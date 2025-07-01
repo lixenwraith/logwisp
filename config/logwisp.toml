@@ -1,0 +1,26 @@
+# Example configuration for LogWisp
+# Default directory: ~/.config/logwisp.toml
+
+# Port to listen on
+port = 8080
+
+[monitor]
+# How often to check for file changes (milliseconds)
+check_interval_ms = 100
+
+# Paths to monitor
+[[monitor.targets]]
+path = "./"
+pattern = "*.log"
+
+[[monitor.targets]]
+path = "/var/log/"
+pattern = "*.log"
+
+#[[monitor.targets]]
+#path = "/home/user/app/logs"
+#pattern = "app-*.log"
+
+[stream]
+# Buffer size for each client connection
+buffer_size = 1000
