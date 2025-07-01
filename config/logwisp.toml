@@ -1,26 +1,70 @@
-# Example configuration for LogWisp
-# Default directory: ~/.config/logwisp.toml
+# LogWisp Configuration
+# Default location: ~/.config/logwisp.toml
+# Override with: LOGWISP_CONFIG_DIR and LOGWISP_CONFIG_FILE
 
 # Port to listen on
+# Environment: LOGWISP_PORT
 port = 8080
+# Environment: LOGWISP_COLOR
+color = false
 
 [monitor]
 # How often to check for file changes (milliseconds)
+# Environment: LOGWISP_MONITOR_CHECK_INTERVAL_MS
 check_interval_ms = 100
 
 # Paths to monitor
+# Environment: LOGWISP_MONITOR_TARGETS (format: "path:pattern:isfile,path2:pattern2:isfile")
+# Example: LOGWISP_MONITOR_TARGETS="/var/log:*.log:false,/app/app.log::true"
+
+# Monitor all .log files in current directory
 [[monitor.targets]]
 path = "./"
 pattern = "*.log"
+is_file = false
 
+# Monitor all logs in /var/log
 [[monitor.targets]]
-path = "/var/log/"
+path = "/var/log"
 pattern = "*.log"
+is_file = false
 
+# Monitor specific application log file
 #[[monitor.targets]]
-#path = "/home/user/app/logs"
-#pattern = "app-*.log"
+#path = "/home/user/app/app.log"
+#pattern = ""  # Ignored for files
+#is_file = true
+
+# Monitor nginx access logs
+#[[monitor.targets]]
+#path = "/var/log/nginx"
+#pattern = "access*.log"
+#is_file = false
+
+# Monitor systemd journal exported logs
+#[[monitor.targets]]
+#path = "/var/log/journal"
+#pattern = "*.log"
+#is_file = false
 
 [stream]
 # Buffer size for each client connection
-buffer_size = 1000
+# Environment: LOGWISP_STREAM_BUFFER_SIZE
+buffer_size = 10000
+
+[stream.rate_limit]
+# Enable rate limiting
+# Environment: LOGWISP_STREAM_RATE_LIMIT_ENABLED
+enabled = true
+
+# Requests per second per client
+# Environment: LOGWISP_STREAM_RATE_LIMIT_REQUESTS_PER_SEC
+requests_per_second = 10
+
+# Burst size (max requests at once)
+# Environment: LOGWISP_STREAM_RATE_LIMIT_BURST_SIZE
+burst_size = 20
+
+# How often to clean up old client limiters (seconds)
+# Environment: LOGWISP_STREAM_RATE_LIMIT_CLEANUP_INTERVAL
+cleanup_interval_s = 5
