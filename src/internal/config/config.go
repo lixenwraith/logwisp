@@ -67,18 +67,15 @@ func defaults() *Config {
 }
 
 // Load reads configuration using lixenwraith/config Builder pattern
-// CHANGED: Now uses config.Builder for all source handling
 func Load() (*Config, error) {
 	configPath := GetConfigPath()
 
-	// CHANGED: Use Builder pattern with custom environment transform
 	cfg, err := lconfig.NewBuilder().
 		WithDefaults(defaults()).
 		WithEnvPrefix("LOGWISP_").
 		WithFile(configPath).
 		WithEnvTransform(customEnvTransform).
 		WithSources(
-			// CHANGED: CLI args removed here - handled separately in LoadWithCLI
 			lconfig.SourceEnv,
 			lconfig.SourceFile,
 			lconfig.SourceDefault,
@@ -107,7 +104,6 @@ func Load() (*Config, error) {
 }
 
 // LoadWithCLI loads configuration and applies CLI arguments
-// CHANGED: New function that properly integrates CLI args with config package
 func LoadWithCLI(cliArgs []string) (*Config, error) {
 	configPath := GetConfigPath()
 
@@ -118,7 +114,7 @@ func LoadWithCLI(cliArgs []string) (*Config, error) {
 		WithDefaults(defaults()).
 		WithEnvPrefix("LOGWISP_").
 		WithFile(configPath).
-		WithArgs(convertedArgs). // CHANGED: Use WithArgs for CLI
+		WithArgs(convertedArgs).
 		WithEnvTransform(customEnvTransform).
 		WithSources(
 			lconfig.SourceCLI, // CLI highest priority
@@ -148,16 +144,14 @@ func LoadWithCLI(cliArgs []string) (*Config, error) {
 	return finalConfig, finalConfig.validate()
 }
 
-// CHANGED: Custom environment transform that handles LOGWISP_ prefix more flexibly
+// customEnvTransform handles LOGWISP_ prefix environment variables
 func customEnvTransform(path string) string {
 	// Standard transform
 	env := strings.ReplaceAll(path, ".", "_")
 	env = strings.ToUpper(env)
 	env = "LOGWISP_" + env
 
-	// Also check for some common variations
-	// This allows both LOGWISP_STREAM_RATE_LIMIT_REQUESTS_PER_SEC
-	// and LOGWISP_STREAM_RATE_LIMIT_REQUESTS_PER_SECOND
+	// Handle common variations
 	switch env {
 	case "LOGWISP_STREAM_RATE_LIMIT_REQUESTS_PER_SECOND":
 		if _, exists := os.LookupEnv("LOGWISP_STREAM_RATE_LIMIT_REQUESTS_PER_SEC"); exists {
@@ -172,7 +166,7 @@ func customEnvTransform(path string) string {
 	return env
 }
 
-// CHANGED: Convert CLI args to config package format
+// convertCLIArgs converts CLI args to config package format
 func convertCLIArgs(args []string) []string {
 	var converted []string
 
@@ -194,7 +188,6 @@ func convertCLIArgs(args []string) []string {
 }
 
 // GetConfigPath returns the configuration file path
-// CHANGED: Exported and simplified - now just returns the path, no manual env handling
 func GetConfigPath() string {
 	// Check explicit config file paths
 	if configFile := os.Getenv("LOGWISP_CONFIG_FILE"); configFile != "" {
@@ -219,7 +212,7 @@ func GetConfigPath() string {
 	return "logwisp.toml"
 }
 
-// CHANGED: Special handling for comma-separated monitor targets env var
+// handleMonitorTargetsEnv handles comma-separated monitor targets env var
 func handleMonitorTargetsEnv(cfg *lconfig.Config) error {
 	if targetsStr := os.Getenv("LOGWISP_MONITOR_TARGETS"); targetsStr != "" {
 		// Clear any existing targets from file/defaults

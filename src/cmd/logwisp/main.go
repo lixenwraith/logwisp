@@ -21,9 +21,10 @@ import (
 )
 
 func main() {
-	// CHANGED: Parse flags manually without init()
+	// Parse flags manually without init()
 	var colorMode bool
 	flag.BoolVar(&colorMode, "c", false, "Enable color pass-through for escape codes in logs")
+	flag.BoolVar(&colorMode, "color", false, "Enable color pass-through for escape codes in logs")
 
 	// Additional CLI flags that override config
 	var (
@@ -98,7 +99,6 @@ func main() {
 	var wg sync.WaitGroup
 
 	// Create components
-	// colorMode is now separate from config
 	streamer := stream.NewWithOptions(cfg.Stream.BufferSize, colorMode)
 	mon := monitor.New(streamer.Publish)
 
@@ -145,7 +145,7 @@ func main() {
 
 		status := map[string]interface{}{
 			"service":    "LogWisp",
-			"version":    "2.0.0", // CHANGED: Version bump for config integration
+			"version":    "2.0.0",
 			"port":       cfg.Port,
 			"color_mode": colorMode,
 			"config": map[string]interface{}{
@@ -191,7 +191,6 @@ func main() {
 		if colorMode {
 			fmt.Println("Color pass-through enabled")
 		}
-		// CHANGED: Log config source information
 		fmt.Printf("Config loaded from: %s\n", config.GetConfigPath())
 
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

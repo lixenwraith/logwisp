@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"logwisp/src/internal/monitor"
@@ -22,13 +23,16 @@ type Streamer struct {
 	done       chan struct{}
 	colorMode  bool
 	wg         sync.WaitGroup
+
+	// Metrics
+	totalDropped atomic.Int64
 }
 
 type clientConnection struct {
 	id           string
 	channel      chan monitor.LogEntry
 	lastActivity time.Time
-	dropped      int64 // Count of dropped messages
+	dropped      atomic.Int64 // Track per-client dropped messages
 }
 
 // New creates a new SSE streamer
@@ -53,13 +57,9 @@ func NewWithOptions(bufferSize int, colorMode bool) *Streamer {
 	return s
 }
 
-// run manages client connections with timeout cleanup
+// run manages client connections - SIMPLIFIED: no forced disconnections
 func (s *Streamer) run() {
 	defer s.wg.Done()
-
-	// Add periodic cleanup for stale/slow clients
-	cleanupTicker := time.NewTicker(30 * time.Second)
-	defer cleanupTicker.Stop()
 
 	for {
 		select {
@@ -79,46 +79,26 @@ func (s *Streamer) run() {
 		case entry := <-s.broadcast:
 			s.mu.RLock()
 			now := time.Now()
-			var toRemove []string
 
-			for id, client := range s.clients {
+			for _, client := range s.clients {
 				select {
 				case client.channel <- entry:
+					// Successfully sent
 					client.lastActivity = now
+					client.dropped.Store(0) // Reset dropped counter on success
 				default:
-					// Track dropped messages and remove slow clients
-					client.dropped++
-					// Remove clients that have dropped >100 messages or been inactive >2min
-					if client.dropped > 100 || now.Sub(client.lastActivity) > 2*time.Minute {
-						toRemove = append(toRemove, id)
+					// Buffer full - skip this message for this client
+					// Don't disconnect, just track dropped messages
+					dropped := client.dropped.Add(1)
+					s.totalDropped.Add(1)
+
+					// Log significant drop milestones for monitoring
+					if dropped == 100 || dropped == 1000 || dropped%10000 == 0 {
+						// Could add logging here if needed
 					}
 				}
 			}
 			s.mu.RUnlock()
-
-			// Remove slow/stale clients outside the read lock
-			if len(toRemove) > 0 {
-				s.mu.Lock()
-				for _, id := range toRemove {
-					if client, ok := s.clients[id]; ok {
-						close(client.channel)
-						delete(s.clients, id)
-					}
-				}
-				s.mu.Unlock()
-			}
-
-		case <-cleanupTicker.C:
-			// Periodic cleanup of inactive clients
-			s.mu.Lock()
-			now := time.Now()
-			for id, client := range s.clients {
-				if now.Sub(client.lastActivity) > 5*time.Minute {
-					close(client.channel)
-					delete(s.clients, id)
-				}
-			}
-			s.mu.Unlock()
 
 		case <-s.done:
 			s.mu.Lock()
@@ -138,18 +118,21 @@ func (s *Streamer) Publish(entry monitor.LogEntry) {
 	case s.broadcast <- entry:
 		// Sent to broadcast channel
 	default:
-		// Drop entry if broadcast buffer full, log occurrence
-		// This prevents memory exhaustion under high load
+		// Broadcast buffer full - drop the message globally
+		s.totalDropped.Add(1)
 	}
 }
 
-// ServeHTTP implements http.Handler for SSE
+// ServeHTTP implements http.Handler for SSE - SIMPLIFIED
 func (s *Streamer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+
+	// SECURITY: Prevent XSS
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 
 	// Create client
 	clientID := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -159,7 +142,6 @@ func (s *Streamer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id:           clientID,
 		channel:      ch,
 		lastActivity: time.Now(),
-		dropped:      0,
 	}
 
 	// Register client
@@ -169,40 +151,28 @@ func (s *Streamer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Send initial connection event
-	fmt.Fprintf(w, "event: connected\ndata: {\"client_id\":\"%s\"}\n\n", clientID)
+	fmt.Fprintf(w, "event: connected\ndata: {\"client_id\":\"%s\",\"buffer_size\":%d}\n\n",
+		clientID, s.bufferSize)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
 
-	// Create ticker for heartbeat
+	// Create ticker for heartbeat - keeps connection alive through proxies
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	// Add timeout for slow clients
-	clientTimeout := time.NewTimer(10 * time.Minute)
-	defer clientTimeout.Stop()
-
-	// Stream events
+	// Stream events until client disconnects
 	for {
 		select {
 		case <-r.Context().Done():
+			// Client disconnected
 			return
 
 		case entry, ok := <-ch:
 			if !ok {
-				// Channel was closed (client removed due to slowness)
-				fmt.Fprintf(w, "event: disconnected\ndata: {\"reason\":\"slow_client\"}\n\n")
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
+				// Channel closed
 				return
 			}
-
-			// Reset client timeout on successful read
-			if !clientTimeout.Stop() {
-				<-clientTimeout.C
-			}
-			clientTimeout.Reset(10 * time.Minute)
 
 			// Process entry for color if needed
 			if s.colorMode {
@@ -220,19 +190,11 @@ func (s *Streamer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case <-ticker.C:
-			// Heartbeat with UTC timestamp
-			fmt.Fprintf(w, ": heartbeat %s\n\n", time.Now().UTC().Format("2006-01-02T15:04:05.000000Z07:00"))
+			// Send heartbeat as SSE comment
+			fmt.Fprintf(w, ": heartbeat %s\n\n", time.Now().UTC().Format(time.RFC3339))
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
-
-		case <-clientTimeout.C:
-			// Client timeout - close connection
-			fmt.Fprintf(w, "event: timeout\ndata: {\"reason\":\"client_timeout\"}\n\n")
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
-			return
 		}
 	}
 }
@@ -246,11 +208,8 @@ func (s *Streamer) Stop() {
 	close(s.broadcast)
 }
 
-// Enhanced color processing with proper ANSI handling
+// processColorEntry preserves ANSI codes in JSON
 func (s *Streamer) processColorEntry(entry monitor.LogEntry) monitor.LogEntry {
-	// For color mode, we preserve ANSI codes but ensure they're properly handled
-	// The JSON marshaling will escape them correctly for transmission
-	// Client-side handling is required for proper display
 	return entry
 }
 
@@ -263,13 +222,24 @@ func (s *Streamer) Stats() map[string]interface{} {
 		"active_clients": len(s.clients),
 		"buffer_size":    s.bufferSize,
 		"color_mode":     s.colorMode,
+		"total_dropped":  s.totalDropped.Load(),
 	}
 
-	totalDropped := int64(0)
-	for _, client := range s.clients {
-		totalDropped += client.dropped
+	// Include per-client dropped counts if any are significant
+	var clientsWithDrops []map[string]interface{}
+	for id, client := range s.clients {
+		dropped := client.dropped.Load()
+		if dropped > 0 {
+			clientsWithDrops = append(clientsWithDrops, map[string]interface{}{
+				"id":      id,
+				"dropped": dropped,
+			})
+		}
 	}
-	stats["total_dropped"] = totalDropped
+
+	if len(clientsWithDrops) > 0 {
+		stats["clients_with_drops"] = clientsWithDrops
+	}
 
 	return stats
 }

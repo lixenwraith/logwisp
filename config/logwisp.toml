@@ -1,70 +1,112 @@
-# LogWisp Configuration
+# LogWisp Configuration Template
 # Default location: ~/.config/logwisp.toml
-# Override with: LOGWISP_CONFIG_DIR and LOGWISP_CONFIG_FILE
+#
+# Configuration precedence (highest to lowest):
+# 1. Command-line arguments
+# 2. Environment variables (LOGWISP_ prefix)
+# 3. This configuration file
+# 4. Built-in defaults
+#
+# All settings shown below with their default values
 
 # Port to listen on
 # Environment: LOGWISP_PORT
+# CLI: --port PORT
+# Default: 8080
 port = 8080
-# Environment: LOGWISP_COLOR
-color = false
 
 [monitor]
 # How often to check for file changes (milliseconds)
+# Lower values = more responsive but higher CPU usage
 # Environment: LOGWISP_MONITOR_CHECK_INTERVAL_MS
+# CLI: --check-interval MS
+# Default: 100
 check_interval_ms = 100
 
-# Paths to monitor
+# Paths to monitor for log files
 # Environment: LOGWISP_MONITOR_TARGETS (format: "path:pattern:isfile,path2:pattern2:isfile")
-# Example: LOGWISP_MONITOR_TARGETS="/var/log:*.log:false,/app/app.log::true"
-
-# Monitor all .log files in current directory
+# CLI: logwisp [path[:pattern[:isfile]]] ...
+# Default: Monitor current directory for *.log files
 [[monitor.targets]]
-path = "./"
-pattern = "*.log"
-is_file = false
+path = "./"          # Directory or file path to monitor
+pattern = "*.log"    # Glob pattern for directory monitoring (ignored for files)
+is_file = false      # true = monitor specific file, false = monitor directory
 
-# Monitor all logs in /var/log
-[[monitor.targets]]
-path = "/var/log"
-pattern = "*.log"
-is_file = false
+# Additional target examples (uncomment to use):
 
-# Monitor specific application log file
-#[[monitor.targets]]
-#path = "/home/user/app/app.log"
-#pattern = ""  # Ignored for files
-#is_file = true
+# # Monitor specific log file
+# [[monitor.targets]]
+# path = "/var/log/application.log"
+# pattern = ""      # Pattern ignored when is_file = true
+# is_file = true
 
-# Monitor nginx access logs
-#[[monitor.targets]]
-#path = "/var/log/nginx"
-#pattern = "access*.log"
-#is_file = false
+# # Monitor system logs
+# [[monitor.targets]]
+# path = "/var/log"
+# pattern = "*.log"
+# is_file = false
 
-# Monitor systemd journal exported logs
-#[[monitor.targets]]
-#path = "/var/log/journal"
-#pattern = "*.log"
-#is_file = false
+# # Monitor nginx access logs with pattern
+# [[monitor.targets]]
+# path = "/var/log/nginx"
+# pattern = "access*.log"
+# is_file = false
+
+# # Monitor journal export directory
+# [[monitor.targets]]
+# path = "/var/log/journal"
+# pattern = "*.log"
+# is_file = false
+
+# # Monitor multiple application logs
+# [[monitor.targets]]
+# path = "/opt/myapp/logs"
+# pattern = "app-*.log"
+# is_file = false
 
 [stream]
 # Buffer size for each client connection
+# Number of log entries that can be queued per client
+# When buffer is full, new messages are skipped (not sent to that client)
+# Increase for burst traffic, decrease for memory conservation
 # Environment: LOGWISP_STREAM_BUFFER_SIZE
-buffer_size = 10000
+# CLI: --buffer-size SIZE
+# Default: 1000
+buffer_size = 1000
 
 [stream.rate_limit]
-# Enable rate limiting
+# Enable rate limiting per client IP
+# Prevents resource exhaustion from misbehaving clients
 # Environment: LOGWISP_STREAM_RATE_LIMIT_ENABLED
-enabled = true
+# CLI: --rate-limit
+# Default: false
+enabled = false
 
-# Requests per second per client
+# Sustained requests per second allowed per client
+# Clients can make this many requests per second continuously
 # Environment: LOGWISP_STREAM_RATE_LIMIT_REQUESTS_PER_SEC
+# CLI: --rate-requests N
+# Default: 10
 requests_per_second = 10
 
-# Burst size (max requests at once)
+# Maximum burst size per client
+# Allows temporary bursts above the sustained rate
+# Should be >= requests_per_second
 # Environment: LOGWISP_STREAM_RATE_LIMIT_BURST_SIZE
+# CLI: --rate-burst N
+# Default: 20
 burst_size = 20
 
-# How often to clean up old client limiters (seconds)
-# Environment: LOGWISP_STREAM_RATE_LIMIT_CLEANUP_INTERVAL
-cleanup_interval_s = 5
+# How often to clean up inactive client rate limiters (seconds)
+# Clients inactive for 2x this duration are removed from tracking
+# Lower values = more frequent cleanup, higher values = less overhead
+# Environment: LOGWISP_STREAM_RATE_LIMIT_CLEANUP_INTERVAL_S
+# Default: 60
+cleanup_interval_s = 60
+
+# Production configuration example:
+# [stream.rate_limit]
+# enabled = true
+# requests_per_second = 100    # Higher limit for production
+# burst_size = 200             # Allow larger bursts
+# cleanup_interval_s = 300     # Less frequent cleanup

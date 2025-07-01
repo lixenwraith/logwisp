@@ -1,0 +1,33 @@
+<svg width="200" height="200" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <!--
+      LogWisp Logo - Vibrant Tech Stream
+      - Shape: 5 swirling streams emanating from a center point.
+      - Style: Wiry, energetic, and modern, suggesting data flow or a galaxy.
+      - Color: Radiant gradient from a bright core to a vibrant teal.
+    -->
+    <defs>
+        <radialGradient id="vibrant-glow" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+            <stop offset="0%" stop-color="#E0FFFF" /> <!-- Bright, almost white cyan at the core -->
+            <stop offset="100%" stop-color="#00B0B0" /> <!-- Deeper teal/cyan at the tips -->
+        </radialGradient>
+    </defs>
+
+    <style>
+        .wisp-path {
+        fill: none;
+        stroke: url(#vibrant-glow);
+        stroke-width: 1.5;
+        stroke-linecap: round;
+        }
+    </style>
+
+    <g id="wisps">
+        <!-- A single path shape is defined, then rotated 5 times around the center (50, 50) -->
+        <!-- The path is a cubic Bezier curve: M(start) C(control1, control2, end) -->
+        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(0, 50, 50)" />
+        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(72, 50, 50)" />
+        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(144, 50, 50)" />
+        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(216, 50, 50)" />
+        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(288, 50, 50)" />
+    </g>
+</svg>
