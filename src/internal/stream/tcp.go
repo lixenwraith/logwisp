@@ -2,6 +2,7 @@
 package stream
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -17,9 +18,11 @@ type TCPStreamer struct {
 	logChan     chan monitor.LogEntry
 	config      config.TCPConfig
 	server      *tcpServer
-	done        chan struct{}
 	activeConns atomic.Int32
 	startTime   time.Time
+	done        chan struct{}
+	engine      *gnet.Engine
+	wg          sync.WaitGroup
 }
 
 type tcpServer struct {
@@ -32,8 +35,8 @@ func NewTCPStreamer(logChan chan monitor.LogEntry, cfg config.TCPConfig) *TCPStr
 	return &TCPStreamer{
 		logChan:   logChan,
 		config:    cfg,
-		done:      make(chan struct{}),
 		startTime: time.Now(),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -41,23 +44,53 @@ func (t *TCPStreamer) Start() error {
 	t.server = &tcpServer{streamer: t}
 
 	// Start log broadcast loop
-	go t.broadcastLoop()
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		t.broadcastLoop()
+	}()
 
 	// Configure gnet with no-op logger
 	addr := fmt.Sprintf("tcp://:%d", t.config.Port)
 
-	err := gnet.Run(t.server, addr,
-		gnet.WithLogger(noopLogger{}), // No-op logger: discard everything
-		gnet.WithMulticore(true),
-		gnet.WithReusePort(true),
-	)
+	// Run gnet in separate goroutine to avoid blocking
+	errChan := make(chan error, 1)
+	go func() {
+		err := gnet.Run(t.server, addr,
+			gnet.WithLogger(noopLogger{}), // No-op logger: discard everything
+			gnet.WithMulticore(true),
+			gnet.WithReusePort(true),
+		)
+		errChan <- err
+	}()
 
-	return err
+	// Wait briefly for server to start or fail
+	select {
+	case err := <-errChan:
+		// Server failed immediately
+		close(t.done)
+		t.wg.Wait()
+		return err
+	case <-time.After(100 * time.Millisecond):
+		// Server started successfully
+		return nil
+	}
 }
 
 func (t *TCPStreamer) Stop() {
+	// Signal broadcast loop to stop
 	close(t.done)
-	// No engine to stop with gnet v2
+
+	// Stop gnet engine if running
+	if t.engine != nil {
+		// Use Stop() method to gracefully shutdown gnet
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		t.engine.Stop(ctx)
+	}
+
+	// Wait for broadcast loop to finish
+	t.wg.Wait()
 }
 
 func (t *TCPStreamer) broadcastLoop() {
@@ -72,7 +105,10 @@ func (t *TCPStreamer) broadcastLoop() {
 
 	for {
 		select {
-		case entry := <-t.logChan:
+		case entry, ok := <-t.logChan:
+			if !ok {
+				return // Channel closed
+			}
 			data, err := json.Marshal(entry)
 			if err != nil {
 				continue
@@ -122,6 +158,7 @@ func (t *TCPStreamer) formatHeartbeat() []byte {
 }
 
 func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
+	s.streamer.engine = &eng
 	return gnet.None
 }
 

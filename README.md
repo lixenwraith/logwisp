@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="LogWisp Logo" width="200"/>
+  <img src="assets/logwisp-logo.svg" alt="LogWisp Logo" width="200"/>
 </p>
 
 # LogWisp - Dual-Stack Log Streaming
@@ -55,10 +55,6 @@ OPTIONS:
   --enable-http            Enable HTTP server (default: true)
   --http-port PORT         HTTP port (default: 8080)
   --http-buffer-size SIZE  HTTP buffer size (default: 1000)
-  
-  # Legacy compatibility
-  --port PORT              Same as --http-port
-  --buffer-size SIZE       Same as --http-buffer-size
 
 TARGET:
   path[:pattern[:isfile]]  Path to monitor
@@ -168,6 +164,8 @@ LogWisp supports configurable heartbeat messages for both HTTP/SSE and TCP strea
 - Same content options as HTTP
 - Useful for detecting disconnected clients
 
+**⚠️ SECURITY:** Heartbeat statistics expose minimal server state (connection count, uptime). If this is sensitive in your environment, disable `include_stats`.
+
 **Example Heartbeat Messages:**
 
 HTTP Comment format:
@@ -195,21 +193,6 @@ format = "json"
 - `LOGWISP_HTTPSERVER_HEARTBEAT_INTERVAL_SECONDS`
 - `LOGWISP_TCPSERVER_HEARTBEAT_ENABLED`
 - `LOGWISP_TCPSERVER_HEARTBEAT_INTERVAL_SECONDS`
-
-## Summary
-
-**Fixed:**
-- Removed duplicate `globToRegex` functions (never used)
-- Added missing TCP heartbeat support
-- Made HTTP heartbeat configurable
-
-**Enhanced:**
-- Configurable heartbeat interval
-- Multiple format options (comment/JSON)
-- Optional timestamp and statistics
-- Per-protocol configuration
-
-**⚠️ SECURITY:** Heartbeat statistics expose minimal server state (connection count, uptime). If this is sensitive in your environment, disable `include_stats`.
 
 ## Deployment
 

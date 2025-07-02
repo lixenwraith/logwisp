@@ -3,6 +3,7 @@ package stream
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -22,6 +23,8 @@ type HTTPStreamer struct {
 	activeClients atomic.Int32
 	mu            sync.RWMutex
 	startTime     time.Time
+	done          chan struct{}
+	wg            sync.WaitGroup
 }
 
 func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTPStreamer {
@@ -29,6 +32,7 @@ func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTP
 		logChan:   logChan,
 		config:    cfg,
 		startTime: time.Now(),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -41,13 +45,42 @@ func (h *HTTPStreamer) Start() error {
 	}
 
 	addr := fmt.Sprintf(":%d", h.config.Port)
-	return h.server.ListenAndServe(addr)
+
+	// Run server in separate goroutine to avoid blocking
+	errChan := make(chan error, 1)
+	go func() {
+		err := h.server.ListenAndServe(addr)
+		if err != nil {
+			errChan <- err
+		}
+	}()
+
+	// Check if server started successfully
+	select {
+	case err := <-errChan:
+		return err
+	case <-time.After(100 * time.Millisecond):
+		// Server started successfully
+		return nil
+	}
 }
 
 func (h *HTTPStreamer) Stop() {
+	// Signal all client handlers to stop
+	close(h.done)
+
+	// Shutdown HTTP server
 	if h.server != nil {
-		h.server.Shutdown()
+		// Create context with timeout for server shutdown
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		// Use ShutdownWithContext for graceful shutdown
+		h.server.ShutdownWithContext(ctx)
 	}
+
+	// Wait for all active client handlers to finish
+	h.wg.Wait()
 }
 
 func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
@@ -72,25 +105,46 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 	ctx.Response.Header.Set("X-Accel-Buffering", "no")
 
 	h.activeClients.Add(1)
-	defer h.activeClients.Add(-1)
+	h.wg.Add(1) // Track this client handler
+	defer func() {
+		h.activeClients.Add(-1)
+		h.wg.Done() // Mark handler as done
+	}()
 
 	// Create subscription for this client
 	clientChan := make(chan monitor.LogEntry, h.config.BufferSize)
+	clientDone := make(chan struct{})
 
 	// Subscribe to monitor's broadcast
 	go func() {
-		for entry := range h.logChan {
+		defer close(clientChan)
+		for {
 			select {
-			case clientChan <- entry:
-			default:
-				// Drop if client buffer full
+			case entry, ok := <-h.logChan:
+				if !ok {
+					return
+				}
+				select {
+				case clientChan <- entry:
+				case <-clientDone:
+					return
+				case <-h.done: // Check for server shutdown
+					return
+				default:
+					// Drop if client buffer full
+				}
+			case <-clientDone:
+				return
+			case <-h.done: // Check for server shutdown
+				return
 			}
 		}
-		close(clientChan)
 	}()
 
 	// Define the stream writer function
 	streamFunc := func(w *bufio.Writer) {
+		defer close(clientDone)
+
 		// Send initial connected event
 		clientID := fmt.Sprintf("%d", time.Now().UnixNano())
 		fmt.Fprintf(w, "event: connected\ndata: {\"client_id\":\"%s\"}\n\n", clientID)
@@ -129,6 +183,12 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 						return
 					}
 				}
+
+			case <-h.done: // ADDED: Check for server shutdown
+				// Send final disconnect event
+				fmt.Fprintf(w, "event: disconnect\ndata: {\"reason\":\"server_shutdown\"}\n\n")
+				w.Flush()
+				return
 			}
 		}
 	}

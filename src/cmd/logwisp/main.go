@@ -20,10 +20,7 @@ func main() {
 	// Parse CLI flags
 	var (
 		configFile = flag.String("config", "", "Config file path")
-		// Legacy compatibility flags
-		port       = flag.Int("port", 0, "HTTP port (legacy, maps to --http-port)")
-		bufferSize = flag.Int("buffer-size", 0, "Buffer size (legacy, maps to --http-buffer-size)")
-		// New explicit flags
+		// Flags
 		httpPort      = flag.Int("http-port", 0, "HTTP server port")
 		httpBuffer    = flag.Int("http-buffer-size", 0, "HTTP server buffer size")
 		tcpPort       = flag.Int("tcp-port", 0, "TCP server port")
@@ -41,15 +38,7 @@ func main() {
 	// Build CLI args for config
 	var cliArgs []string
 
-	// Legacy mapping
-	if *port > 0 {
-		cliArgs = append(cliArgs, fmt.Sprintf("--httpserver.port=%d", *port))
-	}
-	if *bufferSize > 0 {
-		cliArgs = append(cliArgs, fmt.Sprintf("--httpserver.buffer_size=%d", *bufferSize))
-	}
-
-	// New flags
+	// Flags
 	if *httpPort > 0 {
 		cliArgs = append(cliArgs, fmt.Sprintf("--httpserver.port=%d", *httpPort))
 	}
@@ -92,8 +81,6 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	var wg sync.WaitGroup
-
 	// Create monitor
 	mon := monitor.New()
 	mon.SetCheckInterval(time.Duration(cfg.Monitor.CheckIntervalMs) * time.Millisecond)
@@ -119,13 +106,22 @@ func main() {
 		tcpChan := mon.Subscribe()
 		tcpServer = stream.NewTCPStreamer(tcpChan, cfg.TCPServer)
 
-		wg.Add(1)
+		// Start TCP server in separate goroutine without blocking wg.Wait()
+		tcpStarted := make(chan error, 1)
 		go func() {
-			defer wg.Done()
-			if err := tcpServer.Start(); err != nil {
-				fmt.Fprintf(os.Stderr, "TCP server error: %v\n", err)
-			}
+			tcpStarted <- tcpServer.Start()
 		}()
+
+		// Check if TCP server started successfully
+		select {
+		case err := <-tcpStarted:
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "TCP server failed to start: %v\n", err)
+				os.Exit(1)
+			}
+		case <-time.After(1 * time.Second):
+			// Server is running
+		}
 
 		fmt.Printf("TCP streaming on port %d\n", cfg.TCPServer.Port)
 	}
@@ -135,13 +131,22 @@ func main() {
 		httpChan := mon.Subscribe()
 		httpServer = stream.NewHTTPStreamer(httpChan, cfg.HTTPServer)
 
-		wg.Add(1)
+		// Start HTTP server in separate goroutine without blocking wg.Wait()
+		httpStarted := make(chan error, 1)
 		go func() {
-			defer wg.Done()
-			if err := httpServer.Start(); err != nil {
-				fmt.Fprintf(os.Stderr, "HTTP server error: %v\n", err)
-			}
+			httpStarted <- httpServer.Start()
 		}()
+
+		// Check if HTTP server started successfully
+		select {
+		case err := <-httpStarted:
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "HTTP server failed to start: %v\n", err)
+				os.Exit(1)
+			}
+		case <-time.After(1 * time.Second):
+			// Server is running
+		}
 
 		fmt.Printf("HTTP/SSE streaming on http://localhost:%d/stream\n", cfg.HTTPServer.Port)
 		fmt.Printf("Status available at http://localhost:%d/status\n", cfg.HTTPServer.Port)
@@ -156,29 +161,67 @@ func main() {
 	<-sigChan
 	fmt.Println("\nShutting down...")
 
-	// Stop servers first
+	// Create shutdown group for concurrent server stops
+	var shutdownWg sync.WaitGroup
+
+	// Stop servers first (concurrently)
 	if tcpServer != nil {
-		tcpServer.Stop()
+		shutdownWg.Add(1)
+		go func() {
+			defer shutdownWg.Done()
+			tcpServer.Stop()
+		}()
 	}
 	if httpServer != nil {
-		httpServer.Stop()
+		shutdownWg.Add(1)
+		go func() {
+			defer shutdownWg.Done()
+			httpServer.Stop()
+		}()
 	}
 
-	// Cancel context and stop monitor
+	// Cancel context to stop monitor
 	cancel()
-	mon.Stop()
 
-	// Wait for completion
-	done := make(chan struct{})
+	// Wait for servers to stop with timeout
+	serversDone := make(chan struct{})
 	go func() {
-		wg.Wait()
-		close(done)
+		shutdownWg.Wait()
+		close(serversDone)
 	}()
 
-	select {
-	case <-done:
-		fmt.Println("Shutdown complete")
-	case <-time.After(2 * time.Second):
-		fmt.Println("Shutdown timeout")
+	// Stop monitor after context cancellation
+	monitorDone := make(chan struct{})
+	go func() {
+		mon.Stop()
+		close(monitorDone)
+	}()
+
+	// Wait for all components with proper timeout
+	shutdownTimeout := 5 * time.Second
+	shutdownTimer := time.NewTimer(shutdownTimeout)
+	defer shutdownTimer.Stop()
+
+	serversShutdown := false
+	monitorShutdown := false
+
+	for !serversShutdown || !monitorShutdown {
+		select {
+		case <-serversDone:
+			serversShutdown = true
+		case <-monitorDone:
+			monitorShutdown = true
+		case <-shutdownTimer.C:
+			if !serversShutdown {
+				fmt.Println("Warning: Server shutdown timeout")
+			}
+			if !monitorShutdown {
+				fmt.Println("Warning: Monitor shutdown timeout")
+			}
+			fmt.Println("Forcing exit")
+			os.Exit(1)
+		}
 	}
+
+	fmt.Println("Shutdown complete")
 }
