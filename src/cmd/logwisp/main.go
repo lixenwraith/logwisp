@@ -1,230 +1,174 @@
-// File: logwisp/src/cmd/logwisp/main.go
+// FILE: src/cmd/logwisp/main.go
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/middleware"
 	"logwisp/src/internal/monitor"
 	"logwisp/src/internal/stream"
 )
 
 func main() {
-	// Parse flags manually without init()
-	var colorMode bool
-	flag.BoolVar(&colorMode, "c", false, "Enable color pass-through for escape codes in logs")
-	flag.BoolVar(&colorMode, "color", false, "Enable color pass-through for escape codes in logs")
-
-	// Additional CLI flags that override config
+	// Parse CLI flags
 	var (
-		port          = flag.Int("port", 0, "HTTP port (overrides config)")
-		bufferSize    = flag.Int("buffer-size", 0, "Stream buffer size (overrides config)")
-		checkInterval = flag.Int("check-interval", 0, "File check interval in ms (overrides config)")
-		rateLimit     = flag.Bool("rate-limit", false, "Enable rate limiting (overrides config)")
-		rateRequests  = flag.Int("rate-requests", 0, "Rate limit requests/sec (overrides config)")
-		rateBurst     = flag.Int("rate-burst", 0, "Rate limit burst size (overrides config)")
-		configFile    = flag.String("config", "", "Config file path (overrides LOGWISP_CONFIG_FILE)")
+		configFile = flag.String("config", "", "Config file path")
+		// Legacy compatibility flags
+		port       = flag.Int("port", 0, "HTTP port (legacy, maps to --http-port)")
+		bufferSize = flag.Int("buffer-size", 0, "Buffer size (legacy, maps to --http-buffer-size)")
+		// New explicit flags
+		httpPort      = flag.Int("http-port", 0, "HTTP server port")
+		httpBuffer    = flag.Int("http-buffer-size", 0, "HTTP server buffer size")
+		tcpPort       = flag.Int("tcp-port", 0, "TCP server port")
+		tcpBuffer     = flag.Int("tcp-buffer-size", 0, "TCP server buffer size")
+		enableTCP     = flag.Bool("enable-tcp", false, "Enable TCP server")
+		enableHTTP    = flag.Bool("enable-http", false, "Enable HTTP server")
+		checkInterval = flag.Int("check-interval", 0, "File check interval in ms")
 	)
-
 	flag.Parse()
 
-	// Set config file env var if specified via CLI
 	if *configFile != "" {
 		os.Setenv("LOGWISP_CONFIG_FILE", *configFile)
 	}
 
-	// Build CLI override args for config package
+	// Build CLI args for config
 	var cliArgs []string
+
+	// Legacy mapping
 	if *port > 0 {
-		cliArgs = append(cliArgs, fmt.Sprintf("--port=%d", *port))
+		cliArgs = append(cliArgs, fmt.Sprintf("--httpserver.port=%d", *port))
 	}
 	if *bufferSize > 0 {
-		cliArgs = append(cliArgs, fmt.Sprintf("--stream.buffer_size=%d", *bufferSize))
+		cliArgs = append(cliArgs, fmt.Sprintf("--httpserver.buffer_size=%d", *bufferSize))
+	}
+
+	// New flags
+	if *httpPort > 0 {
+		cliArgs = append(cliArgs, fmt.Sprintf("--httpserver.port=%d", *httpPort))
+	}
+	if *httpBuffer > 0 {
+		cliArgs = append(cliArgs, fmt.Sprintf("--httpserver.buffer_size=%d", *httpBuffer))
+	}
+	if *tcpPort > 0 {
+		cliArgs = append(cliArgs, fmt.Sprintf("--tcpserver.port=%d", *tcpPort))
+	}
+	if *tcpBuffer > 0 {
+		cliArgs = append(cliArgs, fmt.Sprintf("--tcpserver.buffer_size=%d", *tcpBuffer))
+	}
+	if flag.Lookup("enable-tcp").DefValue != flag.Lookup("enable-tcp").Value.String() {
+		cliArgs = append(cliArgs, fmt.Sprintf("--tcpserver.enabled=%v", *enableTCP))
+	}
+	if flag.Lookup("enable-http").DefValue != flag.Lookup("enable-http").Value.String() {
+		cliArgs = append(cliArgs, fmt.Sprintf("--httpserver.enabled=%v", *enableHTTP))
 	}
 	if *checkInterval > 0 {
 		cliArgs = append(cliArgs, fmt.Sprintf("--monitor.check_interval_ms=%d", *checkInterval))
 	}
-	if flag.Lookup("rate-limit").DefValue != flag.Lookup("rate-limit").Value.String() {
-		// Rate limit flag was explicitly set
-		cliArgs = append(cliArgs, fmt.Sprintf("--stream.rate_limit.enabled=%v", *rateLimit))
-	}
-	if *rateRequests > 0 {
-		cliArgs = append(cliArgs, fmt.Sprintf("--stream.rate_limit.requests_per_second=%d", *rateRequests))
-	}
-	if *rateBurst > 0 {
-		cliArgs = append(cliArgs, fmt.Sprintf("--stream.rate_limit.burst_size=%d", *rateBurst))
-	}
 
-	// Parse remaining args as monitor targets
+	// Parse monitor targets from remaining args
 	for _, arg := range flag.Args() {
-		if strings.Contains(arg, ":") {
-			// Format: path:pattern:isfile
-			cliArgs = append(cliArgs, fmt.Sprintf("--monitor.targets.add=%s", arg))
-		} else if stat, err := os.Stat(arg); err == nil {
-			// Auto-detect file vs directory
-			if stat.IsDir() {
-				cliArgs = append(cliArgs, fmt.Sprintf("--monitor.targets.add=%s:*.log:false", arg))
-			} else {
-				cliArgs = append(cliArgs, fmt.Sprintf("--monitor.targets.add=%s::true", arg))
-			}
-		}
+		cliArgs = append(cliArgs, fmt.Sprintf("--monitor.targets.add=%s", arg))
 	}
 
-	// Load configuration with CLI overrides
+	// Load configuration
 	cfg, err := config.LoadWithCLI(cliArgs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Create context for graceful shutdown
+	// Create context for shutdown
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// WaitGroup for tracking all goroutines
 	var wg sync.WaitGroup
 
-	// Create components
-	streamer := stream.NewWithOptions(cfg.Stream.BufferSize, colorMode)
-	mon := monitor.New(streamer.Publish)
-
-	// Set monitor check interval from config
+	// Create monitor
+	mon := monitor.New()
 	mon.SetCheckInterval(time.Duration(cfg.Monitor.CheckIntervalMs) * time.Millisecond)
 
-	// Add monitor targets from config
+	// Add targets
 	for _, target := range cfg.Monitor.Targets {
 		if err := mon.AddTarget(target.Path, target.Pattern, target.IsFile); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to add target %s: %v\n", target.Path, err)
 		}
 	}
 
-	// Start monitoring
+	// Start monitor
 	if err := mon.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to start monitor: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Setup HTTP server
-	mux := http.NewServeMux()
+	var tcpServer *stream.TCPStreamer
+	var httpServer *stream.HTTPStreamer
 
-	// Create handler with optional rate limiting
-	var handler http.Handler = streamer
-	var rateLimiter *middleware.RateLimiter
+	// Start TCP server if enabled
+	if cfg.TCPServer.Enabled {
+		tcpChan := mon.Subscribe()
+		tcpServer = stream.NewTCPStreamer(tcpChan, cfg.TCPServer)
 
-	if cfg.Stream.RateLimit.Enabled {
-		rateLimiter = middleware.NewRateLimiter(
-			cfg.Stream.RateLimit.RequestsPerSecond,
-			cfg.Stream.RateLimit.BurstSize,
-			cfg.Stream.RateLimit.CleanupIntervalS,
-		)
-		handler = rateLimiter.Middleware(handler)
-		fmt.Printf("Rate limiting enabled: %d req/s, burst %d\n",
-			cfg.Stream.RateLimit.RequestsPerSecond,
-			cfg.Stream.RateLimit.BurstSize)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := tcpServer.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "TCP server error: %v\n", err)
+			}
+		}()
+
+		fmt.Printf("TCP streaming on port %d\n", cfg.TCPServer.Port)
 	}
 
-	mux.Handle("/stream", handler)
+	// Start HTTP server if enabled
+	if cfg.HTTPServer.Enabled {
+		httpChan := mon.Subscribe()
+		httpServer = stream.NewHTTPStreamer(httpChan, cfg.HTTPServer)
 
-	// Enhanced status endpoint
-	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := httpServer.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "HTTP server error: %v\n", err)
+			}
+		}()
 
-		status := map[string]interface{}{
-			"service":    "LogWisp",
-			"version":    "2.0.0",
-			"port":       cfg.Port,
-			"color_mode": colorMode,
-			"config": map[string]interface{}{
-				"monitor": map[string]interface{}{
-					"check_interval_ms": cfg.Monitor.CheckIntervalMs,
-					"targets_count":     len(cfg.Monitor.Targets),
-				},
-				"stream": map[string]interface{}{
-					"buffer_size": cfg.Stream.BufferSize,
-					"rate_limit": map[string]interface{}{
-						"enabled":             cfg.Stream.RateLimit.Enabled,
-						"requests_per_second": cfg.Stream.RateLimit.RequestsPerSecond,
-						"burst_size":          cfg.Stream.RateLimit.BurstSize,
-					},
-				},
-			},
-		}
-
-		// Add runtime stats
-		if rateLimiter != nil {
-			status["rate_limiter"] = rateLimiter.Stats()
-		}
-		status["streamer"] = streamer.Stats()
-
-		json.NewEncoder(w).Encode(status)
-	})
-
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: mux,
-		// Add timeouts for better shutdown behavior
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		fmt.Printf("HTTP/SSE streaming on http://localhost:%d/stream\n", cfg.HTTPServer.Port)
+		fmt.Printf("Status available at http://localhost:%d/status\n", cfg.HTTPServer.Port)
 	}
 
-	// Start server in goroutine
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		fmt.Printf("LogWisp streaming on http://localhost:%d/stream\n", cfg.Port)
-		fmt.Printf("Status available at http://localhost:%d/status\n", cfg.Port)
-		if colorMode {
-			fmt.Println("Color pass-through enabled")
-		}
-		fmt.Printf("Config loaded from: %s\n", config.GetConfigPath())
+	if !cfg.TCPServer.Enabled && !cfg.HTTPServer.Enabled {
+		fmt.Fprintln(os.Stderr, "No servers enabled. Enable at least one server in config.")
+		os.Exit(1)
+	}
 
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-		}
-	}()
-
-	// Wait for shutdown signal
+	// Wait for shutdown
 	<-sigChan
 	fmt.Println("\nShutting down...")
 
-	// Cancel context to stop all components
+	// Stop servers first
+	if tcpServer != nil {
+		tcpServer.Stop()
+	}
+	if httpServer != nil {
+		httpServer.Stop()
+	}
+
+	// Cancel context and stop monitor
 	cancel()
-
-	// Create shutdown context with timeout
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-
-	// Shutdown server first
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		fmt.Fprintf(os.Stderr, "Server shutdown error: %v\n", err)
-		// Force close if graceful shutdown fails
-		server.Close()
-	}
-
-	// Stop all components
 	mon.Stop()
-	streamer.Stop()
 
-	if rateLimiter != nil {
-		rateLimiter.Stop()
-	}
-
-	// Wait for all goroutines with timeout
+	// Wait for completion
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -235,6 +179,6 @@ func main() {
 	case <-done:
 		fmt.Println("Shutdown complete")
 	case <-time.After(2 * time.Second):
-		fmt.Println("Shutdown timeout, forcing exit")
+		fmt.Println("Shutdown timeout")
 	}
 }
