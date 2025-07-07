@@ -1,4 +1,4 @@
-// FILE: src/internal/stream/http.go
+// FILE: src/internal/stream/httpstreamer.go
 package stream
 
 import (
@@ -25,23 +25,53 @@ type HTTPStreamer struct {
 	startTime     time.Time
 	done          chan struct{}
 	wg            sync.WaitGroup
+
+	// Path configuration
+	streamPath string
+	statusPath string
+
+	// For router integration
+	standalone bool
 }
 
 func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTPStreamer {
+	// Set default paths if not configured
+	streamPath := cfg.StreamPath
+	if streamPath == "" {
+		streamPath = "/stream"
+	}
+	statusPath := cfg.StatusPath
+	if statusPath == "" {
+		statusPath = "/status"
+	}
+
 	return &HTTPStreamer{
-		logChan:   logChan,
-		config:    cfg,
-		startTime: time.Now(),
-		done:      make(chan struct{}),
+		logChan:    logChan,
+		config:     cfg,
+		startTime:  time.Now(),
+		done:       make(chan struct{}),
+		streamPath: streamPath,
+		statusPath: statusPath,
+		standalone: true, // Default to standalone mode
 	}
 }
 
+// SetRouterMode configures the streamer for use with a router
+func (h *HTTPStreamer) SetRouterMode() {
+	h.standalone = false
+}
+
 func (h *HTTPStreamer) Start() error {
+	if !h.standalone {
+		// In router mode, don't start our own server
+		return nil
+	}
+
 	h.server = &fasthttp.Server{
 		Handler:           h.requestHandler,
 		DisableKeepalive:  false,
 		StreamRequestBody: true,
-		Logger:            nil, // Suppress fasthttp logs
+		Logger:            nil,
 	}
 
 	addr := fmt.Sprintf(":%d", h.config.Port)
@@ -69,13 +99,10 @@ func (h *HTTPStreamer) Stop() {
 	// Signal all client handlers to stop
 	close(h.done)
 
-	// Shutdown HTTP server
-	if h.server != nil {
-		// Create context with timeout for server shutdown
+	// Shutdown HTTP server if in standalone mode
+	if h.standalone && h.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-
-		// Use ShutdownWithContext for graceful shutdown
 		h.server.ShutdownWithContext(ctx)
 	}
 
@@ -83,16 +110,26 @@ func (h *HTTPStreamer) Stop() {
 	h.wg.Wait()
 }
 
+func (h *HTTPStreamer) RouteRequest(ctx *fasthttp.RequestCtx) {
+	h.requestHandler(ctx)
+}
+
 func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
 	path := string(ctx.Path())
 
 	switch path {
-	case "/stream":
+	case h.streamPath:
 		h.handleStream(ctx)
-	case "/status":
+	case h.statusPath:
 		h.handleStatus(ctx)
 	default:
 		ctx.SetStatusCode(fasthttp.StatusNotFound)
+		ctx.SetContentType("application/json")
+		json.NewEncoder(ctx).Encode(map[string]interface{}{
+			"error": "Not Found",
+			"message": fmt.Sprintf("Available endpoints: %s (SSE stream), %s (status)",
+				h.streamPath, h.statusPath),
+		})
 	}
 }
 
@@ -103,13 +140,6 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 	ctx.Response.Header.Set("Connection", "keep-alive")
 	ctx.Response.Header.Set("Access-Control-Allow-Origin", "*")
 	ctx.Response.Header.Set("X-Accel-Buffering", "no")
-
-	h.activeClients.Add(1)
-	h.wg.Add(1) // Track this client handler
-	defer func() {
-		h.activeClients.Add(-1)
-		h.wg.Done() // Mark handler as done
-	}()
 
 	// Create subscription for this client
 	clientChan := make(chan monitor.LogEntry, h.config.BufferSize)
@@ -128,14 +158,14 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 				case clientChan <- entry:
 				case <-clientDone:
 					return
-				case <-h.done: // Check for server shutdown
+				case <-h.done:
 					return
 				default:
 					// Drop if client buffer full
 				}
 			case <-clientDone:
 				return
-			case <-h.done: // Check for server shutdown
+			case <-h.done:
 				return
 			}
 		}
@@ -143,11 +173,28 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 
 	// Define the stream writer function
 	streamFunc := func(w *bufio.Writer) {
-		defer close(clientDone)
+		newCount := h.activeClients.Add(1)
+		fmt.Printf("[HTTP DEBUG] Client connected on port %d. Count now: %d\n",
+			h.config.Port, newCount)
+
+		h.wg.Add(1)
+		defer func() {
+			newCount := h.activeClients.Add(-1)
+			fmt.Printf("[HTTP DEBUG] Client disconnected on port %d. Count now: %d\n",
+				h.config.Port, newCount)
+			h.wg.Done()
+		}()
 
 		// Send initial connected event
 		clientID := fmt.Sprintf("%d", time.Now().UnixNano())
-		fmt.Fprintf(w, "event: connected\ndata: {\"client_id\":\"%s\"}\n\n", clientID)
+		connectionInfo := map[string]interface{}{
+			"client_id":   clientID,
+			"stream_path": h.streamPath,
+			"status_path": h.statusPath,
+			"buffer_size": h.config.BufferSize,
+		}
+		data, _ := json.Marshal(connectionInfo)
+		fmt.Fprintf(w, "event: connected\ndata: %s\n\n", data)
 		w.Flush()
 
 		var ticker *time.Ticker
@@ -184,7 +231,7 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 					}
 				}
 
-			case <-h.done: // ADDED: Check for server shutdown
+			case <-h.done:
 				// Send final disconnect event
 				fmt.Fprintf(w, "event: disconnect\ndata: {\"reason\":\"server_shutdown\"}\n\n")
 				w.Flush()
@@ -240,13 +287,48 @@ func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 	status := map[string]interface{}{
 		"service": "LogWisp",
 		"version": "3.0.0",
-		"http_server": map[string]interface{}{
+		"server": map[string]interface{}{
+			"type":           "http",
 			"port":           h.config.Port,
 			"active_clients": h.activeClients.Load(),
 			"buffer_size":    h.config.BufferSize,
+			"uptime_seconds": int(time.Since(h.startTime).Seconds()),
+			"mode":           map[string]bool{"standalone": h.standalone, "router": !h.standalone},
+		},
+		"endpoints": map[string]string{
+			"stream": h.streamPath,
+			"status": h.statusPath,
+		},
+		"features": map[string]interface{}{
+			"heartbeat": map[string]interface{}{
+				"enabled":  h.config.Heartbeat.Enabled,
+				"interval": h.config.Heartbeat.IntervalSeconds,
+				"format":   h.config.Heartbeat.Format,
+			},
+			"ssl": map[string]bool{
+				"enabled": h.config.SSL != nil && h.config.SSL.Enabled,
+			},
+			"rate_limit": map[string]bool{
+				"enabled": h.config.RateLimit != nil && h.config.RateLimit.Enabled,
+			},
 		},
 	}
 
 	data, _ := json.Marshal(status)
 	ctx.SetBody(data)
+}
+
+// GetActiveConnections returns the current number of active clients
+func (h *HTTPStreamer) GetActiveConnections() int32 {
+	return h.activeClients.Load()
+}
+
+// GetStreamPath returns the configured stream endpoint path
+func (h *HTTPStreamer) GetStreamPath() string {
+	return h.streamPath
+}
+
+// GetStatusPath returns the configured status endpoint path
+func (h *HTTPStreamer) GetStatusPath() string {
+	return h.statusPath
 }

@@ -1,18 +1,22 @@
+# LogWisp - Multi-Stream Log Monitoring Service
+
 <p align="center">
   <img src="assets/logwisp-logo.svg" alt="LogWisp Logo" width="200"/>
 </p>
 
-# LogWisp - Dual-Stack Log Streaming
-
-A high-performance log streaming service with dual-stack architecture: raw TCP streaming via gnet and HTTP/SSE streaming via fasthttp.
+A high-performance log streaming service with multi-stream architecture, supporting both TCP and HTTP/SSE protocols with real-time file monitoring and rotation detection.
 
 ## Features
 
-- **Dual streaming modes**: TCP (gnet) and HTTP/SSE (fasthttp)
-- **Fan-out architecture**: Multiple independent consumers
-- **Real-time updates**: File monitoring with rotation detection
-- **Zero dependencies**: Only gnet and fasthttp beyond stdlib
-- **High performance**: Non-blocking I/O throughout
+- **Multi-Stream Architecture**: Run multiple independent log streams, each with its own configuration
+- **Dual Protocol Support**: TCP (raw streaming) and HTTP/SSE (browser-friendly)
+- **Real-time Monitoring**: Instant updates with configurable check intervals
+- **File Rotation Detection**: Automatic detection and handling of log rotation
+- **Path-based Routing**: Optional HTTP router for consolidated access
+- **Per-Stream Configuration**: Independent settings for each log stream
+- **Connection Statistics**: Real-time monitoring of active connections
+- **Flexible Targets**: Monitor individual files or entire directories
+- **Zero Dependencies**: Only gnet and fasthttp beyond stdlib
 
 ## Quick Start
 
@@ -20,200 +24,334 @@ A high-performance log streaming service with dual-stack architecture: raw TCP s
 # Build
 go build -o logwisp ./src/cmd/logwisp
 
-# Run with HTTP only (default)
+# Run with default configuration
 ./logwisp
 
-# Enable both TCP and HTTP
-./logwisp --enable-tcp --tcp-port 9090
+# Run with custom config
+./logwisp --config /etc/logwisp/production.toml
 
-# Monitor specific paths
-./logwisp /var/log:*.log /app/logs:error*.log
+# Run with HTTP router (path-based routing)
+./logwisp --router
 ```
 
 ## Architecture
 
+LogWisp uses a service-oriented architecture where each stream is an independent pipeline:
+
 ```
-Monitor (Publisher) → [Subscriber Channels] → TCP Server (default port 9090)
-                                           ↘ HTTP Server (default port 8080)
-```
-
-## Command Line Options
-
-```bash
-logwisp [OPTIONS] [TARGET...]
-
-OPTIONS:
-  --config FILE             Config file path
-  --check-interval MS       File check interval (default: 100)
-  
-  # TCP Server
-  --enable-tcp              Enable TCP server
-  --tcp-port PORT          TCP port (default: 9090)
-  --tcp-buffer-size SIZE   TCP buffer size (default: 1000)
-  
-  # HTTP Server  
-  --enable-http            Enable HTTP server (default: true)
-  --http-port PORT         HTTP port (default: 8080)
-  --http-buffer-size SIZE  HTTP buffer size (default: 1000)
-
-TARGET:
-  path[:pattern[:isfile]]  Path to monitor
-                          pattern: glob pattern for directories
-                          isfile: true/false (auto-detected if omitted)
+LogStream Service
+├── Stream["app-logs"]
+│   ├── Monitor (watches files)
+│   ├── TCP Server (optional)
+│   └── HTTP Server (optional)
+├── Stream["system-logs"]
+│   ├── Monitor
+│   └── HTTP Server
+└── HTTP Router (optional, for path-based routing)
 ```
 
 ## Configuration
 
-Config file location: `~/.config/logwisp.toml`
+Configuration file location: `~/.config/logwisp.toml`
+
+### Basic Multi-Stream Configuration
 
 ```toml
+# Global defaults
 [monitor]
 check_interval_ms = 100
 
-[[monitor.targets]]
-path = "./"
-pattern = "*.log"
-is_file = false
+# Application logs stream
+[[streams]]
+name = "app"
 
-[tcpserver]
-enabled = false
-port = 9090
-buffer_size = 1000
+[streams.monitor]
+targets = [
+    { path = "/var/log/myapp", pattern = "*.log", is_file = false },
+    { path = "/var/log/myapp/app.log", is_file = true }
+]
 
-[httpserver]
+[streams.httpserver]
 enabled = true
 port = 8080
-buffer_size = 1000
+buffer_size = 2000
+stream_path = "/stream"
+status_path = "/status"
+
+# System logs stream
+[[streams]]
+name = "system"
+
+[streams.monitor]
+check_interval_ms = 50  # Override global default
+targets = [
+    { path = "/var/log/syslog", is_file = true },
+    { path = "/var/log/auth.log", is_file = true }
+]
+
+[streams.tcpserver]
+enabled = true
+port = 9090
+buffer_size = 5000
+
+[streams.httpserver]
+enabled = true
+port = 8443
+stream_path = "/logs"
+status_path = "/health"
 ```
 
-## Clients
+### Target Configuration
+
+Monitor targets support both files and directories:
+
+```toml
+# Directory monitoring with pattern
+{ path = "/var/log", pattern = "*.log", is_file = false }
+
+# Specific file monitoring
+{ path = "/var/log/app.log", is_file = true }
+
+# All .log files in a directory
+{ path = "./logs", pattern = "*.log", is_file = false }
+```
+
+## Usage Modes
+
+### 1. Standalone Mode (Default)
+
+Each stream runs on its configured ports:
+
+```bash
+./logwisp
+# Stream endpoints:
+# - app: http://localhost:8080/stream
+# - system: tcp://localhost:9090 and https://localhost:8443/logs
+```
+
+### 2. Router Mode
+
+All HTTP streams share ports with path-based routing:
+
+```bash
+./logwisp --router
+# Routed endpoints:
+# - app: http://localhost:8080/app/stream
+# - system: http://localhost:8080/system/logs
+# - global: http://localhost:8080/status
+```
+
+## Client Examples
+
+### HTTP/SSE Stream
+
+```bash
+# Connect to a stream
+curl -N http://localhost:8080/stream
+
+# Check stream status
+curl http://localhost:8080/status
+
+# With authentication (when implemented)
+curl -u admin:password -N https://localhost:8443/logs
+```
 
 ### TCP Stream
+
 ```bash
-# Simple TCP client
+# Using netcat
 nc localhost 9090
 
 # Using telnet
 telnet localhost 9090
 
-# Using socat
-socat - TCP:localhost:9090
+# With TLS (when implemented)
+openssl s_client -connect localhost:9443
 ```
 
-### HTTP/SSE Stream
-```bash
-# Stream logs
-curl -N http://localhost:8080/stream
+### JavaScript Client
 
-# Check status
-curl http://localhost:8080/status
+```javascript
+const eventSource = new EventSource('http://localhost:8080/stream');
+
+eventSource.addEventListener('connected', (e) => {
+    const data = JSON.parse(e.data);
+    console.log('Connected with ID:', data.client_id);
+});
+
+eventSource.addEventListener('message', (e) => {
+    const logEntry = JSON.parse(e.data);
+    console.log(`[${logEntry.time}] ${logEntry.level}: ${logEntry.message}`);
+});
 ```
-
-## Environment Variables
-
-All config values can be set via environment:
-- `LOGWISP_MONITOR_CHECK_INTERVAL_MS`
-- `LOGWISP_MONITOR_TARGETS` (format: "path:pattern:isfile,...")
-- `LOGWISP_TCPSERVER_ENABLED`
-- `LOGWISP_TCPSERVER_PORT`
-- `LOGWISP_HTTPSERVER_ENABLED`
-- `LOGWISP_HTTPSERVER_PORT`
 
 ## Log Entry Format
+
+All log entries are streamed as JSON:
 
 ```json
 {
   "time": "2024-01-01T12:00:00.123456Z",
   "source": "app.log",
-  "level": "error",
-  "message": "Something went wrong",
-  "fields": {"key": "value"}
+  "level": "ERROR",
+  "message": "Connection timeout",
+  "fields": {
+    "user_id": "12345",
+    "request_id": "abc-def-ghi"
+  }
 }
 ```
 
 ## API Endpoints
 
-### TCP Protocol
-- Raw JSON lines, one entry per line
-- No headers or authentication
-- Instant connection, streaming starts immediately
+### Stream Endpoints (per stream)
 
-### HTTP Endpoints
-- `GET /stream` - SSE stream of log entries
-- `GET /status` - Service status JSON
+- `GET {stream_path}` - SSE log stream
+- `GET {status_path}` - Stream statistics and configuration
 
-### SSE Events
-- `connected` - Initial connection with client_id
-- `data` - Log entry JSON
-- `:` - Heartbeat comment (30s interval)
+### Global Endpoints (router mode)
 
-## Heartbeat Configuration
+- `GET /status` - Aggregated status for all streams
+- `GET /{stream_name}/{path}` - Stream-specific endpoints
 
-LogWisp supports configurable heartbeat messages for both HTTP/SSE and TCP streams to detect stale connections and provide server statistics.
+### Status Response
 
-**HTTP/SSE Heartbeat:**
-- **Format Options:**
-    - `comment`: SSE comment format (`: heartbeat ...`)
-    - `json`: Standard data message with JSON payload
-- **Content Options:**
-    - `include_timestamp`: Add current UTC timestamp
-    - `include_stats`: Add active clients count and server uptime
-
-**TCP Heartbeat:**
-- Always uses JSON format
-- Same content options as HTTP
-- Useful for detecting disconnected clients
-
-**⚠️ SECURITY:** Heartbeat statistics expose minimal server state (connection count, uptime). If this is sensitive in your environment, disable `include_stats`.
-
-**Example Heartbeat Messages:**
-
-HTTP Comment format:
-```
-: heartbeat 2024-01-01T12:00:00Z clients=5 uptime=3600s
-```
-
-JSON format:
 ```json
-{"type":"heartbeat","timestamp":"2024-01-01T12:00:00Z","active_clients":5,"uptime_seconds":3600}
+{
+  "service": "LogWisp",
+  "version": "3.0.0",
+  "server": {
+    "type": "http",
+    "port": 8080,
+    "active_clients": 5,
+    "uptime_seconds": 3600
+  },
+  "monitor": {
+    "active_watchers": 3,
+    "total_entries": 15420,
+    "dropped_entries": 0
+  }
+}
 ```
 
-**Configuration:**
+## Real-time Statistics
+
+LogWisp provides comprehensive statistics at multiple levels:
+
+- **Per-Stream Stats**: Monitor performance, connection counts, data throughput
+- **Per-Watcher Stats**: File size, position, entries read, rotation count
+- **Global Stats**: Aggregated view of all streams (in router mode)
+
+Access statistics via status endpoints or watch the console output:
+
+```
+[15:04:05] Active streams: 2
+  app: watchers=3 entries=1542 tcp_conns=2 http_conns=5
+  system: watchers=2 entries=8901 tcp_conns=0 http_conns=3
+```
+
+## Advanced Features
+
+### File Rotation Detection
+
+LogWisp automatically detects log rotation through multiple methods:
+- Inode change detection
+- File size decrease
+- Modification time anomalies
+- Position beyond file size
+
+When rotation is detected, a special log entry is generated:
+```json
+{
+  "level": "INFO",
+  "message": "Log rotation detected (#1): inode change"
+}
+```
+
+### Buffer Management
+
+- **Non-blocking delivery**: Messages are dropped rather than blocking when buffers fill
+- **Per-client buffers**: Each client has independent buffer space
+- **Configurable sizes**: Adjust buffer sizes based on expected load
+
+### Heartbeat Messages
+
+Keep connections alive and detect stale clients:
+
 ```toml
-[httpserver.heartbeat]
+[streams.httpserver.heartbeat]
 enabled = true
 interval_seconds = 30
 include_timestamp = true
 include_stats = true
-format = "json"
+format = "json"  # or "comment" for SSE comments
 ```
 
-**Environment Variables:**
-- `LOGWISP_HTTPSERVER_HEARTBEAT_ENABLED`
-- `LOGWISP_HTTPSERVER_HEARTBEAT_INTERVAL_SECONDS`
-- `LOGWISP_TCPSERVER_HEARTBEAT_ENABLED`
-- `LOGWISP_TCPSERVER_HEARTBEAT_INTERVAL_SECONDS`
+## Performance Tuning
+
+### Monitor Settings
+- `check_interval_ms`: Lower values = faster detection, higher CPU usage
+- `buffer_size`: Larger buffers handle bursts better but use more memory
+
+### File Watcher Optimization
+- Use specific file paths when possible (more efficient than directory scanning)
+- Adjust patterns to minimize unnecessary file checks
+- Consider separate streams for different update frequencies
+
+### Network Optimization
+- TCP: Best for high-volume, low-latency requirements
+- HTTP/SSE: Best for browser compatibility and firewall traversal
+- Router mode: Reduces port usage but adds slight routing overhead
+
+## Building from Source
+
+```bash
+# Clone repository
+git clone https://github.com/yourusername/logwisp
+cd logwisp
+
+# Install dependencies
+go mod init logwisp
+go get github.com/panjf2000/gnet/v2
+go get github.com/valyala/fasthttp
+go get github.com/lixenwraith/config
+
+# Build
+go build -o logwisp ./src/cmd/logwisp
+
+# Run tests
+go test ./...
+```
 
 ## Deployment
 
 ### Systemd Service
+
 ```ini
 [Unit]
-Description=LogWisp Log Streaming
+Description=LogWisp Multi-Stream Log Monitor
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/logwisp --enable-tcp --enable-http
+ExecStart=/usr/local/bin/logwisp --config /etc/logwisp/production.toml
 Restart=always
-Environment="LOGWISP_TCPSERVER_PORT=9090"
-Environment="LOGWISP_HTTPSERVER_PORT=8080"
+User=logwisp
+Group=logwisp
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/log
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ### Docker
+
 ```dockerfile
 FROM golang:1.24 AS builder
 WORKDIR /app
@@ -221,56 +359,88 @@ COPY . .
 RUN go build -o logwisp ./src/cmd/logwisp
 
 FROM debian:bookworm-slim
+RUN useradd -r -s /bin/false logwisp
 COPY --from=builder /app/logwisp /usr/local/bin/
+USER logwisp
 EXPOSE 8080 9090
-CMD ["logwisp", "--enable-tcp", "--enable-http"]
+CMD ["logwisp"]
 ```
 
-## Performance Tuning
+### Docker Compose
 
-- **Buffer Size**: Increase for burst traffic (5000+)
-- **Check Interval**: Decrease for lower latency (10-50ms)
-- **TCP**: Best for high-volume system consumers
-- **HTTP**: Best for web browsers and REST clients
-
-### Message Dropping and Client Behavior
-
-LogWisp uses non-blocking message delivery to maintain system stability. When a client cannot keep up with the log stream, messages are dropped rather than blocking other clients or the monitor.
-
-**Common causes of dropped messages:**
-- **Browser throttling**: Browsers may throttle background tabs, reducing JavaScript execution frequency
-- **Network congestion**: Slow connections or high latency can cause client buffers to fill
-- **Client processing**: Heavy client-side processing (parsing, rendering) can create backpressure
-- **System resources**: CPU/memory constraints on client machines affect consumption rate
-
-**TCP vs HTTP behavior:**
-- **TCP**: Raw stream with kernel-level buffering. Drops occur when TCP send buffer fills
-- **HTTP/SSE**: Application-level buffering. Each client has a dedicated channel (default: 1000 entries)
-
-**Mitigation strategies:**
-1. Increase buffer sizes for burst tolerance: `--tcp-buffer-size 5000` or `--http-buffer-size 5000`
-2. Implement client-side flow control (pause/resume based on queue depth)
-3. Use TCP for high-volume consumers that need guaranteed delivery
-4. Keep browser tabs in foreground for real-time monitoring
-5. Consider log aggregation/filtering at source for high-volume scenarios
-
-**Monitoring drops:**
-- HTTP: Check `/status` endpoint for drop statistics
-- TCP: Monitor connection count and system TCP metrics
-- Both: Watch for "channel full" indicators in client implementations
-
-## Building from Source
-
-```bash
-git clone https://github.com/yourusername/logwisp
-cd logwisp
-go mod init logwisp
-go get github.com/panjf2000/gnet/v2
-go get github.com/valyala/fasthttp
-go get github.com/lixenwraith/config
-go build -o logwisp ./src/cmd/logwisp
+```yaml
+version: '3.8'
+services:
+  logwisp:
+    build: .
+    volumes:
+      - /var/log:/var/log:ro
+      - ./config.toml:/etc/logwisp/config.toml:ro
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    restart: unless-stopped
+    command: ["logwisp", "--config", "/etc/logwisp/config.toml"]
 ```
+
+## Security Considerations
+
+### Current Implementation
+- Read-only file access
+- No authentication (placeholder configuration only)
+- No TLS/SSL support (placeholder configuration only)
+
+### Planned Security Features
+- **Authentication**: Basic, Bearer/JWT, mTLS
+- **TLS/SSL**: For both HTTP and TCP streams
+- **Rate Limiting**: Per-client request limits
+- **IP Filtering**: Whitelist/blacklist support
+- **Audit Logging**: Access and authentication events
+
+### Best Practices
+1. Run with minimal privileges (read-only access to log files)
+2. Use network-level security until authentication is implemented
+3. Place behind a reverse proxy for production HTTPS
+4. Monitor access logs for unusual patterns
+5. Regularly update dependencies
+
+## Troubleshooting
+
+### No Log Entries Appearing
+1. Check file permissions (LogWisp needs read access)
+2. Verify file paths in configuration
+3. Ensure files match the specified patterns
+4. Check monitor statistics in status endpoint
+
+### High Memory Usage
+1. Reduce buffer sizes in configuration
+2. Lower the number of concurrent watchers
+3. Increase check interval for less critical logs
+4. Use TCP instead of HTTP for high-volume streams
+
+### Connection Drops
+1. Check heartbeat configuration
+2. Verify network stability
+3. Monitor client-side errors
+4. Review dropped entry statistics
 
 ## License
 
 BSD-3-Clause
+
+## Contributing
+
+Contributions are welcome! Please read our contributing guidelines and submit pull requests to our repository.
+
+## Roadmap
+
+- [x] Multi-stream architecture
+- [x] File and directory monitoring
+- [x] TCP and HTTP/SSE streaming
+- [x] Path-based HTTP routing
+- [ ] Authentication (Basic, JWT, mTLS)
+- [ ] TLS/SSL support
+- [ ] Rate limiting
+- [ ] Prometheus metrics export
+- [ ] WebSocket support
+- [ ] Log filtering and transformation

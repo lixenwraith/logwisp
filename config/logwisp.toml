@@ -1,133 +1,121 @@
-# LogWisp Configuration Template
-# Default location: ~/.config/logwisp.toml
-#
-# Configuration precedence (highest to lowest):
-# 1. Command-line arguments
-# 2. Environment variables (LOGWISP_ prefix)
-# 3. This configuration file
-# 4. Built-in defaults
+# LogWisp Multi-Stream Configuration
+# Location: ~/.config/logwisp.toml
 
+# Global monitor defaults
 [monitor]
-# File check interval (milliseconds)
-# Lower = more responsive, higher CPU usage
-# Environment: LOGWISP_MONITOR_CHECK_INTERVAL_MS
-# CLI: --check-interval MS
 check_interval_ms = 100
 
-# Monitor targets
-# Environment: LOGWISP_MONITOR_TARGETS="path:pattern:isfile,path2:pattern2:isfile"
-# CLI: logwisp [path[:pattern[:isfile]]] ...
-[[monitor.targets]]
-path = "./"          # Directory or file path
-pattern = "*.log"    # Glob pattern (ignored for files)
-is_file = false      # true = file, false = directory
+# Stream 1: Application logs (public access)
+[[streams]]
+name = "app"
 
-# # Example: Specific file
-# [[monitor.targets]]
-# path = "/var/log/app.log"
-# pattern = ""
-# is_file = true
+[streams.monitor]
+targets = [
+    { path = "/var/log/myapp", pattern = "*.log", is_file = false },
+    { path = "/var/log/myapp/app.log", pattern = "", is_file = true }
+]
 
-# # Example: System logs
-# [[monitor.targets]]
-# path = "/var/log"
-# pattern = "*.log"
-# is_file = false
-
-[tcpserver]
-# Raw TCP streaming server (gnet)
-# Environment: LOGWISP_TCPSERVER_ENABLED
-# CLI: --enable-tcp
-enabled = false
-
-# TCP port
-# Environment: LOGWISP_TCPSERVER_PORT
-# CLI: --tcp-port PORT
-port = 9090
-
-# Per-client buffer size
-# Environment: LOGWISP_TCPSERVER_BUFFER_SIZE
-# CLI: --tcp-buffer-size SIZE
-buffer_size = 1000
-
-# TLS/SSL settings (not implemented in PoC)
-ssl_enabled = false
-ssl_cert_file = ""
-ssl_key_file = ""
-
-[tcpserver.heartbeat]
-# Enable/disable heartbeat messages
-# Environment: LOGWISP_TCPSERVER_HEARTBEAT_ENABLED
-enabled = false
-
-# Heartbeat interval in seconds
-# Environment: LOGWISP_TCPSERVER_HEARTBEAT_INTERVAL_SECONDS
-interval_seconds = 30
-
-# Include timestamp in heartbeat
-# Environment: LOGWISP_TCPSERVER_HEARTBEAT_INCLUDE_TIMESTAMP
-include_timestamp = true
-
-# Include server statistics (active connections, uptime)
-# Environment: LOGWISP_TCPSERVER_HEARTBEAT_INCLUDE_STATS
-include_stats = false
-
-# Format: "json" only for TCP
-# Environment: LOGWISP_TCPSERVER_HEARTBEAT_FORMAT
-format = "json"
-
-[httpserver]
-# HTTP/SSE streaming server (fasthttp)
-# Environment: LOGWISP_HTTPSERVER_ENABLED
-# CLI: --enable-http
+[streams.httpserver]
 enabled = true
-
-# HTTP port
-# Environment: LOGWISP_HTTPSERVER_PORT
-# CLI: --http-port PORT (or legacy --port)
 port = 8080
+buffer_size = 2000
+stream_path = "/stream"
+status_path = "/status"
 
-# Per-client buffer size
-# Environment: LOGWISP_HTTPSERVER_BUFFER_SIZE
-# CLI: --http-buffer-size SIZE (or legacy --buffer-size)
-buffer_size = 1000
-
-# TLS/SSL settings (not implemented in PoC)
-ssl_enabled = false
-ssl_cert_file = ""
-ssl_key_file = ""
-
-[httpserver.heartbeat]
-# Enable/disable heartbeat messages
-# Environment: LOGWISP_HTTPSERVER_HEARTBEAT_ENABLED
+[streams.httpserver.heartbeat]
 enabled = true
-
-# Heartbeat interval in seconds
-# Environment: LOGWISP_HTTPSERVER_HEARTBEAT_INTERVAL_SECONDS
 interval_seconds = 30
-
-# Include timestamp in heartbeat
-# Environment: LOGWISP_HTTPSERVER_HEARTBEAT_INCLUDE_TIMESTAMP
-include_timestamp = true
-
-# Include server statistics (active clients, uptime)
-# Environment: LOGWISP_HTTPSERVER_HEARTBEAT_INCLUDE_STATS
-include_stats = false
-
-# Format: "comment" (SSE comment) or "json" (data message)
-# Environment: LOGWISP_HTTPSERVER_HEARTBEAT_FORMAT
 format = "comment"
 
-# Production example:
-# [tcpserver]
-# enabled = true
-# port = 9090
-# buffer_size = 5000
+# Stream 2: System logs (authenticated)
+[[streams]]
+name = "system"
+
+[streams.monitor]
+check_interval_ms = 50  # More frequent checks
+targets = [
+    { path = "/var/log", pattern = "syslog*", is_file = false },
+    { path = "/var/log/auth.log", pattern = "", is_file = true }
+]
+
+[streams.httpserver]
+enabled = true
+port = 8443
+buffer_size = 5000
+stream_path = "/logs"
+status_path = "/health"
+
+# SSL placeholder
+[streams.httpserver.ssl]
+enabled = true
+cert_file = "/etc/logwisp/certs/server.crt"
+key_file = "/etc/logwisp/certs/server.key"
+min_version = "TLS1.2"
+
+# Authentication placeholder
+[streams.auth]
+type = "basic"
+
+[streams.auth.basic_auth]
+realm = "System Logs"
+users = [
+    { username = "admin", password_hash = "$2y$10$..." }
+]
+ip_whitelist = ["10.0.0.0/8", "192.168.0.0/16"]
+
+# TCP server also available
+[streams.tcpserver]
+enabled = true
+port = 9443
+buffer_size = 5000
+
+[streams.tcpserver.heartbeat]
+enabled = false
+
+# Stream 3: Debug logs (high-volume, no heartbeat)
+[[streams]]
+name = "debug"
+
+[streams.monitor]
+targets = [
+    { path = "./debug", pattern = "*.debug", is_file = false }
+]
+
+[streams.httpserver]
+enabled = true
+port = 8082
+buffer_size = 10000
+stream_path = "/stream"
+status_path = "/status"
+
+[streams.httpserver.heartbeat]
+enabled = false  # Disable for high-volume
+
+# Rate limiting placeholder
+[streams.httpserver.rate_limit]
+enabled = true
+requests_per_second = 100.0
+burst_size = 1000
+limit_by = "ip"
+
+# Usage Examples:
 #
-# [httpserver]
-# enabled = true
-# port = 443
-# buffer_size = 5000
-# ssl_enabled = true
-# ssl_cert_file = "/etc/ssl/certs/logwisp.crt"
-# ssl_key_file = "/etc/ssl/private/logwisp.key"
+# 1. Standard mode (each stream on its own port):
+#    ./logwisp
+#    - App logs: http://localhost:8080/stream
+#    - System logs: https://localhost:8443/logs (with auth)
+#    - Debug logs: http://localhost:8082/stream
+#
+# 2. Router mode (shared port with path routing):
+#    ./logwisp --router
+#    - App logs: http://localhost:8080/app/stream
+#    - System logs: http://localhost:8080/system/logs
+#    - Debug logs: http://localhost:8080/debug/stream
+#    - Global status: http://localhost:8080/status
+#
+# 3. Override config file:
+#    ./logwisp --config /etc/logwisp/production.toml
+#
+# 4. Environment variables:
+#    LOGWISP_MONITOR_CHECK_INTERVAL_MS=50
+#    LOGWISP_STREAMS_0_HTTPSERVER_PORT=8090

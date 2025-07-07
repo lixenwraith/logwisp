@@ -1,4 +1,4 @@
-// FILE: src/internal/stream/tcp.go
+// FILE: src/internal/stream/tcpstreamer.go
 package stream
 
 import (
@@ -18,25 +18,19 @@ type TCPStreamer struct {
 	logChan     chan monitor.LogEntry
 	config      config.TCPConfig
 	server      *tcpServer
+	done        chan struct{}
 	activeConns atomic.Int32
 	startTime   time.Time
-	done        chan struct{}
 	engine      *gnet.Engine
 	wg          sync.WaitGroup
-}
-
-type tcpServer struct {
-	gnet.BuiltinEventEngine
-	streamer    *TCPStreamer
-	connections sync.Map
 }
 
 func NewTCPStreamer(logChan chan monitor.LogEntry, cfg config.TCPConfig) *TCPStreamer {
 	return &TCPStreamer{
 		logChan:   logChan,
 		config:    cfg,
-		startTime: time.Now(),
 		done:      make(chan struct{}),
+		startTime: time.Now(),
 	}
 }
 
@@ -50,14 +44,14 @@ func (t *TCPStreamer) Start() error {
 		t.broadcastLoop()
 	}()
 
-	// Configure gnet with no-op logger
+	// Configure gnet
 	addr := fmt.Sprintf("tcp://:%d", t.config.Port)
 
 	// Run gnet in separate goroutine to avoid blocking
 	errChan := make(chan error, 1)
 	go func() {
 		err := gnet.Run(t.server, addr,
-			gnet.WithLogger(noopLogger{}), // No-op logger: discard everything
+			gnet.WithLogger(noopLogger{}),
 			gnet.WithMulticore(true),
 			gnet.WithReusePort(true),
 		)
@@ -83,7 +77,6 @@ func (t *TCPStreamer) Stop() {
 
 	// Stop gnet engine if running
 	if t.engine != nil {
-		// Use Stop() method to gracefully shutdown gnet
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		t.engine.Stop(ctx)
@@ -107,7 +100,7 @@ func (t *TCPStreamer) broadcastLoop() {
 		select {
 		case entry, ok := <-t.logChan:
 			if !ok {
-				return // Channel closed
+				return
 			}
 			data, err := json.Marshal(entry)
 			if err != nil {
@@ -155,27 +148,4 @@ func (t *TCPStreamer) formatHeartbeat() []byte {
 
 	jsonData, _ := json.Marshal(data)
 	return append(jsonData, '\n')
-}
-
-func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
-	s.streamer.engine = &eng
-	return gnet.None
-}
-
-func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
-	s.connections.Store(c, struct{}{})
-	s.streamer.activeConns.Add(1)
-	return nil, gnet.None
-}
-
-func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
-	s.connections.Delete(c)
-	s.streamer.activeConns.Add(-1)
-	return gnet.None
-}
-
-func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
-	// We don't expect input from clients, just discard
-	c.Discard(-1)
-	return gnet.None
 }

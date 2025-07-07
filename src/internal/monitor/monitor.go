@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,15 +21,48 @@ type LogEntry struct {
 	Fields  json.RawMessage `json:"fields,omitempty"`
 }
 
-type Monitor struct {
-	subscribers   []chan LogEntry
-	targets       []target
-	watchers      map[string]*fileWatcher
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	checkInterval time.Duration
+type Monitor interface {
+	Start(ctx context.Context) error
+	Stop()
+	Subscribe() chan LogEntry
+	AddTarget(path, pattern string, isFile bool) error
+	RemoveTarget(path string) error
+	SetCheckInterval(interval time.Duration)
+	GetStats() Stats
+	GetActiveWatchers() []WatcherInfo
+}
+
+type Stats struct {
+	ActiveWatchers int
+	TotalEntries   uint64
+	DroppedEntries uint64
+	StartTime      time.Time
+	LastEntryTime  time.Time
+}
+
+type WatcherInfo struct {
+	Path         string
+	Size         int64
+	Position     int64
+	ModTime      time.Time
+	EntriesRead  uint64
+	LastReadTime time.Time
+	Rotations    int
+}
+
+type monitor struct {
+	subscribers    []chan LogEntry
+	targets        []target
+	watchers       map[string]*fileWatcher
+	mu             sync.RWMutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	checkInterval  time.Duration
+	totalEntries   atomic.Uint64
+	droppedEntries atomic.Uint64
+	startTime      time.Time
+	lastEntryTime  atomic.Value // time.Time
 }
 
 type target struct {
@@ -38,14 +72,17 @@ type target struct {
 	regex   *regexp.Regexp
 }
 
-func New() *Monitor {
-	return &Monitor{
+func New() Monitor {
+	m := &monitor{
 		watchers:      make(map[string]*fileWatcher),
 		checkInterval: 100 * time.Millisecond,
+		startTime:     time.Now(),
 	}
+	m.lastEntryTime.Store(time.Time{})
+	return m
 }
 
-func (m *Monitor) Subscribe() chan LogEntry {
+func (m *monitor) Subscribe() chan LogEntry {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -54,26 +91,29 @@ func (m *Monitor) Subscribe() chan LogEntry {
 	return ch
 }
 
-func (m *Monitor) publish(entry LogEntry) {
+func (m *monitor) publish(entry LogEntry) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	m.totalEntries.Add(1)
+	m.lastEntryTime.Store(entry.Time)
 
 	for _, ch := range m.subscribers {
 		select {
 		case ch <- entry:
 		default:
-			// Drop message if channel full
+			m.droppedEntries.Add(1)
 		}
 	}
 }
 
-func (m *Monitor) SetCheckInterval(interval time.Duration) {
+func (m *monitor) SetCheckInterval(interval time.Duration) {
 	m.mu.Lock()
 	m.checkInterval = interval
 	m.mu.Unlock()
 }
 
-func (m *Monitor) AddTarget(path, pattern string, isFile bool) error {
+func (m *monitor) AddTarget(path, pattern string, isFile bool) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("invalid path %s: %w", path, err)
@@ -100,14 +140,41 @@ func (m *Monitor) AddTarget(path, pattern string, isFile bool) error {
 	return nil
 }
 
-func (m *Monitor) Start(ctx context.Context) error {
+func (m *monitor) RemoveTarget(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("invalid path %s: %w", path, err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Remove from targets
+	newTargets := make([]target, 0, len(m.targets))
+	for _, t := range m.targets {
+		if t.path != absPath {
+			newTargets = append(newTargets, t)
+		}
+	}
+	m.targets = newTargets
+
+	// Stop any watchers for this path
+	if w, exists := m.watchers[absPath]; exists {
+		w.stop()
+		delete(m.watchers, absPath)
+	}
+
+	return nil
+}
+
+func (m *monitor) Start(ctx context.Context) error {
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	m.wg.Add(1)
 	go m.monitorLoop()
 	return nil
 }
 
-func (m *Monitor) Stop() {
+func (m *monitor) Stop() {
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -123,7 +190,34 @@ func (m *Monitor) Stop() {
 	m.mu.Unlock()
 }
 
-func (m *Monitor) monitorLoop() {
+func (m *monitor) GetStats() Stats {
+	lastEntry, _ := m.lastEntryTime.Load().(time.Time)
+
+	m.mu.RLock()
+	watcherCount := len(m.watchers)
+	m.mu.RUnlock()
+
+	return Stats{
+		ActiveWatchers: watcherCount,
+		TotalEntries:   m.totalEntries.Load(),
+		DroppedEntries: m.droppedEntries.Load(),
+		StartTime:      m.startTime,
+		LastEntryTime:  lastEntry,
+	}
+}
+
+func (m *monitor) GetActiveWatchers() []WatcherInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	info := make([]WatcherInfo, 0, len(m.watchers))
+	for _, w := range m.watchers {
+		info = append(info, w.getInfo())
+	}
+	return info
+}
+
+func (m *monitor) monitorLoop() {
 	defer m.wg.Done()
 
 	m.checkTargets()
@@ -155,7 +249,7 @@ func (m *Monitor) monitorLoop() {
 	}
 }
 
-func (m *Monitor) checkTargets() {
+func (m *monitor) checkTargets() {
 	m.mu.RLock()
 	targets := make([]target, len(m.targets))
 	copy(targets, m.targets)
@@ -165,10 +259,13 @@ func (m *Monitor) checkTargets() {
 		if t.isFile {
 			m.ensureWatcher(t.path)
 		} else {
+			// Directory scanning for pattern matching
 			files, err := m.scanDirectory(t.path, t.regex)
 			if err != nil {
+				fmt.Printf("[DEBUG] Error scanning directory %s: %v\n", t.path, err)
 				continue
 			}
+
 			for _, file := range files {
 				m.ensureWatcher(file)
 			}
@@ -178,7 +275,7 @@ func (m *Monitor) checkTargets() {
 	m.cleanupWatchers()
 }
 
-func (m *Monitor) scanDirectory(dir string, pattern *regexp.Regexp) ([]string, error) {
+func (m *monitor) scanDirectory(dir string, pattern *regexp.Regexp) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -199,7 +296,7 @@ func (m *Monitor) scanDirectory(dir string, pattern *regexp.Regexp) ([]string, e
 	return files, nil
 }
 
-func (m *Monitor) ensureWatcher(path string) {
+func (m *monitor) ensureWatcher(path string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -207,17 +304,17 @@ func (m *Monitor) ensureWatcher(path string) {
 		return
 	}
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return
-	}
-
 	w := newFileWatcher(path, m.publish)
 	m.watchers[path] = w
+
+	fmt.Printf("[DEBUG] Created watcher for: %s\n", path)
 
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		w.watch(m.ctx)
+		if err := w.watch(m.ctx); err != nil {
+			fmt.Printf("[ERROR] Watcher for %s failed: %v\n", path, err)
+		}
 
 		m.mu.Lock()
 		delete(m.watchers, path)
@@ -225,7 +322,7 @@ func (m *Monitor) ensureWatcher(path string) {
 	}()
 }
 
-func (m *Monitor) cleanupWatchers() {
+func (m *monitor) cleanupWatchers() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
