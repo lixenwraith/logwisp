@@ -146,6 +146,7 @@ func (t *TCPStreamer) formatHeartbeat() []byte {
 		data["uptime_seconds"] = int(time.Since(t.startTime).Seconds())
 	}
 
+	// For TCP, always use JSON format
 	jsonData, _ := json.Marshal(data)
 	return append(jsonData, '\n')
 }

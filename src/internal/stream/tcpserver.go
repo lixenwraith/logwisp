@@ -3,8 +3,9 @@ package stream
 
 import (
 	"fmt"
-	"github.com/panjf2000/gnet/v2"
 	"sync"
+
+	"github.com/panjf2000/gnet/v2"
 )
 
 type tcpServer struct {

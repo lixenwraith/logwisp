@@ -4,9 +4,10 @@ package logstream
 import (
 	"context"
 	"fmt"
-	"logwisp/src/internal/config"
 	"sync"
 	"time"
+
+	"logwisp/src/internal/config"
 )
 
 func (ls *LogStream) Shutdown() {

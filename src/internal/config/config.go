@@ -2,9 +2,6 @@
 package config
 
 type Config struct {
-	// Global monitor settings
-	Monitor MonitorConfig `toml:"monitor"`
-
 	// Stream configurations
 	Streams []StreamConfig `toml:"streams"`
 }

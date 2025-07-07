@@ -3,21 +3,20 @@ package config
 
 import (
 	"fmt"
-	lconfig "github.com/lixenwraith/config"
 	"os"
 	"path/filepath"
 	"strings"
+
+	lconfig "github.com/lixenwraith/config"
 )
 
 func defaults() *Config {
 	return &Config{
-		Monitor: MonitorConfig{
-			CheckIntervalMs: 100,
-		},
 		Streams: []StreamConfig{
 			{
 				Name: "default",
 				Monitor: &StreamMonitorConfig{
+					CheckIntervalMs: 100,
 					Targets: []MonitorTarget{
 						{Path: "./", Pattern: "*.log", IsFile: false},
 					},

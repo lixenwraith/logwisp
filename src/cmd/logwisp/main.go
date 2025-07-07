@@ -12,6 +12,7 @@ import (
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/logstream"
+	"logwisp/src/internal/version"
 )
 
 func main() {
@@ -20,8 +21,14 @@ func main() {
 		configFile = flag.String("config", "", "Config file path")
 		useRouter  = flag.Bool("router", false, "Use HTTP router for path-based routing")
 		// routerPort = flag.Int("router-port", 0, "Override router port (default: first HTTP port)")
+		showVersion = flag.Bool("version", false, "Show version information")
 	)
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version.String())
+		os.Exit(0)
+	}
 
 	if *configFile != "" {
 		os.Setenv("LOGWISP_CONFIG_FILE", *configFile)
@@ -101,6 +108,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	fmt.Printf("LogWisp %s\n", version.Short())
 	fmt.Printf("\n%d stream(s) running. Press Ctrl+C to stop.\n", successCount)
 
 	// Start periodic status display

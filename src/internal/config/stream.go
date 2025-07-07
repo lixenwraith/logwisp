@@ -17,7 +17,7 @@ type StreamConfig struct {
 }
 
 type StreamMonitorConfig struct {
-	CheckIntervalMs *int            `toml:"check_interval_ms"`
+	CheckIntervalMs int             `toml:"check_interval_ms"`
 	Targets         []MonitorTarget `toml:"targets"`
 }
 
@@ -35,8 +35,8 @@ func (s *StreamConfig) GetTargets(defaultTargets []MonitorTarget) []MonitorTarge
 }
 
 func (s *StreamConfig) GetCheckInterval(defaultInterval int) int {
-	if s.Monitor != nil && s.Monitor.CheckIntervalMs != nil {
-		return *s.Monitor.CheckIntervalMs
+	if s.Monitor != nil && s.Monitor.CheckIntervalMs > 0 {
+		return s.Monitor.CheckIntervalMs
 	}
 	return defaultInterval
 }

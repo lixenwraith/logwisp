@@ -4,9 +4,11 @@ package logstream
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/valyala/fasthttp"
 	"strings"
 	"sync"
+
+	"github.com/valyala/fasthttp"
+	"logwisp/src/internal/version"
 )
 
 type routerServer struct {
@@ -81,6 +83,7 @@ func (rs *routerServer) handleGlobalStatus(ctx *fasthttp.RequestCtx) {
 
 	status := map[string]interface{}{
 		"service":       "LogWisp Router",
+		"version":       version.Short(),
 		"port":          rs.port,
 		"streams":       streams,
 		"total_streams": len(streams),

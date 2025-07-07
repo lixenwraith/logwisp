@@ -7,10 +7,6 @@ import (
 )
 
 func (c *Config) validate() error {
-	if c.Monitor.CheckIntervalMs < 10 {
-		return fmt.Errorf("check interval too small: %d ms", c.Monitor.CheckIntervalMs)
-	}
-
 	if len(c.Streams) == 0 {
 		return fmt.Errorf("no streams configured")
 	}
@@ -29,9 +25,15 @@ func (c *Config) validate() error {
 		}
 		streamNames[stream.Name] = true
 
-		// Stream must have targets
+		// Stream must have monitor config with targets
 		if stream.Monitor == nil || len(stream.Monitor.Targets) == 0 {
 			return fmt.Errorf("stream '%s': no monitor targets specified", stream.Name)
+		}
+
+		// Validate check interval
+		if stream.Monitor.CheckIntervalMs < 10 {
+			return fmt.Errorf("stream '%s': check interval too small: %d ms (min: 10ms)",
+				stream.Name, stream.Monitor.CheckIntervalMs)
 		}
 
 		for j, target := range stream.Monitor.Targets {

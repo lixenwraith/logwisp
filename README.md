@@ -10,21 +10,23 @@ A high-performance log streaming service with multi-stream architecture, support
 
 - **Multi-Stream Architecture**: Run multiple independent log streams, each with its own configuration
 - **Dual Protocol Support**: TCP (raw streaming) and HTTP/SSE (browser-friendly)
-- **Real-time Monitoring**: Instant updates with configurable check intervals
+- **Real-time Monitoring**: Instant updates with per-stream configurable check intervals
 - **File Rotation Detection**: Automatic detection and handling of log rotation
 - **Path-based Routing**: Optional HTTP router for consolidated access
-- **Per-Stream Configuration**: Independent settings for each log stream
+- **Per-Stream Configuration**: Independent settings including check intervals for each log stream
 - **Connection Statistics**: Real-time monitoring of active connections
 - **Flexible Targets**: Monitor individual files or entire directories
-- **Zero Dependencies**: Only gnet and fasthttp beyond stdlib
+- **Version Management**: Git tag-based versioning with build information
+- **Configurable Heartbeats**: Keep connections alive with customizable formats
+- **Minimal Direct Dependencies**: panjf2000/gnet/v2, valyala/fasthttp, lixenwraith/config, and stdlib
 
 ## Quick Start
 
 ```bash
-# Build
-go build -o logwisp ./src/cmd/logwisp
+# Build with version information
+make build
 
-# Run with default configuration
+# Run with default configuration if ~/.config/logwisp.toml doesn't exists
 ./logwisp
 
 # Run with custom config
@@ -32,6 +34,9 @@ go build -o logwisp ./src/cmd/logwisp
 
 # Run with HTTP router (path-based routing)
 ./logwisp --router
+
+# Show version information
+./logwisp --version
 ```
 
 ## Architecture
@@ -57,15 +62,13 @@ Configuration file location: `~/.config/logwisp.toml`
 ### Basic Multi-Stream Configuration
 
 ```toml
-# Global defaults
-[monitor]
-check_interval_ms = 100
-
 # Application logs stream
 [[streams]]
 name = "app"
 
 [streams.monitor]
+# Per-stream check interval in milliseconds
+check_interval_ms = 100
 targets = [
     { path = "/var/log/myapp", pattern = "*.log", is_file = false },
     { path = "/var/log/myapp/app.log", is_file = true }
@@ -78,12 +81,21 @@ buffer_size = 2000
 stream_path = "/stream"
 status_path = "/status"
 
-# System logs stream
+# Heartbeat configuration
+[streams.httpserver.heartbeat]
+enabled = true
+interval_seconds = 30
+format = "comment"  # or "json" for structured events
+include_timestamp = true
+include_stats = false
+
+# System logs stream with slower check interval
 [[streams]]
 name = "system"
 
 [streams.monitor]
-check_interval_ms = 50  # Override global default
+# Check every 60 seconds for slowly updating logs
+check_interval_ms = 60000
 targets = [
     { path = "/var/log/syslog", is_file = true },
     { path = "/var/log/auth.log", is_file = true }
@@ -94,11 +106,12 @@ enabled = true
 port = 9090
 buffer_size = 5000
 
-[streams.httpserver]
+# TCP heartbeat (always JSON format)
+[streams.tcpserver.heartbeat]
 enabled = true
-port = 8443
-stream_path = "/logs"
-status_path = "/health"
+interval_seconds = 300  # 5 minutes
+include_timestamp = true
+include_stats = true
 ```
 
 ### Target Configuration
@@ -115,6 +128,42 @@ Monitor targets support both files and directories:
 # All .log files in a directory
 { path = "./logs", pattern = "*.log", is_file = false }
 ```
+
+### Check Interval Configuration
+
+Each stream can have its own check interval based on log update frequency:
+
+- **High-frequency logs**: 50-100ms (e.g., application debug logs)
+- **Normal logs**: 100-1000ms (e.g., application logs)
+- **Low-frequency logs**: 10000-60000ms (e.g., system logs, archives)
+
+### Heartbeat Configuration
+
+Keep connections alive and detect stale clients with configurable heartbeats:
+
+```toml
+[streams.httpserver.heartbeat]
+enabled = true
+interval_seconds = 30
+format = "comment"        # "comment" for SSE comments, "json" for events
+include_timestamp = true  # Add timestamp to heartbeat
+include_stats = true      # Include connection count and uptime
+```
+
+**Heartbeat Formats**:
+
+Comment format (SSE):
+```
+: heartbeat 2025-01-07T10:30:00Z clients=5 uptime=3600s
+```
+
+JSON format (SSE):
+```
+event: heartbeat
+data: {"type":"heartbeat","timestamp":"2025-01-07T10:30:00Z","active_clients":5,"uptime_seconds":3600}
+```
+
+TCP always uses JSON format with newline delimiter.
 
 ## Usage Modes
 
@@ -183,6 +232,11 @@ eventSource.addEventListener('message', (e) => {
     const logEntry = JSON.parse(e.data);
     console.log(`[${logEntry.time}] ${logEntry.level}: ${logEntry.message}`);
 });
+
+eventSource.addEventListener('heartbeat', (e) => {
+    const heartbeat = JSON.parse(e.data);
+    console.log('Heartbeat:', heartbeat);
+});
 ```
 
 ## Log Entry Format
@@ -219,7 +273,7 @@ All log entries are streamed as JSON:
 ```json
 {
   "service": "LogWisp",
-  "version": "3.0.0",
+  "version": "v1.0.0",
   "server": {
     "type": "http",
     "port": 8080,
@@ -274,24 +328,26 @@ When rotation is detected, a special log entry is generated:
 - **Per-client buffers**: Each client has independent buffer space
 - **Configurable sizes**: Adjust buffer sizes based on expected load
 
-### Heartbeat Messages
+### Per-Stream Check Intervals
 
-Keep connections alive and detect stale clients:
+Optimize resource usage by configuring check intervals based on log update frequency:
 
 ```toml
-[streams.httpserver.heartbeat]
-enabled = true
-interval_seconds = 30
-include_timestamp = true
-include_stats = true
-format = "json"  # or "comment" for SSE comments
+# High-frequency application logs
+[streams.monitor]
+check_interval_ms = 50  # Check every 50ms
+
+# Low-frequency system logs
+[streams.monitor]
+check_interval_ms = 60000  # Check every minute
 ```
 
 ## Performance Tuning
 
 ### Monitor Settings
 - `check_interval_ms`: Lower values = faster detection, higher CPU usage
-- `buffer_size`: Larger buffers handle bursts better but use more memory
+- Configure per-stream based on expected update frequency
+- Use 10000ms+ for archival or slowly updating logs
 
 ### File Watcher Optimization
 - Use specific file paths when possible (more efficient than directory scanning)
@@ -307,7 +363,7 @@ format = "json"  # or "comment" for SSE comments
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/logwisp
+git clone https://github.com/lixenwraith/logwisp
 cd logwisp
 
 # Install dependencies
@@ -316,12 +372,23 @@ go get github.com/panjf2000/gnet/v2
 go get github.com/valyala/fasthttp
 go get github.com/lixenwraith/config
 
-# Build
-go build -o logwisp ./src/cmd/logwisp
+# Build with version information
+make build
 
 # Run tests
-go test ./...
+make test
+
+# Create a release
+make release TAG=v1.0.0
 ```
+
+### Makefile Targets
+
+- `make build` - Build binary with version information
+- `make install` - Install to /usr/local/bin
+- `make clean` - Remove built binary
+- `make test` - Run test suite
+- `make release TAG=vX.Y.Z` - Create and push git tag
 
 ## Deployment
 
@@ -356,7 +423,7 @@ WantedBy=multi-user.target
 FROM golang:1.24 AS builder
 WORKDIR /app
 COPY . .
-RUN go build -o logwisp ./src/cmd/logwisp
+RUN make build
 
 FROM debian:bookworm-slim
 RUN useradd -r -s /bin/false logwisp
@@ -411,6 +478,7 @@ services:
 2. Verify file paths in configuration
 3. Ensure files match the specified patterns
 4. Check monitor statistics in status endpoint
+5. Verify check_interval_ms is appropriate for log update frequency
 
 ### High Memory Usage
 1. Reduce buffer sizes in configuration
@@ -423,6 +491,12 @@ services:
 2. Verify network stability
 3. Monitor client-side errors
 4. Review dropped entry statistics
+
+### Version Information
+Use `./logwisp --version` to see:
+- Version tag (from git tags)
+- Git commit hash
+- Build timestamp
 
 ## License
 
@@ -438,9 +512,13 @@ Contributions are welcome! Please read our contributing guidelines and submit pu
 - [x] File and directory monitoring
 - [x] TCP and HTTP/SSE streaming
 - [x] Path-based HTTP routing
+- [x] Per-stream check intervals
+- [x] Version management
+- [x] Configurable heartbeats
+- [ ] Rate and connection limiting
+- [ ] Log filtering and transformation
+- [ ] Configurable logging support
 - [ ] Authentication (Basic, JWT, mTLS)
 - [ ] TLS/SSL support
-- [ ] Rate limiting
 - [ ] Prometheus metrics export
 - [ ] WebSocket support
-- [ ] Log filtering and transformation

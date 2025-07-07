@@ -14,6 +14,7 @@ import (
 	"github.com/valyala/fasthttp"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/monitor"
+	"logwisp/src/internal/version"
 )
 
 type HTTPStreamer struct {
@@ -286,7 +287,7 @@ func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 
 	status := map[string]interface{}{
 		"service": "LogWisp",
-		"version": "3.0.0",
+		"version": version.Short(),
 		"server": map[string]interface{}{
 			"type":           "http",
 			"port":           h.config.Port,
@@ -318,17 +319,17 @@ func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetBody(data)
 }
 
-// GetActiveConnections returns the current number of active clients
+// Returns the current number of active clients
 func (h *HTTPStreamer) GetActiveConnections() int32 {
 	return h.activeClients.Load()
 }
 
-// GetStreamPath returns the configured stream endpoint path
+// Returns the configured stream endpoint path
 func (h *HTTPStreamer) GetStreamPath() string {
 	return h.streamPath
 }
 
-// GetStatusPath returns the configured status endpoint path
+// Returns the configured status endpoint path
 func (h *HTTPStreamer) GetStatusPath() string {
 	return h.statusPath
 }

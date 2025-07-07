@@ -1,15 +1,15 @@
 # LogWisp Multi-Stream Configuration
 # Location: ~/.config/logwisp.toml
 
-# Global monitor defaults
-[monitor]
-check_interval_ms = 100
-
 # Stream 1: Application logs (public access)
 [[streams]]
 name = "app"
 
 [streams.monitor]
+# Check interval in milliseconds (per-stream configuration)
+check_interval_ms = 100
+# Array of folders and files to be monitored
+# For file targets, pattern is ignored and can be omitted
 targets = [
     { path = "/var/log/myapp", pattern = "*.log", is_file = false },
     { path = "/var/log/myapp/app.log", pattern = "", is_file = true }
@@ -22,17 +22,24 @@ buffer_size = 2000
 stream_path = "/stream"
 status_path = "/status"
 
+# HTTP SSE Heartbeat Configuration
 [streams.httpserver.heartbeat]
 enabled = true
 interval_seconds = 30
+# Format options: "comment" (SSE comments) or "json" (JSON events)
 format = "comment"
+# Include timestamp in heartbeat
+include_timestamp = true
+# Include server statistics (client count, uptime)
+include_stats = false
 
 # Stream 2: System logs (authenticated)
 [[streams]]
 name = "system"
 
 [streams.monitor]
-check_interval_ms = 50  # More frequent checks
+# More frequent checks for critical system logs
+check_interval_ms = 50
 targets = [
     { path = "/var/log", pattern = "syslog*", is_file = false },
     { path = "/var/log/auth.log", pattern = "", is_file = true }
@@ -44,6 +51,14 @@ port = 8443
 buffer_size = 5000
 stream_path = "/logs"
 status_path = "/health"
+
+# JSON format heartbeat with full stats
+[streams.httpserver.heartbeat]
+enabled = true
+interval_seconds = 20
+format = "json"
+include_timestamp = true
+include_stats = true
 
 # SSL placeholder
 [streams.httpserver.ssl]
@@ -69,14 +84,20 @@ enabled = true
 port = 9443
 buffer_size = 5000
 
+# TCP heartbeat (always JSON format)
 [streams.tcpserver.heartbeat]
-enabled = false
+enabled = true
+interval_seconds = 60
+include_timestamp = true
+include_stats = true
 
-# Stream 3: Debug logs (high-volume, no heartbeat)
+# Stream 3: Debug logs (high-volume, less frequent checks)
 [[streams]]
 name = "debug"
 
 [streams.monitor]
+# Check every 10 seconds for debug logs
+check_interval_ms = 10000
 targets = [
     { path = "./debug", pattern = "*.debug", is_file = false }
 ]
@@ -88,8 +109,9 @@ buffer_size = 10000
 stream_path = "/stream"
 status_path = "/status"
 
+# Disable heartbeat for high-volume stream
 [streams.httpserver.heartbeat]
-enabled = false  # Disable for high-volume
+enabled = false
 
 # Rate limiting placeholder
 [streams.httpserver.rate_limit]
@@ -98,6 +120,40 @@ requests_per_second = 100.0
 burst_size = 1000
 limit_by = "ip"
 
+# Stream 4: Slow logs (infrequent updates)
+[[streams]]
+name = "archive"
+
+[streams.monitor]
+# Check once per minute for archival logs
+check_interval_ms = 60000
+targets = [
+    { path = "/var/log/archive", pattern = "*.log.gz", is_file = false }
+]
+
+[streams.tcpserver]
+enabled = true
+port = 9091
+buffer_size = 1000
+
+# Minimal heartbeat for connection keep-alive
+[streams.tcpserver.heartbeat]
+enabled = true
+interval_seconds = 300  # 5 minutes
+include_timestamp = false
+include_stats = false
+
+# Heartbeat Format Examples:
+#
+# Comment format (SSE):
+# : heartbeat 2025-01-07T10:30:00Z clients=5 uptime=3600s
+#
+# JSON format (SSE):
+# event: heartbeat
+# data: {"type":"heartbeat","timestamp":"2025-01-07T10:30:00Z","active_clients":5,"uptime_seconds":3600}
+#
+# TCP always uses JSON format with newline delimiter
+
 # Usage Examples:
 #
 # 1. Standard mode (each stream on its own port):
@@ -105,6 +161,7 @@ limit_by = "ip"
 #    - App logs: http://localhost:8080/stream
 #    - System logs: https://localhost:8443/logs (with auth)
 #    - Debug logs: http://localhost:8082/stream
+#    - Archive logs: tcp://localhost:9091
 #
 # 2. Router mode (shared port with path routing):
 #    ./logwisp --router
@@ -117,5 +174,8 @@ limit_by = "ip"
 #    ./logwisp --config /etc/logwisp/production.toml
 #
 # 4. Environment variables:
-#    LOGWISP_MONITOR_CHECK_INTERVAL_MS=50
+#    LOGWISP_STREAMS_0_MONITOR_CHECK_INTERVAL_MS=50
 #    LOGWISP_STREAMS_0_HTTPSERVER_PORT=8090
+#
+# 5. Show version:
+#    ./logwisp --version
