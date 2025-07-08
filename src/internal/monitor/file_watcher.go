@@ -217,16 +217,22 @@ func (w *fileWatcher) checkFile() error {
 		}
 
 		// Update position after successful read
-		if currentPos, err := file.Seek(0, io.SeekCurrent); err == nil {
-			w.mu.Lock()
-			w.position = currentPos
-			w.size = currentSize
-			w.modTime = currentModTime
-			if !rotated && currentInode != 0 {
-				w.inode = currentInode
-			}
-			w.mu.Unlock()
+		currentPos, err := file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			// Log error but don't fail - position tracking is best effort
+			fmt.Printf("[WARN] Failed to get file position for %s: %v\n", w.path, err)
+			// Use size as fallback position
+			currentPos = currentSize
 		}
+
+		w.mu.Lock()
+		w.position = currentPos
+		w.size = currentSize
+		w.modTime = currentModTime
+		if !rotated && currentInode != 0 {
+			w.inode = currentInode
+		}
+		w.mu.Unlock()
 
 		return scanner.Err()
 	}

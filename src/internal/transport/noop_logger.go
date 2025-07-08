@@ -1,5 +1,5 @@
-// FILE: src/internal/stream/noop_logger.go
-package stream
+// FILE: src/internal/transport/noop_logger.go
+package transport
 
 // noopLogger implements gnet's Logger interface but discards everything
 type noopLogger struct{}

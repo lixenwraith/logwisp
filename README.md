@@ -64,17 +64,17 @@ LogStream Service
 
 ## Configuration
 
-Configuration file location: `~/.config/logwisp.toml`
+Default configuration file location: `~/.config/logwisp.toml`
 
 ### Basic Multi-Stream Configuration
 
 ```toml
-# Application logs stream
+# Application logs transport
 [[streams]]
 name = "app"
 
 [streams.monitor]
-# Per-stream check interval in milliseconds
+# Per-transport check interval in milliseconds
 check_interval_ms = 100
 targets = [
     { path = "/var/log/myapp", pattern = "*.log", is_file = false },
@@ -116,7 +116,7 @@ response_code = 429
 response_message = "Rate limit exceeded"
 max_connections_per_ip = 5
 
-# System logs stream with slower check interval
+# System logs transport with slower check interval
 [[streams]]
 name = "system"
 
@@ -288,10 +288,10 @@ All HTTP streams share ports with path-based routing:
 ### HTTP/SSE Stream
 
 ```bash
-# Connect to a stream
+# Connect to a transport
 curl -N http://localhost:8080/stream
 
-# Check stream status (includes filter and rate limit stats)
+# Check transport status (includes filter and rate limit stats)
 curl http://localhost:8080/status
 
 # With authentication (when implemented)
@@ -742,6 +742,8 @@ Contributions are welcome! Please read our contributing guidelines and submit pu
 - [x] Regex-based log filtering
 - [ ] Log transformation (field extraction, formatting)
 - [ ] Configurable logging/stdout support
+- [ ] Service/non-interactive setup
+- [ ] Live config change support
 - [ ] Authentication (Basic, JWT, mTLS)
 - [ ] TLS/SSL support
 - [ ] Prometheus metrics export

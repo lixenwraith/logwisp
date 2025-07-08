@@ -1,5 +1,5 @@
-// FILE: src/internal/stream/tcpstreamer.go
-package stream
+// FILE: src/internal/transport/tcpstreamer.go
+package transport
 
 import (
 	"context"
@@ -23,6 +23,7 @@ type TCPStreamer struct {
 	activeConns atomic.Int32
 	startTime   time.Time
 	engine      *gnet.Engine
+	engineMu    sync.Mutex
 	wg          sync.WaitGroup
 	rateLimiter *ratelimit.Limiter
 }
@@ -84,10 +85,14 @@ func (t *TCPStreamer) Stop() {
 	close(t.done)
 
 	// Stop gnet engine if running
-	if t.engine != nil {
+	t.engineMu.Lock()
+	engine := t.engine
+	t.engineMu.Unlock()
+
+	if engine != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		t.engine.Stop(ctx)
+		(*engine).Stop(ctx) // Dereference the pointer
 	}
 
 	// Wait for broadcast loop to finish

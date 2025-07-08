@@ -1,5 +1,5 @@
 // FILE: src/internal/monitor/tcpserver.go
-package stream
+package transport
 
 import (
 	"fmt"
@@ -17,7 +17,10 @@ type tcpServer struct {
 
 func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
 	// Store engine reference for shutdown
+	s.streamer.engineMu.Lock()
 	s.streamer.engine = &eng
+	s.streamer.engineMu.Unlock()
+
 	fmt.Printf("[TCP DEBUG] Server booted on port %d\n", s.streamer.config.Port)
 	return gnet.None
 }

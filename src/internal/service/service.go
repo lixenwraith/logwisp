@@ -1,16 +1,16 @@
-// FILE: src/internal/logstream/service.go
-package logstream
+// FILE: src/internal/service/service.go
+package service
 
 import (
 	"context"
 	"fmt"
-	"logwisp/src/internal/filter"
 	"sync"
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/filter"
 	"logwisp/src/internal/monitor"
-	"logwisp/src/internal/stream"
+	"logwisp/src/internal/transport"
 )
 
 type Service struct {
@@ -19,29 +19,6 @@ type Service struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
-}
-
-type LogStream struct {
-	Name        string
-	Config      config.StreamConfig
-	Monitor     monitor.Monitor
-	FilterChain *filter.Chain
-	TCPServer   *stream.TCPStreamer
-	HTTPServer  *stream.HTTPStreamer
-	Stats       *StreamStats
-
-	ctx    context.Context
-	cancel context.CancelFunc
-}
-
-type StreamStats struct {
-	StartTime          time.Time
-	MonitorStats       monitor.Stats
-	TCPConnections     int32
-	HTTPConnections    int32
-	TotalBytesServed   uint64
-	TotalEntriesServed uint64
-	FilterStats        map[string]any
 }
 
 func New(ctx context.Context) *Service {
@@ -58,10 +35,10 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 	defer s.mu.Unlock()
 
 	if _, exists := s.streams[cfg.Name]; exists {
-		return fmt.Errorf("stream '%s' already exists", cfg.Name)
+		return fmt.Errorf("transport '%s' already exists", cfg.Name)
 	}
 
-	// Create stream context
+	// Create transport context
 	streamCtx, streamCancel := context.WithCancel(s.ctx)
 
 	// Create monitor
@@ -93,7 +70,7 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 		filterChain = chain
 	}
 
-	// Create log stream
+	// Create log transport
 	ls := &LogStream{
 		Name:        cfg.Name,
 		Config:      cfg,
@@ -120,7 +97,7 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 			s.filterLoop(streamCtx, rawChan, tcpChan, filterChain)
 		}()
 
-		ls.TCPServer = stream.NewTCPStreamer(tcpChan, *cfg.TCPServer)
+		ls.TCPServer = transport.NewTCPStreamer(tcpChan, *cfg.TCPServer)
 
 		if err := s.startTCPServer(ls); err != nil {
 			ls.Shutdown()
@@ -142,7 +119,7 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 			s.filterLoop(streamCtx, rawChan, httpChan, filterChain)
 		}()
 
-		ls.HTTPServer = stream.NewHTTPStreamer(httpChan, *cfg.HTTPServer)
+		ls.HTTPServer = transport.NewHTTPStreamer(httpChan, *cfg.HTTPServer)
 
 		if err := s.startHTTPServer(ls); err != nil {
 			ls.Shutdown()
@@ -187,7 +164,7 @@ func (s *Service) GetStream(name string) (*LogStream, error) {
 
 	stream, exists := s.streams[name]
 	if !exists {
-		return nil, fmt.Errorf("stream '%s' not found", name)
+		return nil, fmt.Errorf("transport '%s' not found", name)
 	}
 	return stream, nil
 }
@@ -209,7 +186,7 @@ func (s *Service) RemoveStream(name string) error {
 
 	stream, exists := s.streams[name]
 	if !exists {
-		return fmt.Errorf("stream '%s' not found", name)
+		return fmt.Errorf("transport '%s' not found", name)
 	}
 
 	stream.Shutdown()

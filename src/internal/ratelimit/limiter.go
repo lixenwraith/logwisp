@@ -11,7 +11,7 @@ import (
 	"logwisp/src/internal/config"
 )
 
-// Manages rate limiting for a stream
+// Manages rate limiting for a transport
 type Limiter struct {
 	config config.RateLimitConfig
 
@@ -19,7 +19,7 @@ type Limiter struct {
 	ipLimiters map[string]*ipLimiter
 	ipMu       sync.RWMutex
 
-	// Global limiter for the stream
+	// Global limiter for the transport
 	globalLimiter *TokenBucket
 
 	// Connection tracking

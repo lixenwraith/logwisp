@@ -1,5 +1,5 @@
-// FILE: src/internal/config/routerserver.go
-package logstream
+// FILE: src/internal/service/routerserver.go
+package service
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ import (
 type routerServer struct {
 	port      int
 	server    *fasthttp.Server
-	routes    map[string]*LogStream // path prefix -> stream
+	routes    map[string]*LogStream // path prefix -> transport
 	routeMu   sync.RWMutex
 	router    *HTTPRouter
 	startTime time.Time
@@ -38,7 +38,7 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Find matching stream
+	// Find matching transport
 	rs.routeMu.RLock()
 	var matchedStream *LogStream
 	var matchedPrefix string
@@ -68,18 +68,18 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 
 	rs.router.routedRequests.Add(1)
 
-	// Route to stream's handler
+	// Route to transport's handler
 	if matchedStream.HTTPServer != nil {
 		// Save original path
 		originalPath := string(ctx.URI().Path())
 
-		// Rewrite path to remove stream prefix
+		// Rewrite path to remove transport prefix
 		if remainingPath == "" {
-			// Default to stream path if no remaining path
+			// Default to transport path if no remaining path
 			remainingPath = matchedStream.Config.HTTPServer.StreamPath
 		}
 
-		fmt.Printf("[ROUTER] Routing to stream '%s': %s -> %s\n",
+		fmt.Printf("[ROUTER] Routing to transport '%s': %s -> %s\n",
 			matchedStream.Name, originalPath, remainingPath)
 
 		ctx.URI().SetPath(remainingPath)
@@ -91,8 +91,8 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 		ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
 		ctx.SetContentType("application/json")
 		json.NewEncoder(ctx).Encode(map[string]string{
-			"error":  "Stream HTTP server not available",
-			"stream": matchedStream.Name,
+			"error":     "Stream HTTP server not available",
+			"transport": matchedStream.Name,
 		})
 	}
 }
@@ -109,8 +109,8 @@ func (rs *routerServer) handleGlobalStatus(ctx *fasthttp.RequestCtx) {
 		streamStats["routing"] = map[string]any{
 			"path_prefix": prefix,
 			"endpoints": map[string]string{
-				"stream": prefix + stream.Config.HTTPServer.StreamPath,
-				"status": prefix + stream.Config.HTTPServer.StatusPath,
+				"transport": prefix + stream.Config.HTTPServer.StreamPath,
+				"status":    prefix + stream.Config.HTTPServer.StatusPath,
 			},
 		}
 
@@ -148,7 +148,7 @@ func (rs *routerServer) handleNotFound(ctx *fasthttp.RequestCtx) {
 	for prefix, stream := range rs.routes {
 		if stream.Config.HTTPServer != nil {
 			availableRoutes = append(availableRoutes,
-				fmt.Sprintf("%s%s (stream: %s)", prefix, stream.Config.HTTPServer.StreamPath, stream.Name),
+				fmt.Sprintf("%s%s (transport: %s)", prefix, stream.Config.HTTPServer.StreamPath, stream.Name),
 				fmt.Sprintf("%s%s (status: %s)", prefix, stream.Config.HTTPServer.StatusPath, stream.Name),
 			)
 		}

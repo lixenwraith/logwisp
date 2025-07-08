@@ -25,7 +25,7 @@ func defaults() *Config {
 					Enabled:    true,
 					Port:       8080,
 					BufferSize: 1000,
-					StreamPath: "/stream",
+					StreamPath: "/transport",
 					StatusPath: "/status",
 					Heartbeat: HeartbeatConfig{
 						Enabled:          true,

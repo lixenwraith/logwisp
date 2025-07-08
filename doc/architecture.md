@@ -30,18 +30,18 @@ logwisp/
         ├── filter/
         │   ├── filter.go         # Regex-based log filtering implementation
         │   └── chain.go          # Sequential filter chain management
-        ├── logstream/
-        │   ├── httprouter.go     # HTTP router for path-based routing
-        │   ├── logstream.go      # Stream lifecycle management
-        │   ├── routerserver.go   # Router server implementation
-        │   └── service.go        # Multi-stream service orchestration
         ├── monitor/
         │   ├── file_watcher.go   # File watching and rotation detection
         │   └── monitor.go        # Log monitoring interface and implementation
         ├── ratelimit/
         │   ├── ratelimit.go      # Token bucket algorithm implementation
         │   └── limiter.go        # Per-stream rate limiter with IP tracking
-        ├── stream/
+        ├── service/
+        │   ├── httprouter.go     # HTTP router for path-based routing
+        │   ├── logstream.go      # Stream lifecycle management
+        │   ├── routerserver.go   # Router server implementation
+        │   └── service.go        # Multi-stream service orchestration
+        ├── transport/
         │   ├── httpstreamer.go   # HTTP/SSE streaming with rate limiting
         │   ├── noop_logger.go    # Silent logger for gnet
         │   ├── tcpserver.go      # TCP server with rate limiting (gnet)
@@ -206,7 +206,7 @@ Client Request → Rate Limiter → Token Bucket Check → Allow/Deny
 name = "stream-name"
 
 [streams.monitor]
-check_interval_ms = 100  # Per-stream check interval
+check_interval_ms = 100  # Per-transport check interval
 targets = [
     { path = "/path/to/logs", pattern = "*.log", is_file = false },
     { path = "/path/to/file.log", is_file = true }

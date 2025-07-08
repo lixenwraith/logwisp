@@ -1,5 +1,5 @@
-// FILE: src/internal/stream/httpstreamer.go
-package stream
+// FILE: src/internal/transport/httpstreamer.go
+package transport
 
 import (
 	"bufio"
@@ -43,7 +43,7 @@ func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTP
 	// Set default paths if not configured
 	streamPath := cfg.StreamPath
 	if streamPath == "" {
-		streamPath = "/stream"
+		streamPath = "/transport"
 	}
 	statusPath := cfg.StatusPath
 	if statusPath == "" {
@@ -151,7 +151,7 @@ func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
 		ctx.SetContentType("application/json")
 		json.NewEncoder(ctx).Encode(map[string]any{
 			"error": "Not Found",
-			"message": fmt.Sprintf("Available endpoints: %s (SSE stream), %s (status)",
+			"message": fmt.Sprintf("Available endpoints: %s (SSE transport), %s (status)",
 				h.streamPath, h.statusPath),
 		})
 	}
@@ -166,7 +166,7 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 	}
 
 	// Set SSE headers
-	ctx.Response.Header.Set("Content-Type", "text/event-stream")
+	ctx.Response.Header.Set("Content-Type", "text/event-transport")
 	ctx.Response.Header.Set("Cache-Control", "no-cache")
 	ctx.Response.Header.Set("Connection", "keep-alive")
 	ctx.Response.Header.Set("Access-Control-Allow-Origin", "*")
@@ -202,7 +202,7 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 		}
 	}()
 
-	// Define the stream writer function
+	// Define the transport writer function
 	streamFunc := func(w *bufio.Writer) {
 		newCount := h.activeClients.Add(1)
 		fmt.Printf("[HTTP DEBUG] Client connected on port %d. Count now: %d\n",
@@ -336,8 +336,8 @@ func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 			"mode":           map[string]bool{"standalone": h.standalone, "router": !h.standalone},
 		},
 		"endpoints": map[string]string{
-			"stream": h.streamPath,
-			"status": h.statusPath,
+			"transport": h.streamPath,
+			"status":    h.statusPath,
 		},
 		"features": map[string]any{
 			"heartbeat": map[string]any{
@@ -361,7 +361,7 @@ func (h *HTTPStreamer) GetActiveConnections() int32 {
 	return h.activeClients.Load()
 }
 
-// Returns the configured stream endpoint path
+// Returns the configured transport endpoint path
 func (h *HTTPStreamer) GetStreamPath() string {
 	return h.streamPath
 }

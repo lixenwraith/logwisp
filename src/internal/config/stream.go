@@ -1,13 +1,15 @@
-// FILE: src/internal/config/stream.go
+// FILE: src/internal/config/transport.go
 package config
 
-import "logwisp/src/internal/filter"
+import (
+	"logwisp/src/internal/filter"
+)
 
 type StreamConfig struct {
 	// Stream identifier (used in logs and metrics)
 	Name string `toml:"name"`
 
-	// Monitor configuration for this stream
+	// Monitor configuration for this transport
 	Monitor *StreamMonitorConfig `toml:"monitor"`
 
 	// Filter configuration

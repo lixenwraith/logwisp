@@ -1,14 +1,41 @@
-// FILE: src/internal/logstream/logstream.go
-package logstream
+// FILE: src/internal/service/logstream.go
+package service
 
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/filter"
+	"logwisp/src/internal/monitor"
+	"logwisp/src/internal/transport"
 )
+
+type LogStream struct {
+	Name        string
+	Config      config.StreamConfig
+	Monitor     monitor.Monitor
+	FilterChain *filter.Chain
+	TCPServer   *transport.TCPStreamer
+	HTTPServer  *transport.HTTPStreamer
+	Stats       *StreamStats
+
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+type StreamStats struct {
+	StartTime          time.Time
+	MonitorStats       monitor.Stats
+	TCPConnections     int32
+	HTTPConnections    int32
+	TotalBytesServed   uint64
+	TotalEntriesServed uint64
+	FilterStats        map[string]any
+}
 
 func (ls *LogStream) Shutdown() {
 	// Stop servers first
@@ -79,16 +106,36 @@ func (ls *LogStream) GetStats() map[string]any {
 }
 
 func (ls *LogStream) UpdateTargets(targets []config.MonitorTarget) error {
-	// Clear existing targets
-	for _, watcher := range ls.Monitor.GetActiveWatchers() {
-		ls.Monitor.RemoveTarget(watcher.Path)
+	// Validate new targets first
+	validatedTargets := make([]config.MonitorTarget, 0, len(targets))
+	for _, target := range targets {
+		// Basic validation
+		absPath, err := filepath.Abs(target.Path)
+		if err != nil {
+			return fmt.Errorf("invalid target path %s: %w", target.Path, err)
+		}
+		target.Path = absPath
+		validatedTargets = append(validatedTargets, target)
 	}
 
+	// Get current watchers
+	oldWatchers := ls.Monitor.GetActiveWatchers()
+
 	// Add new targets
-	for _, target := range targets {
+	for _, target := range validatedTargets {
 		if err := ls.Monitor.AddTarget(target.Path, target.Pattern, target.IsFile); err != nil {
-			return err
+			// Rollback: restore old watchers
+			for _, watcher := range oldWatchers {
+				// Best effort restoration
+				ls.Monitor.AddTarget(watcher.Path, "", false)
+			}
+			return fmt.Errorf("failed to add target %s: %w", target.Path, err)
 		}
+	}
+
+	// Only remove old targets after new ones are successfully added
+	for _, watcher := range oldWatchers {
+		ls.Monitor.RemoveTarget(watcher.Path)
 	}
 
 	return nil

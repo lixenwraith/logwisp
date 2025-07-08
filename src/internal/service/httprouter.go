@@ -1,5 +1,5 @@
-// FILE: src/internal/logstream/httprouter.go
-package logstream
+// FILE: src/internal/service/httprouter.go
+package service
 
 import (
 	"fmt"
@@ -71,23 +71,23 @@ func (r *HTTPRouter) RegisterStream(stream *LogStream) error {
 	}
 	r.mu.Unlock()
 
-	// Register routes for this stream
+	// Register routes for this transport
 	rs.routeMu.Lock()
 	defer rs.routeMu.Unlock()
 
-	// Use stream name as path prefix
+	// Use transport name as path prefix
 	pathPrefix := "/" + stream.Name
 
 	// Check for conflicts
 	for existingPath, existingStream := range rs.routes {
 		if strings.HasPrefix(pathPrefix, existingPath) || strings.HasPrefix(existingPath, pathPrefix) {
-			return fmt.Errorf("path conflict: '%s' conflicts with existing stream '%s' at '%s'",
+			return fmt.Errorf("path conflict: '%s' conflicts with existing transport '%s' at '%s'",
 				pathPrefix, existingStream.Name, existingPath)
 		}
 	}
 
 	rs.routes[pathPrefix] = stream
-	fmt.Printf("[ROUTER] Registered stream '%s' at path '%s' on port %d\n", stream.Name, pathPrefix, port)
+	fmt.Printf("[ROUTER] Registered transport '%s' at path '%s' on port %d\n", stream.Name, pathPrefix, port)
 	return nil
 }
 
@@ -100,7 +100,7 @@ func (r *HTTPRouter) UnregisterStream(streamName string) {
 		for path, stream := range rs.routes {
 			if stream.Name == streamName {
 				delete(rs.routes, path)
-				fmt.Printf("[ROUTER] Unregistered stream '%s' from path '%s' on port %d\n",
+				fmt.Printf("[ROUTER] Unregistered transport '%s' from path '%s' on port %d\n",
 					streamName, path, port)
 			}
 		}
