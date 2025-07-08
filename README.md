@@ -4,7 +4,7 @@
   <img src="assets/logwisp-logo.svg" alt="LogWisp Logo" width="200"/>
 </p>
 
-A high-performance log streaming service with multi-stream architecture, supporting both TCP and HTTP/SSE protocols with real-time file monitoring and rotation detection.
+A high-performance log streaming service with multi-stream architecture, supporting both TCP and HTTP/SSE protocols with real-time file monitoring, rotation detection, and rate limiting.
 
 ## Features
 
@@ -13,8 +13,10 @@ A high-performance log streaming service with multi-stream architecture, support
 - **Real-time Monitoring**: Instant updates with per-stream configurable check intervals
 - **File Rotation Detection**: Automatic detection and handling of log rotation
 - **Path-based Routing**: Optional HTTP router for consolidated access
-- **Per-Stream Configuration**: Independent settings including check intervals for each log stream
-- **Connection Statistics**: Real-time monitoring of active connections
+- **Rate Limiting**: Per-IP or global rate limiting with token bucket algorithm
+- **Connection Limiting**: Configurable concurrent connection limits per IP
+- **Per-Stream Configuration**: Independent settings including check intervals and rate limits
+- **Connection Statistics**: Real-time monitoring of active connections and rate limit metrics
 - **Flexible Targets**: Monitor individual files or entire directories
 - **Version Management**: Git tag-based versioning with build information
 - **Configurable Heartbeats**: Keep connections alive with customizable formats
@@ -47,10 +49,12 @@ LogWisp uses a service-oriented architecture where each stream is an independent
 LogStream Service
 ├── Stream["app-logs"]
 │   ├── Monitor (watches files)
+│   ├── Rate Limiter (optional)
 │   ├── TCP Server (optional)
 │   └── HTTP Server (optional)
 ├── Stream["system-logs"]
 │   ├── Monitor
+│   ├── Rate Limiter (optional)
 │   └── HTTP Server
 └── HTTP Router (optional, for path-based routing)
 ```
@@ -89,6 +93,16 @@ format = "comment"  # or "json" for structured events
 include_timestamp = true
 include_stats = false
 
+# Rate limiting configuration
+[streams.httpserver.rate_limit]
+enabled = true
+requests_per_second = 10.0
+burst_size = 20
+limit_by = "ip"
+response_code = 429
+response_message = "Rate limit exceeded"
+max_connections_per_ip = 5
+
 # System logs stream with slower check interval
 [[streams]]
 name = "system"
@@ -112,6 +126,13 @@ enabled = true
 interval_seconds = 300  # 5 minutes
 include_timestamp = true
 include_stats = true
+
+# TCP rate limiting
+[streams.tcpserver.rate_limit]
+enabled = true
+requests_per_second = 5.0
+burst_size = 10
+limit_by = "ip"
 ```
 
 ### Target Configuration
@@ -136,6 +157,22 @@ Each stream can have its own check interval based on log update frequency:
 - **High-frequency logs**: 50-100ms (e.g., application debug logs)
 - **Normal logs**: 100-1000ms (e.g., application logs)
 - **Low-frequency logs**: 10000-60000ms (e.g., system logs, archives)
+
+### Rate Limiting Configuration
+
+Control request rates and connection limits per stream:
+
+```toml
+[streams.httpserver.rate_limit]
+enabled = true                    # Enable/disable rate limiting
+requests_per_second = 10.0       # Token refill rate
+burst_size = 20                  # Maximum burst capacity
+limit_by = "ip"                  # "ip" or "global"
+response_code = 429              # HTTP response code when limited
+response_message = "Too many requests"
+max_connections_per_ip = 5       # Max concurrent connections per IP
+max_total_connections = 100      # Max total connections (global)
+```
 
 ### Heartbeat Configuration
 
@@ -198,7 +235,7 @@ All HTTP streams share ports with path-based routing:
 # Connect to a stream
 curl -N http://localhost:8080/stream
 
-# Check stream status
+# Check stream status (includes rate limit stats)
 curl http://localhost:8080/status
 
 # With authentication (when implemented)
@@ -236,6 +273,13 @@ eventSource.addEventListener('message', (e) => {
 eventSource.addEventListener('heartbeat', (e) => {
     const heartbeat = JSON.parse(e.data);
     console.log('Heartbeat:', heartbeat);
+});
+
+eventSource.addEventListener('error', (e) => {
+    if (e.status === 429) {
+        console.error('Rate limited - backing off');
+        // Implement exponential backoff
+    }
 });
 ```
 
@@ -284,6 +328,20 @@ All log entries are streamed as JSON:
     "active_watchers": 3,
     "total_entries": 15420,
     "dropped_entries": 0
+  },
+  "features": {
+    "rate_limit": {
+      "enabled": true,
+      "total_requests": 45678,
+      "blocked_requests": 234,
+      "active_ips": 23,
+      "total_connections": 5,
+      "config": {
+        "requests_per_second": 10,
+        "burst_size": 20,
+        "limit_by": "ip"
+      }
+    }
   }
 }
 ```
@@ -294,6 +352,7 @@ LogWisp provides comprehensive statistics at multiple levels:
 
 - **Per-Stream Stats**: Monitor performance, connection counts, data throughput
 - **Per-Watcher Stats**: File size, position, entries read, rotation count
+- **Rate Limit Stats**: Total requests, blocked requests, active IPs
 - **Global Stats**: Aggregated view of all streams (in router mode)
 
 Access statistics via status endpoints or watch the console output:
@@ -305,6 +364,21 @@ Access statistics via status endpoints or watch the console output:
 ```
 
 ## Advanced Features
+
+### Rate Limiting
+
+LogWisp implements token bucket rate limiting with:
+- **Per-IP limiting**: Each IP gets its own token bucket
+- **Global limiting**: All clients share a single token bucket
+- **Connection limits**: Restrict concurrent connections per IP
+- **Automatic cleanup**: Stale IP entries removed after 5 minutes
+- **Non-blocking**: Excess requests are immediately rejected with 429 status
+
+Monitor rate limiting effectiveness:
+```bash
+# Watch rate limit statistics
+watch -n 1 'curl -s http://localhost:8080/status | jq .features.rate_limit'
+```
 
 ### File Rotation Detection
 
@@ -349,6 +423,11 @@ check_interval_ms = 60000  # Check every minute
 - Configure per-stream based on expected update frequency
 - Use 10000ms+ for archival or slowly updating logs
 
+### Rate Limiting
+- `requests_per_second`: Balance between protection and availability
+- `burst_size`: Set to 2-3x the per-second rate for traffic spikes
+- `max_connections_per_ip`: Prevent resource exhaustion from single IPs
+
 ### File Watcher Optimization
 - Use specific file paths when possible (more efficient than directory scanning)
 - Adjust patterns to minimize unnecessary file checks
@@ -377,6 +456,12 @@ make build
 
 # Run tests
 make test
+
+# Test rate limiting
+./test_ratelimit.sh
+
+# Test router functionality
+./test_router.sh
 
 # Create a release
 make release TAG=v1.0.0
@@ -413,6 +498,9 @@ ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/var/log
 
+# Rate limiting at system level
+LimitNOFILE=65536
+
 [Install]
 WantedBy=multi-user.target
 ```
@@ -448,30 +536,51 @@ services:
       - "9090:9090"
     restart: unless-stopped
     command: ["logwisp", "--config", "/etc/logwisp/config.toml"]
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
 ```
 
 ## Security Considerations
 
 ### Current Implementation
 - Read-only file access
+- Rate limiting for DDoS protection
+- Connection limits to prevent resource exhaustion
 - No authentication (placeholder configuration only)
 - No TLS/SSL support (placeholder configuration only)
 
 ### Planned Security Features
 - **Authentication**: Basic, Bearer/JWT, mTLS
 - **TLS/SSL**: For both HTTP and TCP streams
-- **Rate Limiting**: Per-client request limits
 - **IP Filtering**: Whitelist/blacklist support
 - **Audit Logging**: Access and authentication events
+- **RBAC**: Role-based access control per stream
 
 ### Best Practices
 1. Run with minimal privileges (read-only access to log files)
-2. Use network-level security until authentication is implemented
-3. Place behind a reverse proxy for production HTTPS
-4. Monitor access logs for unusual patterns
-5. Regularly update dependencies
+2. Configure appropriate rate limits based on expected traffic
+3. Use network-level security until authentication is implemented
+4. Place behind a reverse proxy for production HTTPS
+5. Monitor rate limit statistics for potential attacks
+6. Regularly update dependencies
+
+### Rate Limiting Best Practices
+- Start with conservative limits and adjust based on monitoring
+- Use per-IP limiting for public endpoints
+- Use global limiting for resource protection
+- Set connection limits to prevent memory exhaustion
+- Monitor blocked request statistics for anomalies
 
 ## Troubleshooting
+
+### Rate Limit Issues
+1. Check rate limit statistics in status endpoint
+2. Verify appropriate `requests_per_second` for your use case
+3. Ensure `burst_size` accommodates normal traffic spikes
+4. Monitor for distributed attacks if per-IP limiting isn't effective
 
 ### No Log Entries Appearing
 1. Check file permissions (LogWisp needs read access)
@@ -483,14 +592,16 @@ services:
 ### High Memory Usage
 1. Reduce buffer sizes in configuration
 2. Lower the number of concurrent watchers
-3. Increase check interval for less critical logs
-4. Use TCP instead of HTTP for high-volume streams
+3. Enable rate limiting to prevent connection floods
+4. Increase check interval for less critical logs
+5. Use TCP instead of HTTP for high-volume streams
 
 ### Connection Drops
 1. Check heartbeat configuration
 2. Verify network stability
 3. Monitor client-side errors
 4. Review dropped entry statistics
+5. Check if rate limits are too restrictive
 
 ### Version Information
 Use `./logwisp --version` to see:
@@ -515,7 +626,7 @@ Contributions are welcome! Please read our contributing guidelines and submit pu
 - [x] Per-stream check intervals
 - [x] Version management
 - [x] Configurable heartbeats
-- [ ] Rate and connection limiting
+- [x] Rate and connection limiting
 - [ ] Log filtering and transformation
 - [ ] Configurable logging support
 - [ ] Authentication (Basic, JWT, mTLS)

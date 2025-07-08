@@ -1,0 +1,120 @@
+# LogWisp Configuration Example
+# Default path: ~/.config/logwisp.toml
+
+# Application logs - public facing
+[[streams]]
+name = "app-public"
+
+[streams.monitor]
+check_interval_ms = 100
+targets = [
+    { path = "/var/log/nginx", pattern = "access.log*", is_file = false },
+    { path = "/var/log/app", pattern = "production.log", is_file = true }
+]
+
+[streams.httpserver]
+enabled = true
+port = 8080
+buffer_size = 2000
+stream_path = "/logs"
+status_path = "/health"
+
+[streams.httpserver.heartbeat]
+enabled = true
+interval_seconds = 30
+format = "json"
+include_timestamp = true
+include_stats = true
+
+# Rate limiting for public endpoint
+[streams.httpserver.rate_limit]
+enabled = true
+requests_per_second = 50.0
+burst_size = 100
+limit_by = "ip"
+response_code = 429
+response_message = "Rate limit exceeded. Please retry after 60 seconds."
+max_connections_per_ip = 5
+max_total_connections = 100
+
+# System logs - internal only
+[[streams]]
+name = "system"
+
+[streams.monitor]
+check_interval_ms = 5000        # Check every 5 seconds
+targets = [
+    { path = "/var/log/syslog", is_file = true },
+    { path = "/var/log/auth.log", is_file = true },
+    { path = "/var/log/kern.log", is_file = true }
+]
+
+# TCP for internal consumers
+[streams.tcpserver]
+enabled = true
+port = 9090
+buffer_size = 5000
+
+[streams.tcpserver.heartbeat]
+enabled = true
+interval_seconds = 60
+include_timestamp = true
+
+# Moderate rate limiting for internal use
+[streams.tcpserver.rate_limit]
+enabled = true
+requests_per_second = 10.0
+burst_size = 20
+limit_by = "ip"
+
+# Security audit logs - restricted access
+[[streams]]
+name = "security"
+
+[streams.monitor]
+check_interval_ms = 100
+targets = [
+    { path = "/var/log/audit", pattern = "*.log", is_file = false },
+    { path = "/var/log/fail2ban.log", is_file = true }
+]
+
+[streams.httpserver]
+enabled = true
+port = 8443
+buffer_size = 1000
+stream_path = "/audit/stream"
+status_path = "/audit/status"
+
+# Strict rate limiting
+[streams.httpserver.rate_limit]
+enabled = true
+requests_per_second = 1.0
+burst_size = 3
+limit_by = "ip"
+max_connections_per_ip = 1
+response_code = 403
+response_message = "Access denied"
+
+# Application debug logs - development team only
+[[streams]]
+name = "debug"
+
+[streams.monitor]
+check_interval_ms = 1000
+targets = [
+    { path = "/var/log/app", pattern = "debug-*.log", is_file = false }
+]
+
+[streams.httpserver]
+enabled = true
+port = 8090
+buffer_size = 5000
+stream_path = "/debug"
+status_path = "/debug/status"
+
+[streams.httpserver.rate_limit]
+enabled = true
+requests_per_second = 100.0     # Higher limit for internal use
+burst_size = 200
+limit_by = "ip"
+max_connections_per_ip = 10

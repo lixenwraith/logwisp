@@ -53,10 +53,14 @@ type RateLimitConfig struct {
 	// Burst size (token bucket)
 	BurstSize int `toml:"burst_size"`
 
-	// Rate limit by: "ip", "user", "token"
+	// Rate limit by: "ip", "user", "token", "global"
 	LimitBy string `toml:"limit_by"`
 
 	// Response when rate limited
 	ResponseCode    int    `toml:"response_code"`    // Default: 429
 	ResponseMessage string `toml:"response_message"` // Default: "Rate limit exceeded"
+
+	// Connection limits
+	MaxConnectionsPerIP int `toml:"max_connections_per_ip"`
+	MaxTotalConnections int `toml:"max_total_connections"`
 }

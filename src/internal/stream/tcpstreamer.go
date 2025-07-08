@@ -12,6 +12,7 @@ import (
 	"github.com/panjf2000/gnet/v2"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/monitor"
+	"logwisp/src/internal/ratelimit"
 )
 
 type TCPStreamer struct {
@@ -23,15 +24,22 @@ type TCPStreamer struct {
 	startTime   time.Time
 	engine      *gnet.Engine
 	wg          sync.WaitGroup
+	rateLimiter *ratelimit.Limiter
 }
 
 func NewTCPStreamer(logChan chan monitor.LogEntry, cfg config.TCPConfig) *TCPStreamer {
-	return &TCPStreamer{
+	t := &TCPStreamer{
 		logChan:   logChan,
 		config:    cfg,
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 	}
+
+	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
+		t.rateLimiter = ratelimit.New(*cfg.RateLimit)
+	}
+
+	return t
 }
 
 func (t *TCPStreamer) Start() error {

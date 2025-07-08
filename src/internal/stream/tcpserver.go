@@ -3,6 +3,7 @@ package stream
 
 import (
 	"fmt"
+	"net"
 	"sync"
 
 	"github.com/panjf2000/gnet/v2"
@@ -17,10 +18,34 @@ type tcpServer struct {
 func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
 	// Store engine reference for shutdown
 	s.streamer.engine = &eng
+	fmt.Printf("[TCP DEBUG] Server booted on port %d\n", s.streamer.config.Port)
 	return gnet.None
 }
 
 func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
+	// Debug: Log all connection attempts
+	fmt.Printf("[TCP DEBUG] Connection attempt from %s\n", c.RemoteAddr())
+
+	// Check rate limit
+	if s.streamer.rateLimiter != nil {
+		// Parse the remote address to get proper net.Addr
+		remoteStr := c.RemoteAddr().String()
+		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteStr)
+		if err != nil {
+			fmt.Printf("[TCP DEBUG] Failed to parse address %s: %v\n", remoteStr, err)
+			return nil, gnet.Close
+		}
+
+		if !s.streamer.rateLimiter.CheckTCP(tcpAddr) {
+			fmt.Printf("[TCP DEBUG] Rate limited connection from %s\n", remoteStr)
+			// Silently close connection when rate limited
+			return nil, gnet.Close
+		}
+
+		// Track connection
+		s.streamer.rateLimiter.AddConnection(remoteStr)
+	}
+
 	s.connections.Store(c, struct{}{})
 
 	oldCount := s.streamer.activeConns.Load()
@@ -33,6 +58,11 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 
 func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	s.connections.Delete(c)
+
+	// Remove connection tracking
+	if s.streamer.rateLimiter != nil {
+		s.streamer.rateLimiter.RemoveConnection(c.RemoteAddr().String())
+	}
 
 	oldCount := s.streamer.activeConns.Load()
 	newCount := s.streamer.activeConns.Add(-1)

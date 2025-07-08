@@ -68,6 +68,10 @@ func (c *Config) validate() error {
 			if err := validateSSL("TCP", stream.Name, stream.TCPServer.SSL); err != nil {
 				return err
 			}
+
+			if err := validateRateLimit("TCP", stream.Name, stream.TCPServer.RateLimit); err != nil {
+				return err
+			}
 		}
 
 		// Validate HTTP server
@@ -107,6 +111,10 @@ func (c *Config) validate() error {
 			}
 
 			if err := validateSSL("HTTP", stream.Name, stream.HTTPServer.SSL); err != nil {
+				return err
+			}
+
+			if err := validateRateLimit("HTTP", stream.Name, stream.HTTPServer.RateLimit); err != nil {
 				return err
 			}
 		}
@@ -183,6 +191,35 @@ func validateAuth(streamName string, auth *AuthConfig) error {
 
 	if auth.Type == "bearer" && auth.BearerAuth == nil {
 		return fmt.Errorf("stream '%s': bearer auth type specified but config missing", streamName)
+	}
+
+	return nil
+}
+
+func validateRateLimit(serverType, streamName string, rl *RateLimitConfig) error {
+	if rl == nil || !rl.Enabled {
+		return nil
+	}
+
+	if rl.RequestsPerSecond <= 0 {
+		return fmt.Errorf("stream '%s' %s: requests_per_second must be positive: %f",
+			streamName, serverType, rl.RequestsPerSecond)
+	}
+
+	if rl.BurstSize < 1 {
+		return fmt.Errorf("stream '%s' %s: burst_size must be at least 1: %d",
+			streamName, serverType, rl.BurstSize)
+	}
+
+	validLimitBy := map[string]bool{"ip": true, "global": true, "": true}
+	if !validLimitBy[rl.LimitBy] {
+		return fmt.Errorf("stream '%s' %s: invalid limit_by value: %s (must be 'ip' or 'global')",
+			streamName, serverType, rl.LimitBy)
+	}
+
+	if rl.ResponseCode > 0 && (rl.ResponseCode < 400 || rl.ResponseCode >= 600) {
+		return fmt.Errorf("stream '%s' %s: response_code must be 4xx or 5xx: %d",
+			streamName, serverType, rl.ResponseCode)
 	}
 
 	return nil

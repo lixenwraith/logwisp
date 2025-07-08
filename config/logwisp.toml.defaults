@@ -1,0 +1,312 @@
+# LogWisp Configuration File
+# Default path: ~/.config/logwisp.toml
+# Override with: ./logwisp --config /path/to/config.toml
+
+# This is a complete configuration reference showing all available options.
+# Default values are uncommented, alternatives and examples are commented.
+
+# ==============================================================================
+# STREAM CONFIGURATION
+# ==============================================================================
+# Each [[streams]] section defines an independent log monitoring stream.
+# You can have multiple streams, each with its own settings.
+
+# ------------------------------------------------------------------------------
+# Default Stream - Monitors current directory
+# ------------------------------------------------------------------------------
+[[streams]]
+# Stream identifier used in logs, metrics, and router paths
+name = "default"
+
+# File monitoring configuration
+[streams.monitor]
+# How often to check for new log entries (milliseconds)
+# Lower = faster detection but more CPU usage
+check_interval_ms = 100
+
+# Targets to monitor - can be files or directories
+targets = [
+    # Monitor all .log files in current directory
+    { path = "./", pattern = "*.log", is_file = false },
+]
+
+# HTTP Server configuration (SSE/Server-Sent Events)
+[streams.httpserver]
+enabled = true
+port = 8080
+buffer_size = 1000          # Per-client buffer size (messages)
+stream_path = "/stream"     # Endpoint for SSE stream
+status_path = "/status"     # Endpoint for statistics
+
+# Keep-alive heartbeat configuration
+[streams.httpserver.heartbeat]
+enabled = true
+interval_seconds = 30       # Send heartbeat every 30 seconds
+format = "comment"          # SSE comment format (: heartbeat)
+include_timestamp = true    # Include timestamp in heartbeat
+include_stats = false       # Include connection stats
+
+# Rate limiting configuration (disabled by default)
+[streams.httpserver.rate_limit]
+enabled = false
+# requests_per_second = 10.0     # Token refill rate
+# burst_size = 20                # Max burst capacity
+# limit_by = "ip"                # "ip" or "global"
+# response_code = 429            # HTTP Too Many Requests
+# response_message = "Rate limit exceeded"
+# max_connections_per_ip = 5     # Max SSE connections per IP
+
+# ------------------------------------------------------------------------------
+# Example: Application Logs Stream
+# ------------------------------------------------------------------------------
+# [[streams]]
+# name = "app"
+#
+# [streams.monitor]
+# check_interval_ms = 50          # Fast detection for active logs
+# targets = [
+#     # Monitor specific application log directory
+#     { path = "/var/log/myapp", pattern = "*.log", is_file = false },
+#     # Also monitor specific file
+#     { path = "/var/log/myapp/app.log", is_file = true },
+# ]
+#
+# [streams.httpserver]
+# enabled = true
+# port = 8081                     # Different port for each stream
+# buffer_size = 2000              # Larger buffer for busy logs
+# stream_path = "/logs"           # Custom path
+# status_path = "/health"         # Custom health endpoint
+#
+# # JSON heartbeat format for programmatic clients
+# [streams.httpserver.heartbeat]
+# enabled = true
+# interval_seconds = 20
+# format = "json"                 # JSON event format
+# include_timestamp = true
+# include_stats = true            # Include active client count
+#
+# # Moderate rate limiting for public access
+# [streams.httpserver.rate_limit]
+# enabled = true
+# requests_per_second = 25.0
+# burst_size = 50
+# limit_by = "ip"
+# max_connections_per_ip = 10
+
+# ------------------------------------------------------------------------------
+# Example: System Logs Stream (TCP + HTTP)
+# ------------------------------------------------------------------------------
+# [[streams]]
+# name = "system"
+#
+# [streams.monitor]
+# check_interval_ms = 1000        # Check every second (system logs update slowly)
+# targets = [
+#     { path = "/var/log/syslog", is_file = true },
+#     { path = "/var/log/auth.log", is_file = true },
+#     { path = "/var/log/kern.log", is_file = true },
+# ]
+#
+# # TCP Server for high-performance streaming
+# [streams.tcpserver]
+# enabled = true
+# port = 9090
+# buffer_size = 5000
+#
+# # TCP heartbeat (always JSON format)
+# [streams.tcpserver.heartbeat]
+# enabled = true
+# interval_seconds = 60           # Less frequent for TCP
+# include_timestamp = true
+# include_stats = false
+#
+# # TCP rate limiting
+# [streams.tcpserver.rate_limit]
+# enabled = true
+# requests_per_second = 5.0       # Limit TCP connections
+# burst_size = 10
+# limit_by = "ip"
+#
+# # Also expose via HTTP
+# [streams.httpserver]
+# enabled = true
+# port = 8082
+# buffer_size = 1000
+# stream_path = "/stream"
+# status_path = "/status"
+
+# ------------------------------------------------------------------------------
+# Example: High-Volume Debug Logs
+# ------------------------------------------------------------------------------
+# [[streams]]
+# name = "debug"
+#
+# [streams.monitor]
+# check_interval_ms = 5000        # Check every 5 seconds (high volume)
+# targets = [
+#     { path = "/tmp/debug", pattern = "*.debug", is_file = false },
+# ]
+#
+# [streams.httpserver]
+# enabled = true
+# port = 8083
+# buffer_size = 10000             # Very large buffer
+# stream_path = "/debug"
+# status_path = "/stats"
+#
+# # Disable heartbeat for high-volume streams
+# [streams.httpserver.heartbeat]
+# enabled = false
+#
+# # Aggressive rate limiting
+# [streams.httpserver.rate_limit]
+# enabled = true
+# requests_per_second = 1.0       # Very restrictive
+# burst_size = 5
+# limit_by = "ip"
+# max_connections_per_ip = 1      # One connection per IP
+
+# ------------------------------------------------------------------------------
+# Example: Archived Logs (Slow Monitoring)
+# ------------------------------------------------------------------------------
+# [[streams]]
+# name = "archive"
+#
+# [streams.monitor]
+# check_interval_ms = 60000       # Check once per minute
+# targets = [
+#     { path = "/var/log/archive", pattern = "*.gz", is_file = false },
+# ]
+#
+# [streams.tcpserver]
+# enabled = true
+# port = 9091
+# buffer_size = 500               # Small buffer for archived logs
+#
+# # Infrequent heartbeat
+# [streams.tcpserver.heartbeat]
+# enabled = true
+# interval_seconds = 300          # Every 5 minutes
+# include_timestamp = false
+# include_stats = false
+
+# ------------------------------------------------------------------------------
+# Example: Security/Audit Logs with Strict Limits
+# ------------------------------------------------------------------------------
+# [[streams]]
+# name = "security"
+#
+# [streams.monitor]
+# check_interval_ms = 100
+# targets = [
+#     { path = "/var/log/audit", pattern = "audit.log*", is_file = false },
+# ]
+#
+# [streams.httpserver]
+# enabled = true
+# port = 8443                     # HTTPS port (for future TLS)
+# buffer_size = 1000
+# stream_path = "/audit"
+# status_path = "/health"
+#
+# # Strict rate limiting for security logs
+# [streams.httpserver.rate_limit]
+# enabled = true
+# requests_per_second = 2.0       # Very limited access
+# burst_size = 3
+# limit_by = "ip"
+# max_connections_per_ip = 1      # Single connection per IP
+# response_code = 403             # Forbidden instead of rate limit
+# response_message = "Access restricted"
+#
+# # Future: SSL/TLS configuration
+# # [streams.httpserver.ssl]
+# # enabled = true
+# # cert_file = "/etc/logwisp/certs/server.crt"
+# # key_file = "/etc/logwisp/certs/server.key"
+# # min_version = "TLS1.2"
+#
+# # Future: Authentication
+# # [streams.auth]
+# # type = "basic"
+# # [streams.auth.basic_auth]
+# # users_file = "/etc/logwisp/security.users"
+# # realm = "Security Logs"
+
+# ------------------------------------------------------------------------------
+# Example: Public API Logs with Global Rate Limiting
+# ------------------------------------------------------------------------------
+# [[streams]]
+# name = "api-public"
+#
+# [streams.monitor]
+# check_interval_ms = 100
+# targets = [
+#     { path = "/var/log/api", pattern = "access.log*", is_file = false },
+# ]
+#
+# [streams.httpserver]
+# enabled = true
+# port = 8084
+# buffer_size = 2000
+#
+# # Global rate limiting (all clients share limit)
+# [streams.httpserver.rate_limit]
+# enabled = true
+# requests_per_second = 100.0     # 100 req/s total
+# burst_size = 200
+# limit_by = "global"             # All clients share this limit
+# max_total_connections = 50      # Max 50 connections total
+
+# ==============================================================================
+# USAGE EXAMPLES
+# ==============================================================================
+
+# 1. Basic usage (single stream):
+#    ./logwisp
+#    - Monitors current directory for *.log files
+#    - Access logs at: http://localhost:8080/stream
+#    - View stats at: http://localhost:8080/status
+
+# 2. Multi-stream configuration:
+#    - Uncomment additional [[streams]] sections above
+#    - Each stream runs independently on its own port
+#    - Different check intervals for different log types
+
+# 3. Router mode (consolidated access):
+#    ./logwisp --router
+#    - All streams accessible via paths: /streamname/stream
+#    - Global status at: /status
+#    - Example: http://localhost:8080/app/stream
+
+# 4. Production deployment:
+#    - Enable rate limiting on public-facing streams
+#    - Use TCP for internal high-volume streams
+#    - Set appropriate check intervals (higher = less CPU)
+#    - Configure heartbeats for long-lived connections
+
+# 5. Monitoring:
+#    curl http://localhost:8080/status | jq .
+#    - Check active connections
+#    - Monitor rate limit statistics
+#    - Track log entry counts
+
+# ==============================================================================
+# ENVIRONMENT VARIABLES
+# ==============================================================================
+# Configuration can be overridden via environment variables:
+# LOGWISP_STREAMS_0_MONITOR_CHECK_INTERVAL_MS=50
+# LOGWISP_STREAMS_0_HTTPSERVER_PORT=8090
+# LOGWISP_STREAMS_0_HTTPSERVER_RATE_LIMIT_ENABLED=true
+
+# ==============================================================================
+# NOTES
+# ==============================================================================
+# - Rate limiting is disabled by default for backward compatibility
+# - Each stream can have different rate limit settings
+# - TCP connections are silently dropped when rate limited
+# - HTTP returns 429 (or configured code) with JSON error
+# - IP tracking is cleaned up after 5 minutes of inactivity
+# - Token bucket algorithm provides smooth rate limiting
+# - Connection limits prevent resource exhaustion

@@ -14,6 +14,7 @@ import (
 	"github.com/valyala/fasthttp"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/monitor"
+	"logwisp/src/internal/ratelimit"
 	"logwisp/src/internal/version"
 )
 
@@ -33,6 +34,9 @@ type HTTPStreamer struct {
 
 	// For router integration
 	standalone bool
+
+	// Rate limiting
+	rateLimiter *ratelimit.Limiter
 }
 
 func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTPStreamer {
@@ -46,7 +50,7 @@ func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTP
 		statusPath = "/status"
 	}
 
-	return &HTTPStreamer{
+	h := &HTTPStreamer{
 		logChan:    logChan,
 		config:     cfg,
 		startTime:  time.Now(),
@@ -55,9 +59,16 @@ func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTP
 		statusPath: statusPath,
 		standalone: true, // Default to standalone mode
 	}
+
+	// Initialize rate limiter if configured
+	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
+		h.rateLimiter = ratelimit.New(*cfg.RateLimit)
+	}
+
+	return h
 }
 
-// SetRouterMode configures the streamer for use with a router
+// Configures the streamer for use with a router
 func (h *HTTPStreamer) SetRouterMode() {
 	h.standalone = false
 }
@@ -116,6 +127,18 @@ func (h *HTTPStreamer) RouteRequest(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
+	// Check rate limit first
+	remoteAddr := ctx.RemoteAddr().String()
+	if allowed, statusCode, message := h.rateLimiter.CheckHTTP(remoteAddr); !allowed {
+		ctx.SetStatusCode(statusCode)
+		ctx.SetContentType("application/json")
+		json.NewEncoder(ctx).Encode(map[string]interface{}{
+			"error":       message,
+			"retry_after": "60", // seconds
+		})
+		return
+	}
+
 	path := string(ctx.Path())
 
 	switch path {
@@ -135,6 +158,13 @@ func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
+	// Track connection for rate limiting
+	remoteAddr := ctx.RemoteAddr().String()
+	if h.rateLimiter != nil {
+		h.rateLimiter.AddConnection(remoteAddr)
+		defer h.rateLimiter.RemoveConnection(remoteAddr)
+	}
+
 	// Set SSE headers
 	ctx.Response.Header.Set("Content-Type", "text/event-stream")
 	ctx.Response.Header.Set("Cache-Control", "no-cache")
@@ -285,6 +315,15 @@ func (h *HTTPStreamer) formatHeartbeat() string {
 func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetContentType("application/json")
 
+	var rateLimitStats interface{}
+	if h.rateLimiter != nil {
+		rateLimitStats = h.rateLimiter.GetStats()
+	} else {
+		rateLimitStats = map[string]interface{}{
+			"enabled": false,
+		}
+	}
+
 	status := map[string]interface{}{
 		"service": "LogWisp",
 		"version": version.Short(),
@@ -309,9 +348,7 @@ func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 			"ssl": map[string]bool{
 				"enabled": h.config.SSL != nil && h.config.SSL.Enabled,
 			},
-			"rate_limit": map[string]bool{
-				"enabled": h.config.RateLimit != nil && h.config.RateLimit.Enabled,
-			},
+			"rate_limit": rateLimitStats,
 		},
 	}
 

@@ -6,20 +6,31 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/valyala/fasthttp"
 	"logwisp/src/internal/version"
 )
 
 type routerServer struct {
-	port    int
-	server  *fasthttp.Server
-	routes  map[string]*LogStream // path prefix -> stream
-	routeMu sync.RWMutex
+	port      int
+	server    *fasthttp.Server
+	routes    map[string]*LogStream // path prefix -> stream
+	routeMu   sync.RWMutex
+	router    *HTTPRouter
+	startTime time.Time
+	requests  atomic.Uint64
 }
 
 func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
+	rs.requests.Add(1)
+	rs.router.totalRequests.Add(1)
+
 	path := string(ctx.Path())
+
+	// Log request for debugging
+	fmt.Printf("[ROUTER] Request: %s %s from %s\n", ctx.Method(), path, ctx.RemoteAddr())
 
 	// Special case: global status at /status
 	if path == "/status" {
@@ -40,26 +51,48 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 				matchedPrefix = prefix
 				matchedStream = stream
 				remainingPath = strings.TrimPrefix(path, prefix)
+				// Ensure remaining path starts with / or is empty
+				if remainingPath != "" && !strings.HasPrefix(remainingPath, "/") {
+					remainingPath = "/" + remainingPath
+				}
 			}
 		}
 	}
 	rs.routeMu.RUnlock()
 
 	if matchedStream == nil {
+		rs.router.failedRequests.Add(1)
 		rs.handleNotFound(ctx)
 		return
 	}
 
+	rs.router.routedRequests.Add(1)
+
 	// Route to stream's handler
 	if matchedStream.HTTPServer != nil {
+		// Save original path
+		originalPath := string(ctx.URI().Path())
+
 		// Rewrite path to remove stream prefix
+		if remainingPath == "" {
+			// Default to stream path if no remaining path
+			remainingPath = matchedStream.Config.HTTPServer.StreamPath
+		}
+
+		fmt.Printf("[ROUTER] Routing to stream '%s': %s -> %s\n",
+			matchedStream.Name, originalPath, remainingPath)
+
 		ctx.URI().SetPath(remainingPath)
 		matchedStream.HTTPServer.RouteRequest(ctx)
+
+		// Restore original path
+		ctx.URI().SetPath(originalPath)
 	} else {
 		ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
 		ctx.SetContentType("application/json")
 		json.NewEncoder(ctx).Encode(map[string]string{
-			"error": "Stream HTTP server not available",
+			"error":  "Stream HTTP server not available",
+			"stream": matchedStream.Name,
 		})
 	}
 }
@@ -70,26 +103,37 @@ func (rs *routerServer) handleGlobalStatus(ctx *fasthttp.RequestCtx) {
 	rs.routeMu.RLock()
 	streams := make(map[string]interface{})
 	for prefix, stream := range rs.routes {
-		streams[stream.Name] = map[string]interface{}{
+		streamStats := stream.GetStats()
+
+		// Add routing information
+		streamStats["routing"] = map[string]interface{}{
 			"path_prefix": prefix,
-			"config": map[string]interface{}{
-				"stream_path": stream.Config.HTTPServer.StreamPath,
-				"status_path": stream.Config.HTTPServer.StatusPath,
+			"endpoints": map[string]string{
+				"stream": prefix + stream.Config.HTTPServer.StreamPath,
+				"status": prefix + stream.Config.HTTPServer.StatusPath,
 			},
-			"stats": stream.GetStats(),
 		}
+
+		streams[stream.Name] = streamStats
 	}
 	rs.routeMu.RUnlock()
 
+	// Get router stats
+	routerStats := rs.router.GetStats()
+
 	status := map[string]interface{}{
 		"service":       "LogWisp Router",
-		"version":       version.Short(),
+		"version":       version.String(),
 		"port":          rs.port,
 		"streams":       streams,
 		"total_streams": len(streams),
+		"router":        routerStats,
+		"endpoints": map[string]string{
+			"global_status": "/status",
+		},
 	}
 
-	data, _ := json.Marshal(status)
+	data, _ := json.MarshalIndent(status, "", "  ")
 	ctx.SetBody(data)
 }
 
@@ -113,9 +157,11 @@ func (rs *routerServer) handleNotFound(ctx *fasthttp.RequestCtx) {
 
 	response := map[string]interface{}{
 		"error":            "Not Found",
+		"requested_path":   string(ctx.Path()),
 		"available_routes": availableRoutes,
+		"hint":             "Use /status for global router status",
 	}
 
-	data, _ := json.Marshal(response)
+	data, _ := json.MarshalIndent(response, "", "  ")
 	ctx.SetBody(data)
 }
