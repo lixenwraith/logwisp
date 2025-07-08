@@ -132,7 +132,7 @@ func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
 	if allowed, statusCode, message := h.rateLimiter.CheckHTTP(remoteAddr); !allowed {
 		ctx.SetStatusCode(statusCode)
 		ctx.SetContentType("application/json")
-		json.NewEncoder(ctx).Encode(map[string]interface{}{
+		json.NewEncoder(ctx).Encode(map[string]any{
 			"error":       message,
 			"retry_after": "60", // seconds
 		})
@@ -149,7 +149,7 @@ func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
 	default:
 		ctx.SetStatusCode(fasthttp.StatusNotFound)
 		ctx.SetContentType("application/json")
-		json.NewEncoder(ctx).Encode(map[string]interface{}{
+		json.NewEncoder(ctx).Encode(map[string]any{
 			"error": "Not Found",
 			"message": fmt.Sprintf("Available endpoints: %s (SSE stream), %s (status)",
 				h.streamPath, h.statusPath),
@@ -218,7 +218,7 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 
 		// Send initial connected event
 		clientID := fmt.Sprintf("%d", time.Now().UnixNano())
-		connectionInfo := map[string]interface{}{
+		connectionInfo := map[string]any{
 			"client_id":   clientID,
 			"stream_path": h.streamPath,
 			"status_path": h.statusPath,
@@ -280,7 +280,7 @@ func (h *HTTPStreamer) formatHeartbeat() string {
 	}
 
 	if h.config.Heartbeat.Format == "json" {
-		data := make(map[string]interface{})
+		data := make(map[string]any)
 		data["type"] = "heartbeat"
 
 		if h.config.Heartbeat.IncludeTimestamp {
@@ -315,19 +315,19 @@ func (h *HTTPStreamer) formatHeartbeat() string {
 func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetContentType("application/json")
 
-	var rateLimitStats interface{}
+	var rateLimitStats any
 	if h.rateLimiter != nil {
 		rateLimitStats = h.rateLimiter.GetStats()
 	} else {
-		rateLimitStats = map[string]interface{}{
+		rateLimitStats = map[string]any{
 			"enabled": false,
 		}
 	}
 
-	status := map[string]interface{}{
+	status := map[string]any{
 		"service": "LogWisp",
 		"version": version.Short(),
-		"server": map[string]interface{}{
+		"server": map[string]any{
 			"type":           "http",
 			"port":           h.config.Port,
 			"active_clients": h.activeClients.Load(),
@@ -339,8 +339,8 @@ func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 			"stream": h.streamPath,
 			"status": h.statusPath,
 		},
-		"features": map[string]interface{}{
-			"heartbeat": map[string]interface{}{
+		"features": map[string]any{
+			"heartbeat": map[string]any{
 				"enabled":  h.config.Heartbeat.Enabled,
 				"interval": h.config.Heartbeat.IntervalSeconds,
 				"format":   h.config.Heartbeat.Format,

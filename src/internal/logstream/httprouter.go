@@ -135,11 +135,11 @@ func (r *HTTPRouter) Shutdown() {
 	fmt.Println("[ROUTER] Router shutdown complete")
 }
 
-func (r *HTTPRouter) GetStats() map[string]interface{} {
+func (r *HTTPRouter) GetStats() map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	serverStats := make(map[int]interface{})
+	serverStats := make(map[int]any)
 	totalRoutes := 0
 
 	for port, rs := range r.servers {
@@ -151,14 +151,14 @@ func (r *HTTPRouter) GetStats() map[string]interface{} {
 		}
 		rs.routeMu.RUnlock()
 
-		serverStats[port] = map[string]interface{}{
+		serverStats[port] = map[string]any{
 			"routes":   routes,
 			"requests": rs.requests.Load(),
 			"uptime":   int(time.Since(rs.startTime).Seconds()),
 		}
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"uptime_seconds":  int(time.Since(r.startTime).Seconds()),
 		"total_requests":  r.totalRequests.Load(),
 		"routed_requests": r.routedRequests.Load(),

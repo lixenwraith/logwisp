@@ -192,9 +192,9 @@ func (l *Limiter) RemoveConnection(remoteAddr string) {
 }
 
 // Returns rate limiter statistics
-func (l *Limiter) GetStats() map[string]interface{} {
+func (l *Limiter) GetStats() map[string]any {
 	if l == nil {
-		return map[string]interface{}{
+		return map[string]any{
 			"enabled": false,
 		}
 	}
@@ -210,13 +210,13 @@ func (l *Limiter) GetStats() map[string]interface{} {
 	}
 	l.connMu.RUnlock()
 
-	return map[string]interface{}{
+	return map[string]any{
 		"enabled":           true,
 		"total_requests":    l.totalRequests.Load(),
 		"blocked_requests":  l.blockedRequests.Load(),
 		"active_ips":        activeIPs,
 		"total_connections": totalConnections,
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"requests_per_second": l.config.RequestsPerSecond,
 			"burst_size":          l.config.BurstSize,
 			"limit_by":            l.config.LimitBy,

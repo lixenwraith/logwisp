@@ -116,7 +116,7 @@ func (t *TCPStreamer) broadcastLoop() {
 			}
 			data = append(data, '\n')
 
-			t.server.connections.Range(func(key, value interface{}) bool {
+			t.server.connections.Range(func(key, value any) bool {
 				conn := key.(gnet.Conn)
 				conn.AsyncWrite(data, nil)
 				return true
@@ -124,7 +124,7 @@ func (t *TCPStreamer) broadcastLoop() {
 
 		case <-tickerChan:
 			if heartbeat := t.formatHeartbeat(); heartbeat != nil {
-				t.server.connections.Range(func(key, value interface{}) bool {
+				t.server.connections.Range(func(key, value any) bool {
 					conn := key.(gnet.Conn)
 					conn.AsyncWrite(heartbeat, nil)
 					return true
@@ -142,7 +142,7 @@ func (t *TCPStreamer) formatHeartbeat() []byte {
 		return nil
 	}
 
-	data := make(map[string]interface{})
+	data := make(map[string]any)
 	data["type"] = "heartbeat"
 
 	if t.config.Heartbeat.IncludeTimestamp {

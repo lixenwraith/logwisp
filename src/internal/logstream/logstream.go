@@ -40,13 +40,17 @@ func (ls *LogStream) Shutdown() {
 	ls.Monitor.Stop()
 }
 
-func (ls *LogStream) GetStats() map[string]interface{} {
+func (ls *LogStream) GetStats() map[string]any {
 	monStats := ls.Monitor.GetStats()
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"name":           ls.Name,
 		"uptime_seconds": int(time.Since(ls.Stats.StartTime).Seconds()),
 		"monitor":        monStats,
+	}
+
+	if ls.FilterChain != nil {
+		stats["filters"] = ls.FilterChain.GetStats()
 	}
 
 	if ls.TCPServer != nil {
@@ -55,7 +59,7 @@ func (ls *LogStream) GetStats() map[string]interface{} {
 		stats["tcp"] = map[string]interface{}{
 			"enabled":     true,
 			"port":        ls.Config.TCPServer.Port,
-			"connections": currentConnections, // Use current value
+			"connections": currentConnections,
 		}
 	}
 
@@ -65,7 +69,7 @@ func (ls *LogStream) GetStats() map[string]interface{} {
 		stats["http"] = map[string]interface{}{
 			"enabled":     true,
 			"port":        ls.Config.HTTPServer.Port,
-			"connections": currentConnections, // Use current value
+			"connections": currentConnections,
 			"stream_path": ls.Config.HTTPServer.StreamPath,
 			"status_path": ls.Config.HTTPServer.StatusPath,
 		}

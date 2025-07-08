@@ -4,7 +4,7 @@
   <img src="assets/logwisp-logo.svg" alt="LogWisp Logo" width="200"/>
 </p>
 
-A high-performance log streaming service with multi-stream architecture, supporting both TCP and HTTP/SSE protocols with real-time file monitoring, rotation detection, and rate limiting.
+A high-performance log streaming service with multi-stream architecture, supporting both TCP and HTTP/SSE protocols with real-time file monitoring, rotation detection, regex-based filtering, and rate limiting.
 
 ## Features
 
@@ -12,11 +12,12 @@ A high-performance log streaming service with multi-stream architecture, support
 - **Dual Protocol Support**: TCP (raw streaming) and HTTP/SSE (browser-friendly)
 - **Real-time Monitoring**: Instant updates with per-stream configurable check intervals
 - **File Rotation Detection**: Automatic detection and handling of log rotation
+- **Regex-based Filtering**: Include/exclude patterns with AND/OR logic per stream
 - **Path-based Routing**: Optional HTTP router for consolidated access
 - **Rate Limiting**: Per-IP or global rate limiting with token bucket algorithm
 - **Connection Limiting**: Configurable concurrent connection limits per IP
-- **Per-Stream Configuration**: Independent settings including check intervals and rate limits
-- **Connection Statistics**: Real-time monitoring of active connections and rate limit metrics
+- **Per-Stream Configuration**: Independent settings including check intervals, filters, and rate limits
+- **Connection Statistics**: Real-time monitoring of active connections, filter, and rate limit metrics
 - **Flexible Targets**: Monitor individual files or entire directories
 - **Version Management**: Git tag-based versioning with build information
 - **Configurable Heartbeats**: Keep connections alive with customizable formats
@@ -49,11 +50,13 @@ LogWisp uses a service-oriented architecture where each stream is an independent
 LogStream Service
 ├── Stream["app-logs"]
 │   ├── Monitor (watches files)
+│   ├── Filter Chain (optional)
 │   ├── Rate Limiter (optional)
 │   ├── TCP Server (optional)
 │   └── HTTP Server (optional)
 ├── Stream["system-logs"]
 │   ├── Monitor
+│   ├── Filter Chain (optional)
 │   ├── Rate Limiter (optional)
 │   └── HTTP Server
 └── HTTP Router (optional, for path-based routing)
@@ -76,6 +79,16 @@ check_interval_ms = 100
 targets = [
     { path = "/var/log/myapp", pattern = "*.log", is_file = false },
     { path = "/var/log/myapp/app.log", is_file = true }
+]
+
+# Filter configuration (optional)
+[[streams.filters]]
+type = "include"         # Only show matching logs
+logic = "or"            # Match any pattern
+patterns = [
+    "(?i)error",        # Case-insensitive error
+    "(?i)warn",         # Case-insensitive warning
+    "(?i)fatal"         # Fatal errors
 ]
 
 [streams.httpserver]
@@ -115,6 +128,11 @@ targets = [
     { path = "/var/log/auth.log", is_file = true }
 ]
 
+# Exclude debug logs
+[[streams.filters]]
+type = "exclude"
+patterns = ["DEBUG", "TRACE"]
+
 [streams.tcpserver]
 enabled = true
 port = 9090
@@ -149,6 +167,44 @@ Monitor targets support both files and directories:
 # All .log files in a directory
 { path = "./logs", pattern = "*.log", is_file = false }
 ```
+
+### Filter Configuration
+
+Control which logs are streamed using regex patterns:
+
+```toml
+# Include filter - only matching logs pass
+[[streams.filters]]
+type = "include"
+logic = "or"         # Match ANY pattern
+patterns = [
+    "ERROR",
+    "WARN",
+    "CRITICAL"
+]
+
+# Exclude filter - matching logs are dropped
+[[streams.filters]]
+type = "exclude"
+logic = "or"         # Drop if ANY pattern matches
+patterns = [
+    "DEBUG",
+    "healthcheck",
+    "/metrics"
+]
+
+# Complex filter with AND logic
+[[streams.filters]]
+type = "include"
+logic = "and"        # Must match ALL patterns
+patterns = [
+    "database",      # Must contain "database"
+    "error",         # AND must contain "error"
+    "connection"     # AND must contain "connection"
+]
+```
+
+Multiple filters are applied sequentially - all must pass for a log to be streamed.
 
 ### Check Interval Configuration
 
@@ -235,7 +291,7 @@ All HTTP streams share ports with path-based routing:
 # Connect to a stream
 curl -N http://localhost:8080/stream
 
-# Check stream status (includes rate limit stats)
+# Check stream status (includes filter and rate limit stats)
 curl http://localhost:8080/status
 
 # With authentication (when implemented)
@@ -329,6 +385,21 @@ All log entries are streamed as JSON:
     "total_entries": 15420,
     "dropped_entries": 0
   },
+  "filters": {
+    "filter_count": 2,
+    "total_processed": 15420,
+    "total_passed": 1234,
+    "filters": [
+      {
+        "type": "include",
+        "logic": "or",
+        "pattern_count": 3,
+        "total_processed": 15420,
+        "total_matched": 1234,
+        "total_dropped": 0
+      }
+    ]
+  },
   "features": {
     "rate_limit": {
       "enabled": true,
@@ -352,6 +423,7 @@ LogWisp provides comprehensive statistics at multiple levels:
 
 - **Per-Stream Stats**: Monitor performance, connection counts, data throughput
 - **Per-Watcher Stats**: File size, position, entries read, rotation count
+- **Filter Stats**: Processed entries, matched patterns, dropped logs
 - **Rate Limit Stats**: Total requests, blocked requests, active IPs
 - **Global Stats**: Aggregated view of all streams (in router mode)
 
@@ -364,6 +436,21 @@ Access statistics via status endpoints or watch the console output:
 ```
 
 ## Advanced Features
+
+### Log Filtering
+
+LogWisp implements powerful regex-based filtering:
+- **Include Filters**: Whitelist patterns - only matching logs pass
+- **Exclude Filters**: Blacklist patterns - matching logs are dropped
+- **Logic Options**: OR (match any) or AND (match all) for pattern combinations
+- **Filter Chains**: Multiple filters applied sequentially
+- **Performance**: Patterns compiled once at startup for efficiency
+
+Filter statistics help monitor effectiveness:
+```bash
+# Watch filter statistics
+watch -n 1 'curl -s http://localhost:8080/status | jq .filters'
+```
 
 ### Rate Limiting
 
@@ -422,6 +509,12 @@ check_interval_ms = 60000  # Check every minute
 - `check_interval_ms`: Lower values = faster detection, higher CPU usage
 - Configure per-stream based on expected update frequency
 - Use 10000ms+ for archival or slowly updating logs
+
+### Filter Optimization
+- Place most selective filters first
+- Use simple patterns when possible
+- Consider combining patterns: `"ERROR|WARN"` vs separate patterns
+- Monitor filter statistics to identify bottlenecks
 
 ### Rate Limiting
 - `requests_per_second`: Balance between protection and availability
@@ -547,10 +640,18 @@ services:
 
 ### Current Implementation
 - Read-only file access
+- Regex pattern validation at startup
 - Rate limiting for DDoS protection
 - Connection limits to prevent resource exhaustion
 - No authentication (placeholder configuration only)
 - No TLS/SSL support (placeholder configuration only)
+
+### Filter Security
+⚠️ **SECURITY**: Be aware of potential ReDoS (Regular Expression Denial of Service) attacks:
+- Complex nested patterns can cause CPU spikes
+- Patterns are validated at startup but not for complexity
+- Monitor filter processing time in production
+- Consider pattern complexity limits for public-facing streams
 
 ### Planned Security Features
 - **Authentication**: Basic, Bearer/JWT, mTLS
@@ -566,6 +667,8 @@ services:
 4. Place behind a reverse proxy for production HTTPS
 5. Monitor rate limit statistics for potential attacks
 6. Regularly update dependencies
+7. Test filter patterns for performance impact
+8. Limit regex complexity in production environments
 
 ### Rate Limiting Best Practices
 - Start with conservative limits and adjust based on monitoring
@@ -575,6 +678,13 @@ services:
 - Monitor blocked request statistics for anomalies
 
 ## Troubleshooting
+
+### Filter Issues
+1. Check filter statistics to see matched/dropped counts
+2. Test patterns with sample log entries
+3. Verify filter type (include vs exclude)
+4. Check filter logic (or vs and)
+5. Monitor CPU usage for complex patterns
 
 ### Rate Limit Issues
 1. Check rate limit statistics in status endpoint
@@ -588,6 +698,7 @@ services:
 3. Ensure files match the specified patterns
 4. Check monitor statistics in status endpoint
 5. Verify check_interval_ms is appropriate for log update frequency
+6. Review filter configuration - logs might be filtered out
 
 ### High Memory Usage
 1. Reduce buffer sizes in configuration
@@ -595,6 +706,7 @@ services:
 3. Enable rate limiting to prevent connection floods
 4. Increase check interval for less critical logs
 5. Use TCP instead of HTTP for high-volume streams
+6. Check for complex regex patterns causing backtracking
 
 ### Connection Drops
 1. Check heartbeat configuration
@@ -627,8 +739,9 @@ Contributions are welcome! Please read our contributing guidelines and submit pu
 - [x] Version management
 - [x] Configurable heartbeats
 - [x] Rate and connection limiting
-- [ ] Log filtering and transformation
-- [ ] Configurable logging support
+- [x] Regex-based log filtering
+- [ ] Log transformation (field extraction, formatting)
+- [ ] Configurable logging/stdout support
 - [ ] Authentication (Basic, JWT, mTLS)
 - [ ] TLS/SSL support
 - [ ] Prometheus metrics export

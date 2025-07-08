@@ -1,12 +1,17 @@
 // FILE: src/internal/config/stream.go
 package config
 
+import "logwisp/src/internal/filter"
+
 type StreamConfig struct {
 	// Stream identifier (used in logs and metrics)
 	Name string `toml:"name"`
 
 	// Monitor configuration for this stream
 	Monitor *StreamMonitorConfig `toml:"monitor"`
+
+	// Filter configuration
+	Filters []filter.Config `toml:"filters"`
 
 	// Server configurations
 	TCPServer  *TCPConfig  `toml:"tcpserver"`

@@ -14,8 +14,6 @@ logwisp/
 │   └── logwisp.toml.minimal      # Minimal configuration template
 ├── doc/
 │   └── architecture.md           # This file - architecture documentation
-├── test_router.sh                # Router functionality test suite
-├── test_ratelimit.sh             # Rate limiting test suite
 └── src/
     ├── cmd/
     │   └── logwisp/
@@ -27,8 +25,11 @@ logwisp/
         │   ├── loader.go         # Configuration loading with lixenwraith/config
         │   ├── server.go         # TCP/HTTP server configurations with rate limiting
         │   ├── ssl.go            # SSL/TLS configuration structures
-        │   ├── stream.go         # Stream-specific configurations
-        │   └── validation.go     # Configuration validation including rate limits
+        │   ├── stream.go         # Stream-specific configurations with filters
+        │   └── validation.go     # Configuration validation including filters and rate limits
+        ├── filter/
+        │   ├── filter.go         # Regex-based log filtering implementation
+        │   └── chain.go          # Sequential filter chain management
         ├── logstream/
         │   ├── httprouter.go     # HTTP router for path-based routing
         │   ├── logstream.go      # Stream lifecycle management
@@ -92,6 +93,11 @@ LOGWISP_STREAMS_0_HTTPSERVER_BUFFER_SIZE=2000
 LOGWISP_STREAMS_0_HTTPSERVER_HEARTBEAT_ENABLED=true
 LOGWISP_STREAMS_0_HTTPSERVER_HEARTBEAT_FORMAT=json
 
+# Filter configuration
+LOGWISP_STREAMS_0_FILTERS_0_TYPE=include
+LOGWISP_STREAMS_0_FILTERS_0_LOGIC=or
+LOGWISP_STREAMS_0_FILTERS_0_PATTERNS='["ERROR","WARN"]'
+
 # Rate limiting configuration
 LOGWISP_STREAMS_0_HTTPSERVER_RATE_LIMIT_ENABLED=true
 LOGWISP_STREAMS_0_HTTPSERVER_RATE_LIMIT_REQUESTS_PER_SECOND=10.0
@@ -116,9 +122,9 @@ LOGWISP_STREAMS_1_TCPSERVER_PORT=9090
 
 2. **LogStream (`logstream.LogStream`)**
    - Represents a single log monitoring pipeline
-   - Contains: Monitor + Rate Limiter + Servers (TCP/HTTP)
+   - Contains: Monitor + Filter Chain + Rate Limiter + Servers (TCP/HTTP)
    - Independent configuration
-   - Per-stream statistics with rate limit metrics
+   - Per-stream statistics with filter and rate limit metrics
 
 3. **Monitor (`monitor.Monitor`)**
    - Watches files and directories
@@ -126,14 +132,25 @@ LOGWISP_STREAMS_1_TCPSERVER_PORT=9090
    - Publishes log entries to subscribers
    - Configurable check intervals
 
-4. **Rate Limiter (`ratelimit.Limiter`)**
+4. **Filter (`filter.Filter`)**
+   - Regex-based log filtering
+   - Include (whitelist) or Exclude (blacklist) modes
+   - OR/AND logic for multiple patterns
+   - Per-filter statistics (processed, matched, dropped)
+
+5. **Filter Chain (`filter.Chain`)**
+   - Sequential application of multiple filters
+   - All filters must pass for entry to be streamed
+   - Aggregate statistics across filter chain
+
+6. **Rate Limiter (`ratelimit.Limiter`)**
    - Token bucket algorithm for smooth rate limiting
    - Per-IP or global limiting strategies
    - Connection tracking and limits
    - Automatic cleanup of stale entries
    - Non-blocking rejection of excess requests
 
-5. **Streamers**
+7. **Streamers**
    - **HTTPStreamer**: SSE-based streaming over HTTP
       - Rate limit enforcement before request handling
       - Connection tracking for per-IP limits
@@ -144,7 +161,7 @@ LOGWISP_STREAMS_1_TCPSERVER_PORT=9090
    - Both support configurable heartbeats
    - Non-blocking client management
 
-6. **HTTPRouter (`logstream.HTTPRouter`)**
+8. **HTTPRouter (`logstream.HTTPRouter`)**
    - Optional component for path-based routing
    - Consolidates multiple HTTP streams on shared ports
    - Provides global status endpoint
@@ -154,11 +171,22 @@ LOGWISP_STREAMS_1_TCPSERVER_PORT=9090
 ### Data Flow
 
 ```
-File System → Monitor → LogEntry Channel → [Rate Limiter] → Streamer → Network Client
-     ↑            ↓                              ↓
-     └── Rotation Detection              Rate Limit Check
-                                               ↓
-                                         Accept/Reject
+File System → Monitor → LogEntry Channel → Filter Chain → [Rate Limiter] → Streamer → Network Client
+     ↑            ↓                              ↓                ↓
+     └── Rotation Detection              Pattern Match    Rate Limit Check
+                                               ↓                ↓
+                                         Pass/Drop        Accept/Reject
+```
+
+### Filter Architecture
+
+```
+Log Entry → Filter Chain → Filter 1 → Filter 2 → ... → Output
+                              ↓          ↓
+                          Include?    Exclude?
+                              ↓          ↓
+                          OR/AND     OR/AND
+                           Logic      Logic
 ```
 
 ### Rate Limiting Architecture
@@ -183,6 +211,19 @@ targets = [
     { path = "/path/to/logs", pattern = "*.log", is_file = false },
     { path = "/path/to/file.log", is_file = true }
 ]
+
+# Filter configuration (optional)
+[[streams.filters]]
+type = "include"         # "include" or "exclude"
+logic = "or"            # "or" or "and"
+patterns = [
+    "(?i)error",        # Case-insensitive error matching
+    "(?i)warn"          # Case-insensitive warning matching
+]
+
+[[streams.filters]]
+type = "exclude"
+patterns = ["DEBUG", "TRACE"]
 
 [streams.httpserver]
 enabled = true
@@ -225,6 +266,26 @@ requests_per_second = 5.0
 burst_size = 10
 limit_by = "ip"
 ```
+
+## Filter Implementation
+
+### Filter Types
+1. **Include Filter**: Only logs matching patterns are streamed (whitelist)
+2. **Exclude Filter**: Logs matching patterns are dropped (blacklist)
+
+### Pattern Logic
+- **OR Logic**: Log matches if ANY pattern matches
+- **AND Logic**: Log matches only if ALL patterns match
+
+### Filter Chain
+- Multiple filters are applied sequentially
+- All filters must pass for a log to be streamed
+- Efficient short-circuit evaluation
+
+### Performance Considerations
+- Regex patterns compiled once at startup
+- Cached for efficient matching
+- Statistics tracked without locks in hot path
 
 ## Rate Limiting Implementation
 
@@ -308,6 +369,13 @@ go build -ldflags "-X 'logwisp/src/internal/version.Version=v1.0.0'" \
    - Statistics accuracy
    - Stress testing
 
+3. **Filter Testing** (recommended)
+   - Pattern matching accuracy
+   - Include/exclude logic
+   - OR/AND combination logic
+   - Performance with complex patterns
+   - Filter chain behavior
+
 ### Running Tests
 
 ```bash
@@ -323,6 +391,12 @@ make test
 
 ## Performance Considerations
 
+### Filter Overhead
+- Regex compilation: One-time cost at startup
+- Pattern matching: O(n*m) where n=patterns, m=text length
+- Use simple patterns when possible
+- Consider pattern order (most likely matches first)
+
 ### Rate Limiting Overhead
 - Token bucket checks: O(1) time complexity
 - Memory: ~100 bytes per tracked IP
@@ -330,6 +404,8 @@ make test
 - Minimal impact when disabled
 
 ### Optimization Guidelines
+- Use specific patterns to reduce regex complexity
+- Place most selective filters first in chain
 - Use per-IP limiting for fairness
 - Use global limiting for resource protection
 - Set burst size to 2-3x requests_per_second
@@ -343,17 +419,4 @@ make test
 - Rate limiting for DDoS protection
 - Connection limits for resource protection
 - Non-blocking request rejection
-
-### Future Security Roadmap
-- Authentication (Basic, JWT, mTLS)
-- TLS/SSL support
-- IP whitelisting/blacklisting
-- Audit logging
-- RBAC per stream
-
-### Security Best Practices
-- Run with minimal privileges
-- Enable rate limiting on public endpoints
-- Use connection limits to prevent exhaustion
-- Deploy behind reverse proxy for HTTPS
-- Monitor rate limit statistics for attacks
+- Regex pattern validation at startup

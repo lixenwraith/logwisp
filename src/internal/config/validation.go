@@ -3,6 +3,8 @@ package config
 
 import (
 	"fmt"
+	"logwisp/src/internal/filter"
+	"regexp"
 	"strings"
 )
 
@@ -36,12 +38,20 @@ func (c *Config) validate() error {
 				stream.Name, stream.Monitor.CheckIntervalMs)
 		}
 
+		// Validate targets
 		for j, target := range stream.Monitor.Targets {
 			if target.Path == "" {
 				return fmt.Errorf("stream '%s' target %d: empty path", stream.Name, j)
 			}
 			if strings.Contains(target.Path, "..") {
 				return fmt.Errorf("stream '%s' target %d: path contains directory traversal", stream.Name, j)
+			}
+		}
+
+		// Validate filters
+		for j, filterCfg := range stream.Filters {
+			if err := validateFilter(stream.Name, j, &filterCfg); err != nil {
+				return err
 			}
 		}
 
@@ -220,6 +230,41 @@ func validateRateLimit(serverType, streamName string, rl *RateLimitConfig) error
 	if rl.ResponseCode > 0 && (rl.ResponseCode < 400 || rl.ResponseCode >= 600) {
 		return fmt.Errorf("stream '%s' %s: response_code must be 4xx or 5xx: %d",
 			streamName, serverType, rl.ResponseCode)
+	}
+
+	return nil
+}
+
+func validateFilter(streamName string, filterIndex int, cfg *filter.Config) error {
+	// Validate filter type
+	switch cfg.Type {
+	case filter.TypeInclude, filter.TypeExclude, "":
+		// Valid types
+	default:
+		return fmt.Errorf("stream '%s' filter[%d]: invalid type '%s' (must be 'include' or 'exclude')",
+			streamName, filterIndex, cfg.Type)
+	}
+
+	// Validate filter logic
+	switch cfg.Logic {
+	case filter.LogicOr, filter.LogicAnd, "":
+		// Valid logic
+	default:
+		return fmt.Errorf("stream '%s' filter[%d]: invalid logic '%s' (must be 'or' or 'and')",
+			streamName, filterIndex, cfg.Logic)
+	}
+
+	// Empty patterns is valid - passes everything
+	if len(cfg.Patterns) == 0 {
+		return nil
+	}
+
+	// Validate regex patterns
+	for i, pattern := range cfg.Patterns {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("stream '%s' filter[%d] pattern[%d] '%s': invalid regex: %w",
+				streamName, filterIndex, i, pattern, err)
+		}
 	}
 
 	return nil

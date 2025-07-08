@@ -101,12 +101,12 @@ func (rs *routerServer) handleGlobalStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetContentType("application/json")
 
 	rs.routeMu.RLock()
-	streams := make(map[string]interface{})
+	streams := make(map[string]any)
 	for prefix, stream := range rs.routes {
 		streamStats := stream.GetStats()
 
 		// Add routing information
-		streamStats["routing"] = map[string]interface{}{
+		streamStats["routing"] = map[string]any{
 			"path_prefix": prefix,
 			"endpoints": map[string]string{
 				"stream": prefix + stream.Config.HTTPServer.StreamPath,
@@ -121,7 +121,7 @@ func (rs *routerServer) handleGlobalStatus(ctx *fasthttp.RequestCtx) {
 	// Get router stats
 	routerStats := rs.router.GetStats()
 
-	status := map[string]interface{}{
+	status := map[string]any{
 		"service":       "LogWisp Router",
 		"version":       version.String(),
 		"port":          rs.port,
@@ -155,7 +155,7 @@ func (rs *routerServer) handleNotFound(ctx *fasthttp.RequestCtx) {
 	}
 	rs.routeMu.RUnlock()
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"error":            "Not Found",
 		"requested_path":   string(ctx.Path()),
 		"available_routes": availableRoutes,

@@ -11,6 +11,11 @@ targets = [
     { path = "/var/log/myapp", pattern = "*.log", is_file = false }
 ]
 
+# Optional: Filter for errors and warnings only
+# [[streams.filters]]
+# type = "include"
+# patterns = ["ERROR", "WARN", "CRITICAL"]
+
 [streams.httpserver]
 enabled = true
 port = 8080

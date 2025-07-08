@@ -30,6 +30,16 @@ targets = [
     { path = "./", pattern = "*.log", is_file = false },
 ]
 
+# Filter configuration (optional) - controls which logs are streamed
+# Multiple filters are applied sequentially - all must pass
+# [[streams.filters]]
+# type = "include"              # "include" (whitelist) or "exclude" (blacklist)
+# logic = "or"                  # "or" (match any) or "and" (match all)
+# patterns = [
+#     "(?i)error",              # Case-insensitive error matching
+#     "(?i)warn"                # Case-insensitive warning matching
+# ]
+
 # HTTP Server configuration (SSE/Server-Sent Events)
 [streams.httpserver]
 enabled = true
@@ -57,7 +67,7 @@ enabled = false
 # max_connections_per_ip = 5     # Max SSE connections per IP
 
 # ------------------------------------------------------------------------------
-# Example: Application Logs Stream
+# Example: Application Logs Stream with Error Filtering
 # ------------------------------------------------------------------------------
 # [[streams]]
 # name = "app"
@@ -69,6 +79,28 @@ enabled = false
 #     { path = "/var/log/myapp", pattern = "*.log", is_file = false },
 #     # Also monitor specific file
 #     { path = "/var/log/myapp/app.log", is_file = true },
+# ]
+#
+# # Filter 1: Include only errors and warnings
+# [[streams.filters]]
+# type = "include"
+# logic = "or"                    # Match ANY of these patterns
+# patterns = [
+#     "(?i)\\berror\\b",          # Word boundary error (case-insensitive)
+#     "(?i)\\bwarn(ing)?\\b",     # warn or warning
+#     "(?i)\\bfatal\\b",          # fatal
+#     "(?i)\\bcritical\\b",       # critical
+#     "(?i)exception",            # exception anywhere
+#     "(?i)fail(ed|ure)?",        # fail, failed, failure
+# ]
+#
+# # Filter 2: Exclude health check noise
+# [[streams.filters]]
+# type = "exclude"
+# patterns = [
+#     "/health",
+#     "/metrics",
+#     "GET /ping"
 # ]
 #
 # [streams.httpserver]
@@ -95,7 +127,7 @@ enabled = false
 # max_connections_per_ip = 10
 
 # ------------------------------------------------------------------------------
-# Example: System Logs Stream (TCP + HTTP)
+# Example: System Logs Stream (TCP + HTTP) with Security Filtering
 # ------------------------------------------------------------------------------
 # [[streams]]
 # name = "system"
@@ -106,6 +138,21 @@ enabled = false
 #     { path = "/var/log/syslog", is_file = true },
 #     { path = "/var/log/auth.log", is_file = true },
 #     { path = "/var/log/kern.log", is_file = true },
+# ]
+#
+# # Include only security-relevant logs
+# [[streams.filters]]
+# type = "include"
+# logic = "or"
+# patterns = [
+#     "(?i)auth",
+#     "(?i)sudo",
+#     "(?i)ssh",
+#     "(?i)login",
+#     "(?i)permission",
+#     "(?i)denied",
+#     "(?i)unauthorized",
+#     "kernel:.*audit"
 # ]
 #
 # # TCP Server for high-performance streaming
@@ -137,7 +184,7 @@ enabled = false
 # status_path = "/status"
 
 # ------------------------------------------------------------------------------
-# Example: High-Volume Debug Logs
+# Example: High-Volume Debug Logs with Filtering
 # ------------------------------------------------------------------------------
 # [[streams]]
 # name = "debug"
@@ -146,6 +193,25 @@ enabled = false
 # check_interval_ms = 5000        # Check every 5 seconds (high volume)
 # targets = [
 #     { path = "/tmp/debug", pattern = "*.debug", is_file = false },
+# ]
+#
+# # Exclude verbose debug output
+# [[streams.filters]]
+# type = "exclude"
+# patterns = [
+#     "TRACE",
+#     "VERBOSE",
+#     "entering function",
+#     "exiting function",
+#     "memory dump"
+# ]
+#
+# # Include only specific modules
+# [[streams.filters]]
+# type = "include"
+# patterns = [
+#     "module:(api|database|auth)",
+#     "component:(router|handler)"
 # ]
 #
 # [streams.httpserver]
@@ -168,31 +234,78 @@ enabled = false
 # max_connections_per_ip = 1      # One connection per IP
 
 # ------------------------------------------------------------------------------
-# Example: Archived Logs (Slow Monitoring)
+# Example: Database Logs with Complex Filtering
 # ------------------------------------------------------------------------------
 # [[streams]]
-# name = "archive"
+# name = "database"
 #
 # [streams.monitor]
-# check_interval_ms = 60000       # Check once per minute
+# check_interval_ms = 200
 # targets = [
-#     { path = "/var/log/archive", pattern = "*.gz", is_file = false },
+#     { path = "/var/log/postgresql", pattern = "*.log", is_file = false },
+# ]
+#
+# # Complex AND filter - must match all patterns
+# [[streams.filters]]
+# type = "include"
+# logic = "and"                   # Must match ALL patterns
+# patterns = [
+#     "(?i)error|fail",           # Must contain error or fail
+#     "(?i)connection|query",     # AND must be about connections or queries
+#     "(?i)timeout|deadlock"      # AND must involve timeout or deadlock
+# ]
+#
+# # Exclude routine maintenance
+# [[streams.filters]]
+# type = "exclude"
+# patterns = [
+#     "VACUUM",
+#     "ANALYZE",
+#     "checkpoint"
 # ]
 #
 # [streams.tcpserver]
 # enabled = true
 # port = 9091
-# buffer_size = 500               # Small buffer for archived logs
-#
-# # Infrequent heartbeat
-# [streams.tcpserver.heartbeat]
-# enabled = true
-# interval_seconds = 300          # Every 5 minutes
-# include_timestamp = false
-# include_stats = false
+# buffer_size = 2000
 
 # ------------------------------------------------------------------------------
-# Example: Security/Audit Logs with Strict Limits
+# Example: API Access Logs with Pattern Extraction
+# ------------------------------------------------------------------------------
+# [[streams]]
+# name = "api-access"
+#
+# [streams.monitor]
+# check_interval_ms = 100
+# targets = [
+#     { path = "/var/log/nginx/access.log", is_file = true },
+# ]
+#
+# # Include only API endpoints
+# [[streams.filters]]
+# type = "include"
+# patterns = [
+#     '"/api/v[0-9]+/',           # API versioned endpoints
+#     '"(GET|POST|PUT|DELETE) /api/'  # API requests
+# ]
+#
+# # Exclude specific status codes
+# [[streams.filters]]
+# type = "exclude"
+# patterns = [
+#     '" 200 ',                   # Success responses
+#     '" 204 ',                   # No content
+#     '" 304 ',                   # Not modified
+#     'OPTIONS '                  # CORS preflight
+# ]
+#
+# [streams.httpserver]
+# enabled = true
+# port = 8084
+# buffer_size = 3000
+
+# ------------------------------------------------------------------------------
+# Example: Security/Audit Logs with Strict Filtering
 # ------------------------------------------------------------------------------
 # [[streams]]
 # name = "security"
@@ -201,6 +314,25 @@ enabled = false
 # check_interval_ms = 100
 # targets = [
 #     { path = "/var/log/audit", pattern = "audit.log*", is_file = false },
+# ]
+#
+# # Security-focused patterns
+# [[streams.filters]]
+# type = "include"
+# logic = "or"
+# patterns = [
+#     "type=USER_AUTH",
+#     "type=USER_LOGIN",
+#     "type=USER_LOGOUT",
+#     "type=USER_ERR",
+#     "type=CRED_",              # All credential operations
+#     "type=PRIV_",              # All privilege operations
+#     "type=ANOM_",              # All anomalies
+#     "type=RESP_",              # All responses
+#     "failed|failure",
+#     "denied|unauthorized",
+#     "violation",
+#     "attack|intrusion"
 # ]
 #
 # [streams.httpserver]
@@ -235,29 +367,67 @@ enabled = false
 # # realm = "Security Logs"
 
 # ------------------------------------------------------------------------------
-# Example: Public API Logs with Global Rate Limiting
+# Example: Multi-Application Logs with Service Filtering
 # ------------------------------------------------------------------------------
 # [[streams]]
-# name = "api-public"
+# name = "microservices"
 #
 # [streams.monitor]
 # check_interval_ms = 100
 # targets = [
-#     { path = "/var/log/api", pattern = "access.log*", is_file = false },
+#     { path = "/var/log/containers", pattern = "*.log", is_file = false },
+# ]
+#
+# # Filter by service name
+# [[streams.filters]]
+# type = "include"
+# patterns = [
+#     "service=(api|auth|user|order)",  # Specific services
+#     "pod=(api|auth|user|order)-"      # Kubernetes pods
+# ]
+#
+# # Exclude Kubernetes noise
+# [[streams.filters]]
+# type = "exclude"
+# patterns = [
+#     "kube-system",
+#     "kube-proxy",
+#     "Readiness probe",
+#     "Liveness probe"
 # ]
 #
 # [streams.httpserver]
 # enabled = true
-# port = 8084
-# buffer_size = 2000
+# port = 8085
+# buffer_size = 5000
+
+# ==============================================================================
+# FILTER PATTERN EXAMPLES
+# ==============================================================================
 #
-# # Global rate limiting (all clients share limit)
-# [streams.httpserver.rate_limit]
-# enabled = true
-# requests_per_second = 100.0     # 100 req/s total
-# burst_size = 200
-# limit_by = "global"             # All clients share this limit
-# max_total_connections = 50      # Max 50 connections total
+# Basic Patterns:
+# - "ERROR"                    # Exact match
+# - "(?i)error"               # Case-insensitive
+# - "\\berror\\b"             # Word boundary (won't match "errorCode")
+# - "error|warn|fatal"        # Multiple options
+#
+# Complex Patterns:
+# - "^\\[ERROR\\]"            # Line starts with [ERROR]
+# - "status=[4-5][0-9]{2}"    # HTTP 4xx or 5xx status codes
+# - "duration>[0-9]{4}ms"     # Duration over 999ms
+# - "user_id=\"[^\"]+\""      # Extract user_id values
+#
+# Performance Tips:
+# - Avoid nested quantifiers: "((a+)+)+" can cause catastrophic backtracking
+# - Use anchors when possible: "^ERROR" is faster than "ERROR"
+# - Prefer character classes: "[0-9]" over "\\d" for clarity
+# - Test complex patterns with sample data before deployment
+#
+# Security Considerations:
+# - Be aware of ReDoS (Regular Expression Denial of Service)
+# - Limit pattern complexity for public-facing streams
+# - Monitor filter processing time in statistics
+# - Consider pre-filtering very high volume streams
 
 # ==============================================================================
 # USAGE EXAMPLES
@@ -273,6 +443,7 @@ enabled = false
 #    - Uncomment additional [[streams]] sections above
 #    - Each stream runs independently on its own port
 #    - Different check intervals for different log types
+#    - Different filters for each stream
 
 # 3. Router mode (consolidated access):
 #    ./logwisp --router
@@ -281,6 +452,7 @@ enabled = false
 #    - Example: http://localhost:8080/app/stream
 
 # 4. Production deployment:
+#    - Enable filters to reduce noise and bandwidth
 #    - Enable rate limiting on public-facing streams
 #    - Use TCP for internal high-volume streams
 #    - Set appropriate check intervals (higher = less CPU)
@@ -289,6 +461,7 @@ enabled = false
 # 5. Monitoring:
 #    curl http://localhost:8080/status | jq .
 #    - Check active connections
+#    - Monitor filter statistics (matched/dropped)
 #    - Monitor rate limit statistics
 #    - Track log entry counts
 
@@ -299,10 +472,14 @@ enabled = false
 # LOGWISP_STREAMS_0_MONITOR_CHECK_INTERVAL_MS=50
 # LOGWISP_STREAMS_0_HTTPSERVER_PORT=8090
 # LOGWISP_STREAMS_0_HTTPSERVER_RATE_LIMIT_ENABLED=true
+# LOGWISP_STREAMS_0_FILTERS_0_TYPE=include
+# LOGWISP_STREAMS_0_FILTERS_0_PATTERNS='["ERROR","WARN"]'
 
 # ==============================================================================
 # NOTES
 # ==============================================================================
+# - Filters are processed sequentially - all must pass
+# - Empty filter patterns means "pass everything"
 # - Rate limiting is disabled by default for backward compatibility
 # - Each stream can have different rate limit settings
 # - TCP connections are silently dropped when rate limited
@@ -310,3 +487,5 @@ enabled = false
 # - IP tracking is cleaned up after 5 minutes of inactivity
 # - Token bucket algorithm provides smooth rate limiting
 # - Connection limits prevent resource exhaustion
+# - Regex patterns are compiled once at startup for performance
+# - Complex patterns can impact performance - monitor statistics

@@ -4,6 +4,7 @@ package logstream
 import (
 	"context"
 	"fmt"
+	"logwisp/src/internal/filter"
 	"sync"
 	"time"
 
@@ -21,12 +22,13 @@ type Service struct {
 }
 
 type LogStream struct {
-	Name       string
-	Config     config.StreamConfig
-	Monitor    monitor.Monitor
-	TCPServer  *stream.TCPStreamer
-	HTTPServer *stream.HTTPStreamer
-	Stats      *StreamStats
+	Name        string
+	Config      config.StreamConfig
+	Monitor     monitor.Monitor
+	FilterChain *filter.Chain
+	TCPServer   *stream.TCPStreamer
+	HTTPServer  *stream.HTTPStreamer
+	Stats       *StreamStats
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -39,6 +41,7 @@ type StreamStats struct {
 	HTTPConnections    int32
 	TotalBytesServed   uint64
 	TotalEntriesServed uint64
+	FilterStats        map[string]any
 }
 
 func New(ctx context.Context) *Service {
@@ -79,11 +82,23 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 		return fmt.Errorf("failed to start monitor: %w", err)
 	}
 
+	// Create filter chain
+	var filterChain *filter.Chain
+	if len(cfg.Filters) > 0 {
+		chain, err := filter.NewChain(cfg.Filters)
+		if err != nil {
+			streamCancel()
+			return fmt.Errorf("failed to create filter chain: %w", err)
+		}
+		filterChain = chain
+	}
+
 	// Create log stream
 	ls := &LogStream{
-		Name:    cfg.Name,
-		Config:  cfg,
-		Monitor: mon,
+		Name:        cfg.Name,
+		Config:      cfg,
+		Monitor:     mon,
+		FilterChain: filterChain,
 		Stats: &StreamStats{
 			StartTime: time.Now(),
 		},
@@ -93,7 +108,18 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 
 	// Start TCP server if configured
 	if cfg.TCPServer != nil && cfg.TCPServer.Enabled {
-		tcpChan := mon.Subscribe()
+		// Create filtered channel
+		rawChan := mon.Subscribe()
+		tcpChan := make(chan monitor.LogEntry, cfg.TCPServer.BufferSize)
+
+		// Start filter goroutine for TCP
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			defer close(tcpChan)
+			s.filterLoop(streamCtx, rawChan, tcpChan, filterChain)
+		}()
+
 		ls.TCPServer = stream.NewTCPStreamer(tcpChan, *cfg.TCPServer)
 
 		if err := s.startTCPServer(ls); err != nil {
@@ -104,7 +130,18 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 
 	// Start HTTP server if configured
 	if cfg.HTTPServer != nil && cfg.HTTPServer.Enabled {
-		httpChan := mon.Subscribe()
+		// Create filtered channel
+		rawChan := mon.Subscribe()
+		httpChan := make(chan monitor.LogEntry, cfg.HTTPServer.BufferSize)
+
+		// Start filter goroutine for HTTP
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			defer close(httpChan)
+			s.filterLoop(streamCtx, rawChan, httpChan, filterChain)
+		}()
+
 		ls.HTTPServer = stream.NewHTTPStreamer(httpChan, *cfg.HTTPServer)
 
 		if err := s.startHTTPServer(ls); err != nil {
@@ -117,6 +154,31 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 
 	s.streams[cfg.Name] = ls
 	return nil
+}
+
+// filterLoop applies filters to log entries
+func (s *Service) filterLoop(ctx context.Context, in <-chan monitor.LogEntry, out chan<- monitor.LogEntry, chain *filter.Chain) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case entry, ok := <-in:
+			if !ok {
+				return
+			}
+
+			// Apply filter chain if configured
+			if chain == nil || chain.Apply(entry) {
+				select {
+				case out <- entry:
+				case <-ctx.Done():
+					return
+				default:
+					// Drop if output buffer is full
+				}
+			}
+		}
+	}
 }
 
 func (s *Service) GetStream(name string) (*LogStream, error) {
@@ -178,17 +240,17 @@ func (s *Service) Shutdown() {
 	s.wg.Wait()
 }
 
-func (s *Service) GetGlobalStats() map[string]interface{} {
+func (s *Service) GetGlobalStats() map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	stats := map[string]interface{}{
-		"streams":       make(map[string]interface{}),
+	stats := map[string]any{
+		"streams":       make(map[string]any),
 		"total_streams": len(s.streams),
 	}
 
 	for name, stream := range s.streams {
-		stats["streams"].(map[string]interface{})[name] = stream.GetStats()
+		stats["streams"].(map[string]any)[name] = stream.GetStats()
 	}
 
 	return stats
