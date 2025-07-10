@@ -6,11 +6,14 @@ import (
 	"sync/atomic"
 
 	"logwisp/src/internal/monitor"
+
+	"github.com/lixenwraith/log"
 )
 
 // Chain manages multiple filters in sequence
 type Chain struct {
 	filters []*Filter
+	logger  *log.Logger
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -18,19 +21,23 @@ type Chain struct {
 }
 
 // NewChain creates a new filter chain from configurations
-func NewChain(configs []Config) (*Chain, error) {
+func NewChain(configs []Config, logger *log.Logger) (*Chain, error) {
 	chain := &Chain{
 		filters: make([]*Filter, 0, len(configs)),
+		logger:  logger,
 	}
 
 	for i, cfg := range configs {
-		filter, err := New(cfg)
+		filter, err := New(cfg, logger)
 		if err != nil {
 			return nil, fmt.Errorf("filter[%d]: %w", i, err)
 		}
 		chain.filters = append(chain.filters, filter)
 	}
 
+	logger.Info("msg", "Filter chain created",
+		"component", "filter_chain",
+		"filter_count", len(configs))
 	return chain, nil
 }
 
@@ -46,8 +53,12 @@ func (c *Chain) Apply(entry monitor.LogEntry) bool {
 	}
 
 	// All filters must pass
-	for _, filter := range c.filters {
+	for i, filter := range c.filters {
 		if !filter.Apply(entry) {
+			c.logger.Debug("msg", "Entry filtered out",
+				"component", "filter_chain",
+				"filter_index", i,
+				"filter_type", filter.config.Type)
 			return false
 		}
 	}

@@ -26,8 +26,8 @@ func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
 }
 
 func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
-	// Debug: Log all connection attempts
-	fmt.Printf("[TCP DEBUG] Connection attempt from %s\n", c.RemoteAddr())
+	remoteAddr := c.RemoteAddr().String()
+	s.streamer.logger.Debug("msg", "TCP connection attempt", "remote_addr", remoteAddr)
 
 	// Check rate limit
 	if s.streamer.rateLimiter != nil {
@@ -35,12 +35,15 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		remoteStr := c.RemoteAddr().String()
 		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteStr)
 		if err != nil {
-			fmt.Printf("[TCP DEBUG] Failed to parse address %s: %v\n", remoteStr, err)
+			s.streamer.logger.Warn("msg", "Failed to parse TCP address",
+				"remote_addr", remoteAddr,
+				"error", err)
 			return nil, gnet.Close
 		}
 
 		if !s.streamer.rateLimiter.CheckTCP(tcpAddr) {
-			fmt.Printf("[TCP DEBUG] Rate limited connection from %s\n", remoteStr)
+			s.streamer.logger.Warn("msg", "TCP connection rate limited",
+				"remote_addr", remoteAddr)
 			// Silently close connection when rate limited
 			return nil, gnet.Close
 		}
@@ -51,27 +54,29 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 
 	s.connections.Store(c, struct{}{})
 
-	oldCount := s.streamer.activeConns.Load()
 	newCount := s.streamer.activeConns.Add(1)
-	fmt.Printf("[TCP ATOMIC] OnOpen: %d -> %d (expected: %d)\n", oldCount, newCount, oldCount+1)
+	s.streamer.logger.Debug("msg", "TCP connection opened",
+		"remote_addr", remoteAddr,
+		"active_connections", newCount)
 
-	fmt.Printf("[TCP DEBUG] Connection opened. Count now: %d\n", newCount)
 	return nil, gnet.None
 }
 
 func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	s.connections.Delete(c)
 
+	remoteAddr := c.RemoteAddr().String()
+
 	// Remove connection tracking
 	if s.streamer.rateLimiter != nil {
 		s.streamer.rateLimiter.RemoveConnection(c.RemoteAddr().String())
 	}
 
-	oldCount := s.streamer.activeConns.Load()
 	newCount := s.streamer.activeConns.Add(-1)
-	fmt.Printf("[TCP ATOMIC] OnClose: %d -> %d (expected: %d)\n", oldCount, newCount, oldCount-1)
-
-	fmt.Printf("[TCP DEBUG] Connection closed. Count now: %d (err: %v)\n", newCount, err)
+	s.streamer.logger.Debug("msg", "TCP connection closed",
+		"remote_addr", remoteAddr,
+		"active_connections", newCount,
+		"error", err)
 	return gnet.None
 }
 
@@ -79,8 +84,4 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 	// We don't expect input from clients, just discard
 	c.Discard(-1)
 	return gnet.None
-}
-
-func (t *TCPStreamer) GetActiveConnections() int32 {
-	return t.activeConns.Load()
 }

@@ -1,0 +1,62 @@
+// FILE: src/internal/config/logging.go
+package config
+
+// LogConfig represents logging configuration for LogWisp
+type LogConfig struct {
+	// Output mode: "file", "stdout", "stderr", "both", "none"
+	Output string `toml:"output"`
+
+	// Log level: "debug", "info", "warn", "error"
+	Level string `toml:"level"`
+
+	// File output settings (when Output includes "file" or "both")
+	File *LogFileConfig `toml:"file"`
+
+	// Console output settings
+	Console *LogConsoleConfig `toml:"console"`
+}
+
+type LogFileConfig struct {
+	// Directory for log files
+	Directory string `toml:"directory"`
+
+	// Base name for log files
+	Name string `toml:"name"`
+
+	// Maximum size per log file in MB
+	MaxSizeMB int64 `toml:"max_size_mb"`
+
+	// Maximum total size of all logs in MB
+	MaxTotalSizeMB int64 `toml:"max_total_size_mb"`
+
+	// Log retention in hours (0 = disabled)
+	RetentionHours float64 `toml:"retention_hours"`
+}
+
+type LogConsoleConfig struct {
+	// Target for console output: "stdout", "stderr", "split"
+	// "split" means info/debug to stdout, warn/error to stderr
+	Target string `toml:"target"`
+
+	// Format: "txt" or "json"
+	Format string `toml:"format"`
+}
+
+// DefaultLogConfig returns sensible logging defaults
+func DefaultLogConfig() *LogConfig {
+	return &LogConfig{
+		Output: "stderr", // Default to stderr for containerized environments
+		Level:  "info",
+		File: &LogFileConfig{
+			Directory:      "./logs",
+			Name:           "logwisp",
+			MaxSizeMB:      100,
+			MaxTotalSizeMB: 1000,
+			RetentionHours: 168, // 7 days
+		},
+		Console: &LogConsoleConfig{
+			Target: "stderr",
+			Format: "txt",
+		},
+	}
+}

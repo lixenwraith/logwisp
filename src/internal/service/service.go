@@ -11,6 +11,8 @@ import (
 	"logwisp/src/internal/filter"
 	"logwisp/src/internal/monitor"
 	"logwisp/src/internal/transport"
+
+	"github.com/lixenwraith/log"
 )
 
 type Service struct {
@@ -19,14 +21,16 @@ type Service struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+	logger  *log.Logger
 }
 
-func New(ctx context.Context) *Service {
+func New(ctx context.Context, logger *log.Logger) *Service {
 	serviceCtx, cancel := context.WithCancel(ctx)
 	return &Service{
 		streams: make(map[string]*LogStream),
 		ctx:     serviceCtx,
 		cancel:  cancel,
+		logger:  logger,
 	}
 }
 
@@ -35,14 +39,21 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 	defer s.mu.Unlock()
 
 	if _, exists := s.streams[cfg.Name]; exists {
-		return fmt.Errorf("transport '%s' already exists", cfg.Name)
+		err := fmt.Errorf("transport '%s' already exists", cfg.Name)
+		s.logger.Error("msg", "Failed to create stream - duplicate name",
+			"component", "service",
+			"stream", cfg.Name,
+			"error", err)
+		return err
 	}
+
+	s.logger.Debug("msg", "Creating stream", "stream", cfg.Name)
 
 	// Create transport context
 	streamCtx, streamCancel := context.WithCancel(s.ctx)
 
-	// Create monitor
-	mon := monitor.New()
+	// Create monitor - pass the service logger directly
+	mon := monitor.New(s.logger)
 	mon.SetCheckInterval(time.Duration(cfg.GetCheckInterval(100)) * time.Millisecond)
 
 	// Add targets
@@ -56,15 +67,24 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 	// Start monitor
 	if err := mon.Start(streamCtx); err != nil {
 		streamCancel()
+		s.logger.Error("msg", "Failed to start monitor",
+			"component", "service",
+			"stream", cfg.Name,
+			"error", err)
 		return fmt.Errorf("failed to start monitor: %w", err)
 	}
 
 	// Create filter chain
 	var filterChain *filter.Chain
 	if len(cfg.Filters) > 0 {
-		chain, err := filter.NewChain(cfg.Filters)
+		chain, err := filter.NewChain(cfg.Filters, s.logger)
 		if err != nil {
 			streamCancel()
+			s.logger.Error("msg", "Failed to create filter chain",
+				"component", "service",
+				"stream", cfg.Name,
+				"filter_count", len(cfg.Filters),
+				"error", err)
 			return fmt.Errorf("failed to create filter chain: %w", err)
 		}
 		filterChain = chain
@@ -81,6 +101,7 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 		},
 		ctx:    streamCtx,
 		cancel: streamCancel,
+		logger: s.logger, // Use parent logger
 	}
 
 	// Start TCP server if configured
@@ -97,10 +118,18 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 			s.filterLoop(streamCtx, rawChan, tcpChan, filterChain)
 		}()
 
-		ls.TCPServer = transport.NewTCPStreamer(tcpChan, *cfg.TCPServer)
+		ls.TCPServer = transport.NewTCPStreamer(
+			tcpChan,
+			*cfg.TCPServer,
+			s.logger) // Pass parent logger
 
 		if err := s.startTCPServer(ls); err != nil {
 			ls.Shutdown()
+			s.logger.Error("msg", "Failed to start TCP server",
+				"component", "service",
+				"stream", cfg.Name,
+				"port", cfg.TCPServer.Port,
+				"error", err)
 			return fmt.Errorf("TCP server failed: %w", err)
 		}
 	}
@@ -119,10 +148,18 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 			s.filterLoop(streamCtx, rawChan, httpChan, filterChain)
 		}()
 
-		ls.HTTPServer = transport.NewHTTPStreamer(httpChan, *cfg.HTTPServer)
+		ls.HTTPServer = transport.NewHTTPStreamer(
+			httpChan,
+			*cfg.HTTPServer,
+			s.logger) // Pass parent logger
 
 		if err := s.startHTTPServer(ls); err != nil {
 			ls.Shutdown()
+			s.logger.Error("msg", "Failed to start HTTP server",
+				"component", "service",
+				"stream", cfg.Name,
+				"port", cfg.HTTPServer.Port,
+				"error", err)
 			return fmt.Errorf("HTTP server failed: %w", err)
 		}
 	}
@@ -130,6 +167,7 @@ func (s *Service) CreateStream(cfg config.StreamConfig) error {
 	ls.startStatsUpdater(streamCtx)
 
 	s.streams[cfg.Name] = ls
+	s.logger.Info("msg", "Stream created successfully", "stream", cfg.Name)
 	return nil
 }
 
@@ -152,6 +190,7 @@ func (s *Service) filterLoop(ctx context.Context, in <-chan monitor.LogEntry, ou
 					return
 				default:
 					// Drop if output buffer is full
+					s.logger.Debug("msg", "Dropped log entry - buffer full")
 				}
 			}
 		}
@@ -186,15 +225,23 @@ func (s *Service) RemoveStream(name string) error {
 
 	stream, exists := s.streams[name]
 	if !exists {
-		return fmt.Errorf("transport '%s' not found", name)
+		err := fmt.Errorf("transport '%s' not found", name)
+		s.logger.Warn("msg", "Cannot remove non-existent stream",
+			"component", "service",
+			"stream", name,
+			"error", err)
+		return err
 	}
 
+	s.logger.Info("msg", "Removing stream", "stream", name)
 	stream.Shutdown()
 	delete(s.streams, name)
 	return nil
 }
 
 func (s *Service) Shutdown() {
+	s.logger.Info("msg", "Service shutdown initiated")
+
 	s.mu.Lock()
 	streams := make([]*LogStream, 0, len(s.streams))
 	for _, stream := range s.streams {
@@ -215,6 +262,8 @@ func (s *Service) Shutdown() {
 
 	s.cancel()
 	s.wg.Wait()
+
+	s.logger.Info("msg", "Service shutdown complete")
 }
 
 func (s *Service) GetGlobalStats() map[string]any {
@@ -247,8 +296,13 @@ func (s *Service) startTCPServer(ls *LogStream) error {
 	// Check startup
 	select {
 	case err := <-errChan:
+		s.logger.Error("msg", "TCP server startup failed immediately",
+			"component", "service",
+			"stream", ls.Name,
+			"error", err)
 		return err
 	case <-time.After(time.Second):
+		s.logger.Debug("msg", "TCP server started", "stream", ls.Name)
 		return nil
 	}
 }
@@ -267,8 +321,13 @@ func (s *Service) startHTTPServer(ls *LogStream) error {
 	// Check startup
 	select {
 	case err := <-errChan:
+		s.logger.Error("msg", "HTTP server startup failed immediately",
+			"component", "service",
+			"stream", ls.Name,
+			"error", err)
 		return err
 	case <-time.After(time.Second):
+		s.logger.Debug("msg", "HTTP server started", "stream", ls.Name)
 		return nil
 	}
 }

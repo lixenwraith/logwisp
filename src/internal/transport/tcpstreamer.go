@@ -9,10 +9,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/panjf2000/gnet/v2"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/monitor"
 	"logwisp/src/internal/ratelimit"
+
+	"github.com/lixenwraith/log"
+	"github.com/panjf2000/gnet/v2"
 )
 
 type TCPStreamer struct {
@@ -26,14 +28,16 @@ type TCPStreamer struct {
 	engineMu    sync.Mutex
 	wg          sync.WaitGroup
 	rateLimiter *ratelimit.Limiter
+	logger      *log.Logger
 }
 
-func NewTCPStreamer(logChan chan monitor.LogEntry, cfg config.TCPConfig) *TCPStreamer {
+func NewTCPStreamer(logChan chan monitor.LogEntry, cfg config.TCPConfig, logger *log.Logger) *TCPStreamer {
 	t := &TCPStreamer{
 		logChan:   logChan,
 		config:    cfg,
 		done:      make(chan struct{}),
 		startTime: time.Now(),
+		logger:    logger,
 	}
 
 	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
@@ -59,11 +63,21 @@ func (t *TCPStreamer) Start() error {
 	// Run gnet in separate goroutine to avoid blocking
 	errChan := make(chan error, 1)
 	go func() {
+		t.logger.Info("msg", "Starting TCP server",
+			"component", "tcp_streamer",
+			"port", t.config.Port)
+
 		err := gnet.Run(t.server, addr,
 			gnet.WithLogger(noopLogger{}),
 			gnet.WithMulticore(true),
 			gnet.WithReusePort(true),
 		)
+		if err != nil {
+			t.logger.Error("msg", "TCP server failed",
+				"component", "tcp_streamer",
+				"port", t.config.Port,
+				"error", err)
+		}
 		errChan <- err
 	}()
 
@@ -76,11 +90,13 @@ func (t *TCPStreamer) Start() error {
 		return err
 	case <-time.After(100 * time.Millisecond):
 		// Server started successfully
+		t.logger.Info("msg", "TCP server started", "port", t.config.Port)
 		return nil
 	}
 }
 
 func (t *TCPStreamer) Stop() {
+	t.logger.Info("msg", "Stopping TCP server")
 	// Signal broadcast loop to stop
 	close(t.done)
 
@@ -97,6 +113,8 @@ func (t *TCPStreamer) Stop() {
 
 	// Wait for broadcast loop to finish
 	t.wg.Wait()
+
+	t.logger.Info("msg", "TCP server stopped")
 }
 
 func (t *TCPStreamer) broadcastLoop() {
@@ -117,6 +135,10 @@ func (t *TCPStreamer) broadcastLoop() {
 			}
 			data, err := json.Marshal(entry)
 			if err != nil {
+				t.logger.Error("msg", "Failed to marshal log entry",
+					"component", "tcp_streamer",
+					"error", err,
+					"entry_source", entry.Source)
 				continue
 			}
 			data = append(data, '\n')
@@ -162,4 +184,8 @@ func (t *TCPStreamer) formatHeartbeat() []byte {
 	// For TCP, always use JSON format
 	jsonData, _ := json.Marshal(data)
 	return append(jsonData, '\n')
+}
+
+func (t *TCPStreamer) GetActiveConnections() int32 {
+	return t.activeConns.Load()
 }

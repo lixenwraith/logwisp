@@ -12,6 +12,8 @@ import (
 	"logwisp/src/internal/filter"
 	"logwisp/src/internal/monitor"
 	"logwisp/src/internal/transport"
+
+	"github.com/lixenwraith/log"
 )
 
 type LogStream struct {
@@ -22,6 +24,7 @@ type LogStream struct {
 	TCPServer   *transport.TCPStreamer
 	HTTPServer  *transport.HTTPStreamer
 	Stats       *StreamStats
+	logger      *log.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -38,6 +41,10 @@ type StreamStats struct {
 }
 
 func (ls *LogStream) Shutdown() {
+	ls.logger.Info("msg", "Shutting down stream",
+		"component", "logstream",
+		"stream", ls.Name)
+
 	// Stop servers first
 	var wg sync.WaitGroup
 
@@ -65,6 +72,10 @@ func (ls *LogStream) Shutdown() {
 
 	// Stop monitor
 	ls.Monitor.Stop()
+
+	ls.logger.Info("msg", "Stream shutdown complete",
+		"component", "logstream",
+		"stream", ls.Name)
 }
 
 func (ls *LogStream) GetStats() map[string]any {
@@ -112,6 +123,11 @@ func (ls *LogStream) UpdateTargets(targets []config.MonitorTarget) error {
 		// Basic validation
 		absPath, err := filepath.Abs(target.Path)
 		if err != nil {
+			ls.logger.Error("msg", "Invalid target path",
+				"component", "logstream",
+				"stream", ls.Name,
+				"path", target.Path,
+				"error", err)
 			return fmt.Errorf("invalid target path %s: %w", target.Path, err)
 		}
 		target.Path = absPath
@@ -124,6 +140,12 @@ func (ls *LogStream) UpdateTargets(targets []config.MonitorTarget) error {
 	// Add new targets
 	for _, target := range validatedTargets {
 		if err := ls.Monitor.AddTarget(target.Path, target.Pattern, target.IsFile); err != nil {
+			ls.logger.Error("msg", "Failed to add monitor target - rolling back",
+				"component", "logstream",
+				"stream", ls.Name,
+				"target", target.Path,
+				"pattern", target.Pattern,
+				"error", err)
 			// Rollback: restore old watchers
 			for _, watcher := range oldWatchers {
 				// Best effort restoration
@@ -137,6 +159,12 @@ func (ls *LogStream) UpdateTargets(targets []config.MonitorTarget) error {
 	for _, watcher := range oldWatchers {
 		ls.Monitor.RemoveTarget(watcher.Path)
 	}
+
+	ls.logger.Info("msg", "Updated monitor targets",
+		"component", "logstream",
+		"stream", ls.Name,
+		"old_count", len(oldWatchers),
+		"new_count", len(validatedTargets))
 
 	return nil
 }
@@ -157,8 +185,11 @@ func (ls *LogStream) startStatsUpdater(ctx context.Context) {
 					ls.Stats.TCPConnections = ls.TCPServer.GetActiveConnections()
 					if oldTCP != ls.Stats.TCPConnections {
 						// This debug should now show changes
-						fmt.Printf("[STATS DEBUG] %s TCP: %d -> %d\n",
-							ls.Name, oldTCP, ls.Stats.TCPConnections)
+						ls.logger.Debug("msg", "TCP connection count changed",
+							"component", "logstream",
+							"stream", ls.Name,
+							"old", oldTCP,
+							"new", ls.Stats.TCPConnections)
 					}
 				}
 				if ls.HTTPServer != nil {
@@ -166,8 +197,11 @@ func (ls *LogStream) startStatsUpdater(ctx context.Context) {
 					ls.Stats.HTTPConnections = ls.HTTPServer.GetActiveConnections()
 					if oldHTTP != ls.Stats.HTTPConnections {
 						// This debug should now show changes
-						fmt.Printf("[STATS DEBUG] %s HTTP: %d -> %d\n",
-							ls.Name, oldHTTP, ls.Stats.HTTPConnections)
+						ls.logger.Debug("msg", "HTTP connection count changed",
+							"component", "logstream",
+							"stream", ls.Name,
+							"old", oldHTTP,
+							"new", ls.Stats.HTTPConnections)
 					}
 				}
 			}

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
 )
 
@@ -15,6 +16,7 @@ type HTTPRouter struct {
 	service *Service
 	servers map[int]*routerServer // port -> server
 	mu      sync.RWMutex
+	logger  *log.Logger
 
 	// Statistics
 	startTime      time.Time
@@ -23,11 +25,12 @@ type HTTPRouter struct {
 	failedRequests atomic.Uint64
 }
 
-func NewHTTPRouter(service *Service) *HTTPRouter {
+func NewHTTPRouter(service *Service, logger *log.Logger) *HTTPRouter {
 	return &HTTPRouter{
 		service:   service,
 		servers:   make(map[int]*routerServer),
 		startTime: time.Now(),
+		logger:    logger,
 	}
 }
 
@@ -47,6 +50,7 @@ func (r *HTTPRouter) RegisterStream(stream *LogStream) error {
 			routes:    make(map[string]*LogStream),
 			router:    r,
 			startTime: time.Now(),
+			logger:    r.logger,
 		}
 		rs.server = &fasthttp.Server{
 			Handler:           rs.requestHandler,
@@ -59,10 +63,14 @@ func (r *HTTPRouter) RegisterStream(stream *LogStream) error {
 		// Start server in background
 		go func() {
 			addr := fmt.Sprintf(":%d", port)
-			fmt.Printf("[ROUTER] Starting server on port %d\n", port)
+			r.logger.Info("msg", "Starting router server",
+				"component", "http_router",
+				"port", port)
 			if err := rs.server.ListenAndServe(addr); err != nil {
-				// Log error but don't crash
-				fmt.Printf("[ROUTER] Server on port %d failed: %v\n", port, err)
+				r.logger.Error("msg", "Router server failed",
+					"component", "http_router",
+					"port", port,
+					"error", err)
 			}
 		}()
 
@@ -87,7 +95,11 @@ func (r *HTTPRouter) RegisterStream(stream *LogStream) error {
 	}
 
 	rs.routes[pathPrefix] = stream
-	fmt.Printf("[ROUTER] Registered transport '%s' at path '%s' on port %d\n", stream.Name, pathPrefix, port)
+	r.logger.Info("msg", "Registered transport route",
+		"component", "http_router",
+		"transport", stream.Name,
+		"path", pathPrefix,
+		"port", port)
 	return nil
 }
 

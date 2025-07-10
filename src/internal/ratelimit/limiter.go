@@ -4,16 +4,20 @@ package ratelimit
 import (
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"logwisp/src/internal/config"
+
+	"github.com/lixenwraith/log"
 )
 
 // Manages rate limiting for a transport
 type Limiter struct {
 	config config.RateLimitConfig
+	logger *log.Logger
 
 	// Per-IP limiters
 	ipLimiters map[string]*ipLimiter
@@ -53,6 +57,13 @@ func New(cfg config.RateLimitConfig) *Limiter {
 		ipLimiters:    make(map[string]*ipLimiter),
 		ipConnections: make(map[string]*atomic.Int32),
 		lastCleanup:   time.Now(),
+		logger:        log.NewLogger(),
+	}
+
+	// Initialize the logger with defaults
+	if err := l.logger.InitWithDefaults(); err != nil {
+		// Fall back to stderr logging if logger init fails
+		fmt.Fprintf(os.Stderr, "ratelimit: failed to initialize logger: %v\n", err)
 	}
 
 	// Create global limiter if not using per-IP limiting
@@ -65,6 +76,12 @@ func New(cfg config.RateLimitConfig) *Limiter {
 
 	// Start cleanup goroutine
 	go l.cleanupLoop()
+
+	l.logger.Info("msg", "Rate limiter initialized",
+		"component", "ratelimit",
+		"requests_per_second", cfg.RequestsPerSecond,
+		"burst_size", cfg.BurstSize,
+		"limit_by", cfg.LimitBy)
 
 	return l
 }
@@ -80,7 +97,10 @@ func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int, me
 	ip, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		// If we can't parse the IP, allow the request but log
-		fmt.Printf("[RATELIMIT] Failed to parse remote addr %s: %v\n", remoteAddr, err)
+		l.logger.Warn("msg", "Failed to parse remote addr",
+			"component", "ratelimit",
+			"remote_addr", remoteAddr,
+			"error", err)
 		return true, 0, ""
 	}
 
@@ -97,6 +117,13 @@ func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int, me
 				statusCode = 429
 			}
 			message = "Connection limit exceeded"
+
+			l.logger.Warn("msg", "Connection limit exceeded",
+				"component", "ratelimit",
+				"ip", ip,
+				"connections", counter.Load(),
+				"limit", l.config.MaxConnectionsPerIP)
+
 			return false, statusCode, message
 		}
 	}
@@ -113,6 +140,7 @@ func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int, me
 		if message == "" {
 			message = "Rate limit exceeded"
 		}
+		l.logger.Debug("msg", "Request rate limited", "ip", ip)
 	}
 
 	return allowed, statusCode, message
@@ -136,6 +164,7 @@ func (l *Limiter) CheckTCP(remoteAddr net.Addr) bool {
 	allowed := l.checkLimit(ip)
 	if !allowed {
 		l.blockedRequests.Add(1)
+		l.logger.Debug("msg", "TCP connection rate limited", "ip", ip)
 	}
 
 	return allowed
@@ -160,7 +189,10 @@ func (l *Limiter) AddConnection(remoteAddr string) {
 	}
 	l.connMu.Unlock()
 
-	counter.Add(1)
+	newCount := counter.Add(1)
+	l.logger.Debug("msg", "Connection added",
+		"ip", ip,
+		"connections", newCount)
 }
 
 // Removes a connection for an IP
@@ -180,6 +212,10 @@ func (l *Limiter) RemoveConnection(remoteAddr string) {
 
 	if exists {
 		newCount := counter.Add(-1)
+		l.logger.Debug("msg", "Connection removed",
+			"ip", ip,
+			"connections", newCount)
+
 		if newCount <= 0 {
 			// Clean up if no more connections
 			l.connMu.Lock()
@@ -248,6 +284,10 @@ func (l *Limiter) checkLimit(ip string) bool {
 			}
 			l.ipLimiters[ip] = limiter
 			l.uniqueIPs.Add(1)
+
+			l.logger.Debug("msg", "Created new IP limiter",
+				"ip", ip,
+				"total_ips", l.uniqueIPs.Load())
 		} else {
 			limiter.lastSeen = time.Now()
 		}
@@ -268,6 +308,8 @@ func (l *Limiter) checkLimit(ip string) bool {
 
 	default:
 		// Unknown limit_by value, allow by default
+		l.logger.Warn("msg", "Unknown limit_by value",
+			"limit_by", l.config.LimitBy)
 		return true
 	}
 }
@@ -293,10 +335,18 @@ func (l *Limiter) cleanup() {
 	l.ipMu.Lock()
 	defer l.ipMu.Unlock()
 
+	cleaned := 0
 	for ip, limiter := range l.ipLimiters {
 		if now.Sub(limiter.lastSeen) > staleTimeout {
 			delete(l.ipLimiters, ip)
+			cleaned++
 		}
+	}
+
+	if cleaned > 0 {
+		l.logger.Debug("msg", "Cleaned up stale IP limiters",
+			"cleaned", cleaned,
+			"remaining", len(l.ipLimiters))
 	}
 }
 

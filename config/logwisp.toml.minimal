@@ -1,7 +1,7 @@
-# LogWisp Minimal Configuration Example
+# LogWisp Minimal Configuration
 # Save as: ~/.config/logwisp.toml
 
-# Monitor application logs
+# Basic stream monitoring application logs
 [[streams]]
 name = "app"
 
@@ -11,20 +11,32 @@ targets = [
     { path = "/var/log/myapp", pattern = "*.log", is_file = false }
 ]
 
-# Optional: Filter for errors and warnings only
-# [[streams.filters]]
-# type = "include"
-# patterns = ["ERROR", "WARN", "CRITICAL"]
-
 [streams.httpserver]
 enabled = true
 port = 8080
 stream_path = "/stream"
 status_path = "/status"
 
-# Optional: Enable rate limiting
+# Optional additions:
+
+# 1. Filter for errors only:
+# [[streams.filters]]
+# type = "include"
+# patterns = ["ERROR", "WARN", "CRITICAL", "FATAL"]
+
+# 2. Enable rate limiting:
 # [streams.httpserver.rate_limit]
 # enabled = true
 # requests_per_second = 10.0
 # burst_size = 20
 # limit_by = "ip"
+
+# 3. Add heartbeat:
+# [streams.httpserver.heartbeat]
+# enabled = true
+# interval_seconds = 30
+
+# 4. Change LogWisp's own logging:
+# [logging]
+# output = "file"
+# level = "info"

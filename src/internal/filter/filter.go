@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 
 	"logwisp/src/internal/monitor"
+
+	"github.com/lixenwraith/log"
 )
 
 // Type represents the filter type
@@ -38,6 +40,7 @@ type Filter struct {
 	config   Config
 	patterns []*regexp.Regexp
 	mu       sync.RWMutex
+	logger   *log.Logger
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -46,7 +49,7 @@ type Filter struct {
 }
 
 // New creates a new filter from configuration
-func New(cfg Config) (*Filter, error) {
+func New(cfg Config, logger *log.Logger) (*Filter, error) {
 	// Set defaults
 	if cfg.Type == "" {
 		cfg.Type = TypeInclude
@@ -58,6 +61,7 @@ func New(cfg Config) (*Filter, error) {
 	f := &Filter{
 		config:   cfg,
 		patterns: make([]*regexp.Regexp, 0, len(cfg.Patterns)),
+		logger:   logger,
 	}
 
 	// Compile patterns
@@ -68,6 +72,12 @@ func New(cfg Config) (*Filter, error) {
 		}
 		f.patterns = append(f.patterns, re)
 	}
+
+	logger.Debug("msg", "Filter created",
+		"component", "filter",
+		"type", cfg.Type,
+		"logic", cfg.Logic,
+		"pattern_count", len(cfg.Patterns))
 
 	return f, nil
 }
@@ -134,6 +144,9 @@ func (f *Filter) matches(text string) bool {
 
 	default:
 		// Shouldn't happen after validation
+		f.logger.Warn("msg", "Unknown filter logic",
+			"component", "filter",
+			"logic", f.config.Logic)
 		return false
 	}
 }
@@ -169,5 +182,8 @@ func (f *Filter) UpdatePatterns(patterns []string) error {
 	f.config.Patterns = patterns
 	f.mu.Unlock()
 
+	f.logger.Info("msg", "Filter patterns updated",
+		"component", "filter",
+		"pattern_count", len(patterns))
 	return nil
 }

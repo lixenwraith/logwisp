@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/lixenwraith/log"
 )
 
 type fileWatcher struct {
@@ -29,13 +31,15 @@ type fileWatcher struct {
 	rotationSeq  int
 	entriesRead  atomic.Uint64
 	lastReadTime atomic.Value // time.Time
+	logger       *log.Logger
 }
 
-func newFileWatcher(path string, callback func(LogEntry)) *fileWatcher {
+func newFileWatcher(path string, callback func(LogEntry), logger *log.Logger) *fileWatcher {
 	w := &fileWatcher{
 		path:     path,
 		callback: callback,
 		position: -1,
+		logger:   logger,
 	}
 	w.lastReadTime.Store(time.Time{})
 	return w
@@ -59,7 +63,7 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 			}
 			if err := w.checkFile(); err != nil {
 				// Log error but continue watching
-				fmt.Printf("[WARN] checkFile error for %s: %v\n", w.path, err)
+				w.logger.Warn("msg", "checkFile error", "error", err)
 			}
 		}
 	}
@@ -118,12 +122,20 @@ func (w *fileWatcher) checkFile() error {
 			// File doesn't exist yet, keep watching
 			return nil
 		}
+		w.logger.Error("msg", "Failed to open file for checking",
+			"component", "file_watcher",
+			"path", w.path,
+			"error", err)
 		return err
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
+		w.logger.Error("msg", "Failed to stat file",
+			"component", "file_watcher",
+			"path", w.path,
+			"error", err)
 		return err
 	}
 
@@ -193,6 +205,12 @@ func (w *fileWatcher) checkFile() error {
 			Level:   "INFO",
 			Message: fmt.Sprintf("Log rotation detected (#%d): %s", seq, rotationReason),
 		})
+
+		w.logger.Info("msg", "Log rotation detected",
+			"component", "file_watcher",
+			"path", w.path,
+			"sequence", seq,
+			"reason", rotationReason)
 	}
 
 	// Only read if there's new content
@@ -216,11 +234,20 @@ func (w *fileWatcher) checkFile() error {
 			w.lastReadTime.Store(time.Now())
 		}
 
+		if err := scanner.Err(); err != nil {
+			w.logger.Error("msg", "Scanner error while reading file",
+				"component", "file_watcher",
+				"path", w.path,
+				"position", startPos,
+				"error", err)
+			return err
+		}
+
 		// Update position after successful read
 		currentPos, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			// Log error but don't fail - position tracking is best effort
-			fmt.Printf("[WARN] Failed to get file position for %s: %v\n", w.path, err)
+			w.logger.Warn("msg", "Failed to get file position", "error", err)
 			// Use size as fallback position
 			currentPos = currentSize
 		}

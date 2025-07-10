@@ -2,6 +2,9 @@
 package config
 
 type Config struct {
+	// Logging configuration
+	Logging *LogConfig `toml:"logging"`
+
 	// Stream configurations
 	Streams []StreamConfig `toml:"streams"`
 }

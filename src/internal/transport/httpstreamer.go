@@ -11,11 +11,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/valyala/fasthttp"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/monitor"
 	"logwisp/src/internal/ratelimit"
 	"logwisp/src/internal/version"
+
+	"github.com/lixenwraith/log"
+	"github.com/lixenwraith/log/compat"
+	"github.com/valyala/fasthttp"
 )
 
 type HTTPStreamer struct {
@@ -27,6 +30,7 @@ type HTTPStreamer struct {
 	startTime     time.Time
 	done          chan struct{}
 	wg            sync.WaitGroup
+	logger        *log.Logger
 
 	// Path configuration
 	streamPath string
@@ -39,7 +43,7 @@ type HTTPStreamer struct {
 	rateLimiter *ratelimit.Limiter
 }
 
-func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTPStreamer {
+func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig, logger *log.Logger) *HTTPStreamer {
 	// Set default paths if not configured
 	streamPath := cfg.StreamPath
 	if streamPath == "" {
@@ -58,6 +62,7 @@ func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTP
 		streamPath: streamPath,
 		statusPath: statusPath,
 		standalone: true, // Default to standalone mode
+		logger:     logger,
 	}
 
 	// Initialize rate limiter if configured
@@ -71,19 +76,26 @@ func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig) *HTTP
 // Configures the streamer for use with a router
 func (h *HTTPStreamer) SetRouterMode() {
 	h.standalone = false
+	h.logger.Debug("msg", "HTTP streamer set to router mode",
+		"component", "http_streamer")
 }
 
 func (h *HTTPStreamer) Start() error {
 	if !h.standalone {
 		// In router mode, don't start our own server
+		h.logger.Debug("msg", "HTTP streamer in router mode, skipping server start",
+			"component", "http_streamer")
 		return nil
 	}
+
+	// Create fasthttp adapter for logging
+	fasthttpLogger := compat.NewFastHTTPAdapter(h.logger)
 
 	h.server = &fasthttp.Server{
 		Handler:           h.requestHandler,
 		DisableKeepalive:  false,
 		StreamRequestBody: true,
-		Logger:            nil,
+		Logger:            fasthttpLogger,
 	}
 
 	addr := fmt.Sprintf(":%d", h.config.Port)
@@ -91,6 +103,11 @@ func (h *HTTPStreamer) Start() error {
 	// Run server in separate goroutine to avoid blocking
 	errChan := make(chan error, 1)
 	go func() {
+		h.logger.Info("msg", "HTTP server started",
+			"component", "http_streamer",
+			"port", h.config.Port,
+			"stream_path", h.streamPath,
+			"status_path", h.statusPath)
 		err := h.server.ListenAndServe(addr)
 		if err != nil {
 			errChan <- err
@@ -103,11 +120,17 @@ func (h *HTTPStreamer) Start() error {
 		return err
 	case <-time.After(100 * time.Millisecond):
 		// Server started successfully
+		h.logger.Info("msg", "HTTP server started",
+			"port", h.config.Port,
+			"stream_path", h.streamPath,
+			"status_path", h.statusPath)
 		return nil
 	}
 }
 
 func (h *HTTPStreamer) Stop() {
+	h.logger.Info("msg", "Stopping HTTP server")
+
 	// Signal all client handlers to stop
 	close(h.done)
 
@@ -120,6 +143,8 @@ func (h *HTTPStreamer) Stop() {
 
 	// Wait for all active client handlers to finish
 	h.wg.Wait()
+
+	h.logger.Info("msg", "HTTP server stopped")
 }
 
 func (h *HTTPStreamer) RouteRequest(ctx *fasthttp.RequestCtx) {
@@ -193,6 +218,9 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 					return
 				default:
 					// Drop if client buffer full
+					h.logger.Debug("msg", "Dropped entry for slow client",
+						"component", "http_streamer",
+						"remote_addr", remoteAddr)
 				}
 			case <-clientDone:
 				return
@@ -205,14 +233,16 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 	// Define the transport writer function
 	streamFunc := func(w *bufio.Writer) {
 		newCount := h.activeClients.Add(1)
-		fmt.Printf("[HTTP DEBUG] Client connected on port %d. Count now: %d\n",
-			h.config.Port, newCount)
+		h.logger.Debug("msg", "HTTP client connected",
+			"remote_addr", remoteAddr,
+			"active_clients", newCount)
 
 		h.wg.Add(1)
 		defer func() {
 			newCount := h.activeClients.Add(-1)
-			fmt.Printf("[HTTP DEBUG] Client disconnected on port %d. Count now: %d\n",
-				h.config.Port, newCount)
+			h.logger.Debug("msg", "HTTP client disconnected",
+				"remote_addr", remoteAddr,
+				"active_clients", newCount)
 			h.wg.Done()
 		}()
 
@@ -246,6 +276,10 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 
 				data, err := json.Marshal(entry)
 				if err != nil {
+					h.logger.Error("msg", "Failed to marshal log entry",
+						"component", "http_streamer",
+						"error", err,
+						"entry_source", entry.Source)
 					continue
 				}
 

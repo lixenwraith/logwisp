@@ -2,6 +2,7 @@
 data
 dev
 log
+logs
 cert
 bin
 script

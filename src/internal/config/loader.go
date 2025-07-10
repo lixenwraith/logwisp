@@ -12,6 +12,7 @@ import (
 
 func defaults() *Config {
 	return &Config{
+		Logging: DefaultLogConfig(),
 		Streams: []StreamConfig{
 			{
 				Name: "default",

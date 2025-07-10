@@ -14,6 +14,10 @@ func (c *Config) validate() error {
 		return fmt.Errorf("no streams configured")
 	}
 
+	if err := validateLogConfig(c.Logging); err != nil {
+		return fmt.Errorf("logging config: %w", err)
+	}
+
 	// Validate each transport
 	streamNames := make(map[string]bool)
 	streamPorts := make(map[int]string)
@@ -272,6 +276,34 @@ func validateFilter(streamName string, filterIndex int, cfg *filter.Config) erro
 		if _, err := regexp.Compile(pattern); err != nil {
 			return fmt.Errorf("transport '%s' filter[%d] pattern[%d] '%s': invalid regex: %w",
 				streamName, filterIndex, i, pattern, err)
+		}
+	}
+
+	return nil
+}
+
+func validateLogConfig(cfg *LogConfig) error {
+	validOutputs := map[string]bool{
+		"file": true, "stdout": true, "stderr": true,
+		"both": true, "none": true,
+	}
+	if !validOutputs[cfg.Output] {
+		return fmt.Errorf("invalid log output mode: %s", cfg.Output)
+	}
+
+	validLevels := map[string]bool{
+		"debug": true, "info": true, "warn": true, "error": true,
+	}
+	if !validLevels[cfg.Level] {
+		return fmt.Errorf("invalid log level: %s", cfg.Level)
+	}
+
+	if cfg.Console != nil {
+		validTargets := map[string]bool{
+			"stdout": true, "stderr": true, "split": true,
+		}
+		if !validTargets[cfg.Console.Target] {
+			return fmt.Errorf("invalid console target: %s", cfg.Console.Target)
 		}
 	}
 

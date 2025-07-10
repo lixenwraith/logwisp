@@ -9,13 +9,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/valyala/fasthttp"
 	"logwisp/src/internal/version"
+
+	"github.com/lixenwraith/log"
+	"github.com/valyala/fasthttp"
 )
 
 type routerServer struct {
 	port      int
 	server    *fasthttp.Server
+	logger    *log.Logger
 	routes    map[string]*LogStream // path prefix -> transport
 	routeMu   sync.RWMutex
 	router    *HTTPRouter
@@ -28,9 +31,14 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 	rs.router.totalRequests.Add(1)
 
 	path := string(ctx.Path())
+	remoteAddr := ctx.RemoteAddr().String()
 
 	// Log request for debugging
-	fmt.Printf("[ROUTER] Request: %s %s from %s\n", ctx.Method(), path, ctx.RemoteAddr())
+	rs.logger.Debug("msg", "Router request",
+		"component", "router_server",
+		"method", ctx.Method(),
+		"path", path,
+		"remote_addr", remoteAddr)
 
 	// Special case: global status at /status
 	if path == "/status" {
@@ -79,8 +87,11 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 			remainingPath = matchedStream.Config.HTTPServer.StreamPath
 		}
 
-		fmt.Printf("[ROUTER] Routing to transport '%s': %s -> %s\n",
-			matchedStream.Name, originalPath, remainingPath)
+		rs.logger.Debug("msg", "Routing request to transport",
+			"component", "router_server",
+			"transport", matchedStream.Name,
+			"original_path", originalPath,
+			"remaining_path", remainingPath)
 
 		ctx.URI().SetPath(remainingPath)
 		matchedStream.HTTPServer.RouteRequest(ctx)

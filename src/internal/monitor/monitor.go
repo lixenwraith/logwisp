@@ -4,6 +4,7 @@ package monitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/lixenwraith/log"
 )
 
 type LogEntry struct {
@@ -63,6 +66,7 @@ type monitor struct {
 	droppedEntries atomic.Uint64
 	startTime      time.Time
 	lastEntryTime  atomic.Value // time.Time
+	logger         *log.Logger
 }
 
 type target struct {
@@ -72,11 +76,12 @@ type target struct {
 	regex   *regexp.Regexp
 }
 
-func New() Monitor {
+func New(logger *log.Logger) Monitor {
 	m := &monitor{
 		watchers:      make(map[string]*fileWatcher),
 		checkInterval: 100 * time.Millisecond,
 		startTime:     time.Now(),
+		logger:        logger,
 	}
 	m.lastEntryTime.Store(time.Time{})
 	return m
@@ -103,6 +108,7 @@ func (m *monitor) publish(entry LogEntry) {
 		case ch <- entry:
 		default:
 			m.droppedEntries.Add(1)
+			m.logger.Debug("msg", "Dropped log entry - subscriber buffer full")
 		}
 	}
 }
@@ -111,11 +117,17 @@ func (m *monitor) SetCheckInterval(interval time.Duration) {
 	m.mu.Lock()
 	m.checkInterval = interval
 	m.mu.Unlock()
+
+	m.logger.Debug("msg", "Check interval updated", "interval_ms", interval.Milliseconds())
 }
 
 func (m *monitor) AddTarget(path, pattern string, isFile bool) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
+		m.logger.Error("msg", "Failed to resolve absolute path",
+			"component", "monitor",
+			"path", path,
+			"error", err)
 		return fmt.Errorf("invalid path %s: %w", path, err)
 	}
 
@@ -124,6 +136,11 @@ func (m *monitor) AddTarget(path, pattern string, isFile bool) error {
 		regexPattern := globToRegex(pattern)
 		compiledRegex, err = regexp.Compile(regexPattern)
 		if err != nil {
+			m.logger.Error("msg", "Failed to compile pattern regex",
+				"component", "monitor",
+				"pattern", pattern,
+				"regex", regexPattern,
+				"error", err)
 			return fmt.Errorf("invalid pattern %s: %w", pattern, err)
 		}
 	}
@@ -136,6 +153,12 @@ func (m *monitor) AddTarget(path, pattern string, isFile bool) error {
 		regex:   compiledRegex,
 	})
 	m.mu.Unlock()
+
+	m.logger.Info("msg", "Added monitor target",
+		"component", "monitor",
+		"path", absPath,
+		"pattern", pattern,
+		"is_file", isFile)
 
 	return nil
 }
@@ -162,6 +185,9 @@ func (m *monitor) RemoveTarget(path string) error {
 	if w, exists := m.watchers[absPath]; exists {
 		w.stop()
 		delete(m.watchers, absPath)
+		m.logger.Info("msg", "Monitor started",
+			"component", "monitor",
+			"check_interval_ms", m.checkInterval.Milliseconds())
 	}
 
 	return nil
@@ -171,6 +197,8 @@ func (m *monitor) Start(ctx context.Context) error {
 	m.ctx, m.cancel = context.WithCancel(ctx)
 	m.wg.Add(1)
 	go m.monitorLoop()
+
+	m.logger.Info("msg", "Monitor started", "check_interval_ms", m.checkInterval.Milliseconds())
 	return nil
 }
 
@@ -188,6 +216,8 @@ func (m *monitor) Stop() {
 		close(ch)
 	}
 	m.mu.Unlock()
+
+	m.logger.Info("msg", "Monitor stopped")
 }
 
 func (m *monitor) GetStats() Stats {
@@ -262,7 +292,11 @@ func (m *monitor) checkTargets() {
 			// Directory scanning for pattern matching
 			files, err := m.scanDirectory(t.path, t.regex)
 			if err != nil {
-				fmt.Printf("[DEBUG] Error scanning directory %s: %v\n", t.path, err)
+				m.logger.Warn("msg", "Failed to scan directory",
+					"component", "monitor",
+					"path", t.path,
+					"pattern", t.pattern,
+					"error", err)
 				continue
 			}
 
@@ -304,16 +338,26 @@ func (m *monitor) ensureWatcher(path string) {
 		return
 	}
 
-	w := newFileWatcher(path, m.publish)
+	w := newFileWatcher(path, m.publish, m.logger)
 	m.watchers[path] = w
 
-	fmt.Printf("[DEBUG] Created watcher for: %s\n", path)
+	m.logger.Debug("msg", "Created watcher", "path", path)
 
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
 		if err := w.watch(m.ctx); err != nil {
-			fmt.Printf("[ERROR] Watcher for %s failed: %v\n", path, err)
+			// Log based on error type
+			if errors.Is(err, context.Canceled) {
+				m.logger.Debug("msg", "Watcher cancelled",
+					"component", "monitor",
+					"path", path)
+			} else {
+				m.logger.Error("msg", "Watcher failed",
+					"component", "monitor",
+					"path", path,
+					"error", err)
+			}
 		}
 
 		m.mu.Lock()
@@ -330,6 +374,7 @@ func (m *monitor) cleanupWatchers() {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			w.stop()
 			delete(m.watchers, path)
+			m.logger.Debug("msg", "Cleaned up watcher for non-existent file", "path", path)
 		}
 	}
 }
