@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"logwisp/src/internal/monitor"
+	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
 )
@@ -83,7 +83,7 @@ func New(cfg Config, logger *log.Logger) (*Filter, error) {
 }
 
 // Apply checks if a log entry should be passed through
-func (f *Filter) Apply(entry monitor.LogEntry) bool {
+func (f *Filter) Apply(entry source.LogEntry) bool {
 	f.totalProcessed.Add(1)
 
 	// No patterns means pass everything
@@ -152,8 +152,8 @@ func (f *Filter) matches(text string) bool {
 }
 
 // GetStats returns filter statistics
-func (f *Filter) GetStats() map[string]interface{} {
-	return map[string]interface{}{
+func (f *Filter) GetStats() map[string]any {
+	return map[string]any{
 		"type":            f.config.Type,
 		"logic":           f.config.Logic,
 		"pattern_count":   len(f.patterns),

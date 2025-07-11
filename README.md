@@ -3,7 +3,7 @@
     <td width="200" valign="middle">
       <img src="asset/logwisp-logo.svg" alt="LogWisp Logo" width="200"/>
     </td>
-    <td valign="middle">
+    <td>
       <h1>LogWisp</h1>
       <p>
         <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.24-00ADD8?style=flat&logo=go" alt="Go"></a>
@@ -14,30 +14,29 @@
   </tr>
 </table>
 
+**Flexible log monitoring with real-time streaming over HTTP/SSE and TCP**
 
-**Multi-stream log monitoring with real-time streaming over HTTP/SSE and TCP**
-
-LogWisp watches log files and streams updates to connected clients in real-time. Perfect for monitoring multiple applications, filtering noise, and centralizing log access.
+LogWisp watches log files and streams updates to connected clients in real-time using a pipeline architecture: **sources → filters → sinks**. Perfect for monitoring multiple applications, filtering noise, and routing logs to multiple destinations.
 
 ## 🚀 Quick Start
 
 ```bash
 # Install
-go install github.com/yourusername/logwisp/src/cmd/logwisp@latest
+git clone https://github.com/lixenwraith/logwisp.git
+cd logwisp
+make install
 
 # Run with defaults (monitors *.log in current directory)
 logwisp
-
-# Stream logs (from another terminal)
-curl -N http://localhost:8080/stream
 ```
 
 ## ✨ Key Features
 
+- **🔧 Pipeline Architecture** - Flexible source → filter → sink processing
 - **📡 Real-time Streaming** - SSE (HTTP) and TCP protocols
 - **🔍 Pattern Filtering** - Include/exclude logs with regex patterns
 - **🛡️ Rate Limiting** - Protect against abuse with configurable limits
-- **📊 Multi-stream** - Monitor different log sources simultaneously
+- **📊 Multi-pipeline** - Process different log sources simultaneously
 - **🔄 Rotation Aware** - Handles log rotation seamlessly
 - **⚡ High Performance** - Minimal CPU/memory footprint
 
@@ -49,33 +48,6 @@ Complete documentation is available in the [`doc/`](doc/) directory:
 - [**Configuration**](doc/configuration.md) - All configuration options
 - [**CLI Reference**](doc/cli.md) - Command-line interface
 - [**Examples**](doc/examples/) - Ready-to-use configurations
-
-## 💻 Basic Usage
-
-### Monitor application logs with filtering:
-
-```toml
-# ~/.config/logwisp.toml
-[[streams]]
-name = "myapp"
-
-[streams.monitor]
-targets = [{ path = "/var/log/myapp", pattern = "*.log" }]
-
-[[streams.filters]]
-type = "include"
-patterns = ["ERROR", "WARN", "CRITICAL"]
-
-[streams.httpserver]
-enabled = true
-port = 8080
-```
-
-### Run multiple streams:
-
-```bash
-logwisp --router --config /etc/logwisp/multi-stream.toml
-```
 
 ## 📄 License
 

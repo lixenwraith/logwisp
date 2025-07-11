@@ -16,9 +16,9 @@ func statusReporter(service *service.Service) {
 
 	for range ticker.C {
 		stats := service.GetGlobalStats()
-		totalStreams := stats["total_streams"].(int)
-		if totalStreams == 0 {
-			logger.Warn("msg", "No active streams in status report",
+		totalPipelines := stats["total_pipelines"].(int)
+		if totalPipelines == 0 {
+			logger.Warn("msg", "No active pipelines in status report",
 				"component", "status_reporter")
 			return
 		}
@@ -26,94 +26,171 @@ func statusReporter(service *service.Service) {
 		// Log status at DEBUG level to avoid cluttering INFO logs
 		logger.Debug("msg", "Status report",
 			"component", "status_reporter",
-			"active_streams", totalStreams,
+			"active_pipelines", totalPipelines,
 			"time", time.Now().Format("15:04:05"))
 
-		// Log individual stream status
-		for name, streamStats := range stats["streams"].(map[string]interface{}) {
-			logStreamStatus(name, streamStats.(map[string]interface{}))
+		// Log individual pipeline status
+		pipelines := stats["pipelines"].(map[string]any)
+		for name, pipelineStats := range pipelines {
+			logPipelineStatus(name, pipelineStats.(map[string]any))
 		}
 	}
 }
 
-// logStreamStatus logs the status of an individual stream
-func logStreamStatus(name string, stats map[string]interface{}) {
-	statusFields := []interface{}{
-		"msg", "Stream status",
-		"stream", name,
+// logPipelineStatus logs the status of an individual pipeline
+func logPipelineStatus(name string, stats map[string]any) {
+	statusFields := []any{
+		"msg", "Pipeline status",
+		"pipeline", name,
 	}
 
-	// Add monitor statistics
-	if monitor, ok := stats["monitor"].(map[string]interface{}); ok {
-		statusFields = append(statusFields,
-			"watchers", monitor["active_watchers"],
-			"entries", monitor["total_entries"])
+	// Add processing statistics
+	if totalProcessed, ok := stats["total_processed"].(uint64); ok {
+		statusFields = append(statusFields, "entries_processed", totalProcessed)
+	}
+	if totalFiltered, ok := stats["total_filtered"].(uint64); ok {
+		statusFields = append(statusFields, "entries_filtered", totalFiltered)
 	}
 
-	// Add TCP server statistics
-	if tcp, ok := stats["tcp"].(map[string]interface{}); ok && tcp["enabled"].(bool) {
-		statusFields = append(statusFields, "tcp_conns", tcp["connections"])
+	// Add source count
+	if sourceCount, ok := stats["source_count"].(int); ok {
+		statusFields = append(statusFields, "sources", sourceCount)
 	}
 
-	// Add HTTP server statistics
-	if http, ok := stats["http"].(map[string]interface{}); ok && http["enabled"].(bool) {
-		statusFields = append(statusFields, "http_conns", http["connections"])
+	// Add sink statistics
+	if sinks, ok := stats["sinks"].([]map[string]any); ok {
+		tcpConns := 0
+		httpConns := 0
+
+		for _, sink := range sinks {
+			sinkType := sink["type"].(string)
+			if activeConns, ok := sink["active_connections"].(int32); ok {
+				switch sinkType {
+				case "tcp":
+					tcpConns += int(activeConns)
+				case "http":
+					httpConns += int(activeConns)
+				}
+			}
+		}
+
+		if tcpConns > 0 {
+			statusFields = append(statusFields, "tcp_connections", tcpConns)
+		}
+		if httpConns > 0 {
+			statusFields = append(statusFields, "http_connections", httpConns)
+		}
 	}
 
 	logger.Debug(statusFields...)
 }
 
-// displayStreamEndpoints logs the configured endpoints for a stream
-func displayStreamEndpoints(cfg config.StreamConfig, routerMode bool) {
-	// Display TCP endpoints
-	if cfg.TCPServer != nil && cfg.TCPServer.Enabled {
-		logger.Info("msg", "TCP endpoint configured",
-			"component", "main",
-			"transport", cfg.Name,
-			"port", cfg.TCPServer.Port)
+// displayPipelineEndpoints logs the configured endpoints for a pipeline
+func displayPipelineEndpoints(cfg config.PipelineConfig, routerMode bool) {
+	// Display sink endpoints
+	for i, sinkCfg := range cfg.Sinks {
+		switch sinkCfg.Type {
+		case "tcp":
+			if port, ok := toInt(sinkCfg.Options["port"]); ok {
+				logger.Info("msg", "TCP endpoint configured",
+					"component", "main",
+					"pipeline", cfg.Name,
+					"sink_index", i,
+					"port", port)
 
-		if cfg.TCPServer.RateLimit != nil && cfg.TCPServer.RateLimit.Enabled {
-			logger.Info("msg", "TCP rate limiting enabled",
-				"transport", cfg.Name,
-				"requests_per_second", cfg.TCPServer.RateLimit.RequestsPerSecond,
-				"burst_size", cfg.TCPServer.RateLimit.BurstSize)
+				// Display rate limit info if configured
+				if rl, ok := sinkCfg.Options["rate_limit"].(map[string]any); ok {
+					if enabled, ok := rl["enabled"].(bool); ok && enabled {
+						logger.Info("msg", "TCP rate limiting enabled",
+							"pipeline", cfg.Name,
+							"sink_index", i,
+							"requests_per_second", rl["requests_per_second"],
+							"burst_size", rl["burst_size"])
+					}
+				}
+			}
+
+		case "http":
+			if port, ok := toInt(sinkCfg.Options["port"]); ok {
+				streamPath := "/transport"
+				statusPath := "/status"
+				if path, ok := sinkCfg.Options["stream_path"].(string); ok {
+					streamPath = path
+				}
+				if path, ok := sinkCfg.Options["status_path"].(string); ok {
+					statusPath = path
+				}
+
+				if routerMode {
+					logger.Info("msg", "HTTP endpoints configured",
+						"pipeline", cfg.Name,
+						"sink_index", i,
+						"stream_path", fmt.Sprintf("/%s%s", cfg.Name, streamPath),
+						"status_path", fmt.Sprintf("/%s%s", cfg.Name, statusPath))
+				} else {
+					logger.Info("msg", "HTTP endpoints configured",
+						"pipeline", cfg.Name,
+						"sink_index", i,
+						"stream_url", fmt.Sprintf("http://localhost:%d%s", port, streamPath),
+						"status_url", fmt.Sprintf("http://localhost:%d%s", port, statusPath))
+				}
+
+				// Display rate limit info if configured
+				if rl, ok := sinkCfg.Options["rate_limit"].(map[string]any); ok {
+					if enabled, ok := rl["enabled"].(bool); ok && enabled {
+						logger.Info("msg", "HTTP rate limiting enabled",
+							"pipeline", cfg.Name,
+							"sink_index", i,
+							"requests_per_second", rl["requests_per_second"],
+							"burst_size", rl["burst_size"],
+							"limit_by", rl["limit_by"])
+					}
+				}
+			}
+
+		case "file":
+			if dir, ok := sinkCfg.Options["directory"].(string); ok {
+				name, _ := sinkCfg.Options["name"].(string)
+				logger.Info("msg", "File sink configured",
+					"pipeline", cfg.Name,
+					"sink_index", i,
+					"directory", dir,
+					"name", name)
+			}
+
+		case "stdout", "stderr":
+			logger.Info("msg", "Console sink configured",
+				"pipeline", cfg.Name,
+				"sink_index", i,
+				"type", sinkCfg.Type)
 		}
 	}
 
-	// Display HTTP endpoints
-	if cfg.HTTPServer != nil && cfg.HTTPServer.Enabled {
-		if routerMode {
-			logger.Info("msg", "HTTP endpoints configured",
-				"transport", cfg.Name,
-				"stream_path", fmt.Sprintf("/%s%s", cfg.Name, cfg.HTTPServer.StreamPath),
-				"status_path", fmt.Sprintf("/%s%s", cfg.Name, cfg.HTTPServer.StatusPath))
-		} else {
-			logger.Info("msg", "HTTP endpoints configured",
-				"transport", cfg.Name,
-				"stream_url", fmt.Sprintf("http://localhost:%d%s", cfg.HTTPServer.Port, cfg.HTTPServer.StreamPath),
-				"status_url", fmt.Sprintf("http://localhost:%d%s", cfg.HTTPServer.Port, cfg.HTTPServer.StatusPath))
-		}
-
-		if cfg.HTTPServer.RateLimit != nil && cfg.HTTPServer.RateLimit.Enabled {
-			logger.Info("msg", "HTTP rate limiting enabled",
-				"transport", cfg.Name,
-				"requests_per_second", cfg.HTTPServer.RateLimit.RequestsPerSecond,
-				"burst_size", cfg.HTTPServer.RateLimit.BurstSize,
-				"limit_by", cfg.HTTPServer.RateLimit.LimitBy)
-		}
-
-		// Display authentication information
-		if cfg.Auth != nil && cfg.Auth.Type != "none" {
-			logger.Info("msg", "Authentication enabled",
-				"transport", cfg.Name,
-				"auth_type", cfg.Auth.Type)
-		}
+	// Display authentication information
+	if cfg.Auth != nil && cfg.Auth.Type != "none" {
+		logger.Info("msg", "Authentication enabled",
+			"pipeline", cfg.Name,
+			"auth_type", cfg.Auth.Type)
 	}
 
 	// Display filter information
 	if len(cfg.Filters) > 0 {
 		logger.Info("msg", "Filters configured",
-			"transport", cfg.Name,
+			"pipeline", cfg.Name,
 			"filter_count", len(cfg.Filters))
+	}
+}
+
+// Helper function for type conversion
+func toInt(v any) (int, bool) {
+	switch val := v.(type) {
+	case int:
+		return val, true
+	case int64:
+		return int(val), true
+	case float64:
+		return int(val), true
+	default:
+		return 0, false
 	}
 }

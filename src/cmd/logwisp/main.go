@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// Start status reporter if enabled
-	if shouldEnableStatusReporter() {
+	if enableStatusReporter() {
 		go statusReporter(svc)
 	}
 
@@ -123,7 +123,7 @@ func shutdownLogger() {
 	}
 }
 
-func shouldEnableStatusReporter() bool {
+func enableStatusReporter() bool {
 	// Status reporter can be disabled via environment variable
 	if os.Getenv("LOGWISP_DISABLE_STATUS_REPORTER") == "1" {
 		return false

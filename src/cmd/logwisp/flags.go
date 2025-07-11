@@ -31,7 +31,7 @@ func init() {
 }
 
 func customUsage() {
-	fmt.Fprintf(os.Stderr, "LogWisp - Multi-Stream Log Monitoring Service\n\n")
+	fmt.Fprintf(os.Stderr, "LogWisp - Multi-Pipeline Log Processing Service\n\n")
 	fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "Options:\n")
 
@@ -63,8 +63,8 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  # Run with custom config and override log level\n")
 	fmt.Fprintf(os.Stderr, "  %s --config /etc/logwisp.toml --log-level warn\n\n", os.Args[0])
 
-	fmt.Fprintf(os.Stderr, "  # Run in router mode with multiple streams\n")
-	fmt.Fprintf(os.Stderr, "  %s --router --config /etc/logwisp/multi-stream.toml\n\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "  # Run in router mode with multiple pipelines\n")
+	fmt.Fprintf(os.Stderr, "  %s --router --config /etc/logwisp/multi-pipeline.toml\n\n", os.Args[0])
 
 	fmt.Fprintf(os.Stderr, "Environment Variables:\n")
 	fmt.Fprintf(os.Stderr, "  LOGWISP_CONFIG_FILE              Config file path\n")

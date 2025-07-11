@@ -1,5 +1,5 @@
-// FILE: src/internal/transport/httpstreamer.go
-package transport
+// FILE: src/internal/sink/http.go
+package sink
 
 import (
 	"bufio"
@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/monitor"
 	"logwisp/src/internal/ratelimit"
+	"logwisp/src/internal/source"
 	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
@@ -21,9 +21,10 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-type HTTPStreamer struct {
-	logChan       chan monitor.LogEntry
-	config        config.HTTPConfig
+// HTTPSink streams log entries via Server-Sent Events
+type HTTPSink struct {
+	input         chan source.LogEntry
+	config        HTTPConfig
 	server        *fasthttp.Server
 	activeClients atomic.Int32
 	mu            sync.RWMutex
@@ -41,50 +42,115 @@ type HTTPStreamer struct {
 
 	// Rate limiting
 	rateLimiter *ratelimit.Limiter
+
+	// Statistics
+	totalProcessed atomic.Uint64
+	lastProcessed  atomic.Value // time.Time
 }
 
-func NewHTTPStreamer(logChan chan monitor.LogEntry, cfg config.HTTPConfig, logger *log.Logger) *HTTPStreamer {
-	// Set default paths if not configured
-	streamPath := cfg.StreamPath
-	if streamPath == "" {
-		streamPath = "/transport"
-	}
-	statusPath := cfg.StatusPath
-	if statusPath == "" {
-		statusPath = "/status"
+// HTTPConfig holds HTTP sink configuration
+type HTTPConfig struct {
+	Port       int
+	BufferSize int
+	StreamPath string
+	StatusPath string
+	Heartbeat  config.HeartbeatConfig
+	SSL        *config.SSLConfig
+	RateLimit  *config.RateLimitConfig
+}
+
+// NewHTTPSink creates a new HTTP streaming sink
+func NewHTTPSink(options map[string]any, logger *log.Logger) (*HTTPSink, error) {
+	cfg := HTTPConfig{
+		Port:       8080,
+		BufferSize: 1000,
+		StreamPath: "/transport",
+		StatusPath: "/status",
 	}
 
-	h := &HTTPStreamer{
-		logChan:    logChan,
+	// Extract configuration from options
+	if port, ok := toInt(options["port"]); ok {
+		cfg.Port = port
+	}
+	if bufSize, ok := toInt(options["buffer_size"]); ok {
+		cfg.BufferSize = bufSize
+	}
+	if path, ok := options["stream_path"].(string); ok {
+		cfg.StreamPath = path
+	}
+	if path, ok := options["status_path"].(string); ok {
+		cfg.StatusPath = path
+	}
+
+	// Extract heartbeat config
+	if hb, ok := options["heartbeat"].(map[string]any); ok {
+		cfg.Heartbeat.Enabled, _ = hb["enabled"].(bool)
+		if interval, ok := toInt(hb["interval_seconds"]); ok {
+			cfg.Heartbeat.IntervalSeconds = interval
+		}
+		cfg.Heartbeat.IncludeTimestamp, _ = hb["include_timestamp"].(bool)
+		cfg.Heartbeat.IncludeStats, _ = hb["include_stats"].(bool)
+		if format, ok := hb["format"].(string); ok {
+			cfg.Heartbeat.Format = format
+		}
+	}
+
+	// Extract rate limit config
+	if rl, ok := options["rate_limit"].(map[string]any); ok {
+		cfg.RateLimit = &config.RateLimitConfig{}
+		cfg.RateLimit.Enabled, _ = rl["enabled"].(bool)
+		if rps, ok := toFloat(rl["requests_per_second"]); ok {
+			cfg.RateLimit.RequestsPerSecond = rps
+		}
+		if burst, ok := toInt(rl["burst_size"]); ok {
+			cfg.RateLimit.BurstSize = burst
+		}
+		if limitBy, ok := rl["limit_by"].(string); ok {
+			cfg.RateLimit.LimitBy = limitBy
+		}
+		if respCode, ok := toInt(rl["response_code"]); ok {
+			cfg.RateLimit.ResponseCode = respCode
+		}
+		if msg, ok := rl["response_message"].(string); ok {
+			cfg.RateLimit.ResponseMessage = msg
+		}
+		if maxPerIP, ok := toInt(rl["max_connections_per_ip"]); ok {
+			cfg.RateLimit.MaxConnectionsPerIP = maxPerIP
+		}
+		if maxTotal, ok := toInt(rl["max_total_connections"]); ok {
+			cfg.RateLimit.MaxTotalConnections = maxTotal
+		}
+	}
+
+	h := &HTTPSink{
+		input:      make(chan source.LogEntry, cfg.BufferSize),
 		config:     cfg,
 		startTime:  time.Now(),
 		done:       make(chan struct{}),
-		streamPath: streamPath,
-		statusPath: statusPath,
-		standalone: true, // Default to standalone mode
+		streamPath: cfg.StreamPath,
+		statusPath: cfg.StatusPath,
+		standalone: true,
 		logger:     logger,
 	}
+	h.lastProcessed.Store(time.Time{})
 
 	// Initialize rate limiter if configured
 	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
 		h.rateLimiter = ratelimit.New(*cfg.RateLimit)
 	}
 
-	return h
+	return h, nil
 }
 
-// Configures the streamer for use with a router
-func (h *HTTPStreamer) SetRouterMode() {
-	h.standalone = false
-	h.logger.Debug("msg", "HTTP streamer set to router mode",
-		"component", "http_streamer")
+func (h *HTTPSink) Input() chan<- source.LogEntry {
+	return h.input
 }
 
-func (h *HTTPStreamer) Start() error {
+func (h *HTTPSink) Start(ctx context.Context) error {
 	if !h.standalone {
 		// In router mode, don't start our own server
-		h.logger.Debug("msg", "HTTP streamer in router mode, skipping server start",
-			"component", "http_streamer")
+		h.logger.Debug("msg", "HTTP sink in router mode, skipping server start",
+			"component", "http_sink")
 		return nil
 	}
 
@@ -104,7 +170,7 @@ func (h *HTTPStreamer) Start() error {
 	errChan := make(chan error, 1)
 	go func() {
 		h.logger.Info("msg", "HTTP server started",
-			"component", "http_streamer",
+			"component", "http_sink",
 			"port", h.config.Port,
 			"stream_path", h.streamPath,
 			"status_path", h.statusPath)
@@ -120,16 +186,12 @@ func (h *HTTPStreamer) Start() error {
 		return err
 	case <-time.After(100 * time.Millisecond):
 		// Server started successfully
-		h.logger.Info("msg", "HTTP server started",
-			"port", h.config.Port,
-			"stream_path", h.streamPath,
-			"status_path", h.statusPath)
 		return nil
 	}
 }
 
-func (h *HTTPStreamer) Stop() {
-	h.logger.Info("msg", "Stopping HTTP server")
+func (h *HTTPSink) Stop() {
+	h.logger.Info("msg", "Stopping HTTP sink")
 
 	// Signal all client handlers to stop
 	close(h.done)
@@ -144,14 +206,48 @@ func (h *HTTPStreamer) Stop() {
 	// Wait for all active client handlers to finish
 	h.wg.Wait()
 
-	h.logger.Info("msg", "HTTP server stopped")
+	h.logger.Info("msg", "HTTP sink stopped")
 }
 
-func (h *HTTPStreamer) RouteRequest(ctx *fasthttp.RequestCtx) {
+func (h *HTTPSink) GetStats() SinkStats {
+	lastProc, _ := h.lastProcessed.Load().(time.Time)
+
+	var rateLimitStats map[string]any
+	if h.rateLimiter != nil {
+		rateLimitStats = h.rateLimiter.GetStats()
+	}
+
+	return SinkStats{
+		Type:              "http",
+		TotalProcessed:    h.totalProcessed.Load(),
+		ActiveConnections: h.activeClients.Load(),
+		StartTime:         h.startTime,
+		LastProcessed:     lastProc,
+		Details: map[string]any{
+			"port":        h.config.Port,
+			"buffer_size": h.config.BufferSize,
+			"endpoints": map[string]string{
+				"stream": h.streamPath,
+				"status": h.statusPath,
+			},
+			"rate_limit": rateLimitStats,
+		},
+	}
+}
+
+// SetRouterMode configures the sink for use with a router
+func (h *HTTPSink) SetRouterMode() {
+	h.standalone = false
+	h.logger.Debug("msg", "HTTP sink set to router mode",
+		"component", "http_sink")
+}
+
+// RouteRequest handles a request from the router
+func (h *HTTPSink) RouteRequest(ctx *fasthttp.RequestCtx) {
 	h.requestHandler(ctx)
 }
 
-func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
+func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	// Check rate limit first
 	remoteAddr := ctx.RemoteAddr().String()
 	if allowed, statusCode, message := h.rateLimiter.CheckHTTP(remoteAddr); !allowed {
@@ -182,7 +278,7 @@ func (h *HTTPStreamer) requestHandler(ctx *fasthttp.RequestCtx) {
 	}
 }
 
-func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
+func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 	// Track connection for rate limiting
 	remoteAddr := ctx.RemoteAddr().String()
 	if h.rateLimiter != nil {
@@ -198,18 +294,21 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 	ctx.Response.Header.Set("X-Accel-Buffering", "no")
 
 	// Create subscription for this client
-	clientChan := make(chan monitor.LogEntry, h.config.BufferSize)
+	clientChan := make(chan source.LogEntry, h.config.BufferSize)
 	clientDone := make(chan struct{})
 
-	// Subscribe to monitor's broadcast
+	// Subscribe to input channel
 	go func() {
 		defer close(clientChan)
 		for {
 			select {
-			case entry, ok := <-h.logChan:
+			case entry, ok := <-h.input:
 				if !ok {
 					return
 				}
+				h.totalProcessed.Add(1)
+				h.lastProcessed.Store(time.Now())
+
 				select {
 				case clientChan <- entry:
 				case <-clientDone:
@@ -219,7 +318,7 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 				default:
 					// Drop if client buffer full
 					h.logger.Debug("msg", "Dropped entry for slow client",
-						"component", "http_streamer",
+						"component", "http_sink",
 						"remote_addr", remoteAddr)
 				}
 			case <-clientDone:
@@ -239,6 +338,7 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 
 		h.wg.Add(1)
 		defer func() {
+			close(clientDone)
 			newCount := h.activeClients.Add(-1)
 			h.logger.Debug("msg", "HTTP client disconnected",
 				"remote_addr", remoteAddr,
@@ -277,7 +377,7 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 				data, err := json.Marshal(entry)
 				if err != nil {
 					h.logger.Error("msg", "Failed to marshal log entry",
-						"component", "http_streamer",
+						"component", "http_sink",
 						"error", err,
 						"entry_source", entry.Source)
 					continue
@@ -308,7 +408,7 @@ func (h *HTTPStreamer) handleStream(ctx *fasthttp.RequestCtx) {
 	ctx.SetBodyStreamWriter(streamFunc)
 }
 
-func (h *HTTPStreamer) formatHeartbeat() string {
+func (h *HTTPSink) formatHeartbeat() string {
 	if !h.config.Heartbeat.Enabled {
 		return ""
 	}
@@ -346,7 +446,7 @@ func (h *HTTPStreamer) formatHeartbeat() string {
 	return fmt.Sprintf(": %s\n\n", strings.Join(parts, " "))
 }
 
-func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
+func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetContentType("application/json")
 
 	var rateLimitStats any
@@ -390,17 +490,17 @@ func (h *HTTPStreamer) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetBody(data)
 }
 
-// Returns the current number of active clients
-func (h *HTTPStreamer) GetActiveConnections() int32 {
+// GetActiveConnections returns the current number of active clients
+func (h *HTTPSink) GetActiveConnections() int32 {
 	return h.activeClients.Load()
 }
 
-// Returns the configured transport endpoint path
-func (h *HTTPStreamer) GetStreamPath() string {
+// GetStreamPath returns the configured transport endpoint path
+func (h *HTTPSink) GetStreamPath() string {
 	return h.streamPath
 }
 
-// Returns the configured status endpoint path
-func (h *HTTPStreamer) GetStatusPath() string {
+// GetStatusPath returns the configured status endpoint path
+func (h *HTTPSink) GetStatusPath() string {
 	return h.statusPath
 }

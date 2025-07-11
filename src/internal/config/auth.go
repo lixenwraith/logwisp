@@ -1,6 +1,8 @@
 // FILE: src/internal/config/auth.go
 package config
 
+import "fmt"
+
 type AuthConfig struct {
 	// Authentication type: "none", "basic", "bearer", "mtls"
 	Type string `toml:"type"`
@@ -53,4 +55,25 @@ type JWTConfig struct {
 
 	// Expected audience
 	Audience string `toml:"audience"`
+}
+
+func validateAuth(pipelineName string, auth *AuthConfig) error {
+	if auth == nil {
+		return nil
+	}
+
+	validTypes := map[string]bool{"none": true, "basic": true, "bearer": true, "mtls": true}
+	if !validTypes[auth.Type] {
+		return fmt.Errorf("pipeline '%s': invalid auth type: %s", pipelineName, auth.Type)
+	}
+
+	if auth.Type == "basic" && auth.BasicAuth == nil {
+		return fmt.Errorf("pipeline '%s': basic auth type specified but config missing", pipelineName)
+	}
+
+	if auth.Type == "bearer" && auth.BearerAuth == nil {
+		return fmt.Errorf("pipeline '%s': bearer auth type specified but config missing", pipelineName)
+	}
+
+	return nil
 }

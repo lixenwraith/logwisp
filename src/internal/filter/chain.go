@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"logwisp/src/internal/monitor"
+	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
 )
@@ -43,7 +43,7 @@ func NewChain(configs []Config, logger *log.Logger) (*Chain, error) {
 
 // Apply runs all filters in sequence
 // Returns true if the entry passes all filters
-func (c *Chain) Apply(entry monitor.LogEntry) bool {
+func (c *Chain) Apply(entry source.LogEntry) bool {
 	c.totalProcessed.Add(1)
 
 	// No filters means pass everything
@@ -68,13 +68,13 @@ func (c *Chain) Apply(entry monitor.LogEntry) bool {
 }
 
 // GetStats returns chain statistics
-func (c *Chain) GetStats() map[string]interface{} {
-	filterStats := make([]map[string]interface{}, len(c.filters))
+func (c *Chain) GetStats() map[string]any {
+	filterStats := make([]map[string]any, len(c.filters))
 	for i, filter := range c.filters {
 		filterStats[i] = filter.GetStats()
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"filter_count":    len(c.filters),
 		"total_processed": c.totalProcessed.Load(),
 		"total_passed":    c.totalPassed.Load(),

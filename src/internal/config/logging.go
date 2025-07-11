@@ -1,6 +1,8 @@
 // FILE: src/internal/config/logging.go
 package config
 
+import "fmt"
+
 // LogConfig represents logging configuration for LogWisp
 type LogConfig struct {
 	// Output mode: "file", "stdout", "stderr", "both", "none"
@@ -59,4 +61,32 @@ func DefaultLogConfig() *LogConfig {
 			Format: "txt",
 		},
 	}
+}
+
+func validateLogConfig(cfg *LogConfig) error {
+	validOutputs := map[string]bool{
+		"file": true, "stdout": true, "stderr": true,
+		"both": true, "none": true,
+	}
+	if !validOutputs[cfg.Output] {
+		return fmt.Errorf("invalid log output mode: %s", cfg.Output)
+	}
+
+	validLevels := map[string]bool{
+		"debug": true, "info": true, "warn": true, "error": true,
+	}
+	if !validLevels[cfg.Level] {
+		return fmt.Errorf("invalid log level: %s", cfg.Level)
+	}
+
+	if cfg.Console != nil {
+		validTargets := map[string]bool{
+			"stdout": true, "stderr": true, "split": true,
+		}
+		if !validTargets[cfg.Console.Target] {
+			return fmt.Errorf("invalid console target: %s", cfg.Console.Target)
+		}
+	}
+
+	return nil
 }

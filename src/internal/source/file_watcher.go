@@ -1,5 +1,5 @@
-// FILE: src/internal/monitor/file_watcher.go
-package monitor
+// FILE: src/internal/source/file_watcher.go
+package source
 
 import (
 	"bufio"
@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +17,17 @@ import (
 
 	"github.com/lixenwraith/log"
 )
+
+// WatcherInfo contains information about a file watcher
+type WatcherInfo struct {
+	Path         string
+	Size         int64
+	Position     int64
+	ModTime      time.Time
+	EntriesRead  uint64
+	LastReadTime time.Time
+	Rotations    int
+}
 
 type fileWatcher struct {
 	path         string
@@ -331,13 +341,6 @@ func extractLogLevel(line string) string {
 	}
 
 	return ""
-}
-
-func globToRegex(glob string) string {
-	regex := regexp.QuoteMeta(glob)
-	regex = strings.ReplaceAll(regex, `\*`, `.*`)
-	regex = strings.ReplaceAll(regex, `\?`, `.`)
-	return "^" + regex + "$"
 }
 
 func (w *fileWatcher) getInfo() WatcherInfo {

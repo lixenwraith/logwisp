@@ -13,27 +13,35 @@ import (
 func defaults() *Config {
 	return &Config{
 		Logging: DefaultLogConfig(),
-		Streams: []StreamConfig{
+		Pipelines: []PipelineConfig{
 			{
 				Name: "default",
-				Monitor: &StreamMonitorConfig{
-					CheckIntervalMs: 100,
-					Targets: []MonitorTarget{
-						{Path: "./", Pattern: "*.log", IsFile: false},
+				Sources: []SourceConfig{
+					{
+						Type: "directory",
+						Options: map[string]any{
+							"path":              "./",
+							"pattern":           "*.log",
+							"check_interval_ms": 100,
+						},
 					},
 				},
-				HTTPServer: &HTTPConfig{
-					Enabled:    true,
-					Port:       8080,
-					BufferSize: 1000,
-					StreamPath: "/transport",
-					StatusPath: "/status",
-					Heartbeat: HeartbeatConfig{
-						Enabled:          true,
-						IntervalSeconds:  30,
-						IncludeTimestamp: true,
-						IncludeStats:     false,
-						Format:           "comment",
+				Sinks: []SinkConfig{
+					{
+						Type: "http",
+						Options: map[string]any{
+							"port":        8080,
+							"buffer_size": 1000,
+							"stream_path": "/transport",
+							"status_path": "/status",
+							"heartbeat": map[string]any{
+								"enabled":           true,
+								"interval_seconds":  30,
+								"include_timestamp": true,
+								"include_stats":     false,
+								"format":            "comment",
+							},
+						},
 					},
 				},
 			},

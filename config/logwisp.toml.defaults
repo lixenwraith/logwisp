@@ -1,713 +1,221 @@
-# LogWisp Configuration File - Complete Reference
+# LogWisp Default Configuration and Guide
 # Default path: ~/.config/logwisp.toml
-# Override with: ./logwisp --config /path/to/config.toml
+# Override: logwisp --config /path/to/config.toml
 
-# This is a complete configuration reference showing all available options.
-# Default values are uncommented, alternatives and examples are commented.
-
-# ==============================================================================
-# LOGGING CONFIGURATION (LogWisp's own operational logs)
-# ==============================================================================
-# Controls where and how LogWisp logs its own operational messages.
-# This is separate from the logs being monitored and streamed.
-
+# ============================================================================
+# LOGGING (LogWisp's operational logs)
+# ============================================================================
 [logging]
-# Output mode: where to write LogWisp's operational logs
-# Options: "file", "stdout", "stderr", "both", "none"
-# - file: Write only to log files
-# - stdout: Write only to standard output
-# - stderr: Write only to standard error (default for containers)
-# - both: Write to both file and console
-# - none: Disable logging (⚠️ SECURITY: Not recommended)
+# Output mode: file, stdout, stderr, both, none
 output = "stderr"
 
-# Minimum log level for operational logs
-# Options: "debug", "info", "warn", "error"
-# - debug: Maximum verbosity, includes internal state changes
-# - info: Normal operational messages (default)
-# - warn: Warnings and errors only
-# - error: Errors only
+# Log level: debug, info, warn, error
 level = "info"
 
-# File output configuration (used when output includes "file" or "both")
+# File output settings (when output includes "file")
 [logging.file]
-# Directory for log files
 directory = "./logs"
-
-# Base name for log files (will append timestamp and .log)
 name = "logwisp"
-
-# Maximum size per log file before rotation (megabytes)
 max_size_mb = 100
-
-# Maximum total size of all log files (megabytes)
-# Oldest files are deleted when limit is reached
 max_total_size_mb = 1000
-
-# How long to keep log files (hours)
-# 0 = no time-based deletion
 retention_hours = 168.0  # 7 days
 
-# Console output configuration
+# Console output settings
 [logging.console]
-# Target for console output
-# Options: "stdout", "stderr", "split"
-# - stdout: All logs to standard output
-# - stderr: All logs to standard error (default)
-# - split: INFO/DEBUG to stdout, WARN/ERROR to stderr (planned)
-target = "stderr"
+target = "stderr"  # stdout, stderr, split
+format = "txt"     # txt, json
 
-# Output format
-# Options: "txt", "json"
-# - txt: Human-readable text format
-# - json: Structured JSON for log aggregation
-format = "txt"
+# ============================================================================
+# PIPELINE CONFIGURATION
+# ============================================================================
+# Each [[pipelines]] defines an independent log processing pipeline
+# Structure: sources → filters → sinks
 
-# ==============================================================================
-# STREAM CONFIGURATION
-# ==============================================================================
-# Each [[streams]] section defines an independent log monitoring stream.
-# You can have multiple streams, each with its own settings.
-
-# ------------------------------------------------------------------------------
-# Default Stream - Monitors current directory
-# ------------------------------------------------------------------------------
-[[streams]]
-# Stream identifier used in logs, metrics, and router paths
-# Must be unique across all streams
+[[pipelines]]
+# Unique pipeline identifier (used in router paths)
 name = "default"
 
-# File monitoring configuration
-[streams.monitor]
-# How often to check for new log entries (milliseconds)
-# Lower = faster detection but more CPU usage
-# Range: 10-60000 (0.01 to 60 seconds)
-check_interval_ms = 100
+# ----------------------------------------------------------------------------
+# SOURCES - Input data sources
+# ----------------------------------------------------------------------------
+[[pipelines.sources]]
+# Source type: directory, file, stdin
+type = "directory"
 
-# Targets to monitor - can be files or directories
-# At least one target is required
-targets = [
-    # Monitor all .log files in current directory
-    { path = "./", pattern = "*.log", is_file = false },
+# Type-specific options
+options = {
+    path = "./",
+    pattern = "*.log",
+    check_interval_ms = 100  # How often to check for new entries (10-60000)
+}
 
-    # Example: Monitor specific file
-    # { path = "/var/log/app.log", is_file = true },
+# Additional source examples:
+# [[pipelines.sources]]
+# type = "file"
+# options = { path = "/var/log/app.log" }
+#
+# [[pipelines.sources]]
+# type = "stdin"
+# options = {}
 
-    # Example: Multiple patterns in a directory
-    # { path = "/logs", pattern = "*.log", is_file = false },
-    # { path = "/logs", pattern = "*.txt", is_file = false },
-]
-
-# Filter configuration (optional) - controls which logs are streamed
+# ----------------------------------------------------------------------------
+# FILTERS - Log entry filtering (optional)
+# ----------------------------------------------------------------------------
 # Multiple filters are applied sequentially - all must pass
-# Empty patterns array means "match everything"
 
-# Example: Include only errors and warnings
-# [[streams.filters]]
-# type = "include"              # "include" (whitelist) or "exclude" (blacklist)
-# logic = "or"                  # "or" (match any) or "and" (match all)
+# [[pipelines.filters]]
+# type = "include"     # include (whitelist) or exclude (blacklist)
+# logic = "or"         # or (match any) or and (match all)
 # patterns = [
-#     "(?i)error",              # Case-insensitive error matching
-#     "(?i)warn"                # Case-insensitive warning matching
+#     "ERROR",
+#     "(?i)warn",      # Case-insensitive
+#     "\\bfatal\\b"    # Word boundary
 # ]
 
-# Example: Exclude debug and trace logs
-# [[streams.filters]]
-# type = "exclude"
-# patterns = ["DEBUG", "TRACE", "VERBOSE"]
+# ----------------------------------------------------------------------------
+# SINKS - Output destinations
+# ----------------------------------------------------------------------------
+[[pipelines.sinks]]
+# Sink type: http, tcp, file, stdout, stderr
+type = "http"
 
-# HTTP Server configuration (SSE/Server-Sent Events)
-[streams.httpserver]
-# Enable/disable HTTP server for this stream
-enabled = true
+# Type-specific options
+options = {
+    port = 8080,
+    buffer_size = 1000,
+    stream_path = "/stream",
+    status_path = "/status",
 
-# Port to listen on (1-65535)
-# Each stream needs a unique port unless using router mode
-port = 8080
+    # Heartbeat configuration
+    heartbeat = {
+        enabled = true,
+        interval_seconds = 30,
+        format = "comment",      # comment or json
+        include_timestamp = true,
+        include_stats = false
+    },
 
-# Per-client buffer size (number of messages)
-# Larger = handles bursts better, more memory per client
-buffer_size = 1000
+    # Rate limiting (optional)
+    rate_limit = {
+        enabled = false,
+        requests_per_second = 10.0,
+        burst_size = 20,
+        limit_by = "ip",         # ip or global
+        max_connections_per_ip = 5,
+        max_total_connections = 100,
+        response_code = 429,
+        response_message = "Rate limit exceeded"
+    }
 
-# Endpoint paths (must start with /)
-stream_path = "/stream"     # SSE stream endpoint
-status_path = "/status"     # Statistics endpoint
+    # SSL/TLS (planned)
+    # ssl = {
+    #     enabled = false,
+    #     cert_file = "/path/to/cert.pem",
+    #     key_file = "/path/to/key.pem"
+    # }
+}
 
-# Keep-alive heartbeat configuration
-# Prevents connection timeout on quiet logs
-[streams.httpserver.heartbeat]
-# Enable/disable heartbeat messages
-enabled = true
+# Additional sink examples:
 
-# Interval between heartbeats (seconds)
-# Range: 1-3600 (1 second to 1 hour)
-interval_seconds = 30
+# [[pipelines.sinks]]
+# type = "tcp"
+# options = {
+#     port = 9090,
+#     buffer_size = 5000,
+#     heartbeat = { enabled = true, interval_seconds = 60 }
+# }
 
-# Heartbeat format
-# Options: "comment", "json"
-# - comment: SSE comment format (: heartbeat)
-# - json: JSON event format (data: {"type":"heartbeat"})
-format = "comment"
+# [[pipelines.sinks]]
+# type = "file"
+# options = {
+#     directory = "/var/log/logwisp",
+#     name = "app",
+#     max_size_mb = 100,
+#     retention_hours = 168.0
+# }
 
-# Include timestamp in heartbeat
-include_timestamp = true
+# [[pipelines.sinks]]
+# type = "stdout"
+# options = { buffer_size = 500 }
 
-# Include connection statistics
-include_stats = false
-
-# Rate limiting configuration (disabled by default)
-# Protects against abuse and resource exhaustion
-[streams.httpserver.rate_limit]
-# Enable/disable rate limiting
-enabled = false
-
-# Token refill rate (requests per second)
-# Float value, e.g., 0.5 = 1 request every 2 seconds
-# requests_per_second = 10.0
-
-# Maximum burst capacity (token bucket size)
-# Should be 2-3x requests_per_second for normal usage
-# burst_size = 20
-
-# Rate limit strategy
-# Options: "ip", "global"
-# - ip: Each client IP gets its own limit
-# - global: All clients share one limit
-# limit_by = "ip"
-
-# HTTP response code when rate limited
-# Common: 429 (Too Many Requests), 503 (Service Unavailable)
-# response_code = 429
-
-# Response message when rate limited
-# response_message = "Rate limit exceeded"
-
-# Maximum concurrent connections per IP address
-# 0 = unlimited
-# max_connections_per_ip = 5
-
-# Maximum total concurrent connections
-# 0 = unlimited
-# max_total_connections = 100
-
-# SSL/TLS configuration (planned feature)
-# [streams.httpserver.ssl]
-# enabled = false
-# cert_file = "/path/to/cert.pem"
-# key_file = "/path/to/key.pem"
-# min_version = "TLS1.2"        # Minimum TLS version
-# client_auth = false           # Require client certificates
-
-# TCP Server configuration (optional)
-# Raw TCP streaming for high-performance scenarios
-# [streams.tcpserver]
-# enabled = false
-# port = 9090
-# buffer_size = 5000            # Larger buffer for TCP
+# ----------------------------------------------------------------------------
+# AUTHENTICATION (optional, applies to network sinks)
+# ----------------------------------------------------------------------------
+# [pipelines.auth]
+# type = "none"  # none, basic, bearer
 #
-# [streams.tcpserver.heartbeat]
-# enabled = true
-# interval_seconds = 60
-# include_timestamp = true
-# include_stats = false
-#
-# [streams.tcpserver.rate_limit]
-# enabled = false
-# requests_per_second = 5.0
-# burst_size = 10
-# limit_by = "ip"
-
-# Authentication configuration (planned feature)
-# [streams.auth]
-# type = "none"                 # Options: "none", "basic", "bearer"
-#
-# # Basic authentication
-# [streams.auth.basic_auth]
-# users_file = "/etc/logwisp/users.htpasswd"
+# [pipelines.auth.basic_auth]
 # realm = "LogWisp"
-#
-# # IP-based access control
-# ip_whitelist = ["192.168.1.0/24", "10.0.0.0/8"]
-# ip_blacklist = []
+# users = [
+#     { username = "admin", password_hash = "$2a$10$..." }
+# ]
+# ip_whitelist = ["192.168.1.0/24"]
 
-# ------------------------------------------------------------------------------
-# Example: Application Logs Stream with Error Filtering
-# ------------------------------------------------------------------------------
-# [[streams]]
-# name = "app"
+# ============================================================================
+# COMPLETE EXAMPLES
+# ============================================================================
+
+# Example: Production logs with filtering and multiple outputs
+# [[pipelines]]
+# name = "production"
 #
-# [streams.monitor]
-# check_interval_ms = 50          # Fast detection for active logs
-# targets = [
-#     # Monitor specific application log directory
-#     { path = "/var/log/myapp", pattern = "*.log", is_file = false },
-#     # Also monitor specific file
-#     { path = "/var/log/myapp/app.log", is_file = true },
-# ]
+# [[pipelines.sources]]
+# type = "directory"
+# options = { path = "/var/log/app", pattern = "*.log", check_interval_ms = 50 }
 #
-# # Filter 1: Include only errors and warnings
-# [[streams.filters]]
+# [[pipelines.filters]]
 # type = "include"
-# logic = "or"                    # Match ANY of these patterns
-# patterns = [
-#     "(?i)\\berror\\b",          # Word boundary error (case-insensitive)
-#     "(?i)\\bwarn(ing)?\\b",     # warn or warning
-#     "(?i)\\bfatal\\b",          # fatal
-#     "(?i)\\bcritical\\b",       # critical
-#     "(?i)exception",            # exception anywhere
-#     "(?i)fail(ed|ure)?",        # fail, failed, failure
-#     "panic",                    # Go panics
-#     "traceback",                # Python tracebacks
-# ]
+# patterns = ["ERROR", "WARN", "CRITICAL"]
 #
-# # Filter 2: Exclude health check noise
-# [[streams.filters]]
+# [[pipelines.filters]]
 # type = "exclude"
-# patterns = [
-#     "/health",
-#     "/metrics",
-#     "/ping",
-#     "GET /favicon.ico",
-#     "ELB-HealthChecker",
-#     "kube-probe"
-# ]
+# patterns = ["/health", "/metrics"]
 #
-# [streams.httpserver]
-# enabled = true
-# port = 8081                     # Different port for each stream
-# buffer_size = 2000              # Larger buffer for busy logs
-# stream_path = "/logs"           # Custom path
-# status_path = "/health"         # Custom health endpoint
+# [[pipelines.sinks]]
+# type = "http"
+# options = {
+#     port = 8080,
+#     rate_limit = { enabled = true, requests_per_second = 25.0 }
+# }
 #
-# # JSON heartbeat format for programmatic clients
-# [streams.httpserver.heartbeat]
-# enabled = true
-# interval_seconds = 20
-# format = "json"                 # JSON event format
-# include_timestamp = true
-# include_stats = true            # Include active client count
-#
-# # Moderate rate limiting for public access
-# [streams.httpserver.rate_limit]
-# enabled = true
-# requests_per_second = 25.0
-# burst_size = 50
-# limit_by = "ip"
-# max_connections_per_ip = 10
-# max_total_connections = 200
+# [[pipelines.sinks]]
+# type = "file"
+# options = { directory = "/var/log/archive", name = "errors" }
 
-# ------------------------------------------------------------------------------
-# Example: System Logs Stream (TCP + HTTP) with Security Filtering
-# ------------------------------------------------------------------------------
-# [[streams]]
-# name = "system"
+# Example: Multi-source aggregation
+# [[pipelines]]
+# name = "aggregated"
 #
-# [streams.monitor]
-# check_interval_ms = 1000        # Check every second (system logs update slowly)
-# targets = [
-#     { path = "/var/log/syslog", is_file = true },
-#     { path = "/var/log/auth.log", is_file = true },
-#     { path = "/var/log/kern.log", is_file = true },
-#     { path = "/var/log/messages", is_file = true },
-# ]
+# [[pipelines.sources]]
+# type = "directory"
+# options = { path = "/var/log/nginx", pattern = "*.log" }
 #
-# # Include only security-relevant logs
-# [[streams.filters]]
-# type = "include"
-# logic = "or"
-# patterns = [
-#     "(?i)auth",
-#     "(?i)sudo",
-#     "(?i)ssh",
-#     "(?i)login",
-#     "(?i)permission",
-#     "(?i)denied",
-#     "(?i)unauthorized",
-#     "(?i)security",
-#     "(?i)selinux",
-#     "kernel:.*audit",
-#     "COMMAND=",                 # sudo commands
-#     "session opened",
-#     "session closed"
-# ]
+# [[pipelines.sources]]
+# type = "directory"
+# options = { path = "/var/log/app", pattern = "*.log" }
 #
-# # TCP Server for high-performance streaming
-# [streams.tcpserver]
-# enabled = true
-# port = 9090
-# buffer_size = 5000
-#
-# # TCP heartbeat (always JSON format)
-# [streams.tcpserver.heartbeat]
-# enabled = true
-# interval_seconds = 60           # Less frequent for TCP
-# include_timestamp = true
-# include_stats = false
-#
-# # TCP rate limiting
-# [streams.tcpserver.rate_limit]
-# enabled = true
-# requests_per_second = 5.0       # Limit TCP connections
-# burst_size = 10
-# limit_by = "ip"
-#
-# # Also expose via HTTP
-# [streams.httpserver]
-# enabled = true
-# port = 8082
-# buffer_size = 1000
-# stream_path = "/stream"
-# status_path = "/status"
-#
-# [streams.httpserver.rate_limit]
-# enabled = true
-# requests_per_second = 5.0
-# burst_size = 10
-# max_connections_per_ip = 2      # Strict for security logs
+# [[pipelines.sinks]]
+# type = "tcp"
+# options = { port = 9090 }
 
-# ------------------------------------------------------------------------------
-# Example: High-Volume Debug Logs with Performance Filtering
-# ------------------------------------------------------------------------------
-# [[streams]]
-# name = "debug"
-#
-# [streams.monitor]
-# check_interval_ms = 5000        # Check every 5 seconds (high volume)
-# targets = [
-#     { path = "/tmp/debug", pattern = "*.debug", is_file = false },
-#     { path = "/var/log/debug", pattern = "debug-*.log", is_file = false },
-# ]
-#
-# # Exclude verbose debug output
-# [[streams.filters]]
-# type = "exclude"
-# patterns = [
-#     "TRACE",
-#     "VERBOSE",
-#     "entering function",
-#     "exiting function",
-#     "memory dump",
-#     "hex dump",
-#     "stack trace",
-#     "goroutine [0-9]+"
-# ]
-#
-# # Include only specific modules
-# [[streams.filters]]
-# type = "include"
-# patterns = [
-#     "module=(api|database|auth)",
-#     "component=(router|handler)",
-#     "service=(payment|order|user)"
-# ]
-#
-# [streams.httpserver]
-# enabled = true
-# port = 8083
-# buffer_size = 10000             # Very large buffer
-# stream_path = "/debug"
-# status_path = "/stats"
-#
-# # Disable heartbeat for high-volume streams
-# [streams.httpserver.heartbeat]
-# enabled = false
-#
-# # Aggressive rate limiting
-# [streams.httpserver.rate_limit]
-# enabled = true
-# requests_per_second = 1.0       # Very restrictive
-# burst_size = 5
-# limit_by = "ip"
-# max_connections_per_ip = 1      # One connection per IP
-# response_code = 503             # Service Unavailable
-# response_message = "Debug stream overloaded"
-
-# ------------------------------------------------------------------------------
-# Example: Multi-Application with Router Mode
-# ------------------------------------------------------------------------------
+# ============================================================================
+# ROUTER MODE
+# ============================================================================
 # Run with: logwisp --router
-#
-# [[streams]]
-# name = "frontend"
-# [streams.monitor]
-# targets = [{ path = "/var/log/nginx", pattern = "*.log" }]
-# [[streams.filters]]
-# type = "exclude"
-# patterns = ["GET /static/", "GET /assets/"]
-# [streams.httpserver]
-# enabled = true
-# port = 8080                     # Same port OK in router mode
-#
-# [[streams]]
-# name = "backend"
-# [streams.monitor]
-# targets = [{ path = "/var/log/api", pattern = "*.log" }]
-# [[streams.filters]]
-# type = "include"
-# patterns = ["ERROR", "WARN", "timeout", "failed"]
-# [streams.httpserver]
-# enabled = true
-# port = 8080                     # Shared port in router mode
-#
-# [[streams]]
-# name = "database"
-# [streams.monitor]
-# targets = [{ path = "/var/log/postgresql", pattern = "*.log" }]
-# [streams.httpserver]
-# enabled = true
-# port = 8080
-#
-# # Access via:
-# # http://localhost:8080/frontend/stream
-# # http://localhost:8080/backend/stream
-# # http://localhost:8080/database/stream
-# # http://localhost:8080/status (global)
+# Allows multiple pipelines to share HTTP ports via path-based routing
+# Access: http://localhost:8080/{pipeline_name}/stream
+# Global status: http://localhost:8080/status
 
-# ==============================================================================
-# FILTER PATTERN REFERENCE
-# ==============================================================================
+# ============================================================================
+# QUICK REFERENCE
+# ============================================================================
+# Source types: directory, file, stdin
+# Sink types: http, tcp, file, stdout, stderr
+# Filter types: include, exclude
+# Filter logic: or, and
 #
-# Basic Patterns:
-# - "ERROR"                    # Exact match (case sensitive)
-# - "(?i)error"               # Case-insensitive
-# - "\\berror\\b"             # Word boundary (won't match "errorCode")
-# - "error|warn|fatal"        # Multiple options (OR)
-# - "(error|warn) level"      # Group with context
-#
-# Position Patterns:
-# - "^\\[ERROR\\]"            # Line starts with [ERROR]
-# - "ERROR:$"                 # Line ends with ERROR:
-# - "^\\d{4}-\\d{2}-\\d{2}"  # Line starts with date
-#
-# Complex Patterns:
-# - "status=[4-5][0-9]{2}"    # HTTP 4xx or 5xx status codes
-# - "duration>[0-9]{4}ms"     # Duration over 999ms
-# - "user_id=\"[^\"]+\""      # Extract user_id values
-# - "\\[ERROR\\].*database"   # ERROR followed by database
-# - "(?i)\\b(error|fail|critical)\\b"  # Multiple error words
-#
-# Log Level Patterns:
-# - "\\[(ERROR|WARN|FATAL)\\]"     # Common formats
-# - "level=(error|warning|critical)" # Key-value format
-# - "ERROR\\s*:"                    # ERROR with optional space
-# - "<(Error|Warning)>"             # XML-style
-#
-# Application Patterns:
-# - "com\\.mycompany\\..*Exception"  # Java exceptions
-# - "at .+\\(.+\\.java:[0-9]+\\)"   # Java stack traces
-# - "File \".+\", line [0-9]+"      # Python tracebacks
-# - "panic: .+"                     # Go panics
-# - "/api/v[0-9]+/"                 # API versioned paths
-#
-# Performance Patterns:
-# - "took [0-9]{4,}ms"              # Operations over 999ms
-# - "memory usage: [8-9][0-9]%"    # High memory usage
-# - "queue size: [0-9]{4,}"        # Large queues
-# - "timeout|timed out"             # Timeouts
-#
-# Security Patterns:
-# - "unauthorized|forbidden"         # Access denied
-# - "invalid token|expired token"   # Auth failures
-# - "SQL injection|XSS"             # Security threats
-# - "failed login.*IP: ([0-9.]+)"  # Failed logins with IP
-#
-# Performance Tips:
-# - Avoid nested quantifiers: "((a+)+)+" causes catastrophic backtracking
-# - Use anchors when possible: "^ERROR" is faster than "ERROR"
-# - Prefer character classes: "[0-9]" over "\\d" for clarity
-# - Use non-capturing groups: "(?:error|warn)" when not extracting
-# - Test complex patterns with sample data before deployment
-# - Consider using multiple simple patterns instead of one complex pattern
-#
-# Security Considerations:
-# - Be aware of ReDoS (Regular Expression Denial of Service)
-# - Limit pattern complexity for public-facing streams
-# - Monitor filter processing time in statistics
-# - Consider pre-filtering very high volume streams
-# - Use explicit allow-lists for sensitive logs
-
-# ==============================================================================
-# RATE LIMITING GUIDE
-# ==============================================================================
-#
-# Token Bucket Algorithm:
-# - Each client (IP) or global limit gets a bucket with 'burst_size' tokens
-# - Tokens refill at 'requests_per_second' rate
-# - Each request consumes one token
-# - Provides smooth rate limiting without hard cutoffs
-#
-# Configuration Examples:
-#
-# Light Protection (default for most streams):
-# requests_per_second = 10.0
-# burst_size = 20              # Handle short bursts
-#
-# Moderate Protection (public endpoints):
-# requests_per_second = 5.0
-# burst_size = 15
-# max_connections_per_ip = 5
-#
-# Strict Protection (sensitive logs):
-# requests_per_second = 1.0
-# burst_size = 3
-# max_connections_per_ip = 1
-# limit_by = "ip"
-#
-# Global Limiting (shared resource):
-# requests_per_second = 50.0   # Total for all clients
-# burst_size = 100
-# limit_by = "global"
-# max_total_connections = 50
-#
-# Behavior:
-# - HTTP: Returns response_code (default 429) with JSON error
-# - TCP: Silently drops connection (no error message)
-# - Cleanup: Inactive IPs removed after 5 minutes
-# - Statistics: Available in /status endpoint
-#
-# Best Practices:
-# - Set burst_size to 2-3x requests_per_second
-# - Use per-IP limiting for fairness
-# - Use global limiting for resource protection
-# - Monitor rate limit statistics for tuning
-# - Consider different limits for different streams
-# - Enable for any public-facing endpoints
-
-# ==============================================================================
-# PERFORMANCE TUNING
-# ==============================================================================
-#
-# Monitor Check Interval:
-# - 10-50ms: Real-time monitoring, higher CPU usage
-# - 100-500ms: Good balance for active logs
-# - 1000-5000ms: Low-activity logs, minimal CPU
-# - 10000ms+: Very slow changing logs
-#
-# Buffer Sizes:
-# - HTTP: 100-1000 for normal use, 5000+ for high volume
-# - TCP: 1000-5000 typical, 10000+ for bulk streaming
-# - Larger = more memory per client, handles bursts better
-#
-# Connection Limits:
-# - Development: No limits needed
-# - Production: 5-10 connections per IP typical
-# - Public: 1-3 connections per IP
-# - Total: Based on available memory (each uses ~1-5MB)
-#
-# Filter Performance:
-# - Simple patterns: ~1μs per check
-# - Complex patterns: ~10-100μs per check
-# - Many patterns: Consider multiple streams instead
-# - Use exclude filters to drop noise early
-#
-# Memory Usage (approximate):
-# - Base process: ~10-20MB
-# - Per stream: ~5-10MB
-# - Per HTTP client: ~1-2MB
-# - Per TCP client: ~0.5-1MB
-# - Filter chain: ~1-5MB depending on patterns
-
-# ==============================================================================
-# DEPLOYMENT SCENARIOS
-# ==============================================================================
-#
-# Single Application:
-# - One stream with basic filtering
-# - Moderate rate limiting
-# - Standard check interval (100ms)
-#
-# Microservices:
-# - Multiple streams, one per service
-# - Router mode for unified access
-# - Different filter rules per service
-# - Service-specific rate limits
-#
-# High Security:
-# - Strict include filters
-# - Low rate limits (1-2 req/sec)
-# - Single connection per IP
-# - TCP for internal, HTTP for external
-#
-# High Performance:
-# - TCP streaming preferred
-# - Large buffers (10000+)
-# - Minimal filtering
-# - Higher check intervals
-# - No heartbeats
-#
-# Development/Testing:
-# - Multiple streams for different log levels
-# - No rate limiting
-# - Debug level logging
-# - Fast check intervals
-# - All filters disabled
-
-# ==============================================================================
-# TROUBLESHOOTING
-# ==============================================================================
-#
-# Common Issues:
-#
-# "No logs appearing":
-# - Check file paths and permissions
-# - Verify pattern matches filenames
-# - Check filters aren't too restrictive
-# - Enable debug logging: --log-level debug
-#
-# "High CPU usage":
-# - Increase check_interval_ms
-# - Reduce number of filter patterns
-# - Use simpler regex patterns
-# - Check for runaway log growth
-#
-# "Clients disconnecting":
-# - Enable heartbeats
-# - Check rate limiting settings
-# - Verify network connectivity
-# - Increase buffer sizes
-#
-# "Memory growth":
-# - Check client connection count
-# - Verify buffer sizes are reasonable
-# - Look for memory leaks in filters
-# - Enable connection limits
-#
-# Debug Commands:
-# - Check status: curl http://localhost:8080/status
-# - Test stream: curl -N http://localhost:8080/stream
-# - View logs: logwisp --log-level debug --log-output stderr
-# - Test filters: Use simple patterns first
-
-# ==============================================================================
-# FUTURE FEATURES (Roadmap)
-# ==============================================================================
-#
-# Authentication:
-# - Basic auth with htpasswd files
-# - Bearer token authentication
-# - JWT validation
-# - mTLS client certificates
-#
-# SSL/TLS:
-# - HTTPS endpoints
-# - TLS for TCP streams
-# - Certificate management
-# - Let's Encrypt integration
-#
-# Advanced Filtering:
-# - Lua scripting for complex logic
-# - Rate-based filtering (N per minute)
-# - Statistical anomaly detection
-# - Multi-line pattern matching
-#
-# Output Formats:
-# - JSON transformation
-# - Field extraction
-# - Custom formatting templates
-# - Compression (gzip)
-#
-# Integrations:
-# - Prometheus metrics
-# - OpenTelemetry traces
-# - Webhook notifications
-# - Cloud storage backends
+# Common patterns:
+# "(?i)error"          - Case-insensitive
+# "\\berror\\b"        - Word boundary
+# "^ERROR"             - Start of line
+# "status=[4-5]\\d{2}" - HTTP errors

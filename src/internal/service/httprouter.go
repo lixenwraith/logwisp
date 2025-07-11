@@ -8,10 +8,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/sink"
+
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
 )
 
+// HTTPRouter manages HTTP routing for multiple pipelines
 type HTTPRouter struct {
 	service *Service
 	servers map[int]*routerServer // port -> server
@@ -25,6 +28,7 @@ type HTTPRouter struct {
 	failedRequests atomic.Uint64
 }
 
+// NewHTTPRouter creates a new HTTP router
 func NewHTTPRouter(service *Service, logger *log.Logger) *HTTPRouter {
 	return &HTTPRouter{
 		service:   service,
@@ -34,12 +38,23 @@ func NewHTTPRouter(service *Service, logger *log.Logger) *HTTPRouter {
 	}
 }
 
-func (r *HTTPRouter) RegisterStream(stream *LogStream) error {
-	if stream.HTTPServer == nil || stream.Config.HTTPServer == nil {
-		return nil // No HTTP server configured
+// RegisterPipeline registers a pipeline's HTTP sinks with the router
+func (r *HTTPRouter) RegisterPipeline(pipeline *Pipeline) error {
+	// Register all HTTP sinks in the pipeline
+	for _, httpSink := range pipeline.HTTPSinks {
+		if err := r.registerHTTPSink(pipeline.Name, httpSink); err != nil {
+			return err
+		}
 	}
+	return nil
+}
 
-	port := stream.Config.HTTPServer.Port
+// registerHTTPSink registers a single HTTP sink
+func (r *HTTPRouter) registerHTTPSink(pipelineName string, httpSink *sink.HTTPSink) error {
+	// Get port from sink configuration
+	stats := httpSink.GetStats()
+	details := stats.Details
+	port := details["port"].(int)
 
 	r.mu.Lock()
 	rs, exists := r.servers[port]
@@ -47,7 +62,7 @@ func (r *HTTPRouter) RegisterStream(stream *LogStream) error {
 		// Create new server for this port
 		rs = &routerServer{
 			port:      port,
-			routes:    make(map[string]*LogStream),
+			routes:    make(map[string]*routedSink),
 			router:    r,
 			startTime: time.Now(),
 			logger:    r.logger,
@@ -56,7 +71,7 @@ func (r *HTTPRouter) RegisterStream(stream *LogStream) error {
 			Handler:           rs.requestHandler,
 			DisableKeepalive:  false,
 			StreamRequestBody: true,
-			CloseOnShutdown:   true, // Ensure connections close on shutdown
+			CloseOnShutdown:   true,
 		}
 		r.servers[port] = rs
 
@@ -79,54 +94,74 @@ func (r *HTTPRouter) RegisterStream(stream *LogStream) error {
 	}
 	r.mu.Unlock()
 
-	// Register routes for this transport
+	// Register routes for this sink
 	rs.routeMu.Lock()
 	defer rs.routeMu.Unlock()
 
-	// Use transport name as path prefix
-	pathPrefix := "/" + stream.Name
+	// Use pipeline name as path prefix
+	pathPrefix := "/" + pipelineName
 
 	// Check for conflicts
-	for existingPath, existingStream := range rs.routes {
+	for existingPath, existing := range rs.routes {
 		if strings.HasPrefix(pathPrefix, existingPath) || strings.HasPrefix(existingPath, pathPrefix) {
-			return fmt.Errorf("path conflict: '%s' conflicts with existing transport '%s' at '%s'",
-				pathPrefix, existingStream.Name, existingPath)
+			return fmt.Errorf("path conflict: '%s' conflicts with existing pipeline '%s' at '%s'",
+				pathPrefix, existing.pipelineName, existingPath)
 		}
 	}
 
-	rs.routes[pathPrefix] = stream
-	r.logger.Info("msg", "Registered transport route",
+	// Set the sink to router mode
+	httpSink.SetRouterMode()
+
+	rs.routes[pathPrefix] = &routedSink{
+		pipelineName: pipelineName,
+		httpSink:     httpSink,
+	}
+
+	r.logger.Info("msg", "Registered pipeline route",
 		"component", "http_router",
-		"transport", stream.Name,
+		"pipeline", pipelineName,
 		"path", pathPrefix,
 		"port", port)
 	return nil
 }
 
+// UnregisterStream is deprecated
 func (r *HTTPRouter) UnregisterStream(streamName string) {
+	r.logger.Warn("msg", "UnregisterStream is deprecated",
+		"component", "http_router")
+}
+
+// UnregisterPipeline removes a pipeline's routes
+func (r *HTTPRouter) UnregisterPipeline(pipelineName string) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	for port, rs := range r.servers {
 		rs.routeMu.Lock()
-		for path, stream := range rs.routes {
-			if stream.Name == streamName {
+		for path, route := range rs.routes {
+			if route.pipelineName == pipelineName {
 				delete(rs.routes, path)
-				fmt.Printf("[ROUTER] Unregistered transport '%s' from path '%s' on port %d\n",
-					streamName, path, port)
+				r.logger.Info("msg", "Unregistered pipeline route",
+					"component", "http_router",
+					"pipeline", pipelineName,
+					"path", path,
+					"port", port)
 			}
 		}
 
 		// Check if server has no more routes
 		if len(rs.routes) == 0 {
-			fmt.Printf("[ROUTER] No routes left on port %d, considering shutdown\n", port)
+			r.logger.Info("msg", "No routes left on port, considering shutdown",
+				"component", "http_router",
+				"port", port)
 		}
 		rs.routeMu.Unlock()
 	}
 }
 
+// Shutdown stops all router servers
 func (r *HTTPRouter) Shutdown() {
-	fmt.Println("[ROUTER] Starting router shutdown...")
+	r.logger.Info("msg", "Starting router shutdown...")
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -136,17 +171,23 @@ func (r *HTTPRouter) Shutdown() {
 		wg.Add(1)
 		go func(p int, s *routerServer) {
 			defer wg.Done()
-			fmt.Printf("[ROUTER] Shutting down server on port %d\n", p)
+			r.logger.Info("msg", "Shutting down server",
+				"component", "http_router",
+				"port", p)
 			if err := s.server.Shutdown(); err != nil {
-				fmt.Printf("[ROUTER] Error shutting down server on port %d: %v\n", p, err)
+				r.logger.Error("msg", "Error shutting down server",
+					"component", "http_router",
+					"port", p,
+					"error", err)
 			}
 		}(port, rs)
 	}
 	wg.Wait()
 
-	fmt.Println("[ROUTER] Router shutdown complete")
+	r.logger.Info("msg", "Router shutdown complete")
 }
 
+// GetStats returns router statistics
 func (r *HTTPRouter) GetStats() map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

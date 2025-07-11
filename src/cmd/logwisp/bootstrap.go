@@ -18,7 +18,7 @@ import (
 
 // bootstrapService creates and initializes the log transport service
 func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, *service.HTTPRouter, error) {
-	// Create log transport service
+	// Create service
 	svc := service.New(ctx, logger)
 
 	// Create HTTP router if requested
@@ -28,73 +28,44 @@ func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service
 		logger.Info("msg", "HTTP router mode enabled")
 	}
 
-	// Initialize streams
+	// Initialize pipelines
 	successCount := 0
-	for _, streamCfg := range cfg.Streams {
-		logger.Info("msg", "Initializing transport", "transport", streamCfg.Name)
+	for _, pipelineCfg := range cfg.Pipelines {
+		logger.Info("msg", "Initializing pipeline", "pipeline", pipelineCfg.Name)
 
-		// Handle router mode configuration
-		if *useRouter && streamCfg.HTTPServer != nil && streamCfg.HTTPServer.Enabled {
-			if err := initializeRouterStream(svc, router, streamCfg); err != nil {
-				logger.Error("msg", "Failed to initialize router stream",
-					"transport", streamCfg.Name,
-					"error", err)
-				continue
-			}
-		} else {
-			// Standard standalone mode
-			if err := svc.CreateStream(streamCfg); err != nil {
-				logger.Error("msg", "Failed to create transport",
-					"transport", streamCfg.Name,
-					"error", err)
-				continue
+		// Create the pipeline
+		if err := svc.NewPipeline(pipelineCfg); err != nil {
+			logger.Error("msg", "Failed to create pipeline",
+				"pipeline", pipelineCfg.Name,
+				"error", err)
+			continue
+		}
+
+		// If using router mode, register HTTP sinks
+		if *useRouter {
+			pipeline, err := svc.GetPipeline(pipelineCfg.Name)
+			if err == nil && len(pipeline.HTTPSinks) > 0 {
+				if err := router.RegisterPipeline(pipeline); err != nil {
+					logger.Error("msg", "Failed to register pipeline with router",
+						"pipeline", pipelineCfg.Name,
+						"error", err)
+				}
 			}
 		}
 
 		successCount++
-		displayStreamEndpoints(streamCfg, *useRouter)
+		displayPipelineEndpoints(pipelineCfg, *useRouter)
 	}
 
 	if successCount == 0 {
-		return nil, nil, fmt.Errorf("no streams successfully started (attempted %d)", len(cfg.Streams))
+		return nil, nil, fmt.Errorf("no pipelines successfully started (attempted %d)", len(cfg.Pipelines))
 	}
 
 	logger.Info("msg", "LogWisp started",
 		"version", version.Short(),
-		"transports", successCount)
+		"pipelines", successCount)
 
 	return svc, router, nil
-}
-
-// initializeRouterStream sets up a stream for router mode
-func initializeRouterStream(svc *service.Service, router *service.HTTPRouter, streamCfg config.StreamConfig) error {
-	// Temporarily disable standalone server startup
-	originalEnabled := streamCfg.HTTPServer.Enabled
-	streamCfg.HTTPServer.Enabled = false
-
-	if err := svc.CreateStream(streamCfg); err != nil {
-		return err
-	}
-
-	// Get the created transport and configure for router mode
-	stream, err := svc.GetStream(streamCfg.Name)
-	if err != nil {
-		return err
-	}
-
-	if stream.HTTPServer != nil {
-		stream.HTTPServer.SetRouterMode()
-		// Restore enabled state
-		stream.Config.HTTPServer.Enabled = originalEnabled
-
-		if err := router.RegisterStream(stream); err != nil {
-			return err
-		}
-
-		logger.Info("msg", "Stream registered with router", "stream", streamCfg.Name)
-	}
-
-	return nil
 }
 
 // initializeLogger sets up the logger based on configuration and CLI flags

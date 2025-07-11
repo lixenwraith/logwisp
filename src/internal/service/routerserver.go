@@ -9,17 +9,25 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/sink"
 	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
 )
 
+// routedSink represents a sink registered with the router
+type routedSink struct {
+	pipelineName string
+	httpSink     *sink.HTTPSink
+}
+
+// routerServer handles HTTP requests for a specific port
 type routerServer struct {
 	port      int
 	server    *fasthttp.Server
 	logger    *log.Logger
-	routes    map[string]*LogStream // path prefix -> transport
+	routes    map[string]*routedSink // path prefix -> sink
 	routeMu   sync.RWMutex
 	router    *HTTPRouter
 	startTime time.Time
@@ -36,7 +44,7 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 	// Log request for debugging
 	rs.logger.Debug("msg", "Router request",
 		"component", "router_server",
-		"method", ctx.Method(),
+		"method", string(ctx.Method()),
 		"path", path,
 		"remote_addr", remoteAddr)
 
@@ -46,18 +54,18 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Find matching transport
+	// Find matching route
 	rs.routeMu.RLock()
-	var matchedStream *LogStream
+	var matchedSink *routedSink
 	var matchedPrefix string
 	var remainingPath string
 
-	for prefix, stream := range rs.routes {
+	for prefix, route := range rs.routes {
 		if strings.HasPrefix(path, prefix) {
 			// Use longest prefix match
 			if len(prefix) > len(matchedPrefix) {
 				matchedPrefix = prefix
-				matchedStream = stream
+				matchedSink = route
 				remainingPath = strings.TrimPrefix(path, prefix)
 				// Ensure remaining path starts with / or is empty
 				if remainingPath != "" && !strings.HasPrefix(remainingPath, "/") {
@@ -68,7 +76,7 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 	}
 	rs.routeMu.RUnlock()
 
-	if matchedStream == nil {
+	if matchedSink == nil {
 		rs.router.failedRequests.Add(1)
 		rs.handleNotFound(ctx)
 		return
@@ -76,25 +84,25 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 
 	rs.router.routedRequests.Add(1)
 
-	// Route to transport's handler
-	if matchedStream.HTTPServer != nil {
+	// Route to sink's handler
+	if matchedSink.httpSink != nil {
 		// Save original path
 		originalPath := string(ctx.URI().Path())
 
-		// Rewrite path to remove transport prefix
+		// Rewrite path to remove pipeline prefix
 		if remainingPath == "" {
-			// Default to transport path if no remaining path
-			remainingPath = matchedStream.Config.HTTPServer.StreamPath
+			// Default to stream path if no remaining path
+			remainingPath = matchedSink.httpSink.GetStreamPath()
 		}
 
-		rs.logger.Debug("msg", "Routing request to transport",
+		rs.logger.Debug("msg", "Routing request to pipeline",
 			"component", "router_server",
-			"transport", matchedStream.Name,
+			"pipeline", matchedSink.pipelineName,
 			"original_path", originalPath,
 			"remaining_path", remainingPath)
 
 		ctx.URI().SetPath(remainingPath)
-		matchedStream.HTTPServer.RouteRequest(ctx)
+		matchedSink.httpSink.RouteRequest(ctx)
 
 		// Restore original path
 		ctx.URI().SetPath(originalPath)
@@ -102,8 +110,8 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 		ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
 		ctx.SetContentType("application/json")
 		json.NewEncoder(ctx).Encode(map[string]string{
-			"error":     "Stream HTTP server not available",
-			"transport": matchedStream.Name,
+			"error":    "Pipeline HTTP sink not available",
+			"pipeline": matchedSink.pipelineName,
 		})
 	}
 }
@@ -112,20 +120,26 @@ func (rs *routerServer) handleGlobalStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetContentType("application/json")
 
 	rs.routeMu.RLock()
-	streams := make(map[string]any)
-	for prefix, stream := range rs.routes {
-		streamStats := stream.GetStats()
-
-		// Add routing information
-		streamStats["routing"] = map[string]any{
+	pipelines := make(map[string]any)
+	for prefix, route := range rs.routes {
+		pipelineInfo := map[string]any{
 			"path_prefix": prefix,
 			"endpoints": map[string]string{
-				"transport": prefix + stream.Config.HTTPServer.StreamPath,
-				"status":    prefix + stream.Config.HTTPServer.StatusPath,
+				"stream": prefix + route.httpSink.GetStreamPath(),
+				"status": prefix + route.httpSink.GetStatusPath(),
 			},
 		}
 
-		streams[stream.Name] = streamStats
+		// Get sink stats
+		sinkStats := route.httpSink.GetStats()
+		pipelineInfo["sink"] = map[string]any{
+			"type":               sinkStats.Type,
+			"total_processed":    sinkStats.TotalProcessed,
+			"active_connections": sinkStats.ActiveConnections,
+			"details":            sinkStats.Details,
+		}
+
+		pipelines[route.pipelineName] = pipelineInfo
 	}
 	rs.routeMu.RUnlock()
 
@@ -133,12 +147,12 @@ func (rs *routerServer) handleGlobalStatus(ctx *fasthttp.RequestCtx) {
 	routerStats := rs.router.GetStats()
 
 	status := map[string]any{
-		"service":       "LogWisp Router",
-		"version":       version.String(),
-		"port":          rs.port,
-		"streams":       streams,
-		"total_streams": len(streams),
-		"router":        routerStats,
+		"service":         "LogWisp Router",
+		"version":         version.String(),
+		"port":            rs.port,
+		"pipelines":       pipelines,
+		"total_pipelines": len(pipelines),
+		"router":          routerStats,
 		"endpoints": map[string]string{
 			"global_status": "/status",
 		},
@@ -156,11 +170,11 @@ func (rs *routerServer) handleNotFound(ctx *fasthttp.RequestCtx) {
 	availableRoutes := make([]string, 0, len(rs.routes)*2+1)
 	availableRoutes = append(availableRoutes, "/status (global status)")
 
-	for prefix, stream := range rs.routes {
-		if stream.Config.HTTPServer != nil {
+	for prefix, route := range rs.routes {
+		if route.httpSink != nil {
 			availableRoutes = append(availableRoutes,
-				fmt.Sprintf("%s%s (transport: %s)", prefix, stream.Config.HTTPServer.StreamPath, stream.Name),
-				fmt.Sprintf("%s%s (status: %s)", prefix, stream.Config.HTTPServer.StatusPath, stream.Name),
+				fmt.Sprintf("%s%s (stream: %s)", prefix, route.httpSink.GetStreamPath(), route.pipelineName),
+				fmt.Sprintf("%s%s (status: %s)", prefix, route.httpSink.GetStatusPath(), route.pipelineName),
 			)
 		}
 	}
