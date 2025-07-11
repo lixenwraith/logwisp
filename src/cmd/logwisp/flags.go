@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/lixenwraith/log"
 )
 
 // Command-line flags
@@ -24,10 +22,76 @@ var (
 	logFile    = flag.String("log-file", "", "Log file path (when using file output)")
 	logDir     = flag.String("log-dir", "", "Log directory (when using file output)")
 	logConsole = flag.String("log-console", "", "Console target: stdout, stderr, split (overrides config)")
+
+	// Quiet mode flag
+	quiet = flag.Bool("quiet", false, "Suppress all LogWisp logging output (sink outputs remain unaffected)")
 )
 
-func init() {
+// FlagConfig holds parsed command-line flags
+type FlagConfig struct {
+	ConfigFile  string
+	UseRouter   bool
+	ShowVersion bool
+	Background  bool
+	LogOutput   string
+	LogLevel    string
+	LogFile     string
+	LogDir      string
+	LogConsole  string
+	Quiet       bool
+}
+
+// ParseFlags parses command-line arguments and returns configuration
+func ParseFlags() (*FlagConfig, error) {
+	// Set custom usage before parsing
 	flag.Usage = customUsage
+	flag.Parse()
+
+	fc := &FlagConfig{
+		ConfigFile:  *configFile,
+		UseRouter:   *useRouter,
+		ShowVersion: *showVersion,
+		Background:  *background,
+		LogOutput:   *logOutput,
+		LogLevel:    *logLevel,
+		LogFile:     *logFile,
+		LogDir:      *logDir,
+		LogConsole:  *logConsole,
+		Quiet:       *quiet,
+	}
+
+	// Validate log-output flag if provided
+	if fc.LogOutput != "" {
+		validOutputs := map[string]bool{
+			"file": true, "stdout": true, "stderr": true,
+			"both": true, "none": true,
+		}
+		if !validOutputs[fc.LogOutput] {
+			return nil, fmt.Errorf("invalid log-output: %s (valid: file, stdout, stderr, both, none)", fc.LogOutput)
+		}
+	}
+
+	// Validate log-level flag if provided
+	if fc.LogLevel != "" {
+		validLevels := map[string]bool{
+			"debug": true, "info": true, "warn": true, "error": true,
+		}
+		if !validLevels[strings.ToLower(fc.LogLevel)] {
+			return nil, fmt.Errorf("invalid log-level: %s (valid: debug, info, warn, error)", fc.LogLevel)
+		}
+	}
+
+	// Validate log-console flag if provided
+	if fc.LogConsole != "" {
+		validTargets := map[string]bool{
+			"stdout": true, "stderr": true, "split": true,
+		}
+		if !validTargets[fc.LogConsole] {
+			return nil, fmt.Errorf("invalid log-console: %s (valid: stdout, stderr, split)", fc.LogConsole)
+		}
+	}
+
+	return fc, nil
 }
 
 func customUsage() {
@@ -49,6 +113,7 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  -log-file string\n\tLog file path (when using file output)\n")
 	fmt.Fprintf(os.Stderr, "  -log-dir string\n\tLog directory (when using file output)\n")
 	fmt.Fprintf(os.Stderr, "  -log-console string\n\tConsole target: stdout, stderr, split (overrides config)\n")
+	fmt.Fprintf(os.Stderr, "  -quiet\n\tSuppress all LogWisp logging output (sink outputs remain unaffected)\n")
 
 	fmt.Fprintf(os.Stderr, "\nExamples:\n")
 	fmt.Fprintf(os.Stderr, "  # Run with default config (logs to stderr)\n")
@@ -72,53 +137,4 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  LOGWISP_DISABLE_STATUS_REPORTER  Disable periodic status reports (set to 1)\n")
 	fmt.Fprintf(os.Stderr, "  LOGWISP_BACKGROUND               Internal use - background process marker\n")
 	fmt.Fprintf(os.Stderr, "\nFor complete documentation, see: https://github.com/logwisp/logwisp/tree/main/doc\n")
-}
-
-func parseFlags() error {
-	flag.Parse()
-
-	// Validate log-output flag if provided
-	if *logOutput != "" {
-		validOutputs := map[string]bool{
-			"file": true, "stdout": true, "stderr": true,
-			"both": true, "none": true,
-		}
-		if !validOutputs[*logOutput] {
-			return fmt.Errorf("invalid log-output: %s (valid: file, stdout, stderr, both, none)", *logOutput)
-		}
-	}
-
-	// Validate log-level flag if provided
-	if *logLevel != "" {
-		if _, err := parseLogLevel(*logLevel); err != nil {
-			return fmt.Errorf("invalid log-level: %s (valid: debug, info, warn, error)", *logLevel)
-		}
-	}
-
-	// Validate log-console flag if provided
-	if *logConsole != "" {
-		validTargets := map[string]bool{
-			"stdout": true, "stderr": true, "split": true,
-		}
-		if !validTargets[*logConsole] {
-			return fmt.Errorf("invalid log-console: %s (valid: stdout, stderr, split)", *logConsole)
-		}
-	}
-
-	return nil
-}
-
-func parseLogLevel(level string) (int, error) {
-	switch strings.ToLower(level) {
-	case "debug":
-		return int(log.LevelDebug), nil
-	case "info":
-		return int(log.LevelInfo), nil
-	case "warn", "warning":
-		return int(log.LevelWarn), nil
-	case "error":
-		return int(log.LevelError), nil
-	default:
-		return 0, fmt.Errorf("unknown log level: %s", level)
-	}
 }

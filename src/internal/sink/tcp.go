@@ -111,7 +111,7 @@ func NewTCPSink(options map[string]any, logger *log.Logger) (*TCPSink, error) {
 	t.lastProcessed.Store(time.Time{})
 
 	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
-		t.rateLimiter = ratelimit.New(*cfg.RateLimit)
+		t.rateLimiter = ratelimit.New(*cfg.RateLimit, logger)
 	}
 
 	return t, nil

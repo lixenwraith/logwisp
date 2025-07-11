@@ -84,32 +84,50 @@ func (p *Pipeline) Shutdown() {
 
 // GetStats returns pipeline statistics
 func (p *Pipeline) GetStats() map[string]any {
+	// Recovery to handle concurrent access during shutdown
+	// TODO: check if needed to keep
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Error("msg", "Panic getting pipeline stats",
+				"pipeline", p.Name,
+				"panic", r)
+		}
+	}()
+
 	// Collect source stats
-	sourceStats := make([]map[string]any, len(p.Sources))
-	for i, src := range p.Sources {
+	sourceStats := make([]map[string]any, 0, len(p.Sources))
+	for _, src := range p.Sources {
+		if src == nil {
+			continue // Skip nil sources
+		}
+
 		stats := src.GetStats()
-		sourceStats[i] = map[string]any{
+		sourceStats = append(sourceStats, map[string]any{
 			"type":            stats.Type,
 			"total_entries":   stats.TotalEntries,
 			"dropped_entries": stats.DroppedEntries,
 			"start_time":      stats.StartTime,
 			"last_entry_time": stats.LastEntryTime,
 			"details":         stats.Details,
-		}
+		})
 	}
 
 	// Collect sink stats
-	sinkStats := make([]map[string]any, len(p.Sinks))
-	for i, s := range p.Sinks {
+	sinkStats := make([]map[string]any, 0, len(p.Sinks))
+	for _, s := range p.Sinks {
+		if s == nil {
+			continue // Skip nil sinks
+		}
+
 		stats := s.GetStats()
-		sinkStats[i] = map[string]any{
+		sinkStats = append(sinkStats, map[string]any{
 			"type":               stats.Type,
 			"total_processed":    stats.TotalProcessed,
 			"active_connections": stats.ActiveConnections,
 			"start_time":         stats.StartTime,
 			"last_processed":     stats.LastProcessed,
 			"details":            stats.Details,
-		}
+		})
 	}
 
 	// Collect filter stats

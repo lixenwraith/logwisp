@@ -1,4 +1,4 @@
-// FILE: src/internal/ratelimit/ratelimit.go
+// FILE: src/internal/ratelimit/ratelimiter.go
 package ratelimit
 
 import (
@@ -38,6 +38,15 @@ func (tb *TokenBucket) AllowN(n float64) bool {
 	// Refill tokens based on time elapsed
 	now := time.Now()
 	elapsed := now.Sub(tb.lastRefill).Seconds()
+
+	// Handle time sync issues causing negative elapsed time
+	if elapsed < 0 {
+		// Clock went backwards, reset to current time but don't add tokens
+		tb.lastRefill = now
+		// Don't log here as this is a hot path
+		elapsed = 0
+	}
+
 	tb.tokens += elapsed * tb.refillRate
 	if tb.tokens > tb.capacity {
 		tb.tokens = tb.capacity

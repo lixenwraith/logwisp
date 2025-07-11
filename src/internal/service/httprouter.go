@@ -75,12 +75,19 @@ func (r *HTTPRouter) registerHTTPSink(pipelineName string, httpSink *sink.HTTPSi
 		}
 		r.servers[port] = rs
 
+		// Startup sync channel
+		startupDone := make(chan error, 1)
+
 		// Start server in background
 		go func() {
 			addr := fmt.Sprintf(":%d", port)
 			r.logger.Info("msg", "Starting router server",
 				"component", "http_router",
 				"port", port)
+
+			// Signal that server is about to start
+			startupDone <- nil
+
 			if err := rs.server.ListenAndServe(addr); err != nil {
 				r.logger.Error("msg", "Router server failed",
 					"component", "http_router",
@@ -89,8 +96,17 @@ func (r *HTTPRouter) registerHTTPSink(pipelineName string, httpSink *sink.HTTPSi
 			}
 		}()
 
-		// Wait briefly to ensure server starts
-		time.Sleep(100 * time.Millisecond)
+		// Wait for server startup signal with timeout
+		select {
+		case err := <-startupDone:
+			if err != nil {
+				r.mu.Unlock()
+				return fmt.Errorf("server startup failed: %w", err)
+			}
+		case <-time.After(5 * time.Second):
+			r.mu.Unlock()
+			return fmt.Errorf("server startup timeout on port %d", port)
+		}
 	}
 	r.mu.Unlock()
 

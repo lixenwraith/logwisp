@@ -2,9 +2,9 @@
 package ratelimit
 
 import (
-	"fmt"
+	"context"
 	"net"
-	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +38,11 @@ type Limiter struct {
 	// Cleanup
 	lastCleanup time.Time
 	cleanupMu   sync.Mutex
+
+	// Lifecycle management
+	ctx         context.Context
+	cancel      context.CancelFunc
+	cleanupDone chan struct{}
 }
 
 type ipLimiter struct {
@@ -47,23 +52,26 @@ type ipLimiter struct {
 }
 
 // Creates a new rate limiter
-func New(cfg config.RateLimitConfig) *Limiter {
+func New(cfg config.RateLimitConfig, logger *log.Logger) *Limiter {
 	if !cfg.Enabled {
 		return nil
 	}
+
+	if logger == nil {
+		panic("ratelimit.New: logger cannot be nil")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	l := &Limiter{
 		config:        cfg,
 		ipLimiters:    make(map[string]*ipLimiter),
 		ipConnections: make(map[string]*atomic.Int32),
 		lastCleanup:   time.Now(),
-		logger:        log.NewLogger(),
-	}
-
-	// Initialize the logger with defaults
-	if err := l.logger.InitWithDefaults(); err != nil {
-		// Fall back to stderr logging if logger init fails
-		fmt.Fprintf(os.Stderr, "ratelimit: failed to initialize logger: %v\n", err)
+		logger:        logger,
+		ctx:           ctx,
+		cancel:        cancel,
+		cleanupDone:   make(chan struct{}),
 	}
 
 	// Create global limiter if not using per-IP limiting
@@ -86,6 +94,25 @@ func New(cfg config.RateLimitConfig) *Limiter {
 	return l
 }
 
+func (l *Limiter) Shutdown() {
+	if l == nil {
+		return
+	}
+
+	l.logger.Info("msg", "Shutting down rate limiter", "component", "ratelimit")
+
+	// Cancel context to stop cleanup goroutine
+	l.cancel()
+
+	// Wait for cleanup goroutine to finish
+	select {
+	case <-l.cleanupDone:
+		l.logger.Debug("msg", "Cleanup goroutine stopped", "component", "ratelimit")
+	case <-time.After(2 * time.Second):
+		l.logger.Warn("msg", "Cleanup goroutine shutdown timeout", "component", "ratelimit")
+	}
+}
+
 // Checks if an HTTP request should be allowed
 func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int, message string) {
 	if l == nil {
@@ -102,6 +129,16 @@ func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int, me
 			"remote_addr", remoteAddr,
 			"error", err)
 		return true, 0, ""
+	}
+
+	// Only supporting ipv4
+	if !isIPv4(ip) {
+		// Block non-IPv4 addresses to prevent complications
+		l.blockedRequests.Add(1)
+		l.logger.Warn("msg", "Non-IPv4 address blocked",
+			"component", "ratelimit",
+			"ip", ip)
+		return false, 403, "IPv4 only"
 	}
 
 	// Check connection limit for streaming endpoint
@@ -161,6 +198,16 @@ func (l *Limiter) CheckTCP(remoteAddr net.Addr) bool {
 	}
 
 	ip := tcpAddr.IP.String()
+
+	// Only supporting ipv4
+	if !isIPv4(ip) {
+		l.blockedRequests.Add(1)
+		l.logger.Warn("msg", "Non-IPv4 TCP connection blocked",
+			"component", "ratelimit",
+			"ip", ip)
+		return false
+	}
+
 	allowed := l.checkLimit(ip)
 	if !allowed {
 		l.blockedRequests.Add(1)
@@ -168,6 +215,11 @@ func (l *Limiter) CheckTCP(remoteAddr net.Addr) bool {
 	}
 
 	return allowed
+}
+
+func isIPv4(ip string) bool {
+	// Simple check: IPv4 addresses contain dots, IPv6 contain colons
+	return strings.Contains(ip, ".") && !strings.Contains(ip, ":")
 }
 
 // Tracks a new connection for an IP
@@ -178,6 +230,11 @@ func (l *Limiter) AddConnection(remoteAddr string) {
 
 	ip, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
+		return
+	}
+
+	// Only supporting ipv4
+	if !isIPv4(ip) {
 		return
 	}
 
@@ -203,6 +260,11 @@ func (l *Limiter) RemoveConnection(remoteAddr string) {
 
 	ip, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
+		return
+	}
+
+	// Only supporting ipv4
+	if !isIPv4(ip) {
 		return
 	}
 
@@ -352,10 +414,19 @@ func (l *Limiter) cleanup() {
 
 // Runs periodic cleanup
 func (l *Limiter) cleanupLoop() {
+	defer close(l.cleanupDone)
+
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		l.cleanup()
+	for {
+		select {
+		case <-l.ctx.Done():
+			// Exit when context is cancelled
+			l.logger.Debug("msg", "Cleanup loop stopping", "component", "ratelimit")
+			return
+		case <-ticker.C:
+			l.cleanup()
+		}
 	}
 }

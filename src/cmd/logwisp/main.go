@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,52 +19,62 @@ import (
 var logger *log.Logger
 
 func main() {
-	// Parse and validate flags
-	if err := parseFlags(); err != nil {
+	// Parse flags first to get quiet mode early
+	flagCfg, err := ParseFlags()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
+	// Initialize output handler with quiet mode
+	InitOutputHandler(flagCfg.Quiet)
+
 	// Handle version flag
-	if *showVersion {
+	if flagCfg.ShowVersion {
 		fmt.Println(version.String())
 		os.Exit(0)
 	}
 
 	// Handle background mode
-	if *background && !isBackgroundProcess() {
+	if flagCfg.Background && !isBackgroundProcess() {
 		if err := runInBackground(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to start background process: %v\n", err)
-			os.Exit(1)
+			FatalError(1, "Failed to start background process: %v\n", err)
 		}
 		os.Exit(0)
 	}
 
 	// Set config file environment if specified
-	if *configFile != "" {
-		os.Setenv("LOGWISP_CONFIG_FILE", *configFile)
+	if flagCfg.ConfigFile != "" {
+		os.Setenv("LOGWISP_CONFIG_FILE", flagCfg.ConfigFile)
 	}
 
-	// Load configuration
-	cfg, err := config.LoadWithCLI(os.Args[1:])
+	// Load configuration with CLI overrides
+	cfg, err := config.LoadWithCLI(os.Args[1:], flagCfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
+		if flagCfg.ConfigFile != "" && strings.Contains(err.Error(), "not found") {
+			FatalError(2, "Config file not found: %s\n", flagCfg.ConfigFile)
+		}
+		FatalError(1, "Failed to load config: %v\n", err)
+
 	}
 
-	// Initialize logger
-	if err := initializeLogger(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
-		os.Exit(1)
+	// DEBUG: Extra nil check
+	if cfg == nil {
+		FatalError(1, "Configuration is nil after loading\n")
+	}
+
+	// Initialize logger with quiet mode awareness
+	if err := initializeLogger(cfg, flagCfg); err != nil {
+		FatalError(1, "Failed to initialize logger: %v\n", err)
 	}
 	defer shutdownLogger()
 
-	// Log startup information
+	// Log startup information (respects quiet mode via logger config)
 	logger.Info("msg", "LogWisp starting",
 		"version", version.String(),
-		"config_file", *configFile,
+		"config_file", flagCfg.ConfigFile,
 		"log_output", cfg.Logging.Output,
-		"router_mode", *useRouter)
+		"router_mode", flagCfg.UseRouter)
 
 	// Create context for shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -71,10 +82,10 @@ func main() {
 
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 
 	// Bootstrap the service
-	svc, router, err := bootstrapService(ctx, cfg)
+	svc, router, err := bootstrapService(ctx, cfg, flagCfg)
 	if err != nil {
 		logger.Error("msg", "Failed to bootstrap service", "error", err)
 		os.Exit(1)
@@ -86,7 +97,13 @@ func main() {
 	}
 
 	// Wait for shutdown signal
-	<-sigChan
+	sig := <-sigChan
+
+	// Handle SIGKILL for immediate shutdown
+	if sig == syscall.SIGKILL {
+		os.Exit(137) // Standard exit code for SIGKILL (128 + 9)
+	}
+
 	logger.Info("msg", "Shutdown signal received, starting graceful shutdown...")
 
 	// Shutdown router first if using it
@@ -118,7 +135,7 @@ func shutdownLogger() {
 	if logger != nil {
 		if err := logger.Shutdown(2 * time.Second); err != nil {
 			// Best effort - can't log the shutdown error
-			fmt.Fprintf(os.Stderr, "Logger shutdown error: %v\n", err)
+			Error("Logger shutdown error: %v\n", err)
 		}
 	}
 }

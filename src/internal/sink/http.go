@@ -136,7 +136,7 @@ func NewHTTPSink(options map[string]any, logger *log.Logger) (*HTTPSink, error) 
 
 	// Initialize rate limiter if configured
 	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
-		h.rateLimiter = ratelimit.New(*cfg.RateLimit)
+		h.rateLimiter = ratelimit.New(*cfg.RateLimit, logger)
 	}
 
 	return h, nil
@@ -316,7 +316,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 				case <-h.done:
 					return
 				default:
-					// Drop if client buffer full
+					// Drop if client buffer full, may flood logging for slow client
 					h.logger.Debug("msg", "Dropped entry for slow client",
 						"component", "http_sink",
 						"remote_addr", remoteAddr)
@@ -385,6 +385,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				if err := w.Flush(); err != nil {
+					// Client disconnected, fasthttp handles cleanup
 					return
 				}
 

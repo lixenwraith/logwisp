@@ -143,6 +143,17 @@ func (s *Service) wirePipeline(p *Pipeline) {
 		go func(source source.Source, entries <-chan source.LogEntry) {
 			defer p.wg.Done()
 
+			// Panic recovery to prevent single source from crashing pipeline
+			// TODO: check if failed pipeline is properly shut down
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("msg", "Panic in pipeline processing",
+						"pipeline", p.Name,
+						"source", source.GetStats().Type,
+						"panic", r)
+				}
+			}()
+
 			for {
 				select {
 				case <-p.ctx.Done():
@@ -169,7 +180,7 @@ func (s *Service) wirePipeline(p *Pipeline) {
 						case <-p.ctx.Done():
 							return
 						default:
-							// Drop if sink buffer is full
+							// Drop if sink buffer is full, may flood logging for slow client
 							s.logger.Debug("msg", "Dropped log entry - sink buffer full",
 								"pipeline", p.Name)
 						}

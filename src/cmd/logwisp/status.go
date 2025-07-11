@@ -14,25 +14,45 @@ func statusReporter(service *service.Service) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		stats := service.GetGlobalStats()
-		totalPipelines := stats["total_pipelines"].(int)
-		if totalPipelines == 0 {
-			logger.Warn("msg", "No active pipelines in status report",
-				"component", "status_reporter")
-			return
-		}
+	for {
+		select {
+		case <-ticker.C:
+			// ⚠️ FIXED: Add nil check and safe access for service stats
+			if service == nil {
+				logger.Warn("msg", "Status reporter: service is nil",
+					"component", "status_reporter")
+				return
+			}
 
-		// Log status at DEBUG level to avoid cluttering INFO logs
-		logger.Debug("msg", "Status report",
-			"component", "status_reporter",
-			"active_pipelines", totalPipelines,
-			"time", time.Now().Format("15:04:05"))
+			// Safely get stats with recovery
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Error("msg", "Panic in status reporter",
+							"component", "status_reporter",
+							"panic", r)
+					}
+				}()
 
-		// Log individual pipeline status
-		pipelines := stats["pipelines"].(map[string]any)
-		for name, pipelineStats := range pipelines {
-			logPipelineStatus(name, pipelineStats.(map[string]any))
+				stats := service.GetGlobalStats()
+				totalPipelines, ok := stats["total_pipelines"].(int)
+				if !ok || totalPipelines == 0 {
+					logger.Warn("msg", "No active pipelines in status report",
+						"component", "status_reporter")
+					return
+				}
+
+				logger.Debug("msg", "Status report",
+					"component", "status_reporter",
+					"active_pipelines", totalPipelines,
+					"time", time.Now().Format("15:04:05"))
+
+				// Log individual pipeline status
+				pipelines := stats["pipelines"].(map[string]any)
+				for name, pipelineStats := range pipelines {
+					logPipelineStatus(name, pipelineStats.(map[string]any))
+				}
+			}()
 		}
 	}
 }

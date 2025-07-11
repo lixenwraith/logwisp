@@ -37,7 +37,7 @@ type LogFileConfig struct {
 
 type LogConsoleConfig struct {
 	// Target for console output: "stdout", "stderr", "split"
-	// "split" means info/debug to stdout, warn/error to stderr
+	// "split": info/debug to stdout, warn/error to stderr
 	Target string `toml:"target"`
 
 	// Format: "txt" or "json"
@@ -47,7 +47,7 @@ type LogConsoleConfig struct {
 // DefaultLogConfig returns sensible logging defaults
 func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
-		Output: "stderr", // Default to stderr for containerized environments
+		Output: "stderr",
 		Level:  "info",
 		File: &LogFileConfig{
 			Directory:      "./logs",
@@ -85,6 +85,18 @@ func validateLogConfig(cfg *LogConfig) error {
 		}
 		if !validTargets[cfg.Console.Target] {
 			return fmt.Errorf("invalid console target: %s", cfg.Console.Target)
+		}
+
+		// TODO: check if file output check is correct
+		if cfg.Console.Target == "split" && cfg.Output == "file" {
+			return fmt.Errorf("console target 'split' requires output mode 'stdout', 'stderr', or 'both'")
+		}
+
+		validFormats := map[string]bool{
+			"txt": true, "json": true, "": true,
+		}
+		if !validFormats[cfg.Console.Format] {
+			return fmt.Errorf("invalid console format: %s", cfg.Console.Format)
 		}
 	}
 

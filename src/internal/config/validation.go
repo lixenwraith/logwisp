@@ -6,6 +6,14 @@ import (
 )
 
 func (c *Config) validate() error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+
+	if c.Logging == nil {
+		c.Logging = DefaultLogConfig()
+	}
+
 	if len(c.Pipelines) == 0 {
 		return fmt.Errorf("no pipelines configured")
 	}
