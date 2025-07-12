@@ -4,14 +4,35 @@ package config
 import (
 	"fmt"
 	"regexp"
-
-	"logwisp/src/internal/filter"
 )
 
-func validateFilter(pipelineName string, filterIndex int, cfg *filter.Config) error {
+// FilterType represents the filter type
+type FilterType string
+
+const (
+	FilterTypeInclude FilterType = "include" // Whitelist - only matching logs pass
+	FilterTypeExclude FilterType = "exclude" // Blacklist - matching logs are dropped
+)
+
+// FilterLogic represents how multiple patterns are combined
+type FilterLogic string
+
+const (
+	FilterLogicOr  FilterLogic = "or"  // Match any pattern
+	FilterLogicAnd FilterLogic = "and" // Match all patterns
+)
+
+// FilterConfig represents filter configuration
+type FilterConfig struct {
+	Type     FilterType  `toml:"type"`
+	Logic    FilterLogic `toml:"logic"`
+	Patterns []string    `toml:"patterns"`
+}
+
+func validateFilter(pipelineName string, filterIndex int, cfg *FilterConfig) error {
 	// Validate filter type
 	switch cfg.Type {
-	case filter.TypeInclude, filter.TypeExclude, "":
+	case FilterTypeInclude, FilterTypeExclude, "":
 		// Valid types
 	default:
 		return fmt.Errorf("pipeline '%s' filter[%d]: invalid type '%s' (must be 'include' or 'exclude')",
@@ -20,7 +41,7 @@ func validateFilter(pipelineName string, filterIndex int, cfg *filter.Config) er
 
 	// Validate filter logic
 	switch cfg.Logic {
-	case filter.LogicOr, filter.LogicAnd, "":
+	case FilterLogicOr, FilterLogicAnd, "":
 		// Valid logic
 	default:
 		return fmt.Errorf("pipeline '%s' filter[%d]: invalid logic '%s' (must be 'or' or 'and')",

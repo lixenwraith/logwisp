@@ -7,37 +7,15 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
 )
 
-// Type represents the filter type
-type Type string
-
-const (
-	TypeInclude Type = "include" // Whitelist - only matching logs pass
-	TypeExclude Type = "exclude" // Blacklist - matching logs are dropped
-)
-
-// Logic represents how multiple patterns are combined
-type Logic string
-
-const (
-	LogicOr  Logic = "or"  // Match any pattern
-	LogicAnd Logic = "and" // Match all patterns
-)
-
-// Config represents filter configuration
-type Config struct {
-	Type     Type     `toml:"type"`
-	Logic    Logic    `toml:"logic"`
-	Patterns []string `toml:"patterns"`
-}
-
 // Filter applies regex-based filtering to log entries
 type Filter struct {
-	config   Config
+	config   config.FilterConfig
 	patterns []*regexp.Regexp
 	mu       sync.RWMutex
 	logger   *log.Logger
@@ -49,13 +27,13 @@ type Filter struct {
 }
 
 // New creates a new filter from configuration
-func New(cfg Config, logger *log.Logger) (*Filter, error) {
+func New(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 	// Set defaults
 	if cfg.Type == "" {
-		cfg.Type = TypeInclude
+		cfg.Type = config.FilterTypeInclude
 	}
 	if cfg.Logic == "" {
-		cfg.Logic = LogicOr
+		cfg.Logic = config.FilterLogicOr
 	}
 
 	f := &Filter{
@@ -108,9 +86,9 @@ func (f *Filter) Apply(entry source.LogEntry) bool {
 	// Determine if we should pass or drop
 	shouldPass := false
 	switch f.config.Type {
-	case TypeInclude:
+	case config.FilterTypeInclude:
 		shouldPass = matched
-	case TypeExclude:
+	case config.FilterTypeExclude:
 		shouldPass = !matched
 	}
 
@@ -124,7 +102,7 @@ func (f *Filter) Apply(entry source.LogEntry) bool {
 // matches checks if text matches the patterns according to the logic
 func (f *Filter) matches(text string) bool {
 	switch f.config.Logic {
-	case LogicOr:
+	case config.FilterLogicOr:
 		// Match any pattern
 		for _, re := range f.patterns {
 			if re.MatchString(text) {
@@ -133,7 +111,7 @@ func (f *Filter) matches(text string) bool {
 		}
 		return false
 
-	case LogicAnd:
+	case config.FilterLogicAnd:
 		// Must match all patterns
 		for _, re := range f.patterns {
 			if !re.MatchString(text) {

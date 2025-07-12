@@ -3,7 +3,8 @@ package config
 
 import (
 	"fmt"
-	"logwisp/src/internal/filter"
+	"net"
+	"net/url"
 	"path/filepath"
 	"strings"
 )
@@ -17,7 +18,7 @@ type PipelineConfig struct {
 	Sources []SourceConfig `toml:"sources"`
 
 	// Filter configuration
-	Filters []filter.Config `toml:"filters"`
+	Filters []FilterConfig `toml:"filters"`
 
 	// Output sinks for this pipeline
 	Sinks []SinkConfig `toml:"sinks"`
@@ -93,29 +94,38 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 			}
 		}
 
-	case "file":
-		// Validate file source options
-		path, ok := cfg.Options["path"].(string)
-		if !ok || path == "" {
-			return fmt.Errorf("pipeline '%s' source[%d]: file source requires 'path' option",
-				pipelineName, sourceIndex)
-		}
-
-		// Check for directory traversal
-		if strings.Contains(path, "..") {
-			return fmt.Errorf("pipeline '%s' source[%d]: path contains directory traversal",
-				pipelineName, sourceIndex)
-		}
-
 	case "stdin":
 		// No specific validation needed for stdin
+
+	case "http":
+		// Validate HTTP source options
+		port, ok := toInt(cfg.Options["port"])
+		if !ok || port < 1 || port > 65535 {
+			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing HTTP port",
+				pipelineName, sourceIndex)
+		}
+
+		// Validate path if provided
+		if ingestPath, ok := cfg.Options["ingest_path"].(string); ok {
+			if !strings.HasPrefix(ingestPath, "/") {
+				return fmt.Errorf("pipeline '%s' source[%d]: ingest path must start with /: %s",
+					pipelineName, sourceIndex, ingestPath)
+			}
+		}
+
+	case "tcp":
+		// Validate TCP source options
+		port, ok := toInt(cfg.Options["port"])
+		if !ok || port < 1 || port > 65535 {
+			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing TCP port",
+				pipelineName, sourceIndex)
+		}
 
 	default:
 		return fmt.Errorf("pipeline '%s' source[%d]: unknown source type '%s'",
 			pipelineName, sourceIndex, cfg.Type)
 	}
 
-	// Note: RateLimit field is ignored for now as it's a placeholder
 	return nil
 }
 
@@ -225,6 +235,72 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		if rl, ok := cfg.Options["rate_limit"].(map[string]any); ok {
 			if err := validateRateLimitOptions("TCP", pipelineName, sinkIndex, rl); err != nil {
 				return err
+			}
+		}
+
+	case "http_client":
+		// Validate URL
+		urlStr, ok := cfg.Options["url"].(string)
+		if !ok || urlStr == "" {
+			return fmt.Errorf("pipeline '%s' sink[%d]: http_client sink requires 'url' option",
+				pipelineName, sinkIndex)
+		}
+
+		// Validate URL format
+		parsedURL, err := url.Parse(urlStr)
+		if err != nil {
+			return fmt.Errorf("pipeline '%s' sink[%d]: invalid URL: %w",
+				pipelineName, sinkIndex, err)
+		}
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			return fmt.Errorf("pipeline '%s' sink[%d]: URL must use http or https scheme",
+				pipelineName, sinkIndex)
+		}
+
+		// Validate batch size
+		if batchSize, ok := toInt(cfg.Options["batch_size"]); ok {
+			if batchSize < 1 {
+				return fmt.Errorf("pipeline '%s' sink[%d]: batch_size must be positive: %d",
+					pipelineName, sinkIndex, batchSize)
+			}
+		}
+
+		// Validate timeout
+		if timeout, ok := toInt(cfg.Options["timeout_seconds"]); ok {
+			if timeout < 1 {
+				return fmt.Errorf("pipeline '%s' sink[%d]: timeout_seconds must be positive: %d",
+					pipelineName, sinkIndex, timeout)
+			}
+		}
+
+	case "tcp_client":
+		// FIXED: Added validation for TCP client sink
+		// Validate address
+		address, ok := cfg.Options["address"].(string)
+		if !ok || address == "" {
+			return fmt.Errorf("pipeline '%s' sink[%d]: tcp_client sink requires 'address' option",
+				pipelineName, sinkIndex)
+		}
+
+		// Validate address format
+		_, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return fmt.Errorf("pipeline '%s' sink[%d]: invalid address format (expected host:port): %w",
+				pipelineName, sinkIndex, err)
+		}
+
+		// Validate timeouts
+		if dialTimeout, ok := toInt(cfg.Options["dial_timeout_seconds"]); ok {
+			if dialTimeout < 1 {
+				return fmt.Errorf("pipeline '%s' sink[%d]: dial_timeout_seconds must be positive: %d",
+					pipelineName, sinkIndex, dialTimeout)
+			}
+		}
+
+		if writeTimeout, ok := toInt(cfg.Options["write_timeout_seconds"]); ok {
+			if writeTimeout < 1 {
+				return fmt.Errorf("pipeline '%s' sink[%d]: write_timeout_seconds must be positive: %d",
+					pipelineName, sinkIndex, writeTimeout)
 			}
 		}
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
@@ -21,7 +22,7 @@ type Chain struct {
 }
 
 // NewChain creates a new filter chain from configurations
-func NewChain(configs []Config, logger *log.Logger) (*Chain, error) {
+func NewChain(configs []config.FilterConfig, logger *log.Logger) (*Chain, error) {
 	chain := &Chain{
 		filters: make([]*Filter, 0, len(configs)),
 		logger:  logger,

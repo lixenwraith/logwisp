@@ -208,6 +208,10 @@ func (s *Service) createSource(cfg config.SourceConfig) (source.Source, error) {
 		return source.NewDirectorySource(cfg.Options, s.logger)
 	case "stdin":
 		return source.NewStdinSource(cfg.Options, s.logger)
+	case "http":
+		return source.NewHTTPSource(cfg.Options, s.logger)
+	case "tcp":
+		return source.NewTCPSource(cfg.Options, s.logger)
 	default:
 		return nil, fmt.Errorf("unknown source type: %s", cfg.Type)
 	}
@@ -220,6 +224,10 @@ func (s *Service) createSink(cfg config.SinkConfig) (sink.Sink, error) {
 		return sink.NewHTTPSink(cfg.Options, s.logger)
 	case "tcp":
 		return sink.NewTCPSink(cfg.Options, s.logger)
+	case "http_client":
+		return sink.NewHTTPClientSink(cfg.Options, s.logger)
+	case "tcp_client":
+		return sink.NewTCPClientSink(cfg.Options, s.logger)
 	case "file":
 		return sink.NewFileSink(cfg.Options, s.logger)
 	case "stdout":
