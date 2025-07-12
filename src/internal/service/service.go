@@ -144,13 +144,23 @@ func (s *Service) wirePipeline(p *Pipeline) {
 			defer p.wg.Done()
 
 			// Panic recovery to prevent single source from crashing pipeline
-			// TODO: check if failed pipeline is properly shut down
 			defer func() {
 				if r := recover(); r != nil {
 					s.logger.Error("msg", "Panic in pipeline processing",
 						"pipeline", p.Name,
 						"source", source.GetStats().Type,
 						"panic", r)
+
+					// Ensure failed pipelines don't leave resources hanging
+					go func() {
+						s.logger.Warn("msg", "Shutting down pipeline due to panic",
+							"pipeline", p.Name)
+						if err := s.RemovePipeline(p.Name); err != nil {
+							s.logger.Error("msg", "Failed to remove panicked pipeline",
+								"pipeline", p.Name,
+								"error", err)
+						}
+					}()
 				}
 			}()
 

@@ -85,7 +85,7 @@ func (p *Pipeline) Shutdown() {
 // GetStats returns pipeline statistics
 func (p *Pipeline) GetStats() map[string]any {
 	// Recovery to handle concurrent access during shutdown
-	// TODO: check if needed to keep
+	// When service is shutting down, sources/sinks might be nil or partially stopped
 	defer func() {
 		if r := recover(); r != nil {
 			p.logger.Error("msg", "Panic getting pipeline stats",

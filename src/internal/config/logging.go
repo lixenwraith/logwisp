@@ -87,11 +87,6 @@ func validateLogConfig(cfg *LogConfig) error {
 			return fmt.Errorf("invalid console target: %s", cfg.Console.Target)
 		}
 
-		// TODO: check if file output check is correct
-		if cfg.Console.Target == "split" && cfg.Output == "file" {
-			return fmt.Errorf("console target 'split' requires output mode 'stdout', 'stderr', or 'both'")
-		}
-
 		validFormats := map[string]bool{
 			"txt": true, "json": true, "": true,
 		}
