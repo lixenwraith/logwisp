@@ -24,7 +24,8 @@ Example response:
     "port": 8080,
     "active_clients": 5,
     "buffer_size": 1000,
-    "uptime_seconds": 3600
+    "uptime_seconds": 3600,
+    "mode": {"standalone": true, "router": false}
   },
   "sources": [{
     "type": "directory",
@@ -40,8 +41,36 @@ Example response:
   "sinks": [{
     "type": "http",
     "total_processed": 48234,
-    "active_connections": 5
-  }]
+    "active_connections": 5,
+    "details": {
+      "port": 8080,
+      "buffer_size": 1000,
+      "rate_limit": {
+        "enabled": true,
+        "total_requests": 98234,
+        "blocked_requests": 234
+      }
+    }
+  }],
+  "endpoints": {
+    "transport": "/stream",
+    "status": "/status"
+  },
+  "features": {
+    "heartbeat": {
+      "enabled": true,
+      "interval": 30,
+      "format": "comment"
+    },
+    "ssl": {
+      "enabled": false
+    },
+    "rate_limit": {
+      "enabled": true,
+      "requests_per_second": 10.0,
+      "burst_size": 20
+    }
+  }
 }
 ```
 
@@ -53,18 +82,29 @@ Example response:
 | `active_watchers` | Files being watched | 1-1000 |
 | `total_entries` | Entries processed | Increasing |
 | `dropped_entries` | Buffer overflows | < 1% of total |
+| `active_connections` | Network connections (HTTP/TCP sources) | Within limits |
 
 ### Sink Metrics
 | Metric | Description | Warning Signs |
 |--------|-------------|---------------|
 | `active_connections` | Current clients | Near limit |
 | `total_processed` | Entries sent | Should match filter output |
+| `total_batches` | Batches sent (client sinks) | Increasing |
+| `failed_batches` | Failed sends (client sinks) | > 0 indicates issues |
 
 ### Filter Metrics
 | Metric | Description | Notes |
 |--------|-------------|-------|
 | `total_processed` | Entries checked | All entries |
 | `total_passed` | Passed filters | Check if too low/high |
+| `total_matched` | Pattern matches | Per filter stats |
+
+### Rate Limit Metrics
+| Metric | Description | Action |
+|--------|-------------|--------|
+| `blocked_requests` | Rejected requests | Increase limits if high |
+| `active_ips` | Unique IPs tracked | Monitor for attacks |
+| `total_connections` | Current connections | Check against limits |
 
 ## Operational Logging
 
@@ -74,32 +114,11 @@ Example response:
 level = "info"  # debug, info, warn, error
 ```
 
-### Important Messages
-
-**Startup**:
-```
-LogWisp starting version=1.0.0
-Pipeline created successfully pipeline=app
-HTTP server started port=8080
-```
-
-**Connections**:
-```
-HTTP client connected remote_addr=192.168.1.100 active_clients=6
-TCP connection opened active_connections=3
-```
-
-**Errors**:
-```
-Failed to open file path=/var/log/app.log error=permission denied
-Request rate limited ip=192.168.1.100
-```
-
 ## Health Checks
 
 ### Basic Check
 ```bash
-#!/bin/bash
+#!/usr/bin/env bash
 if curl -s -f http://localhost:8080/status > /dev/null; then
     echo "Healthy"
 else
@@ -110,7 +129,7 @@ fi
 
 ### Advanced Check
 ```bash
-#!/bin/bash
+#!/usr/bin/env bash
 STATUS=$(curl -s http://localhost:8080/status)
 DROPPED=$(echo "$STATUS" | jq '.sources[0].dropped_entries')
 TOTAL=$(echo "$STATUS" | jq '.sources[0].total_entries')
@@ -119,68 +138,11 @@ if [ $((DROPPED * 100 / TOTAL)) -gt 5 ]; then
     echo "High drop rate"
     exit 1
 fi
-```
 
-### Docker
-```dockerfile
-HEALTHCHECK --interval=30s --timeout=3s \
-    CMD curl -f http://localhost:8080/status || exit 1
-```
-
-## Integration
-
-### Prometheus Export
-```bash
-#!/bin/bash
-STATUS=$(curl -s http://localhost:8080/status)
-
-cat << EOF
-# HELP logwisp_active_clients Active streaming clients
-# TYPE logwisp_active_clients gauge
-logwisp_active_clients $(echo "$STATUS" | jq '.server.active_clients')
-
-# HELP logwisp_total_entries Total log entries
-# TYPE logwisp_total_entries counter
-logwisp_total_entries $(echo "$STATUS" | jq '.sources[0].total_entries')
-EOF
-```
-
-### Alerts
-
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| Service Down | Status fails | Critical |
-| High Drops | >10% dropped | Warning |
-| No Activity | 0 entries/min | Warning |
-| Rate Limited | >20% blocked | Warning |
-
-## Performance Monitoring
-
-### CPU Usage
-```bash
-top -p $(pgrep logwisp)
-```
-
-### Memory Usage
-```bash
-ps aux | grep logwisp
-```
-
-### Connections
-```bash
-ss -tan | grep :8080 | wc -l
-```
-
-## Troubleshooting
-
-Enable debug logging:
-```bash
-logwisp --log-level debug --log-output stderr
-```
-
-Check specific components:
-```bash
-curl -s http://localhost:8080/status | jq '.sources'
-curl -s http://localhost:8080/status | jq '.filters'
-curl -s http://localhost:8080/status | jq '.sinks'
+# Check client sink failures
+FAILED=$(echo "$STATUS" | jq '.sinks[] | select(.type=="http_client") | .details.failed_batches // 0' | head -1)
+if [ "$FAILED" -gt 10 ]; then
+    echo "High failure rate"
+    exit 1
+fi
 ```

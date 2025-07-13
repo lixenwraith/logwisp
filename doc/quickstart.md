@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get LogWisp up and running in 5 minutes with the new pipeline architecture!
+Get LogWisp up and running in minutes:
 
 ## Installation
 
@@ -51,7 +51,7 @@ echo "[WARN] Low memory warning" >> test.log
 
 ### Monitor Specific Directory
 
-Create `~/.config/logwisp.toml`:
+Create `~/.config/logwisp/logwisp.toml`:
 
 ```toml
 [[pipelines]]
@@ -143,11 +143,46 @@ logwisp --router
 # http://localhost:8080/status (global)
 ```
 
+### Remote Log Collection
+
+Receive logs via HTTP/TCP and forward to remote servers:
+
+```toml
+[[pipelines]]
+name = "collector"
+
+# Receive logs via HTTP POST
+[[pipelines.sources]]
+type = "http"
+options = { port = 8081, ingest_path = "/ingest" }
+
+# Forward to remote server
+[[pipelines.sinks]]
+type = "http_client"
+options = {
+    url = "https://log-server.com/ingest",
+    batch_size = 100,
+    headers = { "Authorization" = "Bearer <API_KEY_HERE>" }
+}
+```
+
+Send logs to collector:
+```bash
+curl -X POST http://localhost:8081/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Test log", "level": "INFO"}'
+```
+
 ## Quick Tips
 
 ### Enable Debug Logging
 ```bash
-logwisp --log-level debug --log-output stderr
+logwisp --logging.level debug --logging.output stderr
+```
+
+### Quiet Mode
+```bash
+logwisp --quiet
 ```
 
 ### Rate Limiting
@@ -169,4 +204,12 @@ options = {
 [[pipelines.sinks]]
 type = "stdout"  # or "stderr"
 options = {}
+```
+
+### Split Console Output
+```toml
+# INFO/DEBUG to stdout, ERROR/WARN to stderr
+[[pipelines.sinks]]
+type = "stdout"
+options = { target = "split" }
 ```

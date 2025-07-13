@@ -14,21 +14,24 @@ LogWisp implements a flexible pipeline architecture for real-time log processing
 │  │  Sources           Filters              Sinks                    │   │
 │  │  ┌──────┐        ┌────────┐          ┌──────┐                    │   │
 │  │  │ Dir  │──┐     │Include │     ┌────│ HTTP │←── Client 1        │   │
-│  │  └──────┘  │     │ ERROR  │     │    └──────┘                    │   │
-│  │            ├────▶│  WARN  │────▶├────┌──────┐                    │   │
-│  │  ┌──────┐  │     └────────┘     │    │ File │                    │   │
-│  │  │ File │──┘          ▼         │    └──────┘                    │   │
-│  │  └──────┘        ┌────────┐     │    ┌──────┐                    │   │
-│  │                  │Exclude │     └────│ TCP  │←── Client 2        │   │
-│  │                  │ DEBUG  │          └──────┘                    │   │
-│  │                  └────────┘                                      │   │
+│  │  └──────┘  ├────▶│ ERROR  │     │    └──────┘                    │   │
+│  │            │     │  WARN  │────▶├────┌──────┐                    │   │
+│  │  ┌──────┐  │     └────┬───┘     │    │ File │                    │   │
+│  │  │ HTTP │──┤          ▼         │    └──────┘                    │   │
+│  │  └──────┘  │     ┌────────┐     │    ┌──────┐                    │   │
+│  │  ┌──────┐  │     │Exclude │     └────│ TCP  │←── Client 2        │   │
+│  │  │ TCP  │──┘     │ DEBUG  │          └──────┘                    │   │
+│  │  └──────┘        └────────┘                                      │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
 │  ┌─────────────────────────── Pipeline 2 ───────────────────────────┐   │
 │  │                                                                  │   │
-│  │  ┌──────┐                            ┌──────┐                    │   │
-│  │  │Stdin │────────────────────────────│Stdout│                    │   │
-│  │  └──────┘         (No Filters)       └──────┘                    │   │
+│  │  ┌──────┐                            ┌───────────┐               │   │
+│  │  │Stdin │───────────────────────┬───▶│HTTP Client│──► Remote     │   │
+│  │  └──────┘         (No Filters)  │    └───────────┘               │   │
+│  │                                 │    ┌───────────┐               │   │
+│  │                                 └────│TCP Client │──► Remote     │   │
+│  │                                      └───────────┘               │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
 │  ┌─────────────────────────── Pipeline N ───────────────────────────┐   │
@@ -43,14 +46,13 @@ LogWisp implements a flexible pipeline architecture for real-time log processing
 Log Entry Flow:
 
 ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐
-│  File   │     │  Parse  │     │ Filter  │     │ Format  │
-│ Watcher │────▶│  Entry  │────▶│  Chain  │────▶│  Send   │
+│  Source │     │  Parse  │     │ Filter  │     │  Sink   │
+│ Monitor │────▶│  Entry  │────▶│  Chain  │────▶│ Deliver │
 └─────────┘     └─────────┘     └─────────┘     └─────────┘
      │               │               │               │
      ▼               ▼               ▼               ▼
-  Detect         Extract         Include/        Deliver to
-  Changes        Timestamp       Exclude         Clients
-                 & Level         Patterns
+  Detect         Extract         Include/        Send to
+  Input          & Format        Exclude         Clients
 
 
 Entry Processing:
@@ -70,7 +72,11 @@ Entry Processing:
    │   TCP    │◀───┼────────── Entry ◀──────────────────┘
    └──────────┘    │           (if passed)
    ┌──────────┐    │
-   │   File   │◀───┘
+   │   File   │◀───┤
+   └──────────┘    │
+   ┌──────────┐    │
+   │ HTTP/TCP │◀───┘
+   │  Client  │
    └──────────┘
 ```
 
@@ -99,6 +105,16 @@ Directory Source:
     │ • Track Pos  │
     │ • Detect Rot │
     └──────────────┘
+
+HTTP/TCP Sources:
+┌─────────────────────────────────┐
+│      Network Listener           │
+├─────────────────────────────────┤
+│ • JSON Parsing                  │
+│ • Rate Limiting                 │
+│ • Connection Management         │
+│ • Input Validation              │
+└─────────────────────────────────┘
 ```
 
 ### Filters
@@ -162,6 +178,20 @@ TCP Sink:
 │    │ • Rate Limiting        │     │
 │    └────────────────────────┘     │
 └───────────────────────────────────┘
+
+Client Sinks:
+┌───────────────────────────────────┐
+│       HTTP/TCP Client             │
+├───────────────────────────────────┤
+│    ┌────────────────────────┐     │
+│    │    Output Manager      │     │
+│    ├────────────────────────┤     │
+│    │ • Batching             │     │
+│    │ • Retry Logic          │     │
+│    │ • Connection Pooling   │     │
+│    │ • Failover             │     │
+│    └────────────────────────┘     │
+└───────────────────────────────────┘
 ```
 
 ## Router Mode
@@ -179,10 +209,10 @@ Router Architecture:
         │                    │                    │
    /app/stream          /db/stream         /sys/stream
         │                    │                    │
-   ┌────▼────┐         ┌────▼────┐         ┌────▼────┐
-   │Pipeline │         │Pipeline │         │Pipeline │
-   │  "app"  │         │  "db"   │         │  "sys"  │
-   └─────────┘         └─────────┘         └─────────┘
+   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
+   │Pipeline │          │Pipeline │          │Pipeline │
+   │  "app"  │          │  "db"   │          │  "sys"  │
+   └─────────┘          └─────────┘          └─────────┘
 
 Path Routing:
 Client Request ──▶ Router ──▶ Parse Path ──▶ Find Pipeline ──▶ Route
@@ -205,6 +235,13 @@ Buffer Flow:
      ▼                ▼                 ▼
  Drop if full    Backpressure      Drop if full
  (counted)        (blocking)        (counted)
+
+Client Sinks:
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│  Entry   │     │  Batch   │     │  Send    │
+│  Buffer  │────▶│  Buffer  │────▶│  Queue   │
+│ (1000)   │     │ (100)    │     │  (retry) │
+└──────────┘     └──────────┘     └──────────┘
 ```
 
 ## Rate Limiting
@@ -241,9 +278,11 @@ Goroutine Structure:
 
 Main ────┬──── Pipeline 1 ────┬──── Source Reader 1
          │                    ├──── Source Reader 2
-         │                    ├──── Filter Processor
          │                    ├──── HTTP Server
-         │                    └──── TCP Server
+         │                    ├──── TCP Server
+         │                    ├──── Filter Processor
+         │                    ├──── HTTP Client Writer
+         │                    └──── TCP Client Writer
          │
          ├──── Pipeline 2 ────┬──── Source Reader
          │                    └──── Sink Writers
@@ -267,7 +306,7 @@ Priority Order:
 4. Defaults ──────────┘
 
 Example:
-CLI:     --log-level debug
+CLI:     --logging.level debug
 Env:     LOGWISP_PIPELINES_0_NAME=app
 File:    pipelines.toml
 Default: buffer_size = 1000

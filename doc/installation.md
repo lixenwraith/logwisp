@@ -6,7 +6,7 @@ Installation process on tested platforms.
 
 - **OS**: Linux, FreeBSD
 - **Architecture**: amd64
-- **Go**: 1.23+ (for building)
+- **Go**: 1.24+ (for building)
 
 ## Installation
 
@@ -14,14 +14,9 @@ Installation process on tested platforms.
 
 ```bash
 # Linux amd64
-wget https://github.com/yourusername/logwisp/releases/latest/download/logwisp-linux-amd64
+wget https://github.com/lixenwraith/logwisp/releases/latest/download/logwisp-linux-amd64
 chmod +x logwisp-linux-amd64
 sudo mv logwisp-linux-amd64 /usr/local/bin/logwisp
-
-# macOS Intel
-wget https://github.com/yourusername/logwisp/releases/latest/download/logwisp-darwin-amd64
-chmod +x logwisp-darwin-amd64
-sudo mv logwisp-darwin-amd64 /usr/local/bin/logwisp
 
 # Verify
 logwisp --version
@@ -30,7 +25,7 @@ logwisp --version
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/logwisp.git
+git clone https://github.com/lixenwraith/logwisp.git
 cd logwisp
 make build
 sudo make install
