@@ -79,11 +79,10 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 	}
 }
 
+// FILE: src/internal/source/file_watcher.go
 func (w *fileWatcher) seekToEnd() error {
 	file, err := os.Open(w.path)
 	if err != nil {
-		// For non-existent files, initialize position to 0
-		// This allows watching files that don't exist yet
 		if os.IsNotExist(err) {
 			w.mu.Lock()
 			w.position = 0
@@ -103,13 +102,13 @@ func (w *fileWatcher) seekToEnd() error {
 	}
 
 	w.mu.Lock()
-	// Only seek to end if position was never set (-1)
-	// This preserves position = 0 for new files while allowing
-	// directory-discovered files to start reading from current position
+	defer w.mu.Unlock()
+
+	// Keep existing position (including 0)
+	// First time initialization seeks to the end of the file
 	if w.position == -1 {
 		pos, err := file.Seek(0, io.SeekEnd)
 		if err != nil {
-			w.mu.Unlock()
 			return err
 		}
 		w.position = pos
@@ -120,7 +119,6 @@ func (w *fileWatcher) seekToEnd() error {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 		w.inode = stat.Ino
 	}
-	w.mu.Unlock()
 
 	return nil
 }
@@ -171,35 +169,57 @@ func (w *fileWatcher) checkFile() error {
 		w.inode = currentInode
 		w.size = currentSize
 		w.modTime = currentModTime
-		// Keep position at 0 to read from beginning if this is a new file
-		// or seek to end if we want to skip existing content
-		if oldSize == 0 && w.position == 0 {
-			// First time seeing this file, seek to end to skip existing content
-			w.position = currentSize
-		}
+		// Position stays at 0 for new files
 		w.mu.Unlock()
-		return nil
+		// Don't return here - continue to read content
 	}
 
 	// Check for rotation
 	rotated := false
 	rotationReason := ""
+	startPos := oldPos
 
-	if oldInode != 0 && currentInode != 0 && currentInode != oldInode {
-		rotated = true
-		rotationReason = "inode change"
-	} else if currentSize < oldSize {
+	// Rotation detection
+	if currentSize < oldSize {
+		// File was truncated
 		rotated = true
 		rotationReason = "size decrease"
 	} else if currentModTime.Before(oldModTime) && currentSize <= oldSize {
+		// Modification time went backwards (logrotate behavior)
 		rotated = true
 		rotationReason = "modification time reset"
 	} else if oldPos > currentSize+1024 {
+		// Our position is way beyond file size
 		rotated = true
 		rotationReason = "position beyond file size"
+	} else if oldInode != 0 && currentInode != 0 && currentInode != oldInode {
+		// Inode changed - distinguish between rotation and atomic save
+		if currentSize == 0 {
+			// Empty file with new inode = likely rotation
+			rotated = true
+			rotationReason = "inode change with empty file"
+		} else if currentSize < oldPos {
+			// New file is smaller than our position = rotation
+			rotated = true
+			rotationReason = "inode change with size less than position"
+		} else {
+			// Inode changed but file has content and size >= position
+			// This is likely an atomic save by an editor
+			// Update inode but keep position
+			w.mu.Lock()
+			w.inode = currentInode
+			w.mu.Unlock()
+
+			w.logger.Debug("msg", "Atomic file update detected",
+				"component", "file_watcher",
+				"path", w.path,
+				"old_inode", oldInode,
+				"new_inode", currentInode,
+				"position", oldPos,
+				"size", currentSize)
+		}
 	}
 
-	startPos := oldPos
 	if rotated {
 		startPos = 0
 		w.mu.Lock()

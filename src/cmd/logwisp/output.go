@@ -29,7 +29,7 @@ func InitOutputHandler(quiet bool) {
 }
 
 // Print writes to stdout if not in quiet mode
-func (o *OutputHandler) Print(format string, args ...interface{}) {
+func (o *OutputHandler) Print(format string, args ...any) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 
@@ -39,7 +39,7 @@ func (o *OutputHandler) Print(format string, args ...interface{}) {
 }
 
 // Error writes to stderr if not in quiet mode
-func (o *OutputHandler) Error(format string, args ...interface{}) {
+func (o *OutputHandler) Error(format string, args ...any) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 
@@ -49,7 +49,7 @@ func (o *OutputHandler) Error(format string, args ...interface{}) {
 }
 
 // FatalError writes to stderr and exits (respects quiet mode)
-func (o *OutputHandler) FatalError(code int, format string, args ...interface{}) {
+func (o *OutputHandler) FatalError(code int, format string, args ...any) {
 	o.Error(format, args...)
 	os.Exit(code)
 }
@@ -69,19 +69,19 @@ func (o *OutputHandler) SetQuiet(quiet bool) {
 }
 
 // Helper functions for global output handler
-func Print(format string, args ...interface{}) {
+func Print(format string, args ...any) {
 	if output != nil {
 		output.Print(format, args...)
 	}
 }
 
-func Error(format string, args ...interface{}) {
+func Error(format string, args ...any) {
 	if output != nil {
 		output.Error(format, args...)
 	}
 }
 
-func FatalError(code int, format string, args ...interface{}) {
+func FatalError(code int, format string, args ...any) {
 	if output != nil {
 		output.FatalError(code, format, args...)
 	} else {

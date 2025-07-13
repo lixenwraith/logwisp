@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -19,62 +20,57 @@ import (
 var logger *log.Logger
 
 func main() {
-	// Parse flags first to get quiet mode early
-	flagCfg, err := ParseFlags()
+	// Emulates nohup
+	signal.Ignore(syscall.SIGHUP)
+
+	// Load configuration with automatic CLI parsing
+	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if strings.Contains(err.Error(), "not found") && cfg != nil && cfg.ConfigFile != "" {
+			fmt.Fprintf(os.Stderr, "Error: Config file not found: %s\n", cfg.ConfigFile)
+			os.Exit(2)
+		}
+		fmt.Fprintf(os.Stderr, "Error: Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Initialize output handler with quiet mode
-	InitOutputHandler(flagCfg.Quiet)
+	// Initialize output handler
+	InitOutputHandler(cfg.Quiet)
 
-	// Handle version flag
-	if flagCfg.ShowVersion {
+	// Handle version
+	if cfg.ShowVersion {
 		fmt.Println(version.String())
 		os.Exit(0)
 	}
 
-	// Handle background mode
-	if flagCfg.Background && !isBackgroundProcess() {
-		if err := runInBackground(); err != nil {
+	// Background mode spawns a child with internal --background-daemon flag.
+	if cfg.Background && !cfg.BackgroundDaemon {
+		// Prepare arguments for the child process, including originals and daemon flag.
+		args := append(os.Args[1:], "--background-daemon")
+
+		cmd := exec.Command(os.Args[0], args...)
+
+		if err := cmd.Start(); err != nil {
 			FatalError(1, "Failed to start background process: %v\n", err)
 		}
-		os.Exit(0)
+
+		Print("Started LogWisp in background (PID: %d)\n", cmd.Process.Pid)
+		os.Exit(0) // The parent process exits successfully.
 	}
 
-	// Set config file environment if specified
-	if flagCfg.ConfigFile != "" {
-		os.Setenv("LOGWISP_CONFIG_FILE", flagCfg.ConfigFile)
-	}
-
-	// Load configuration with CLI overrides
-	cfg, err := config.LoadWithCLI(os.Args[1:], flagCfg)
-	if err != nil {
-		if flagCfg.ConfigFile != "" && strings.Contains(err.Error(), "not found") {
-			FatalError(2, "Config file not found: %s\n", flagCfg.ConfigFile)
-		}
-		FatalError(1, "Failed to load config: %v\n", err)
-
-	}
-
-	// DEBUG: Extra nil check
-	if cfg == nil {
-		FatalError(1, "Configuration is nil after loading\n")
-	}
-
-	// Initialize logger with quiet mode awareness
-	if err := initializeLogger(cfg, flagCfg); err != nil {
+	// Initialize logger
+	if err := initializeLogger(cfg); err != nil {
 		FatalError(1, "Failed to initialize logger: %v\n", err)
 	}
 	defer shutdownLogger()
 
-	// Log startup information (respects quiet mode via logger config)
+	// Log startup information
 	logger.Info("msg", "LogWisp starting",
 		"version", version.String(),
-		"config_file", flagCfg.ConfigFile,
+		"config_file", cfg.ConfigFile,
 		"log_output", cfg.Logging.Output,
-		"router_mode", flagCfg.UseRouter)
+		"router_mode", cfg.UseRouter,
+		"background_mode", cfg.Background)
 
 	// Create context for shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -85,14 +81,14 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 
 	// Bootstrap the service
-	svc, router, err := bootstrapService(ctx, cfg, flagCfg)
+	svc, router, err := bootstrapService(ctx, cfg)
 	if err != nil {
 		logger.Error("msg", "Failed to bootstrap service", "error", err)
 		os.Exit(1)
 	}
 
 	// Start status reporter if enabled
-	if enableStatusReporter() {
+	if !cfg.DisableStatusReporter {
 		go statusReporter(svc)
 	}
 
@@ -138,12 +134,4 @@ func shutdownLogger() {
 			Error("Logger shutdown error: %v\n", err)
 		}
 	}
-}
-
-func enableStatusReporter() bool {
-	// Status reporter can be disabled via environment variable
-	if os.Getenv("LOGWISP_DISABLE_STATUS_REPORTER") == "1" {
-		return false
-	}
-	return true
 }

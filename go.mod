@@ -3,8 +3,8 @@ module logwisp
 go 1.24.5
 
 require (
-	github.com/lixenwraith/config v0.0.0-20250701170607-8515fa0543b6
-	github.com/lixenwraith/log v0.0.0-20250710012114-049926224b0e
+	github.com/lixenwraith/config v0.0.0-20250712170030-7d38402e0497
+	github.com/lixenwraith/log v0.0.0-20250710220042-139c522da9aa
 	github.com/panjf2000/gnet/v2 v2.9.1
 	github.com/valyala/fasthttp v1.63.0
 )

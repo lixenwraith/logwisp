@@ -4,9 +4,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"logwisp/src/internal/config"
@@ -17,13 +14,13 @@ import (
 )
 
 // bootstrapService creates and initializes the log transport service
-func bootstrapService(ctx context.Context, cfg *config.Config, flagCfg *FlagConfig) (*service.Service, *service.HTTPRouter, error) {
+func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, *service.HTTPRouter, error) {
 	// Create service with logger dependency injection
 	svc := service.New(ctx, logger)
 
 	// Create HTTP router if requested
 	var router *service.HTTPRouter
-	if flagCfg.UseRouter {
+	if cfg.UseRouter {
 		router = service.NewHTTPRouter(svc, logger)
 		logger.Info("msg", "HTTP router mode enabled")
 	}
@@ -42,7 +39,7 @@ func bootstrapService(ctx context.Context, cfg *config.Config, flagCfg *FlagConf
 		}
 
 		// If using router mode, register HTTP sinks
-		if flagCfg.UseRouter {
+		if cfg.UseRouter {
 			pipeline, err := svc.GetPipeline(pipelineCfg.Name)
 			if err == nil && len(pipeline.HTTPSinks) > 0 {
 				if err := router.RegisterPipeline(pipeline); err != nil {
@@ -54,7 +51,7 @@ func bootstrapService(ctx context.Context, cfg *config.Config, flagCfg *FlagConf
 		}
 
 		successCount++
-		displayPipelineEndpoints(pipelineCfg, flagCfg.UseRouter)
+		displayPipelineEndpoints(pipelineCfg, cfg.UseRouter)
 	}
 
 	if successCount == 0 {
@@ -68,42 +65,31 @@ func bootstrapService(ctx context.Context, cfg *config.Config, flagCfg *FlagConf
 	return svc, router, nil
 }
 
-// initializeLogger sets up the logger based on configuration and CLI flags
-func initializeLogger(cfg *config.Config, flagCfg *FlagConfig) error {
+// initializeLogger sets up the logger based on configuration
+func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 
 	var configArgs []string
 
-	// Quiet mode suppresses ALL LogWisp logging (not sink outputs)
-	if flagCfg.Quiet {
+	if cfg.Quiet {
 		// In quiet mode, disable ALL logging output
 		configArgs = append(configArgs,
 			"disable_file=true",
 			"enable_stdout=false",
-			"level=255") // Set to max level to suppress everything
+			"level=255")
 
 		return logger.InitWithDefaults(configArgs...)
 	}
 
-	// Determine output mode from CLI or config
-	outputMode := cfg.Logging.Output
-	if flagCfg.LogOutput != "" {
-		outputMode = flagCfg.LogOutput
-	}
-
 	// Determine log level
-	level := cfg.Logging.Level
-	if flagCfg.LogLevel != "" {
-		level = flagCfg.LogLevel
-	}
-	levelValue, err := parseLogLevel(level)
+	levelValue, err := parseLogLevel(cfg.Logging.Level)
 	if err != nil {
 		return fmt.Errorf("invalid log level: %w", err)
 	}
 	configArgs = append(configArgs, fmt.Sprintf("level=%d", levelValue))
 
 	// Configure based on output mode
-	switch outputMode {
+	switch cfg.Logging.Output {
 	case "none":
 		configArgs = append(configArgs, "disable_file=true", "enable_stdout=false")
 
@@ -121,15 +107,15 @@ func initializeLogger(cfg *config.Config, flagCfg *FlagConfig) error {
 
 	case "file":
 		configArgs = append(configArgs, "enable_stdout=false")
-		configureFileLogging(&configArgs, cfg, flagCfg)
+		configureFileLogging(&configArgs, cfg)
 
 	case "both":
 		configArgs = append(configArgs, "enable_stdout=true")
-		configureFileLogging(&configArgs, cfg, flagCfg)
-		configureConsoleTarget(&configArgs, cfg, flagCfg)
+		configureFileLogging(&configArgs, cfg)
+		configureConsoleTarget(&configArgs, cfg)
 
 	default:
-		return fmt.Errorf("invalid log output mode: %s", outputMode)
+		return fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
 	}
 
 	// Apply format if specified
@@ -141,20 +127,8 @@ func initializeLogger(cfg *config.Config, flagCfg *FlagConfig) error {
 }
 
 // configureFileLogging sets up file-based logging parameters
-func configureFileLogging(configArgs *[]string, cfg *config.Config, flagCfg *FlagConfig) {
-	// CLI overrides
-	if flagCfg.LogFile != "" {
-		dir := filepath.Dir(flagCfg.LogFile)
-		name := strings.TrimSuffix(filepath.Base(flagCfg.LogFile), filepath.Ext(flagCfg.LogFile))
-		*configArgs = append(*configArgs,
-			fmt.Sprintf("directory=%s", dir),
-			fmt.Sprintf("name=%s", name))
-	} else if flagCfg.LogDir != "" {
-		*configArgs = append(*configArgs,
-			fmt.Sprintf("directory=%s", flagCfg.LogDir),
-			fmt.Sprintf("name=%s", cfg.Logging.File.Name))
-	} else if cfg.Logging.File != nil {
-		// Use config file settings
+func configureFileLogging(configArgs *[]string, cfg *config.Config) {
+	if cfg.Logging.File != nil {
 		*configArgs = append(*configArgs,
 			fmt.Sprintf("directory=%s", cfg.Logging.File.Directory),
 			fmt.Sprintf("name=%s", cfg.Logging.File.Name),
@@ -169,12 +143,10 @@ func configureFileLogging(configArgs *[]string, cfg *config.Config, flagCfg *Fla
 }
 
 // configureConsoleTarget sets up console output parameters
-func configureConsoleTarget(configArgs *[]string, cfg *config.Config, flagCfg *FlagConfig) {
+func configureConsoleTarget(configArgs *[]string, cfg *config.Config) {
 	target := "stderr" // default
 
-	if flagCfg.LogConsole != "" {
-		target = flagCfg.LogConsole
-	} else if cfg.Logging.Console != nil && cfg.Logging.Console.Target != "" {
+	if cfg.Logging.Console != nil && cfg.Logging.Console.Target != "" {
 		target = cfg.Logging.Console.Target
 	}
 
@@ -182,37 +154,9 @@ func configureConsoleTarget(configArgs *[]string, cfg *config.Config, flagCfg *F
 	if target == "split" {
 		*configArgs = append(*configArgs, "stdout_split_mode=true")
 		*configArgs = append(*configArgs, "stdout_target=split")
-		logger.Debug("msg", "Console output configured for split mode",
-			"component", "bootstrap",
-			"info_debug", "stdout",
-			"warn_error", "stderr")
 	} else {
 		*configArgs = append(*configArgs, fmt.Sprintf("stdout_target=%s", target))
 	}
-}
-
-// isBackgroundProcess checks if we're already running in background
-func isBackgroundProcess() bool {
-	return os.Getenv("LOGWISP_BACKGROUND") == "1"
-}
-
-// runInBackground starts the process in background
-func runInBackground() error {
-	cmd := exec.Command(os.Args[0], os.Args[1:]...)
-	cmd.Env = append(os.Environ(), "LOGWISP_BACKGROUND=1")
-	cmd.Stdin = nil
-	// Respect quiet mode for background process output
-	if !output.IsQuiet() {
-		cmd.Stdout = os.Stdout // Keep stdout for logging
-		cmd.Stderr = os.Stderr // Keep stderr for logging
-	}
-
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	Print("Started LogWisp in background (PID: %d)\n", cmd.Process.Pid)
-	return nil
 }
 
 func parseLogLevel(level string) (int, error) {
