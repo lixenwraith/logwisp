@@ -1,16 +1,17 @@
-// FILE: src/internal/netlimit/netlimiter.go
-package netlimit
+// FILE: src/internal/limiter/token_bucket.go
+package limiter
 
 import (
 	"sync"
 	"time"
 )
 
-// TokenBucket implements a token bucket net limiter
+// TokenBucket implements a token bucket rate limiter
+// Safe for concurrent use.
 type TokenBucket struct {
 	capacity   float64
 	tokens     float64
-	refillRate float64
+	refillRate float64 // tokens per second
 	lastRefill time.Time
 	mu         sync.Mutex
 }
@@ -19,7 +20,7 @@ type TokenBucket struct {
 func NewTokenBucket(capacity float64, refillRate float64) *TokenBucket {
 	return &TokenBucket{
 		capacity:   capacity,
-		tokens:     capacity,
+		tokens:     capacity, // Start full
 		refillRate: refillRate,
 		lastRefill: time.Now(),
 	}
@@ -35,7 +36,27 @@ func (tb *TokenBucket) AllowN(n float64) bool {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 
-	// Refill tokens based on time elapsed
+	tb.refill()
+
+	if tb.tokens >= n {
+		tb.tokens -= n
+		return true
+	}
+	return false
+}
+
+// Tokens returns the current number of available tokens
+func (tb *TokenBucket) Tokens() float64 {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	tb.refill()
+	return tb.tokens
+}
+
+// refill adds tokens based on time elapsed since last refill
+// MUST be called with mutex held
+func (tb *TokenBucket) refill() {
 	now := time.Now()
 	elapsed := now.Sub(tb.lastRefill).Seconds()
 
@@ -43,7 +64,6 @@ func (tb *TokenBucket) AllowN(n float64) bool {
 	if elapsed < 0 {
 		// Clock went backwards, reset to current time but don't add tokens
 		tb.lastRefill = now
-		// Don't log here as this is a hot path
 		elapsed = 0
 	}
 
@@ -52,11 +72,4 @@ func (tb *TokenBucket) AllowN(n float64) bool {
 		tb.tokens = tb.capacity
 	}
 	tb.lastRefill = now
-
-	// Check if we have enough tokens
-	if tb.tokens >= n {
-		tb.tokens -= n
-		return true
-	}
-	return false
 }

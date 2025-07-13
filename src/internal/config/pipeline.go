@@ -37,10 +37,6 @@ type SourceConfig struct {
 
 	// Type-specific configuration options
 	Options map[string]any `toml:"options"`
-
-	// Placeholder for future source-side rate limiting
-	// This will be used for features like aggregation and summarization
-	NetLimit *NetLimitConfig `toml:"net_limit"`
 }
 
 // SinkConfig represents an output destination
@@ -116,12 +112,26 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 			}
 		}
 
+		// Validate net_limit if present within Options
+		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
+			if err := validateNetLimitOptions("HTTP source", pipelineName, sourceIndex, rl); err != nil {
+				return err
+			}
+		}
+
 	case "tcp":
 		// Validate TCP source options
 		port, ok := toInt(cfg.Options["port"])
 		if !ok || port < 1 || port > 65535 {
 			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing TCP port",
 				pipelineName, sourceIndex)
+		}
+
+		// Validate net_limit if present within Options
+		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
+			if err := validateNetLimitOptions("TCP source", pipelineName, sourceIndex, rl); err != nil {
+				return err
+			}
 		}
 
 	default:

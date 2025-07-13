@@ -13,6 +13,7 @@ type LogEntry struct {
 	Level   string          `json:"level,omitempty"`
 	Message string          `json:"message"`
 	Fields  json.RawMessage `json:"fields,omitempty"`
+	RawSize int             `json:"-"`
 }
 
 // Source represents an input data stream

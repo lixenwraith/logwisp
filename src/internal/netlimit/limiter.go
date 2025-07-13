@@ -10,11 +10,12 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/limiter"
 
 	"github.com/lixenwraith/log"
 )
 
-// Manages net limiting for a transport
+// Limiter manages net limiting for a transport
 type Limiter struct {
 	config config.NetLimitConfig
 	logger *log.Logger
@@ -24,7 +25,7 @@ type Limiter struct {
 	ipMu       sync.RWMutex
 
 	// Global limiter for the transport
-	globalLimiter *TokenBucket
+	globalLimiter *limiter.TokenBucket
 
 	// Connection tracking
 	ipConnections map[string]*atomic.Int32
@@ -46,7 +47,7 @@ type Limiter struct {
 }
 
 type ipLimiter struct {
-	bucket      *TokenBucket
+	bucket      *limiter.TokenBucket
 	lastSeen    time.Time
 	connections atomic.Int32
 }
@@ -76,7 +77,7 @@ func New(cfg config.NetLimitConfig, logger *log.Logger) *Limiter {
 
 	// Create global limiter if not using per-IP limiting
 	if cfg.LimitBy == "global" {
-		l.globalLimiter = NewTokenBucket(
+		l.globalLimiter = limiter.NewTokenBucket(
 			float64(cfg.BurstSize),
 			cfg.RequestsPerSecond,
 		)
@@ -334,24 +335,24 @@ func (l *Limiter) checkLimit(ip string) bool {
 	case "ip", "":
 		// Default to per-IP limiting
 		l.ipMu.Lock()
-		limiter, exists := l.ipLimiters[ip]
+		lim, exists := l.ipLimiters[ip]
 		if !exists {
 			// Create new limiter for this IP
-			limiter = &ipLimiter{
-				bucket: NewTokenBucket(
+			lim = &ipLimiter{
+				bucket: limiter.NewTokenBucket(
 					float64(l.config.BurstSize),
 					l.config.RequestsPerSecond,
 				),
 				lastSeen: time.Now(),
 			}
-			l.ipLimiters[ip] = limiter
+			l.ipLimiters[ip] = lim
 			l.uniqueIPs.Add(1)
 
 			l.logger.Debug("msg", "Created new IP limiter",
 				"ip", ip,
 				"total_ips", l.uniqueIPs.Load())
 		} else {
-			limiter.lastSeen = time.Now()
+			lim.lastSeen = time.Now()
 		}
 		l.ipMu.Unlock()
 
@@ -366,7 +367,7 @@ func (l *Limiter) checkLimit(ip string) bool {
 			}
 		}
 
-		return limiter.bucket.Allow()
+		return lim.bucket.Allow()
 
 	default:
 		// Unknown limit_by value, allow by default
@@ -398,8 +399,8 @@ func (l *Limiter) cleanup() {
 	defer l.ipMu.Unlock()
 
 	cleaned := 0
-	for ip, limiter := range l.ipLimiters {
-		if now.Sub(limiter.lastSeen) > staleTimeout {
+	for ip, lim := range l.ipLimiters {
+		if now.Sub(lim.lastSeen) > staleTimeout {
 			delete(l.ipLimiters, ip)
 			cleaned++
 		}

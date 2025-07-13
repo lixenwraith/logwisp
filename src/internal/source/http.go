@@ -271,6 +271,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 		if single.Source == "" {
 			single.Source = "http"
 		}
+		single.RawSize = len(body)
 		entries = append(entries, single)
 		return entries, nil
 	}
@@ -278,6 +279,8 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 	// Try to parse as JSON array
 	var array []LogEntry
 	if err := json.Unmarshal(body, &array); err == nil {
+		// TODO: Placeholder; For array, divide total size by entry count as approximation
+		approxSizePerEntry := len(body) / len(array)
 		for i, entry := range array {
 			if entry.Message == "" {
 				return nil, fmt.Errorf("entry %d missing required field: message", i)
@@ -288,6 +291,8 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 			if entry.Source == "" {
 				array[i].Source = "http"
 			}
+			// TODO: Placeholder
+			array[i].RawSize = approxSizePerEntry
 		}
 		return array, nil
 	}
@@ -313,6 +318,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 		if entry.Source == "" {
 			entry.Source = "http"
 		}
+		entry.RawSize = len(line)
 
 		entries = append(entries, entry)
 	}

@@ -8,8 +8,8 @@ github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zt
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
 github.com/lixenwraith/config v0.0.0-20250712170030-7d38402e0497 h1:ixTIdJSd945n/IhMRwGwQVmQnQ1nUr5z1wn31jXq9FU=
 github.com/lixenwraith/config v0.0.0-20250712170030-7d38402e0497/go.mod h1:y7kgDrWIFROWJJ6ASM/SPTRRAj27FjRGWh2SDLcdQ68=
-github.com/lixenwraith/log v0.0.0-20250710220042-139c522da9aa h1:lIo780MTgZXH5jF+Qr24fRDFQTQ3eu3OaaFYLP9ZkR0=
-github.com/lixenwraith/log v0.0.0-20250710220042-139c522da9aa/go.mod h1:lEjTIMWGW+XGn20x5Ec0qkNK4LCd7Y/04PII51crYKk=
+github.com/lixenwraith/log v0.0.0-20250713052337-7b17ce48112f h1:GBSik9B/Eaqz1ogSbG6C+Ti199k8cd7atnNSkCdkfV4=
+github.com/lixenwraith/log v0.0.0-20250713052337-7b17ce48112f/go.mod h1:lEjTIMWGW+XGn20x5Ec0qkNK4LCd7Y/04PII51crYKk=
 github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyuac5Z2hdY=
 github.com/mitchellh/mapstructure v1.5.0/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
 github.com/panjf2000/ants/v2 v2.11.3 h1:AfI0ngBoXJmYOpDh9m516vjqoUu2sLrIVgppI9TZVpg=

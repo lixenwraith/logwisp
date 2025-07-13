@@ -3,27 +3,25 @@ package ratelimit
 
 import (
 	"strings"
-	"sync"
 	"sync/atomic"
-	"time"
+
+	"logwisp/src/internal/config"
+	"logwisp/src/internal/limiter"
+	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
-	"logwisp/src/internal/config"
-	"logwisp/src/internal/source"
 )
 
 // Limiter enforces rate limits on log entries flowing through a pipeline.
 type Limiter struct {
-	mu        sync.Mutex
-	rate      float64
-	burst     float64
-	tokens    float64
-	lastToken time.Time
-	policy    config.RateLimitPolicy
-	logger    *log.Logger
+	bucket *limiter.TokenBucket
+	policy config.RateLimitPolicy
+	logger *log.Logger
 
 	// Statistics
-	droppedCount atomic.Uint64
+	maxEntrySizeBytes  int
+	droppedBySizeCount atomic.Uint64
+	droppedCount       atomic.Uint64
 }
 
 // New creates a new rate limiter. If cfg.Rate is 0, it returns nil.
@@ -46,12 +44,14 @@ func New(cfg config.RateLimitConfig, logger *log.Logger) (*Limiter, error) {
 	}
 
 	l := &Limiter{
-		rate:      cfg.Rate,
-		burst:     burst,
-		tokens:    burst,
-		lastToken: time.Now(),
-		policy:    policy,
-		logger:    logger,
+		bucket:            limiter.NewTokenBucket(burst, cfg.Rate),
+		policy:            policy,
+		logger:            logger,
+		maxEntrySizeBytes: cfg.MaxEntrySizeBytes,
+	}
+
+	if cfg.Rate > 0 {
+		l.bucket = limiter.NewTokenBucket(burst, cfg.Rate)
 	}
 
 	return l, nil
@@ -60,46 +60,51 @@ func New(cfg config.RateLimitConfig, logger *log.Logger) (*Limiter, error) {
 // Allow checks if a log entry is allowed to pass based on the rate limit.
 // It returns true if the entry should pass, false if it should be dropped.
 func (l *Limiter) Allow(entry source.LogEntry) bool {
-	if l.policy == config.PolicyPass {
+	if l == nil || l.policy == config.PolicyPass {
 		return true
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	now := time.Now()
-	elapsed := now.Sub(l.lastToken).Seconds()
-
-	if elapsed < 0 {
-		// Clock went backwards, don't add tokens
-		l.lastToken = now
-		elapsed = 0
+	// Check size limit first
+	if l.maxEntrySizeBytes > 0 && entry.RawSize > l.maxEntrySizeBytes {
+		l.droppedBySizeCount.Add(1)
+		return false
 	}
 
-	l.tokens += elapsed * l.rate
-	if l.tokens > l.burst {
-		l.tokens = l.burst
+	// Check rate limit if configured
+	if l.bucket != nil {
+		if l.bucket.Allow() {
+			return true
+		}
+		// Not enough tokens, drop the entry
+		l.droppedCount.Add(1)
+		return false
 	}
-	l.lastToken = now
 
-	if l.tokens >= 1 {
-		l.tokens--
-		return true
-	}
-
-	// Not enough tokens, drop the entry
-	l.droppedCount.Add(1)
-	return false
+	// No rate limit configured, size check passed
+	return true
 }
 
 // GetStats returns the statistics for the limiter.
 func (l *Limiter) GetStats() map[string]any {
-	return map[string]any{
-		"dropped_total": l.droppedCount.Load(),
-		"policy":        policyString(l.policy),
-		"rate":          l.rate,
-		"burst":         l.burst,
+	if l == nil {
+		return map[string]any{
+			"enabled": false,
+		}
 	}
+
+	stats := map[string]any{
+		"enabled":               true,
+		"dropped_total":         l.droppedCount.Load(),
+		"dropped_by_size_total": l.droppedBySizeCount.Load(),
+		"policy":                policyString(l.policy),
+		"max_entry_size_bytes":  l.maxEntrySizeBytes,
+	}
+
+	if l.bucket != nil {
+		stats["tokens"] = l.bucket.Tokens()
+	}
+
+	return stats
 }
 
 // policyString returns the string representation of the policy.

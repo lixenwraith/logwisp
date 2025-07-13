@@ -15,7 +15,7 @@ type TCPConfig struct {
 	NetLimit *NetLimitConfig `toml:"net_limit"`
 
 	// Heartbeat
-	Heartbeat HeartbeatConfig `toml:"heartbeat"`
+	Heartbeat *HeartbeatConfig `toml:"heartbeat"`
 }
 
 type HTTPConfig struct {
@@ -34,7 +34,7 @@ type HTTPConfig struct {
 	NetLimit *NetLimitConfig `toml:"net_limit"`
 
 	// Heartbeat
-	Heartbeat HeartbeatConfig `toml:"heartbeat"`
+	Heartbeat *HeartbeatConfig `toml:"heartbeat"`
 }
 
 type HeartbeatConfig struct {

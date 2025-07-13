@@ -41,7 +41,7 @@ type TCPSink struct {
 type TCPConfig struct {
 	Port       int
 	BufferSize int
-	Heartbeat  config.HeartbeatConfig
+	Heartbeat  *config.HeartbeatConfig
 	SSL        *config.SSLConfig
 	NetLimit   *config.NetLimitConfig
 }
@@ -63,6 +63,7 @@ func NewTCPSink(options map[string]any, logger *log.Logger) (*TCPSink, error) {
 
 	// Extract heartbeat config
 	if hb, ok := options["heartbeat"].(map[string]any); ok {
+		cfg.Heartbeat = &config.HeartbeatConfig{}
 		cfg.Heartbeat.Enabled, _ = hb["enabled"].(bool)
 		if interval, ok := toInt(hb["interval_seconds"]); ok {
 			cfg.Heartbeat.IntervalSeconds = interval

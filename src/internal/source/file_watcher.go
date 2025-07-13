@@ -258,7 +258,10 @@ func (w *fileWatcher) checkFile() error {
 				continue
 			}
 
+			rawSize := len(line)
 			entry := w.parseLine(line)
+			entry.RawSize = rawSize
+
 			w.callback(entry)
 			w.entriesRead.Add(1)
 			w.lastReadTime.Store(time.Now())

@@ -341,6 +341,9 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 			continue
 		}
 
+		// Capture raw line size before parsing
+		rawSize := len(line)
+
 		// Parse JSON log entry
 		var entry LogEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
@@ -363,6 +366,9 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 		if entry.Source == "" {
 			entry.Source = "tcp"
 		}
+
+		// Set raw size
+		entry.RawSize = rawSize
 
 		// Publish the entry
 		s.source.publish(entry)

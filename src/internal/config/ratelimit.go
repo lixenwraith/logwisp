@@ -24,6 +24,8 @@ type RateLimitConfig struct {
 	Burst float64 `toml:"burst"`
 	// Policy defines the action to take when the limit is exceeded. "pass" or "drop".
 	Policy string `toml:"policy"`
+	// MaxEntrySizeBytes is the maximum allowed size for a single log entry. 0 = no limit.
+	MaxEntrySizeBytes int `toml:"max_entry_size_bytes"`
 }
 
 func validateRateLimit(pipelineName string, cfg *RateLimitConfig) error {
@@ -37,6 +39,10 @@ func validateRateLimit(pipelineName string, cfg *RateLimitConfig) error {
 
 	if cfg.Burst < 0 {
 		return fmt.Errorf("pipeline '%s': rate limit burst cannot be negative", pipelineName)
+	}
+
+	if cfg.MaxEntrySizeBytes < 0 {
+		return fmt.Errorf("pipeline '%s': max entry size bytes cannot be negative", pipelineName)
 	}
 
 	// Validate policy
