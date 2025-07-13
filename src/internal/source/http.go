@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/ratelimit"
+	"logwisp/src/internal/netlimit"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
@@ -25,7 +25,7 @@ type HTTPSource struct {
 	mu          sync.RWMutex
 	done        chan struct{}
 	wg          sync.WaitGroup
-	rateLimiter *ratelimit.Limiter
+	netLimiter  *netlimit.Limiter
 	logger      *log.Logger
 
 	// Statistics
@@ -63,10 +63,10 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 	}
 	h.lastEntryTime.Store(time.Time{})
 
-	// Initialize rate limiter if configured
-	if rl, ok := options["rate_limit"].(map[string]any); ok {
+	// Initialize net limiter if configured
+	if rl, ok := options["net_limit"].(map[string]any); ok {
 		if enabled, _ := rl["enabled"].(bool); enabled {
-			cfg := config.RateLimitConfig{
+			cfg := config.NetLimitConfig{
 				Enabled: true,
 			}
 
@@ -89,7 +89,7 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 				cfg.MaxConnectionsPerIP = maxPerIP
 			}
 
-			h.rateLimiter = ratelimit.New(cfg, logger)
+			h.netLimiter = netlimit.New(cfg, logger)
 		}
 	}
 
@@ -149,9 +149,9 @@ func (h *HTTPSource) Stop() {
 		}
 	}
 
-	// Shutdown rate limiter
-	if h.rateLimiter != nil {
-		h.rateLimiter.Shutdown()
+	// Shutdown net limiter
+	if h.netLimiter != nil {
+		h.netLimiter.Shutdown()
 	}
 
 	h.wg.Wait()
@@ -169,9 +169,9 @@ func (h *HTTPSource) Stop() {
 func (h *HTTPSource) GetStats() SourceStats {
 	lastEntry, _ := h.lastEntryTime.Load().(time.Time)
 
-	var rateLimitStats map[string]any
-	if h.rateLimiter != nil {
-		rateLimitStats = h.rateLimiter.GetStats()
+	var netLimitStats map[string]any
+	if h.netLimiter != nil {
+		netLimitStats = h.netLimiter.GetStats()
 	}
 
 	return SourceStats{
@@ -184,14 +184,9 @@ func (h *HTTPSource) GetStats() SourceStats {
 			"port":            h.port,
 			"ingest_path":     h.ingestPath,
 			"invalid_entries": h.invalidEntries.Load(),
-			"rate_limit":      rateLimitStats,
+			"net_limit":       netLimitStats,
 		},
 	}
-}
-
-func (h *HTTPSource) ApplyRateLimit(entry LogEntry) (LogEntry, bool) {
-	// TODO: Implement source-side rate limiting for aggregation/summarization
-	return entry, true
 }
 
 func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
@@ -206,10 +201,10 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Check rate limit
+	// Check net limit
 	remoteAddr := ctx.RemoteAddr().String()
-	if h.rateLimiter != nil {
-		if allowed, statusCode, message := h.rateLimiter.CheckHTTP(remoteAddr); !allowed {
+	if h.netLimiter != nil {
+		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
 			ctx.SetStatusCode(statusCode)
 			ctx.SetContentType("application/json")
 			json.NewEncoder(ctx).Encode(map[string]any{
@@ -330,12 +325,6 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 }
 
 func (h *HTTPSource) publish(entry LogEntry) bool {
-	// Apply rate limiting
-	entry, allowed := h.ApplyRateLimit(entry)
-	if !allowed {
-		return false
-	}
-
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

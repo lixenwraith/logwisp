@@ -118,10 +118,10 @@ func displayPipelineEndpoints(cfg config.PipelineConfig, routerMode bool) {
 					"sink_index", i,
 					"port", port)
 
-				// Display rate limit info if configured
-				if rl, ok := sinkCfg.Options["rate_limit"].(map[string]any); ok {
+				// Display net limit info if configured
+				if rl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
 					if enabled, ok := rl["enabled"].(bool); ok && enabled {
-						logger.Info("msg", "TCP rate limiting enabled",
+						logger.Info("msg", "TCP net limiting enabled",
 							"pipeline", cfg.Name,
 							"sink_index", i,
 							"requests_per_second", rl["requests_per_second"],
@@ -155,10 +155,10 @@ func displayPipelineEndpoints(cfg config.PipelineConfig, routerMode bool) {
 						"status_url", fmt.Sprintf("http://localhost:%d%s", port, statusPath))
 				}
 
-				// Display rate limit info if configured
-				if rl, ok := sinkCfg.Options["rate_limit"].(map[string]any); ok {
+				// Display net limit info if configured
+				if rl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
 					if enabled, ok := rl["enabled"].(bool); ok && enabled {
-						logger.Info("msg", "HTTP rate limiting enabled",
+						logger.Info("msg", "HTTP net limiting enabled",
 							"pipeline", cfg.Name,
 							"sink_index", i,
 							"requests_per_second", rl["requests_per_second"],

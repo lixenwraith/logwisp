@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/ratelimit"
+	"logwisp/src/internal/netlimit"
 	"logwisp/src/internal/source"
 	"logwisp/src/internal/version"
 
@@ -40,8 +40,8 @@ type HTTPSink struct {
 	// For router integration
 	standalone bool
 
-	// Rate limiting
-	rateLimiter *ratelimit.Limiter
+	// Net limiting
+	netLimiter *netlimit.Limiter
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -56,7 +56,7 @@ type HTTPConfig struct {
 	StatusPath string
 	Heartbeat  config.HeartbeatConfig
 	SSL        *config.SSLConfig
-	RateLimit  *config.RateLimitConfig
+	NetLimit   *config.NetLimitConfig
 }
 
 // NewHTTPSink creates a new HTTP streaming sink
@@ -95,30 +95,30 @@ func NewHTTPSink(options map[string]any, logger *log.Logger) (*HTTPSink, error) 
 		}
 	}
 
-	// Extract rate limit config
-	if rl, ok := options["rate_limit"].(map[string]any); ok {
-		cfg.RateLimit = &config.RateLimitConfig{}
-		cfg.RateLimit.Enabled, _ = rl["enabled"].(bool)
+	// Extract net limit config
+	if rl, ok := options["net_limit"].(map[string]any); ok {
+		cfg.NetLimit = &config.NetLimitConfig{}
+		cfg.NetLimit.Enabled, _ = rl["enabled"].(bool)
 		if rps, ok := toFloat(rl["requests_per_second"]); ok {
-			cfg.RateLimit.RequestsPerSecond = rps
+			cfg.NetLimit.RequestsPerSecond = rps
 		}
 		if burst, ok := toInt(rl["burst_size"]); ok {
-			cfg.RateLimit.BurstSize = burst
+			cfg.NetLimit.BurstSize = burst
 		}
 		if limitBy, ok := rl["limit_by"].(string); ok {
-			cfg.RateLimit.LimitBy = limitBy
+			cfg.NetLimit.LimitBy = limitBy
 		}
 		if respCode, ok := toInt(rl["response_code"]); ok {
-			cfg.RateLimit.ResponseCode = respCode
+			cfg.NetLimit.ResponseCode = respCode
 		}
 		if msg, ok := rl["response_message"].(string); ok {
-			cfg.RateLimit.ResponseMessage = msg
+			cfg.NetLimit.ResponseMessage = msg
 		}
 		if maxPerIP, ok := toInt(rl["max_connections_per_ip"]); ok {
-			cfg.RateLimit.MaxConnectionsPerIP = maxPerIP
+			cfg.NetLimit.MaxConnectionsPerIP = maxPerIP
 		}
 		if maxTotal, ok := toInt(rl["max_total_connections"]); ok {
-			cfg.RateLimit.MaxTotalConnections = maxTotal
+			cfg.NetLimit.MaxTotalConnections = maxTotal
 		}
 	}
 
@@ -134,9 +134,9 @@ func NewHTTPSink(options map[string]any, logger *log.Logger) (*HTTPSink, error) 
 	}
 	h.lastProcessed.Store(time.Time{})
 
-	// Initialize rate limiter if configured
-	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
-		h.rateLimiter = ratelimit.New(*cfg.RateLimit, logger)
+	// Initialize net limiter if configured
+	if cfg.NetLimit != nil && cfg.NetLimit.Enabled {
+		h.netLimiter = netlimit.New(*cfg.NetLimit, logger)
 	}
 
 	return h, nil
@@ -212,9 +212,9 @@ func (h *HTTPSink) Stop() {
 func (h *HTTPSink) GetStats() SinkStats {
 	lastProc, _ := h.lastProcessed.Load().(time.Time)
 
-	var rateLimitStats map[string]any
-	if h.rateLimiter != nil {
-		rateLimitStats = h.rateLimiter.GetStats()
+	var netLimitStats map[string]any
+	if h.netLimiter != nil {
+		netLimitStats = h.netLimiter.GetStats()
 	}
 
 	return SinkStats{
@@ -230,7 +230,7 @@ func (h *HTTPSink) GetStats() SinkStats {
 				"stream": h.streamPath,
 				"status": h.statusPath,
 			},
-			"rate_limit": rateLimitStats,
+			"net_limit": netLimitStats,
 		},
 	}
 }
@@ -248,9 +248,9 @@ func (h *HTTPSink) RouteRequest(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
-	// Check rate limit first
+	// Check net limit first
 	remoteAddr := ctx.RemoteAddr().String()
-	if allowed, statusCode, message := h.rateLimiter.CheckHTTP(remoteAddr); !allowed {
+	if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
 		ctx.SetStatusCode(statusCode)
 		ctx.SetContentType("application/json")
 		json.NewEncoder(ctx).Encode(map[string]any{
@@ -279,11 +279,11 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 }
 
 func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
-	// Track connection for rate limiting
+	// Track connection for net limiting
 	remoteAddr := ctx.RemoteAddr().String()
-	if h.rateLimiter != nil {
-		h.rateLimiter.AddConnection(remoteAddr)
-		defer h.rateLimiter.RemoveConnection(remoteAddr)
+	if h.netLimiter != nil {
+		h.netLimiter.AddConnection(remoteAddr)
+		defer h.netLimiter.RemoveConnection(remoteAddr)
 	}
 
 	// Set SSE headers
@@ -450,11 +450,11 @@ func (h *HTTPSink) formatHeartbeat() string {
 func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetContentType("application/json")
 
-	var rateLimitStats any
-	if h.rateLimiter != nil {
-		rateLimitStats = h.rateLimiter.GetStats()
+	var netLimitStats any
+	if h.netLimiter != nil {
+		netLimitStats = h.netLimiter.GetStats()
 	} else {
-		rateLimitStats = map[string]any{
+		netLimitStats = map[string]any{
 			"enabled": false,
 		}
 	}
@@ -483,7 +483,7 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 			"ssl": map[string]bool{
 				"enabled": h.config.SSL != nil && h.config.SSL.Enabled,
 			},
-			"rate_limit": rateLimitStats,
+			"net_limit": netLimitStats,
 		},
 	}
 

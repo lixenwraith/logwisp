@@ -65,12 +65,6 @@ func (s *StdinSource) GetStats() SourceStats {
 	}
 }
 
-func (s *StdinSource) ApplyRateLimit(entry LogEntry) (LogEntry, bool) {
-	// TODO: Implement source-side rate limiting for aggregation/summarization
-	// For now, just pass through unchanged
-	return entry, true
-}
-
 func (s *StdinSource) readLoop() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -88,12 +82,6 @@ func (s *StdinSource) readLoop() {
 				Source:  "stdin",
 				Message: line,
 				Level:   extractLogLevel(line),
-			}
-
-			// Apply rate limiting
-			entry, allowed := s.ApplyRateLimit(entry)
-			if !allowed {
-				continue
 			}
 
 			s.publish(entry)

@@ -17,6 +17,9 @@ type PipelineConfig struct {
 	// Data sources for this pipeline
 	Sources []SourceConfig `toml:"sources"`
 
+	// Rate limiting
+	RateLimit *RateLimitConfig `toml:"rate_limit"`
+
 	// Filter configuration
 	Filters []FilterConfig `toml:"filters"`
 
@@ -37,7 +40,7 @@ type SourceConfig struct {
 
 	// Placeholder for future source-side rate limiting
 	// This will be used for features like aggregation and summarization
-	RateLimit *RateLimitConfig `toml:"rate_limit"`
+	NetLimit *NetLimitConfig `toml:"net_limit"`
 }
 
 // SinkConfig represents an output destination
@@ -187,9 +190,9 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-		// Validate rate limit if present
-		if rl, ok := cfg.Options["rate_limit"].(map[string]any); ok {
-			if err := validateRateLimitOptions("HTTP", pipelineName, sinkIndex, rl); err != nil {
+		// Validate net limit if present
+		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
+			if err := validateNetLimitOptions("HTTP", pipelineName, sinkIndex, rl); err != nil {
 				return err
 			}
 		}
@@ -231,9 +234,9 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-		// Validate rate limit if present
-		if rl, ok := cfg.Options["rate_limit"].(map[string]any); ok {
-			if err := validateRateLimitOptions("TCP", pipelineName, sinkIndex, rl); err != nil {
+		// Validate net limit if present
+		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
+			if err := validateNetLimitOptions("TCP", pipelineName, sinkIndex, rl); err != nil {
 				return err
 			}
 		}

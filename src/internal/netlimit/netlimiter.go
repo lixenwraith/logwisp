@@ -1,12 +1,12 @@
-// FILE: src/internal/ratelimit/ratelimiter.go
-package ratelimit
+// FILE: src/internal/netlimit/netlimiter.go
+package netlimit
 
 import (
 	"sync"
 	"time"
 )
 
-// TokenBucket implements a token bucket rate limiter
+// TokenBucket implements a token bucket net limiter
 type TokenBucket struct {
 	capacity   float64
 	tokens     float64

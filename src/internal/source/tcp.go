@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/ratelimit"
+	"logwisp/src/internal/netlimit"
 
 	"github.com/lixenwraith/log"
 	"github.com/panjf2000/gnet/v2"
@@ -29,7 +29,7 @@ type TCPSource struct {
 	engine      *gnet.Engine
 	engineMu    sync.Mutex
 	wg          sync.WaitGroup
-	rateLimiter *ratelimit.Limiter
+	netLimiter  *netlimit.Limiter
 	logger      *log.Logger
 
 	// Statistics
@@ -62,10 +62,10 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 	}
 	t.lastEntryTime.Store(time.Time{})
 
-	// Initialize rate limiter if configured
-	if rl, ok := options["rate_limit"].(map[string]any); ok {
+	// Initialize net limiter if configured
+	if rl, ok := options["net_limit"].(map[string]any); ok {
 		if enabled, _ := rl["enabled"].(bool); enabled {
-			cfg := config.RateLimitConfig{
+			cfg := config.NetLimitConfig{
 				Enabled: true,
 			}
 
@@ -85,7 +85,7 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 				cfg.MaxTotalConnections = maxTotal
 			}
 
-			t.rateLimiter = ratelimit.New(cfg, logger)
+			t.netLimiter = netlimit.New(cfg, logger)
 		}
 	}
 
@@ -150,9 +150,9 @@ func (t *TCPSource) Stop() {
 		(*engine).Stop(ctx)
 	}
 
-	// Shutdown rate limiter
-	if t.rateLimiter != nil {
-		t.rateLimiter.Shutdown()
+	// Shutdown net limiter
+	if t.netLimiter != nil {
+		t.netLimiter.Shutdown()
 	}
 
 	t.wg.Wait()
@@ -170,9 +170,9 @@ func (t *TCPSource) Stop() {
 func (t *TCPSource) GetStats() SourceStats {
 	lastEntry, _ := t.lastEntryTime.Load().(time.Time)
 
-	var rateLimitStats map[string]any
-	if t.rateLimiter != nil {
-		rateLimitStats = t.rateLimiter.GetStats()
+	var netLimitStats map[string]any
+	if t.netLimiter != nil {
+		netLimitStats = t.netLimiter.GetStats()
 	}
 
 	return SourceStats{
@@ -185,23 +185,12 @@ func (t *TCPSource) GetStats() SourceStats {
 			"port":               t.port,
 			"active_connections": t.activeConns.Load(),
 			"invalid_entries":    t.invalidEntries.Load(),
-			"rate_limit":         rateLimitStats,
+			"net_limit":          netLimitStats,
 		},
 	}
 }
 
-func (t *TCPSource) ApplyRateLimit(entry LogEntry) (LogEntry, bool) {
-	// TODO: Implement source-side rate limiting for aggregation/summarization
-	return entry, true
-}
-
 func (t *TCPSource) publish(entry LogEntry) bool {
-	// Apply rate limiting
-	entry, allowed := t.ApplyRateLimit(entry)
-	if !allowed {
-		return false
-	}
-
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -258,8 +247,8 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		"component", "tcp_source",
 		"remote_addr", remoteAddr)
 
-	// Check rate limit
-	if s.source.rateLimiter != nil {
+	// Check net limit
+	if s.source.netLimiter != nil {
 		remoteStr := c.RemoteAddr().String()
 		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteStr)
 		if err != nil {
@@ -270,15 +259,15 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 			return nil, gnet.Close
 		}
 
-		if !s.source.rateLimiter.CheckTCP(tcpAddr) {
-			s.source.logger.Warn("msg", "TCP connection rate limited",
+		if !s.source.netLimiter.CheckTCP(tcpAddr) {
+			s.source.logger.Warn("msg", "TCP connection net limited",
 				"component", "tcp_source",
 				"remote_addr", remoteAddr)
 			return nil, gnet.Close
 		}
 
 		// Track connection
-		s.source.rateLimiter.AddConnection(remoteStr)
+		s.source.netLimiter.AddConnection(remoteStr)
 	}
 
 	// Create client state
@@ -304,8 +293,8 @@ func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	s.mu.Unlock()
 
 	// Remove connection tracking
-	if s.source.rateLimiter != nil {
-		s.source.rateLimiter.RemoveConnection(remoteAddr)
+	if s.source.netLimiter != nil {
+		s.source.netLimiter.RemoveConnection(remoteAddr)
 	}
 
 	newCount := s.source.activeConns.Add(-1)

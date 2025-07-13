@@ -144,19 +144,7 @@ func (ds *DirectorySource) GetStats() SourceStats {
 	}
 }
 
-func (ds *DirectorySource) ApplyRateLimit(entry LogEntry) (LogEntry, bool) {
-	// TODO: Implement source-side rate limiting for aggregation/summarization
-	// For now, just pass through unchanged
-	return entry, true
-}
-
 func (ds *DirectorySource) publish(entry LogEntry) {
-	// Apply rate limiting (placeholder for now)
-	entry, allowed := ds.ApplyRateLimit(entry)
-	if !allowed {
-		return
-	}
-
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 

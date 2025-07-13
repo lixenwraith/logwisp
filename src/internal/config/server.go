@@ -11,8 +11,8 @@ type TCPConfig struct {
 	// SSL/TLS Configuration
 	SSL *SSLConfig `toml:"ssl"`
 
-	// Rate limiting
-	RateLimit *RateLimitConfig `toml:"rate_limit"`
+	// Net limiting
+	NetLimit *NetLimitConfig `toml:"net_limit"`
 
 	// Heartbeat
 	Heartbeat HeartbeatConfig `toml:"heartbeat"`
@@ -30,8 +30,8 @@ type HTTPConfig struct {
 	// SSL/TLS Configuration
 	SSL *SSLConfig `toml:"ssl"`
 
-	// Rate limiting
-	RateLimit *RateLimitConfig `toml:"rate_limit"`
+	// Nate limiting
+	NetLimit *NetLimitConfig `toml:"net_limit"`
 
 	// Heartbeat
 	Heartbeat HeartbeatConfig `toml:"heartbeat"`
@@ -45,8 +45,8 @@ type HeartbeatConfig struct {
 	Format           string `toml:"format"` // "comment" or "json"
 }
 
-type RateLimitConfig struct {
-	// Enable rate limiting
+type NetLimitConfig struct {
+	// Enable net limiting
 	Enabled bool `toml:"enabled"`
 
 	// Requests per second per client
@@ -55,12 +55,12 @@ type RateLimitConfig struct {
 	// Burst size (token bucket)
 	BurstSize int `toml:"burst_size"`
 
-	// Rate limit by: "ip", "user", "token", "global"
+	// Net limit by: "ip", "user", "token", "global"
 	LimitBy string `toml:"limit_by"`
 
-	// Response when rate limited
+	// Response when net limited
 	ResponseCode    int    `toml:"response_code"`    // Default: 429
-	ResponseMessage string `toml:"response_message"` // Default: "Rate limit exceeded"
+	ResponseMessage string `toml:"response_message"` // Default: "Net limit exceeded"
 
 	// Connection limits
 	MaxConnectionsPerIP int `toml:"max_connections_per_ip"`
@@ -85,7 +85,7 @@ func validateHeartbeatOptions(serverType, pipelineName string, sinkIndex int, hb
 	return nil
 }
 
-func validateRateLimitOptions(serverType, pipelineName string, sinkIndex int, rl map[string]any) error {
+func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl map[string]any) error {
 	if enabled, ok := rl["enabled"].(bool); !ok || !enabled {
 		return nil
 	}

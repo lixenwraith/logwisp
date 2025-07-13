@@ -48,6 +48,11 @@ func (c *Config) validate() error {
 			}
 		}
 
+		// Validate rate limit if present
+		if err := validateRateLimit(pipeline.Name, pipeline.RateLimit); err != nil {
+			return err
+		}
+
 		// Validate filters
 		for j, filterCfg := range pipeline.Filters {
 			if err := validateFilter(pipeline.Name, j, &filterCfg); err != nil {

@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"logwisp/src/internal/ratelimit"
 	"sync"
 	"time"
 
@@ -75,6 +76,16 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 			return fmt.Errorf("failed to create source[%d]: %w", i, err)
 		}
 		pipeline.Sources = append(pipeline.Sources, src)
+	}
+
+	// Create pipeline rate limiter
+	if cfg.RateLimit != nil {
+		limiter, err := ratelimit.New(*cfg.RateLimit, s.logger)
+		if err != nil {
+			pipelineCancel()
+			return fmt.Errorf("failed to create pipeline rate limiter: %w", err)
+		}
+		pipeline.RateLimiter = limiter
 	}
 
 	// Create filter chain
@@ -174,6 +185,14 @@ func (s *Service) wirePipeline(p *Pipeline) {
 					}
 
 					p.Stats.TotalEntriesProcessed.Add(1)
+
+					// Apply pipeline rate limiter
+					if p.RateLimiter != nil {
+						if !p.RateLimiter.Allow(entry) {
+							p.Stats.TotalEntriesDroppedByRateLimit.Add(1)
+							continue // Drop the entry
+						}
+					}
 
 					// Apply filters if configured
 					if p.FilterChain != nil {

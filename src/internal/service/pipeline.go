@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"logwisp/src/internal/ratelimit"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +21,7 @@ type Pipeline struct {
 	Name        string
 	Config      config.PipelineConfig
 	Sources     []source.Source
+	RateLimiter *ratelimit.Limiter
 	FilterChain *filter.Chain
 	Sinks       []sink.Sink
 	Stats       *PipelineStats
@@ -36,12 +38,13 @@ type Pipeline struct {
 
 // PipelineStats contains statistics for a pipeline
 type PipelineStats struct {
-	StartTime             time.Time
-	TotalEntriesProcessed atomic.Uint64
-	TotalEntriesFiltered  atomic.Uint64
-	SourceStats           []source.SourceStats
-	SinkStats             []sink.SinkStats
-	FilterStats           map[string]any
+	StartTime                      time.Time
+	TotalEntriesProcessed          atomic.Uint64
+	TotalEntriesDroppedByRateLimit atomic.Uint64
+	TotalEntriesFiltered           atomic.Uint64
+	SourceStats                    []source.SourceStats
+	SinkStats                      []sink.SinkStats
+	FilterStats                    map[string]any
 }
 
 // Shutdown gracefully stops the pipeline
@@ -112,6 +115,18 @@ func (p *Pipeline) GetStats() map[string]any {
 		})
 	}
 
+	// Collect rate limit stats
+	var rateLimitStats map[string]any
+	if p.RateLimiter != nil {
+		rateLimitStats = p.RateLimiter.GetStats()
+	}
+
+	// Collect filter stats
+	var filterStats map[string]any
+	if p.FilterChain != nil {
+		filterStats = p.FilterChain.GetStats()
+	}
+
 	// Collect sink stats
 	sinkStats := make([]map[string]any, 0, len(p.Sinks))
 	for _, s := range p.Sinks {
@@ -130,23 +145,19 @@ func (p *Pipeline) GetStats() map[string]any {
 		})
 	}
 
-	// Collect filter stats
-	var filterStats map[string]any
-	if p.FilterChain != nil {
-		filterStats = p.FilterChain.GetStats()
-	}
-
 	return map[string]any{
-		"name":            p.Name,
-		"uptime_seconds":  int(time.Since(p.Stats.StartTime).Seconds()),
-		"total_processed": p.Stats.TotalEntriesProcessed.Load(),
-		"total_filtered":  p.Stats.TotalEntriesFiltered.Load(),
-		"sources":         sourceStats,
-		"sinks":           sinkStats,
-		"filters":         filterStats,
-		"source_count":    len(p.Sources),
-		"sink_count":      len(p.Sinks),
-		"filter_count":    len(p.Config.Filters),
+		"name":                     p.Name,
+		"uptime_seconds":           int(time.Since(p.Stats.StartTime).Seconds()),
+		"total_processed":          p.Stats.TotalEntriesProcessed.Load(),
+		"total_dropped_rate_limit": p.Stats.TotalEntriesDroppedByRateLimit.Load(),
+		"total_filtered":           p.Stats.TotalEntriesFiltered.Load(),
+		"sources":                  sourceStats,
+		"rate_limiter":             rateLimitStats,
+		"sinks":                    sinkStats,
+		"filters":                  filterStats,
+		"source_count":             len(p.Sources),
+		"sink_count":               len(p.Sinks),
+		"filter_count":             len(p.Config.Filters),
 	}
 }
 

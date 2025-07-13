@@ -28,11 +28,6 @@ type Source interface {
 
 	// GetStats returns source statistics
 	GetStats() SourceStats
-
-	// ApplyRateLimit applies source-side rate limiting
-	// TODO: This is a placeholder for future features like aggregation and summarization
-	// Currently just returns the entry unchanged
-	ApplyRateLimit(entry LogEntry) (LogEntry, bool)
 }
 
 // SourceStats contains statistics about a source

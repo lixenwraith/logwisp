@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/ratelimit"
+	"logwisp/src/internal/netlimit"
 	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
@@ -29,7 +29,7 @@ type TCPSink struct {
 	engine      *gnet.Engine
 	engineMu    sync.Mutex
 	wg          sync.WaitGroup
-	rateLimiter *ratelimit.Limiter
+	netLimiter  *netlimit.Limiter
 	logger      *log.Logger
 
 	// Statistics
@@ -43,7 +43,7 @@ type TCPConfig struct {
 	BufferSize int
 	Heartbeat  config.HeartbeatConfig
 	SSL        *config.SSLConfig
-	RateLimit  *config.RateLimitConfig
+	NetLimit   *config.NetLimitConfig
 }
 
 // NewTCPSink creates a new TCP streaming sink
@@ -74,30 +74,30 @@ func NewTCPSink(options map[string]any, logger *log.Logger) (*TCPSink, error) {
 		}
 	}
 
-	// Extract rate limit config
-	if rl, ok := options["rate_limit"].(map[string]any); ok {
-		cfg.RateLimit = &config.RateLimitConfig{}
-		cfg.RateLimit.Enabled, _ = rl["enabled"].(bool)
+	// Extract net limit config
+	if rl, ok := options["net_limit"].(map[string]any); ok {
+		cfg.NetLimit = &config.NetLimitConfig{}
+		cfg.NetLimit.Enabled, _ = rl["enabled"].(bool)
 		if rps, ok := toFloat(rl["requests_per_second"]); ok {
-			cfg.RateLimit.RequestsPerSecond = rps
+			cfg.NetLimit.RequestsPerSecond = rps
 		}
 		if burst, ok := toInt(rl["burst_size"]); ok {
-			cfg.RateLimit.BurstSize = burst
+			cfg.NetLimit.BurstSize = burst
 		}
 		if limitBy, ok := rl["limit_by"].(string); ok {
-			cfg.RateLimit.LimitBy = limitBy
+			cfg.NetLimit.LimitBy = limitBy
 		}
 		if respCode, ok := toInt(rl["response_code"]); ok {
-			cfg.RateLimit.ResponseCode = respCode
+			cfg.NetLimit.ResponseCode = respCode
 		}
 		if msg, ok := rl["response_message"].(string); ok {
-			cfg.RateLimit.ResponseMessage = msg
+			cfg.NetLimit.ResponseMessage = msg
 		}
 		if maxPerIP, ok := toInt(rl["max_connections_per_ip"]); ok {
-			cfg.RateLimit.MaxConnectionsPerIP = maxPerIP
+			cfg.NetLimit.MaxConnectionsPerIP = maxPerIP
 		}
 		if maxTotal, ok := toInt(rl["max_total_connections"]); ok {
-			cfg.RateLimit.MaxTotalConnections = maxTotal
+			cfg.NetLimit.MaxTotalConnections = maxTotal
 		}
 	}
 
@@ -110,8 +110,8 @@ func NewTCPSink(options map[string]any, logger *log.Logger) (*TCPSink, error) {
 	}
 	t.lastProcessed.Store(time.Time{})
 
-	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
-		t.rateLimiter = ratelimit.New(*cfg.RateLimit, logger)
+	if cfg.NetLimit != nil && cfg.NetLimit.Enabled {
+		t.netLimiter = netlimit.New(*cfg.NetLimit, logger)
 	}
 
 	return t, nil
@@ -194,9 +194,9 @@ func (t *TCPSink) Stop() {
 func (t *TCPSink) GetStats() SinkStats {
 	lastProc, _ := t.lastProcessed.Load().(time.Time)
 
-	var rateLimitStats map[string]any
-	if t.rateLimiter != nil {
-		rateLimitStats = t.rateLimiter.GetStats()
+	var netLimitStats map[string]any
+	if t.netLimiter != nil {
+		netLimitStats = t.netLimiter.GetStats()
 	}
 
 	return SinkStats{
@@ -208,7 +208,7 @@ func (t *TCPSink) GetStats() SinkStats {
 		Details: map[string]any{
 			"port":        t.config.Port,
 			"buffer_size": t.config.BufferSize,
-			"rate_limit":  rateLimitStats,
+			"net_limit":   netLimitStats,
 		},
 	}
 }
@@ -313,8 +313,8 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	remoteAddr := c.RemoteAddr().String()
 	s.sink.logger.Debug("msg", "TCP connection attempt", "remote_addr", remoteAddr)
 
-	// Check rate limit
-	if s.sink.rateLimiter != nil {
+	// Check net limit
+	if s.sink.netLimiter != nil {
 		// Parse the remote address to get proper net.Addr
 		remoteStr := c.RemoteAddr().String()
 		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteStr)
@@ -325,15 +325,15 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 			return nil, gnet.Close
 		}
 
-		if !s.sink.rateLimiter.CheckTCP(tcpAddr) {
-			s.sink.logger.Warn("msg", "TCP connection rate limited",
+		if !s.sink.netLimiter.CheckTCP(tcpAddr) {
+			s.sink.logger.Warn("msg", "TCP connection net limited",
 				"remote_addr", remoteAddr)
-			// Silently close connection when rate limited
+			// Silently close connection when net limited
 			return nil, gnet.Close
 		}
 
 		// Track connection
-		s.sink.rateLimiter.AddConnection(remoteStr)
+		s.sink.netLimiter.AddConnection(remoteStr)
 	}
 
 	s.connections.Store(c, struct{}{})
@@ -352,8 +352,8 @@ func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	remoteAddr := c.RemoteAddr().String()
 
 	// Remove connection tracking
-	if s.sink.rateLimiter != nil {
-		s.sink.rateLimiter.RemoveConnection(c.RemoteAddr().String())
+	if s.sink.netLimiter != nil {
+		s.sink.netLimiter.RemoveConnection(c.RemoteAddr().String())
 	}
 
 	newCount := s.sink.activeConns.Add(-1)
