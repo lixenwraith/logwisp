@@ -3,13 +3,14 @@ package sink
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/format"
 	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
@@ -25,6 +26,7 @@ type TCPClientSink struct {
 	wg        sync.WaitGroup
 	startTime time.Time
 	logger    *log.Logger
+	formatter format.Formatter
 
 	// Reconnection state
 	reconnecting   atomic.Bool
@@ -54,7 +56,7 @@ type TCPClientConfig struct {
 }
 
 // NewTCPClientSink creates a new TCP client sink
-func NewTCPClientSink(options map[string]any, logger *log.Logger) (*TCPClientSink, error) {
+func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPClientSink, error) {
 	cfg := TCPClientConfig{
 		BufferSize:        1000,
 		DialTimeout:       10 * time.Second,
@@ -107,6 +109,7 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger) (*TCPClientSin
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
+		formatter: formatter,
 	}
 	t.lastProcessed.Store(time.Time{})
 	t.connectionUptime.Store(time.Duration(0))
@@ -141,7 +144,7 @@ func (t *TCPClientSink) Stop() {
 	// Close connection
 	t.connMu.Lock()
 	if t.conn != nil {
-		t.conn.Close()
+		_ = t.conn.Close()
 	}
 	t.connMu.Unlock()
 
@@ -292,12 +295,17 @@ func (t *TCPClientSink) monitorConnection(conn net.Conn) {
 			return
 		case <-ticker.C:
 			// Set read deadline
-			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			// TODO: Add t.config.ReadTimeout instead of static value
+			if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				t.logger.Debug("msg", "Failed to set read deadline", "error", err)
+				return
+			}
 
 			// Try to read (we don't expect any data)
 			_, err := conn.Read(buf)
 			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
 					// Timeout is expected, connection is still alive
 					continue
 				}
@@ -347,14 +355,11 @@ func (t *TCPClientSink) sendEntry(entry source.LogEntry) error {
 		return fmt.Errorf("not connected")
 	}
 
-	// Marshal to JSON
-	data, err := json.Marshal(entry)
+	// Format data
+	data, err := t.formatter.Format(entry)
 	if err != nil {
 		return fmt.Errorf("failed to marshal entry: %w", err)
 	}
-
-	// Add newline
-	data = append(data, '\n')
 
 	// Set write deadline
 	if err := conn.SetWriteDeadline(time.Now().Add(t.config.WriteTimeout)); err != nil {

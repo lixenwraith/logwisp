@@ -7,3 +7,5 @@ cert
 bin
 script
 build
+*.log
+*.toml

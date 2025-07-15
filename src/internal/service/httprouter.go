@@ -141,12 +141,6 @@ func (r *HTTPRouter) registerHTTPSink(pipelineName string, httpSink *sink.HTTPSi
 	return nil
 }
 
-// UnregisterStream is deprecated
-func (r *HTTPRouter) UnregisterStream(streamName string) {
-	r.logger.Warn("msg", "UnregisterStream is deprecated",
-		"component", "http_router")
-}
-
 // UnregisterPipeline removes a pipeline's routes
 func (r *HTTPRouter) UnregisterPipeline(pipelineName string) {
 	r.mu.RLock()

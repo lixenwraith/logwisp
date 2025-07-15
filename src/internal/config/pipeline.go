@@ -23,6 +23,10 @@ type PipelineConfig struct {
 	// Filter configuration
 	Filters []FilterConfig `toml:"filters"`
 
+	// Log formatting configuration
+	Format        string         `toml:"format"`
+	FormatOptions map[string]any `toml:"format_options"`
+
 	// Output sinks for this pipeline
 	Sinks []SinkConfig `toml:"sinks"`
 

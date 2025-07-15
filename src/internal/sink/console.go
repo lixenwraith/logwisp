@@ -3,13 +3,13 @@ package sink
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/format"
 	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
@@ -29,6 +29,7 @@ type StdoutSink struct {
 	done      chan struct{}
 	startTime time.Time
 	logger    *log.Logger
+	formatter format.Formatter
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -36,7 +37,7 @@ type StdoutSink struct {
 }
 
 // NewStdoutSink creates a new stdout sink
-func NewStdoutSink(options map[string]any, logger *log.Logger) (*StdoutSink, error) {
+func NewStdoutSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*StdoutSink, error) {
 	config := ConsoleConfig{
 		Target:     "stdout",
 		BufferSize: 1000,
@@ -58,6 +59,7 @@ func NewStdoutSink(options map[string]any, logger *log.Logger) (*StdoutSink, err
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
+		formatter: formatter,
 	}
 	s.lastProcessed.Store(time.Time{})
 
@@ -117,14 +119,12 @@ func (s *StdoutSink) processLoop(ctx context.Context) {
 			}
 
 			// Format and write
-			timestamp := entry.Time.Format(time.RFC3339Nano)
-			level := entry.Level
-			if level == "" {
-				level = "INFO"
+			formatted, err := s.formatter.Format(entry)
+			if err != nil {
+				s.logger.Error("msg", "Failed to format log entry for stdout", "error", err)
+				continue
 			}
-
-			// Direct write to stdout
-			fmt.Fprintf(s.output, "[%s] %s %s\n", timestamp, level, entry.Message)
+			s.output.Write(formatted)
 
 		case <-ctx.Done():
 			return
@@ -142,6 +142,7 @@ type StderrSink struct {
 	done      chan struct{}
 	startTime time.Time
 	logger    *log.Logger
+	formatter format.Formatter
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -149,7 +150,7 @@ type StderrSink struct {
 }
 
 // NewStderrSink creates a new stderr sink
-func NewStderrSink(options map[string]any, logger *log.Logger) (*StderrSink, error) {
+func NewStderrSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*StderrSink, error) {
 	config := ConsoleConfig{
 		Target:     "stderr",
 		BufferSize: 1000,
@@ -171,6 +172,7 @@ func NewStderrSink(options map[string]any, logger *log.Logger) (*StderrSink, err
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
+		formatter: formatter,
 	}
 	s.lastProcessed.Store(time.Time{})
 
@@ -230,14 +232,12 @@ func (s *StderrSink) processLoop(ctx context.Context) {
 			}
 
 			// Format and write
-			timestamp := entry.Time.Format(time.RFC3339Nano)
-			level := entry.Level
-			if level == "" {
-				level = "INFO"
+			formatted, err := s.formatter.Format(entry)
+			if err != nil {
+				s.logger.Error("msg", "Failed to format log entry for stderr", "error", err)
+				continue
 			}
-
-			// Direct write to stderr
-			fmt.Fprintf(s.output, "[%s] %s %s\n", timestamp, level, entry.Message)
+			s.output.Write(formatted)
 
 		case <-ctx.Done():
 			return

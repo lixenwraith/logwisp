@@ -2,14 +2,15 @@
 package sink
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/format"
 	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
@@ -27,6 +28,7 @@ type HTTPClientSink struct {
 	wg        sync.WaitGroup
 	startTime time.Time
 	logger    *log.Logger
+	formatter format.Formatter
 
 	// Statistics
 	totalProcessed    atomic.Uint64
@@ -56,7 +58,7 @@ type HTTPClientConfig struct {
 }
 
 // NewHTTPClientSink creates a new HTTP client sink
-func NewHTTPClientSink(options map[string]any, logger *log.Logger) (*HTTPClientSink, error) {
+func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*HTTPClientSink, error) {
 	cfg := HTTPClientConfig{
 		BufferSize:   1000,
 		BatchSize:    100,
@@ -131,6 +133,7 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger) (*HTTPClientS
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
+		formatter: formatter,
 	}
 	h.lastProcessed.Store(time.Time{})
 	h.lastBatchSent.Store(time.Time{})
@@ -296,10 +299,33 @@ func (h *HTTPClientSink) sendBatch(batch []source.LogEntry) {
 	h.totalBatches.Add(1)
 	h.lastBatchSent.Store(time.Now())
 
-	// Prepare request body
-	body, err := json.Marshal(batch)
+	// Special handling for JSON formatter with batching
+	var body []byte
+	var err error
+
+	if jsonFormatter, ok := h.formatter.(*format.JSONFormatter); ok {
+		// Use the batch formatting method
+		body, err = jsonFormatter.FormatBatch(batch)
+	} else {
+		// For non-JSON formatters, format each entry and combine
+		var formatted [][]byte
+		for _, entry := range batch {
+			entryBytes, err := h.formatter.Format(entry)
+			if err != nil {
+				h.logger.Error("msg", "Failed to format entry in batch",
+					"component", "http_client_sink",
+					"error", err)
+				continue
+			}
+			formatted = append(formatted, entryBytes)
+		}
+
+		// For raw/text formats, join with newlines
+		body = bytes.Join(formatted, nil)
+	}
+
 	if err != nil {
-		h.logger.Error("msg", "Failed to marshal batch",
+		h.logger.Error("msg", "Failed to format batch",
 			"component", "http_client_sink",
 			"error", err,
 			"batch_size", len(batch))
@@ -318,10 +344,11 @@ func (h *HTTPClientSink) sendBatch(batch []source.LogEntry) {
 			retryDelay = time.Duration(float64(retryDelay) * h.config.RetryBackoff)
 		}
 
+		// TODO: defer placement issue
 		// Create request
 		req := fasthttp.AcquireRequest()
-		resp := fasthttp.AcquireResponse()
 		defer fasthttp.ReleaseRequest(req)
+		resp := fasthttp.AcquireResponse()
 		defer fasthttp.ReleaseResponse(resp)
 
 		req.SetRequestURI(h.config.URL)

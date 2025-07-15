@@ -3,15 +3,16 @@ package sink
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/format"
 	"logwisp/src/internal/netlimit"
 	"logwisp/src/internal/source"
 	"logwisp/src/internal/version"
@@ -32,6 +33,7 @@ type HTTPSink struct {
 	done          chan struct{}
 	wg            sync.WaitGroup
 	logger        *log.Logger
+	formatter     format.Formatter
 
 	// Path configuration
 	streamPath string
@@ -60,7 +62,7 @@ type HTTPConfig struct {
 }
 
 // NewHTTPSink creates a new HTTP streaming sink
-func NewHTTPSink(options map[string]any, logger *log.Logger) (*HTTPSink, error) {
+func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*HTTPSink, error) {
 	cfg := HTTPConfig{
 		Port:       8080,
 		BufferSize: 1000,
@@ -91,8 +93,8 @@ func NewHTTPSink(options map[string]any, logger *log.Logger) (*HTTPSink, error) 
 		}
 		cfg.Heartbeat.IncludeTimestamp, _ = hb["include_timestamp"].(bool)
 		cfg.Heartbeat.IncludeStats, _ = hb["include_stats"].(bool)
-		if format, ok := hb["format"].(string); ok {
-			cfg.Heartbeat.Format = format
+		if hbFormat, ok := hb["format"].(string); ok {
+			cfg.Heartbeat.Format = hbFormat
 		}
 	}
 
@@ -132,6 +134,7 @@ func NewHTTPSink(options map[string]any, logger *log.Logger) (*HTTPSink, error) 
 		statusPath: cfg.StatusPath,
 		standalone: true,
 		logger:     logger,
+		formatter:  formatter,
 	}
 	h.lastProcessed.Store(time.Time{})
 
@@ -148,6 +151,7 @@ func (h *HTTPSink) Input() chan<- source.LogEntry {
 }
 
 func (h *HTTPSink) Start(ctx context.Context) error {
+	// TODO: use or remove unused ctx
 	if !h.standalone {
 		// In router mode, don't start our own server
 		h.logger.Debug("msg", "HTTP sink in router mode, skipping server start",
@@ -356,7 +360,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 			"buffer_size": h.config.BufferSize,
 		}
 		data, _ := json.Marshal(connectionInfo)
-		fmt.Fprintf(w, "event: connected\ndata: %s\n\n", data)
+		fmt.Fprintf(w, "event: connected\ndata: %s\n", data)
 		w.Flush()
 
 		var ticker *time.Ticker
@@ -375,27 +379,28 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 					return
 				}
 
-				data, err := json.Marshal(entry)
-				if err != nil {
-					h.logger.Error("msg", "Failed to marshal log entry",
+				if err := h.formatEntryForSSE(w, entry); err != nil {
+					h.logger.Error("msg", "Failed to format log entry",
 						"component", "http_sink",
 						"error", err,
 						"entry_source", entry.Source)
 					continue
 				}
 
-				fmt.Fprintf(w, "data: %s\n\n", data)
 				if err := w.Flush(); err != nil {
-					// Client disconnected, fasthttp handles cleanup
+					// Client disconnected
 					return
 				}
 
 			case <-tickerChan:
-				if heartbeat := h.formatHeartbeat(); heartbeat != "" {
-					fmt.Fprint(w, heartbeat)
-					if err := w.Flush(); err != nil {
-						return
-					}
+				heartbeatEntry := h.createHeartbeatEntry()
+				if err := h.formatEntryForSSE(w, heartbeatEntry); err != nil {
+					h.logger.Error("msg", "Failed to format heartbeat",
+						"component", "http_sink",
+						"error", err)
+				}
+				if err := w.Flush(); err != nil {
+					return
 				}
 
 			case <-h.done:
@@ -410,42 +415,46 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 	ctx.SetBodyStreamWriter(streamFunc)
 }
 
-func (h *HTTPSink) formatHeartbeat() string {
-	if !h.config.Heartbeat.Enabled {
-		return ""
+func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry source.LogEntry) error {
+	formatted, err := h.formatter.Format(entry)
+	if err != nil {
+		return err
 	}
 
-	if h.config.Heartbeat.Format == "json" {
-		data := make(map[string]any)
-		data["type"] = "heartbeat"
+	// Remove trailing newline if present (SSE adds its own)
+	formatted = bytes.TrimSuffix(formatted, []byte{'\n'})
 
-		if h.config.Heartbeat.IncludeTimestamp {
-			data["timestamp"] = time.Now().UTC().Format(time.RFC3339)
-		}
-
-		if h.config.Heartbeat.IncludeStats {
-			data["active_clients"] = h.activeClients.Load()
-			data["uptime_seconds"] = int(time.Since(h.startTime).Seconds())
-		}
-
-		jsonData, _ := json.Marshal(data)
-		return fmt.Sprintf("data: %s\n\n", jsonData)
+	// Multi-line content handler
+	lines := bytes.Split(formatted, []byte{'\n'})
+	for _, line := range lines {
+		// SSE needs "data: " prefix for each line
+		fmt.Fprintf(w, "data: %s\n", line)
 	}
 
-	// Default comment format
-	var parts []string
-	parts = append(parts, "heartbeat")
+	return nil
+}
 
-	if h.config.Heartbeat.IncludeTimestamp {
-		parts = append(parts, time.Now().UTC().Format(time.RFC3339))
-	}
+func (h *HTTPSink) createHeartbeatEntry() source.LogEntry {
+	message := "heartbeat"
+
+	// Build fields for heartbeat metadata
+	fields := make(map[string]any)
+	fields["type"] = "heartbeat"
 
 	if h.config.Heartbeat.IncludeStats {
-		parts = append(parts, fmt.Sprintf("clients=%d", h.activeClients.Load()))
-		parts = append(parts, fmt.Sprintf("uptime=%ds", int(time.Since(h.startTime).Seconds())))
+		fields["active_clients"] = h.activeClients.Load()
+		fields["uptime_seconds"] = int(time.Since(h.startTime).Seconds())
 	}
 
-	return fmt.Sprintf(": %s\n\n", strings.Join(parts, " "))
+	fieldsJSON, _ := json.Marshal(fields)
+
+	return source.LogEntry{
+		Time:    time.Now(),
+		Source:  "logwisp-http",
+		Level:   "INFO",
+		Message: message,
+		Fields:  fieldsJSON,
+	}
 }
 
 func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {

@@ -62,7 +62,7 @@ func (rs *routerServer) requestHandler(ctx *fasthttp.RequestCtx) {
 
 	for prefix, route := range rs.routes {
 		if strings.HasPrefix(path, prefix) {
-			// Use longest prefix match
+			// Longest prefix match
 			if len(prefix) > len(matchedPrefix) {
 				matchedPrefix = prefix
 				matchedSink = route

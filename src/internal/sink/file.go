@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/format"
 	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
@@ -19,6 +20,7 @@ type FileSink struct {
 	done      chan struct{}
 	startTime time.Time
 	logger    *log.Logger // Application logger
+	formatter format.Formatter
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -26,7 +28,7 @@ type FileSink struct {
 }
 
 // NewFileSink creates a new file sink
-func NewFileSink(options map[string]any, logger *log.Logger) (*FileSink, error) {
+func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*FileSink, error) {
 	directory, ok := options["directory"].(string)
 	if !ok || directory == "" {
 		return nil, fmt.Errorf("file sink requires 'directory' option")
@@ -82,6 +84,7 @@ func NewFileSink(options map[string]any, logger *log.Logger) (*FileSink, error) 
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
+		formatter: formatter,
 	}
 	fs.lastProcessed.Store(time.Time{})
 
@@ -135,16 +138,21 @@ func (fs *FileSink) processLoop(ctx context.Context) {
 			fs.totalProcessed.Add(1)
 			fs.lastProcessed.Store(time.Now())
 
-			// Format the log entry
-			// Include timestamp and level since we disabled them in the writer
-			timestamp := entry.Time.Format(time.RFC3339Nano)
-			level := entry.Level
-			if level == "" {
-				level = "INFO"
+			// Format using the formatter instead of fmt.Sprintf
+			formatted, err := fs.formatter.Format(entry)
+			if err != nil {
+				fs.logger.Error("msg", "Failed to format log entry",
+					"component", "file_sink",
+					"error", err)
+				continue
 			}
 
-			// Write to file using the internal logger
-			fs.writer.Message(fmt.Sprintf("[%s] %s %s", timestamp, level, entry.Message))
+			// Write formatted bytes (strip newline as writer adds it)
+			message := string(formatted)
+			if len(message) > 0 && message[len(message)-1] == '\n' {
+				message = message[:len(message)-1]
+			}
+			fs.writer.Message(message)
 
 		case <-ctx.Done():
 			return

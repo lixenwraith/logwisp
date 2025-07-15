@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/format"
 	"logwisp/src/internal/netlimit"
 	"logwisp/src/internal/source"
 
@@ -31,6 +32,7 @@ type TCPSink struct {
 	wg          sync.WaitGroup
 	netLimiter  *netlimit.Limiter
 	logger      *log.Logger
+	formatter   format.Formatter
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -47,7 +49,7 @@ type TCPConfig struct {
 }
 
 // NewTCPSink creates a new TCP streaming sink
-func NewTCPSink(options map[string]any, logger *log.Logger) (*TCPSink, error) {
+func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPSink, error) {
 	cfg := TCPConfig{
 		Port:       9090,
 		BufferSize: 1000,
@@ -70,8 +72,8 @@ func NewTCPSink(options map[string]any, logger *log.Logger) (*TCPSink, error) {
 		}
 		cfg.Heartbeat.IncludeTimestamp, _ = hb["include_timestamp"].(bool)
 		cfg.Heartbeat.IncludeStats, _ = hb["include_stats"].(bool)
-		if format, ok := hb["format"].(string); ok {
-			cfg.Heartbeat.Format = format
+		if hbFormat, ok := hb["format"].(string); ok {
+			cfg.Heartbeat.Format = hbFormat
 		}
 	}
 
@@ -108,6 +110,7 @@ func NewTCPSink(options map[string]any, logger *log.Logger) (*TCPSink, error) {
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
+		formatter: formatter,
 	}
 	t.lastProcessed.Store(time.Time{})
 
@@ -233,15 +236,14 @@ func (t *TCPSink) broadcastLoop() {
 			t.totalProcessed.Add(1)
 			t.lastProcessed.Store(time.Now())
 
-			data, err := json.Marshal(entry)
+			data, err := t.formatter.Format(entry)
 			if err != nil {
-				t.logger.Error("msg", "Failed to marshal log entry",
+				t.logger.Error("msg", "Failed to format log entry",
 					"component", "tcp_sink",
 					"error", err,
 					"entry_source", entry.Source)
 				continue
 			}
-			data = append(data, '\n')
 
 			t.server.connections.Range(func(key, value any) bool {
 				conn := key.(gnet.Conn)
@@ -250,13 +252,20 @@ func (t *TCPSink) broadcastLoop() {
 			})
 
 		case <-tickerChan:
-			if heartbeat := t.formatHeartbeat(); heartbeat != nil {
-				t.server.connections.Range(func(key, value any) bool {
-					conn := key.(gnet.Conn)
-					conn.AsyncWrite(heartbeat, nil)
-					return true
-				})
+			heartbeatEntry := t.createHeartbeatEntry()
+			data, err := t.formatter.Format(heartbeatEntry)
+			if err != nil {
+				t.logger.Error("msg", "Failed to format heartbeat",
+					"component", "tcp_sink",
+					"error", err)
+				continue
 			}
+
+			t.server.connections.Range(func(key, value any) bool {
+				conn := key.(gnet.Conn)
+				conn.AsyncWrite(data, nil)
+				return true
+			})
 
 		case <-t.done:
 			return
@@ -264,26 +273,28 @@ func (t *TCPSink) broadcastLoop() {
 	}
 }
 
-func (t *TCPSink) formatHeartbeat() []byte {
-	if !t.config.Heartbeat.Enabled {
-		return nil
-	}
+// Create heartbeat as a proper LogEntry
+func (t *TCPSink) createHeartbeatEntry() source.LogEntry {
+	message := "heartbeat"
 
-	data := make(map[string]any)
-	data["type"] = "heartbeat"
-
-	if t.config.Heartbeat.IncludeTimestamp {
-		data["time"] = time.Now().UTC().Format(time.RFC3339Nano)
-	}
+	// Build fields for heartbeat metadata
+	fields := make(map[string]any)
+	fields["type"] = "heartbeat"
 
 	if t.config.Heartbeat.IncludeStats {
-		data["active_connections"] = t.activeConns.Load()
-		data["uptime_seconds"] = int(time.Since(t.startTime).Seconds())
+		fields["active_connections"] = t.activeConns.Load()
+		fields["uptime_seconds"] = int(time.Since(t.startTime).Seconds())
 	}
 
-	// For TCP, always use JSON format
-	jsonData, _ := json.Marshal(data)
-	return append(jsonData, '\n')
+	fieldsJSON, _ := json.Marshal(fields)
+
+	return source.LogEntry{
+		Time:    time.Now(),
+		Source:  "logwisp-tcp",
+		Level:   "INFO",
+		Message: message,
+		Fields:  fieldsJSON,
+	}
 }
 
 // GetActiveConnections returns the current number of connections
@@ -371,7 +382,7 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 	return gnet.None
 }
 
-// noopLogger implements gnet's Logger interface but discards everything
+// noopLogger implements gnet Logger interface but discards everything
 type noopLogger struct{}
 
 func (n noopLogger) Debugf(format string, args ...any) {}

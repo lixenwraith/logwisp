@@ -3,6 +3,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -245,7 +246,7 @@ func (ds *DirectorySource) ensureWatcher(path string) {
 	go func() {
 		defer ds.wg.Done()
 		if err := w.watch(ds.ctx); err != nil {
-			if err == context.Canceled {
+			if errors.Is(err, context.Canceled) {
 				ds.logger.Debug("msg", "Watcher cancelled",
 					"component", "directory_source",
 					"path", path)

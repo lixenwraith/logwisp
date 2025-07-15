@@ -279,7 +279,7 @@ func (w *fileWatcher) checkFile() error {
 		// Update position after successful read
 		currentPos, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
-			// Log error but don't fail - position tracking is best effort
+			// Log error but don't fail - best effort position tracking
 			w.logger.Warn("msg", "Failed to get file position", "error", err)
 			// Use size as fallback position
 			currentPos = currentSize
