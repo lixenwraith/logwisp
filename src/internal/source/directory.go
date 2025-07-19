@@ -47,7 +47,7 @@ func NewDirectorySource(options map[string]any, logger *log.Logger) (*DirectoryS
 	}
 
 	checkInterval := 100 * time.Millisecond
-	if ms, ok := toInt(options["check_interval_ms"]); ok && ms > 0 {
+	if ms, ok := options["check_interval_ms"].(int64); ok && ms > 0 {
 		checkInterval = time.Duration(ms) * time.Millisecond
 	}
 
@@ -115,7 +115,7 @@ func (ds *DirectorySource) GetStats() SourceStats {
 	lastEntry, _ := ds.lastEntryTime.Load().(time.Time)
 
 	ds.mu.RLock()
-	watcherCount := len(ds.watchers)
+	watcherCount := int64(len(ds.watchers))
 	details := make(map[string]any)
 
 	// Add watcher details

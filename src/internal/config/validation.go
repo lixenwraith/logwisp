@@ -23,7 +23,7 @@ func (c *Config) validate() error {
 	}
 
 	// Track used ports across all pipelines
-	allPorts := make(map[int]string)
+	allPorts := make(map[int64]string)
 	pipelineNames := make(map[string]bool)
 
 	for i, pipeline := range c.Pipelines {

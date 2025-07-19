@@ -4,9 +4,9 @@ package config
 import "fmt"
 
 type TCPConfig struct {
-	Enabled    bool `toml:"enabled"`
-	Port       int  `toml:"port"`
-	BufferSize int  `toml:"buffer_size"`
+	Enabled    bool  `toml:"enabled"`
+	Port       int64 `toml:"port"`
+	BufferSize int64 `toml:"buffer_size"`
 
 	// SSL/TLS Configuration
 	SSL *SSLConfig `toml:"ssl"`
@@ -19,9 +19,9 @@ type TCPConfig struct {
 }
 
 type HTTPConfig struct {
-	Enabled    bool `toml:"enabled"`
-	Port       int  `toml:"port"`
-	BufferSize int  `toml:"buffer_size"`
+	Enabled    bool  `toml:"enabled"`
+	Port       int64 `toml:"port"`
+	BufferSize int64 `toml:"buffer_size"`
 
 	// Endpoint paths
 	StreamPath string `toml:"stream_path"`
@@ -39,10 +39,10 @@ type HTTPConfig struct {
 
 type HeartbeatConfig struct {
 	Enabled          bool   `toml:"enabled"`
-	IntervalSeconds  int    `toml:"interval_seconds"`
+	IntervalSeconds  int64  `toml:"interval_seconds"`
 	IncludeTimestamp bool   `toml:"include_timestamp"`
 	IncludeStats     bool   `toml:"include_stats"`
-	Format           string `toml:"format"` // "comment" or "json"
+	Format           string `toml:"format"`
 }
 
 type NetLimitConfig struct {
@@ -53,23 +53,23 @@ type NetLimitConfig struct {
 	RequestsPerSecond float64 `toml:"requests_per_second"`
 
 	// Burst size (token bucket)
-	BurstSize int `toml:"burst_size"`
+	BurstSize int64 `toml:"burst_size"`
 
 	// Net limit by: "ip", "user", "token", "global"
 	LimitBy string `toml:"limit_by"`
 
 	// Response when net limited
-	ResponseCode    int    `toml:"response_code"`    // Default: 429
+	ResponseCode    int64  `toml:"response_code"`    // Default: 429
 	ResponseMessage string `toml:"response_message"` // Default: "Net limit exceeded"
 
 	// Connection limits
-	MaxConnectionsPerIP int `toml:"max_connections_per_ip"`
-	MaxTotalConnections int `toml:"max_total_connections"`
+	MaxConnectionsPerIP int64 `toml:"max_connections_per_ip"`
+	MaxTotalConnections int64 `toml:"max_total_connections"`
 }
 
 func validateHeartbeatOptions(serverType, pipelineName string, sinkIndex int, hb map[string]any) error {
 	if enabled, ok := hb["enabled"].(bool); ok && enabled {
-		interval, ok := toInt(hb["interval_seconds"])
+		interval, ok := hb["interval_seconds"].(int64)
 		if !ok || interval < 1 {
 			return fmt.Errorf("pipeline '%s' sink[%d] %s: heartbeat interval must be positive",
 				pipelineName, sinkIndex, serverType)
@@ -91,14 +91,14 @@ func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl 
 	}
 
 	// Validate requests per second
-	rps, ok := toFloat(rl["requests_per_second"])
+	rps, ok := rl["requests_per_second"].(float64)
 	if !ok || rps <= 0 {
 		return fmt.Errorf("pipeline '%s' sink[%d] %s: requests_per_second must be positive",
 			pipelineName, sinkIndex, serverType)
 	}
 
 	// Validate burst size
-	burst, ok := toInt(rl["burst_size"])
+	burst, ok := rl["burst_size"].(int64)
 	if !ok || burst < 1 {
 		return fmt.Errorf("pipeline '%s' sink[%d] %s: burst_size must be at least 1",
 			pipelineName, sinkIndex, serverType)
@@ -114,7 +114,7 @@ func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl 
 	}
 
 	// Validate response code
-	if respCode, ok := toInt(rl["response_code"]); ok {
+	if respCode, ok := rl["response_code"].(int64); ok {
 		if respCode > 0 && (respCode < 400 || respCode >= 600) {
 			return fmt.Errorf("pipeline '%s' sink[%d] %s: response_code must be 4xx or 5xx: %d",
 				pipelineName, sinkIndex, serverType, respCode)
@@ -122,8 +122,8 @@ func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl 
 	}
 
 	// Validate connection limits
-	maxPerIP, perIPOk := toInt(rl["max_connections_per_ip"])
-	maxTotal, totalOk := toInt(rl["max_total_connections"])
+	maxPerIP, perIPOk := rl["max_connections_per_ip"].(int64)
+	maxTotal, totalOk := rl["max_total_connections"].(int64)
 
 	if perIPOk && totalOk && maxPerIP > 0 && maxTotal > 0 {
 		if maxPerIP > maxTotal {

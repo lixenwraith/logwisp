@@ -25,7 +25,7 @@ type TCPSink struct {
 	config      TCPConfig
 	server      *tcpServer
 	done        chan struct{}
-	activeConns atomic.Int32
+	activeConns atomic.Int64
 	startTime   time.Time
 	engine      *gnet.Engine
 	engineMu    sync.Mutex
@@ -41,8 +41,8 @@ type TCPSink struct {
 
 // TCPConfig holds TCP sink configuration
 type TCPConfig struct {
-	Port       int
-	BufferSize int
+	Port       int64
+	BufferSize int64
 	Heartbeat  *config.HeartbeatConfig
 	SSL        *config.SSLConfig
 	NetLimit   *config.NetLimitConfig
@@ -51,15 +51,15 @@ type TCPConfig struct {
 // NewTCPSink creates a new TCP streaming sink
 func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPSink, error) {
 	cfg := TCPConfig{
-		Port:       9090,
-		BufferSize: 1000,
+		Port:       int64(9090),
+		BufferSize: int64(1000),
 	}
 
 	// Extract configuration from options
-	if port, ok := toInt(options["port"]); ok {
+	if port, ok := options["port"].(int64); ok {
 		cfg.Port = port
 	}
-	if bufSize, ok := toInt(options["buffer_size"]); ok {
+	if bufSize, ok := options["buffer_size"].(int64); ok {
 		cfg.BufferSize = bufSize
 	}
 
@@ -67,7 +67,7 @@ func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.For
 	if hb, ok := options["heartbeat"].(map[string]any); ok {
 		cfg.Heartbeat = &config.HeartbeatConfig{}
 		cfg.Heartbeat.Enabled, _ = hb["enabled"].(bool)
-		if interval, ok := toInt(hb["interval_seconds"]); ok {
+		if interval, ok := hb["interval_seconds"].(int64); ok {
 			cfg.Heartbeat.IntervalSeconds = interval
 		}
 		cfg.Heartbeat.IncludeTimestamp, _ = hb["include_timestamp"].(bool)
@@ -81,25 +81,25 @@ func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.For
 	if rl, ok := options["net_limit"].(map[string]any); ok {
 		cfg.NetLimit = &config.NetLimitConfig{}
 		cfg.NetLimit.Enabled, _ = rl["enabled"].(bool)
-		if rps, ok := toFloat(rl["requests_per_second"]); ok {
+		if rps, ok := rl["requests_per_second"].(float64); ok {
 			cfg.NetLimit.RequestsPerSecond = rps
 		}
-		if burst, ok := toInt(rl["burst_size"]); ok {
+		if burst, ok := rl["burst_size"].(int64); ok {
 			cfg.NetLimit.BurstSize = burst
 		}
 		if limitBy, ok := rl["limit_by"].(string); ok {
 			cfg.NetLimit.LimitBy = limitBy
 		}
-		if respCode, ok := toInt(rl["response_code"]); ok {
+		if respCode, ok := rl["response_code"].(int64); ok {
 			cfg.NetLimit.ResponseCode = respCode
 		}
 		if msg, ok := rl["response_message"].(string); ok {
 			cfg.NetLimit.ResponseMessage = msg
 		}
-		if maxPerIP, ok := toInt(rl["max_connections_per_ip"]); ok {
+		if maxPerIP, ok := rl["max_connections_per_ip"].(int64); ok {
 			cfg.NetLimit.MaxConnectionsPerIP = maxPerIP
 		}
-		if maxTotal, ok := toInt(rl["max_total_connections"]); ok {
+		if maxTotal, ok := rl["max_total_connections"].(int64); ok {
 			cfg.NetLimit.MaxTotalConnections = maxTotal
 		}
 	}
@@ -283,7 +283,7 @@ func (t *TCPSink) createHeartbeatEntry() source.LogEntry {
 
 	if t.config.Heartbeat.IncludeStats {
 		fields["active_connections"] = t.activeConns.Load()
-		fields["uptime_seconds"] = int(time.Since(t.startTime).Seconds())
+		fields["uptime_seconds"] = int64(time.Since(t.startTime).Seconds())
 	}
 
 	fieldsJSON, _ := json.Marshal(fields)
@@ -298,7 +298,7 @@ func (t *TCPSink) createHeartbeatEntry() source.LogEntry {
 }
 
 // GetActiveConnections returns the current number of connections
-func (t *TCPSink) GetActiveConnections() int32 {
+func (t *TCPSink) GetActiveConnections() int64 {
 	return t.activeConns.Load()
 }
 

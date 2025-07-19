@@ -79,17 +79,17 @@ func logPipelineStatus(name string, stats map[string]any) {
 
 	// Add sink statistics
 	if sinks, ok := stats["sinks"].([]map[string]any); ok {
-		tcpConns := 0
-		httpConns := 0
+		tcpConns := int64(0)
+		httpConns := int64(0)
 
 		for _, sink := range sinks {
 			sinkType := sink["type"].(string)
-			if activeConns, ok := sink["active_connections"].(int32); ok {
+			if activeConns, ok := sink["active_connections"].(int64); ok {
 				switch sinkType {
 				case "tcp":
-					tcpConns += int(activeConns)
+					tcpConns += activeConns
 				case "http":
-					httpConns += int(activeConns)
+					httpConns += activeConns
 				}
 			}
 		}
@@ -111,7 +111,7 @@ func displayPipelineEndpoints(cfg config.PipelineConfig, routerMode bool) {
 	for i, sinkCfg := range cfg.Sinks {
 		switch sinkCfg.Type {
 		case "tcp":
-			if port, ok := toInt(sinkCfg.Options["port"]); ok {
+			if port, ok := sinkCfg.Options["port"].(int64); ok {
 				logger.Info("msg", "TCP endpoint configured",
 					"component", "main",
 					"pipeline", cfg.Name,
@@ -131,7 +131,7 @@ func displayPipelineEndpoints(cfg config.PipelineConfig, routerMode bool) {
 			}
 
 		case "http":
-			if port, ok := toInt(sinkCfg.Options["port"]); ok {
+			if port, ok := sinkCfg.Options["port"].(int64); ok {
 				streamPath := "/transport"
 				statusPath := "/status"
 				if path, ok := sinkCfg.Options["stream_path"].(string); ok {
@@ -198,19 +198,5 @@ func displayPipelineEndpoints(cfg config.PipelineConfig, routerMode bool) {
 		logger.Info("msg", "Filters configured",
 			"pipeline", cfg.Name,
 			"filter_count", len(cfg.Filters))
-	}
-}
-
-// Helper function for type conversion
-func toInt(v any) (int, bool) {
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case int64:
-		return int(val), true
-	case float64:
-		return int(val), true
-	default:
-		return 0, false
 	}
 }

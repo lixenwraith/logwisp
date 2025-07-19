@@ -20,8 +20,8 @@ import (
 
 // TCPSource receives log entries via TCP connections
 type TCPSource struct {
-	port        int
-	bufferSize  int
+	port        int64
+	bufferSize  int64
 	server      *tcpSourceServer
 	subscribers []chan LogEntry
 	mu          sync.RWMutex
@@ -36,20 +36,20 @@ type TCPSource struct {
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
 	invalidEntries atomic.Uint64
-	activeConns    atomic.Int32
+	activeConns    atomic.Int64
 	startTime      time.Time
 	lastEntryTime  atomic.Value // time.Time
 }
 
 // NewTCPSource creates a new TCP server source
 func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error) {
-	port, ok := toInt(options["port"])
+	port, ok := options["port"].(int64)
 	if !ok || port < 1 || port > 65535 {
 		return nil, fmt.Errorf("tcp source requires valid 'port' option")
 	}
 
-	bufferSize := 1000
-	if bufSize, ok := toInt(options["buffer_size"]); ok && bufSize > 0 {
+	bufferSize := int64(1000)
+	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		bufferSize = bufSize
 	}
 
@@ -72,16 +72,16 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 			if rps, ok := toFloat(rl["requests_per_second"]); ok {
 				cfg.RequestsPerSecond = rps
 			}
-			if burst, ok := toInt(rl["burst_size"]); ok {
+			if burst, ok := rl["burst_size"].(int64); ok {
 				cfg.BurstSize = burst
 			}
 			if limitBy, ok := rl["limit_by"].(string); ok {
 				cfg.LimitBy = limitBy
 			}
-			if maxPerIP, ok := toInt(rl["max_connections_per_ip"]); ok {
+			if maxPerIP, ok := rl["max_connections_per_ip"].(int64); ok {
 				cfg.MaxConnectionsPerIP = maxPerIP
 			}
-			if maxTotal, ok := toInt(rl["max_total_connections"]); ok {
+			if maxTotal, ok := rl["max_total_connections"].(int64); ok {
 				cfg.MaxTotalConnections = maxTotal
 			}
 
@@ -342,7 +342,7 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 		}
 
 		// Capture raw line size before parsing
-		rawSize := len(line)
+		rawSize := int64(len(line))
 
 		// Parse JSON log entry
 		var entry LogEntry

@@ -36,20 +36,20 @@ type HTTPClientSink struct {
 	failedBatches     atomic.Uint64
 	lastProcessed     atomic.Value // time.Time
 	lastBatchSent     atomic.Value // time.Time
-	activeConnections atomic.Int32
+	activeConnections atomic.Int64
 }
 
 // HTTPClientConfig holds HTTP client sink configuration
 type HTTPClientConfig struct {
 	URL        string
-	BufferSize int
-	BatchSize  int
+	BufferSize int64
+	BatchSize  int64
 	BatchDelay time.Duration
 	Timeout    time.Duration
 	Headers    map[string]string
 
 	// Retry configuration
-	MaxRetries   int
+	MaxRetries   int64
 	RetryDelay   time.Duration
 	RetryBackoff float64 // Multiplier for exponential backoff
 
@@ -60,13 +60,13 @@ type HTTPClientConfig struct {
 // NewHTTPClientSink creates a new HTTP client sink
 func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*HTTPClientSink, error) {
 	cfg := HTTPClientConfig{
-		BufferSize:   1000,
-		BatchSize:    100,
+		BufferSize:   int64(1000),
+		BatchSize:    int64(100),
 		BatchDelay:   time.Second,
 		Timeout:      30 * time.Second,
-		MaxRetries:   3,
+		MaxRetries:   int64(3),
 		RetryDelay:   time.Second,
-		RetryBackoff: 2.0,
+		RetryBackoff: float64(2.0),
 		Headers:      make(map[string]string),
 	}
 
@@ -87,25 +87,25 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 	cfg.URL = urlStr
 
 	// Extract other options
-	if bufSize, ok := toInt(options["buffer_size"]); ok && bufSize > 0 {
+	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		cfg.BufferSize = bufSize
 	}
-	if batchSize, ok := toInt(options["batch_size"]); ok && batchSize > 0 {
+	if batchSize, ok := options["batch_size"].(int64); ok && batchSize > 0 {
 		cfg.BatchSize = batchSize
 	}
-	if delayMs, ok := toInt(options["batch_delay_ms"]); ok && delayMs > 0 {
+	if delayMs, ok := options["batch_delay_ms"].(int64); ok && delayMs > 0 {
 		cfg.BatchDelay = time.Duration(delayMs) * time.Millisecond
 	}
-	if timeoutSec, ok := toInt(options["timeout_seconds"]); ok && timeoutSec > 0 {
+	if timeoutSec, ok := options["timeout_seconds"].(int64); ok && timeoutSec > 0 {
 		cfg.Timeout = time.Duration(timeoutSec) * time.Second
 	}
-	if maxRetries, ok := toInt(options["max_retries"]); ok && maxRetries >= 0 {
+	if maxRetries, ok := options["max_retries"].(int64); ok && maxRetries >= 0 {
 		cfg.MaxRetries = maxRetries
 	}
-	if retryDelayMs, ok := toInt(options["retry_delay_ms"]); ok && retryDelayMs > 0 {
+	if retryDelayMs, ok := options["retry_delay_ms"].(int64); ok && retryDelayMs > 0 {
 		cfg.RetryDelay = time.Duration(retryDelayMs) * time.Millisecond
 	}
-	if backoff, ok := toFloat(options["retry_backoff"]); ok && backoff >= 1.0 {
+	if backoff, ok := options["retry_backoff"].(float64); ok && backoff >= 1.0 {
 		cfg.RetryBackoff = backoff
 	}
 	if insecure, ok := options["insecure_skip_verify"].(bool); ok {
@@ -244,7 +244,7 @@ func (h *HTTPClientSink) processLoop(ctx context.Context) {
 			h.batch = append(h.batch, entry)
 
 			// Check if batch is full
-			if len(h.batch) >= h.config.BatchSize {
+			if int64(len(h.batch)) >= h.config.BatchSize {
 				batch := h.batch
 				h.batch = make([]source.LogEntry, 0, h.config.BatchSize)
 				h.batchMu.Unlock()
@@ -337,7 +337,7 @@ func (h *HTTPClientSink) sendBatch(batch []source.LogEntry) {
 	var lastErr error
 	retryDelay := h.config.RetryDelay
 
-	for attempt := 0; attempt <= h.config.MaxRetries; attempt++ {
+	for attempt := int64(0); attempt <= h.config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			// Wait before retry
 			time.Sleep(retryDelay)

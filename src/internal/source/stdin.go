@@ -82,7 +82,7 @@ func (s *StdinSource) readLoop() {
 				Source:  "stdin",
 				Message: line,
 				Level:   extractLogLevel(line),
-				RawSize: len(line),
+				RawSize: int64(len(line)),
 			}
 
 			s.publish(entry)

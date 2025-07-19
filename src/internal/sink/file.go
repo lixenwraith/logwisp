@@ -50,31 +50,31 @@ func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	)
 
 	// Add optional configurations
-	if maxSize, ok := toInt(options["max_size_mb"]); ok && maxSize > 0 {
+	if maxSize, ok := options["max_size_mb"].(int64); ok && maxSize > 0 {
 		configArgs = append(configArgs, fmt.Sprintf("max_size_mb=%d", maxSize))
 	}
 
-	if maxTotalSize, ok := toInt(options["max_total_size_mb"]); ok && maxTotalSize >= 0 {
+	if maxTotalSize, ok := options["max_total_size_mb"].(int64); ok && maxTotalSize >= 0 {
 		configArgs = append(configArgs, fmt.Sprintf("max_total_size_mb=%d", maxTotalSize))
 	}
 
-	if retention, ok := toFloat(options["retention_hours"]); ok && retention > 0 {
+	if retention, ok := options["retention_hours"].(int64); ok && retention > 0 {
 		configArgs = append(configArgs, fmt.Sprintf("retention_period_hrs=%.1f", retention))
 	}
 
-	if minDiskFree, ok := toInt(options["min_disk_free_mb"]); ok && minDiskFree > 0 {
+	if minDiskFree, ok := options["min_disk_free_mb"].(int64); ok && minDiskFree > 0 {
 		configArgs = append(configArgs, fmt.Sprintf("min_disk_free_mb=%d", minDiskFree))
 	}
 
 	// Create internal logger for file writing
 	writer := log.NewLogger()
-	if err := writer.InitWithDefaults(configArgs...); err != nil {
+	if err := writer.ApplyOverride(configArgs...); err != nil {
 		return nil, fmt.Errorf("failed to initialize file writer: %w", err)
 	}
 
 	// Buffer size for input channel
-	bufferSize := 1000
-	if bufSize, ok := toInt(options["buffer_size"]); ok && bufSize > 0 {
+	bufferSize := int64(1000)
+	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		bufferSize = bufSize
 	}
 

@@ -13,7 +13,7 @@ type LogEntry struct {
 	Level   string          `json:"level,omitempty"`
 	Message string          `json:"message"`
 	Fields  json.RawMessage `json:"fields,omitempty"`
-	RawSize int             `json:"-"`
+	RawSize int64           `json:"-"`
 }
 
 // Source represents an input data stream
@@ -39,18 +39,4 @@ type SourceStats struct {
 	StartTime      time.Time
 	LastEntryTime  time.Time
 	Details        map[string]any
-}
-
-// Helper function for type conversion
-func toInt(v any) (int, bool) {
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case int64:
-		return int(val), true
-	case float64:
-		return int(val), true
-	default:
-		return 0, false
-	}
 }

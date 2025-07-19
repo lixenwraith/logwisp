@@ -26,7 +26,7 @@ type WatcherInfo struct {
 	ModTime      time.Time
 	EntriesRead  uint64
 	LastReadTime time.Time
-	Rotations    int
+	Rotations    int64
 }
 
 type fileWatcher struct {
@@ -38,7 +38,7 @@ type fileWatcher struct {
 	modTime      time.Time
 	mu           sync.Mutex
 	stopped      bool
-	rotationSeq  int
+	rotationSeq  int64
 	entriesRead  atomic.Uint64
 	lastReadTime atomic.Value // time.Time
 	logger       *log.Logger
@@ -258,7 +258,7 @@ func (w *fileWatcher) checkFile() error {
 				continue
 			}
 
-			rawSize := len(line)
+			rawSize := int64(len(line))
 			entry := w.parseLine(line)
 			entry.RawSize = rawSize
 

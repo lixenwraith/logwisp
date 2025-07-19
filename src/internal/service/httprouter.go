@@ -17,7 +17,7 @@ import (
 // HTTPRouter manages HTTP routing for multiple pipelines
 type HTTPRouter struct {
 	service *Service
-	servers map[int]*routerServer // port -> server
+	servers map[int64]*routerServer // port -> server
 	mu      sync.RWMutex
 	logger  *log.Logger
 
@@ -32,7 +32,7 @@ type HTTPRouter struct {
 func NewHTTPRouter(service *Service, logger *log.Logger) *HTTPRouter {
 	return &HTTPRouter{
 		service:   service,
-		servers:   make(map[int]*routerServer),
+		servers:   make(map[int64]*routerServer),
 		startTime: time.Now(),
 		logger:    logger,
 	}
@@ -54,7 +54,7 @@ func (r *HTTPRouter) registerHTTPSink(pipelineName string, httpSink *sink.HTTPSi
 	// Get port from sink configuration
 	stats := httpSink.GetStats()
 	details := stats.Details
-	port := details["port"].(int)
+	port := details["port"].(int64)
 
 	r.mu.Lock()
 	rs, exists := r.servers[port]
@@ -179,7 +179,7 @@ func (r *HTTPRouter) Shutdown() {
 	var wg sync.WaitGroup
 	for port, rs := range r.servers {
 		wg.Add(1)
-		go func(p int, s *routerServer) {
+		go func(p int64, s *routerServer) {
 			defer wg.Done()
 			r.logger.Info("msg", "Shutting down server",
 				"component", "http_router",
@@ -202,7 +202,7 @@ func (r *HTTPRouter) GetStats() map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	serverStats := make(map[int]any)
+	serverStats := make(map[int64]any)
 	totalRoutes := 0
 
 	for port, rs := range r.servers {
@@ -222,7 +222,7 @@ func (r *HTTPRouter) GetStats() map[string]any {
 	}
 
 	return map[string]any{
-		"uptime_seconds":  int(time.Since(r.startTime).Seconds()),
+		"uptime_seconds":  int64(time.Since(r.startTime).Seconds()),
 		"total_requests":  r.totalRequests.Load(),
 		"routed_requests": r.routedRequests.Load(),
 		"failed_requests": r.failedRequests.Load(),

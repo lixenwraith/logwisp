@@ -17,9 +17,9 @@ import (
 
 // HTTPSource receives log entries via HTTP POST requests
 type HTTPSource struct {
-	port        int
+	port        int64
 	ingestPath  string
-	bufferSize  int
+	bufferSize  int64
 	server      *fasthttp.Server
 	subscribers []chan LogEntry
 	mu          sync.RWMutex
@@ -38,7 +38,7 @@ type HTTPSource struct {
 
 // NewHTTPSource creates a new HTTP server source
 func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, error) {
-	port, ok := toInt(options["port"])
+	port, ok := options["port"].(int64)
 	if !ok || port < 1 || port > 65535 {
 		return nil, fmt.Errorf("http source requires valid 'port' option")
 	}
@@ -48,8 +48,8 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 		ingestPath = path
 	}
 
-	bufferSize := 1000
-	if bufSize, ok := toInt(options["buffer_size"]); ok && bufSize > 0 {
+	bufferSize := int64(1000)
+	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		bufferSize = bufSize
 	}
 
@@ -73,19 +73,19 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 			if rps, ok := toFloat(rl["requests_per_second"]); ok {
 				cfg.RequestsPerSecond = rps
 			}
-			if burst, ok := toInt(rl["burst_size"]); ok {
+			if burst, ok := rl["burst_size"].(int64); ok {
 				cfg.BurstSize = burst
 			}
 			if limitBy, ok := rl["limit_by"].(string); ok {
 				cfg.LimitBy = limitBy
 			}
-			if respCode, ok := toInt(rl["response_code"]); ok {
+			if respCode, ok := rl["response_code"].(int64); ok {
 				cfg.ResponseCode = respCode
 			}
 			if msg, ok := rl["response_message"].(string); ok {
 				cfg.ResponseMessage = msg
 			}
-			if maxPerIP, ok := toInt(rl["max_connections_per_ip"]); ok {
+			if maxPerIP, ok := rl["max_connections_per_ip"].(int64); ok {
 				cfg.MaxConnectionsPerIP = maxPerIP
 			}
 
@@ -205,7 +205,7 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 	remoteAddr := ctx.RemoteAddr().String()
 	if h.netLimiter != nil {
 		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
-			ctx.SetStatusCode(statusCode)
+			ctx.SetStatusCode(int(statusCode))
 			ctx.SetContentType("application/json")
 			json.NewEncoder(ctx).Encode(map[string]any{
 				"error":       message,
@@ -271,7 +271,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 		if single.Source == "" {
 			single.Source = "http"
 		}
-		single.RawSize = len(body)
+		single.RawSize = int64(len(body))
 		entries = append(entries, single)
 		return entries, nil
 	}
@@ -280,7 +280,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 	var array []LogEntry
 	if err := json.Unmarshal(body, &array); err == nil {
 		// TODO: Placeholder; For array, divide total size by entry count as approximation
-		approxSizePerEntry := len(body) / len(array)
+		approxSizePerEntry := int64(len(body) / len(array))
 		for i, entry := range array {
 			if entry.Message == "" {
 				return nil, fmt.Errorf("entry %d missing required field: message", i)
@@ -318,7 +318,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 		if entry.Source == "" {
 			entry.Source = "http"
 		}
-		entry.RawSize = len(line)
+		entry.RawSize = int64(len(line))
 
 		entries = append(entries, entry)
 	}

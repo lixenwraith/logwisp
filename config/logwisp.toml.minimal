@@ -1,5 +1,5 @@
 # LogWisp Minimal Configuration
-# Save as: ~/.config/logwisp.toml
+# Save as: ~/.config/logwisp/logwisp.toml
 
 # Basic pipeline monitoring application logs
 [[pipelines]]
@@ -20,27 +20,23 @@ options = {
     status_path = "/status"
 }
 
-# Optional additions:
-
-# 1. Filter for errors only:
+# Optional: Filter for errors only
 # [[pipelines.filters]]
 # type = "include"
-# patterns = ["ERROR", "WARN", "CRITICAL", "FATAL"]
+# patterns = ["ERROR", "WARN", "CRITICAL"]
 
-# 2. Enable rate limiting:
-# Modify the sink options above:
+# Optional: Add rate limiting to HTTP sink
+# [[pipelines.sinks]]
+# type = "http"
 # options = {
 #     port = 8080,
 #     buffer_size = 1000,
-#     rate_limit = { enabled = true, requests_per_second = 10.0, burst_size = 20 }
+#     stream_path = "/stream",
+#     status_path = "/status",
+#     net_limit = { enabled = true, requests_per_second = 10.0, burst_size = 20 }
 # }
 
-# 3. Add file output:
+# Optional: Add file output
 # [[pipelines.sinks]]
 # type = "file"
 # options = { directory = "/var/log/logwisp", name = "app" }
-
-# 4. Change LogWisp's own logging:
-# [logging]
-# output = "file"
-# level = "info"

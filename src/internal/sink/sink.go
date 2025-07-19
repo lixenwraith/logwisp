@@ -27,35 +27,8 @@ type Sink interface {
 type SinkStats struct {
 	Type              string
 	TotalProcessed    uint64
-	ActiveConnections int32
+	ActiveConnections int64
 	StartTime         time.Time
 	LastProcessed     time.Time
 	Details           map[string]any
-}
-
-// Helper functions for type conversion
-func toInt(v any) (int, bool) {
-	switch val := v.(type) {
-	case int:
-		return val, true
-	case int64:
-		return int(val), true
-	case float64:
-		return int(val), true
-	default:
-		return 0, false
-	}
-}
-
-func toFloat(v any) (float64, bool) {
-	switch val := v.(type) {
-	case float64:
-		return val, true
-	case int:
-		return float64(val), true
-	case int64:
-		return float64(val), true
-	default:
-		return 0, false
-	}
 }

@@ -19,7 +19,7 @@ type Limiter struct {
 	logger *log.Logger
 
 	// Statistics
-	maxEntrySizeBytes  int
+	maxEntrySizeBytes  int64
 	droppedBySizeCount atomic.Uint64
 	droppedCount       atomic.Uint64
 }

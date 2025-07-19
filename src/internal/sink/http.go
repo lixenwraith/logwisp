@@ -27,7 +27,7 @@ type HTTPSink struct {
 	input         chan source.LogEntry
 	config        HTTPConfig
 	server        *fasthttp.Server
-	activeClients atomic.Int32
+	activeClients atomic.Int64
 	mu            sync.RWMutex
 	startTime     time.Time
 	done          chan struct{}
@@ -52,8 +52,8 @@ type HTTPSink struct {
 
 // HTTPConfig holds HTTP sink configuration
 type HTTPConfig struct {
-	Port       int
-	BufferSize int
+	Port       int64
+	BufferSize int64
 	StreamPath string
 	StatusPath string
 	Heartbeat  *config.HeartbeatConfig
@@ -71,10 +71,10 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	}
 
 	// Extract configuration from options
-	if port, ok := toInt(options["port"]); ok {
+	if port, ok := options["port"].(int64); ok {
 		cfg.Port = port
 	}
-	if bufSize, ok := toInt(options["buffer_size"]); ok {
+	if bufSize, ok := options["buffer_size"].(int64); ok {
 		cfg.BufferSize = bufSize
 	}
 	if path, ok := options["stream_path"].(string); ok {
@@ -88,7 +88,7 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	if hb, ok := options["heartbeat"].(map[string]any); ok {
 		cfg.Heartbeat = &config.HeartbeatConfig{}
 		cfg.Heartbeat.Enabled, _ = hb["enabled"].(bool)
-		if interval, ok := toInt(hb["interval_seconds"]); ok {
+		if interval, ok := hb["interval_seconds"].(int64); ok {
 			cfg.Heartbeat.IntervalSeconds = interval
 		}
 		cfg.Heartbeat.IncludeTimestamp, _ = hb["include_timestamp"].(bool)
@@ -102,25 +102,25 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	if rl, ok := options["net_limit"].(map[string]any); ok {
 		cfg.NetLimit = &config.NetLimitConfig{}
 		cfg.NetLimit.Enabled, _ = rl["enabled"].(bool)
-		if rps, ok := toFloat(rl["requests_per_second"]); ok {
+		if rps, ok := rl["requests_per_second"].(float64); ok {
 			cfg.NetLimit.RequestsPerSecond = rps
 		}
-		if burst, ok := toInt(rl["burst_size"]); ok {
+		if burst, ok := rl["burst_size"].(int64); ok {
 			cfg.NetLimit.BurstSize = burst
 		}
 		if limitBy, ok := rl["limit_by"].(string); ok {
 			cfg.NetLimit.LimitBy = limitBy
 		}
-		if respCode, ok := toInt(rl["response_code"]); ok {
+		if respCode, ok := rl["response_code"].(int64); ok {
 			cfg.NetLimit.ResponseCode = respCode
 		}
 		if msg, ok := rl["response_message"].(string); ok {
 			cfg.NetLimit.ResponseMessage = msg
 		}
-		if maxPerIP, ok := toInt(rl["max_connections_per_ip"]); ok {
+		if maxPerIP, ok := rl["max_connections_per_ip"].(int64); ok {
 			cfg.NetLimit.MaxConnectionsPerIP = maxPerIP
 		}
-		if maxTotal, ok := toInt(rl["max_total_connections"]); ok {
+		if maxTotal, ok := rl["max_total_connections"].(int64); ok {
 			cfg.NetLimit.MaxTotalConnections = maxTotal
 		}
 	}
@@ -256,7 +256,7 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	// Check net limit first
 	remoteAddr := ctx.RemoteAddr().String()
 	if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
-		ctx.SetStatusCode(statusCode)
+		ctx.SetStatusCode(int(statusCode))
 		ctx.SetContentType("application/json")
 		json.NewEncoder(ctx).Encode(map[string]any{
 			"error":       message,
@@ -502,7 +502,7 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 }
 
 // GetActiveConnections returns the current number of active clients
-func (h *HTTPSink) GetActiveConnections() int32 {
+func (h *HTTPSink) GetActiveConnections() int64 {
 	return h.activeClients.Load()
 }
 

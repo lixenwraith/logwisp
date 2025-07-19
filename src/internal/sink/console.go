@@ -18,7 +18,7 @@ import (
 // ConsoleConfig holds common configuration for console sinks
 type ConsoleConfig struct {
 	Target     string // "stdout", "stderr", or "split"
-	BufferSize int
+	BufferSize int64
 }
 
 // StdoutSink writes log entries to stdout
@@ -48,7 +48,7 @@ func NewStdoutSink(options map[string]any, logger *log.Logger, formatter format.
 		config.Target = target
 	}
 
-	if bufSize, ok := toInt(options["buffer_size"]); ok && bufSize > 0 {
+	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		config.BufferSize = bufSize
 	}
 
@@ -161,7 +161,7 @@ func NewStderrSink(options map[string]any, logger *log.Logger, formatter format.
 		config.Target = target
 	}
 
-	if bufSize, ok := toInt(options["buffer_size"]); ok && bufSize > 0 {
+	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		config.BufferSize = bufSize
 	}
 

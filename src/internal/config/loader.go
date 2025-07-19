@@ -40,7 +40,7 @@ func defaults() *Config {
 						Options: map[string]any{
 							"path":              "./",
 							"pattern":           "*.log",
-							"check_interval_ms": 100,
+							"check_interval_ms": int64(100),
 						},
 					},
 				},
@@ -48,13 +48,13 @@ func defaults() *Config {
 					{
 						Type: "http",
 						Options: map[string]any{
-							"port":        8080,
-							"buffer_size": 1000,
+							"port":        int64(8080),
+							"buffer_size": int64(1000),
 							"stream_path": "/stream",
 							"status_path": "/status",
 							"heartbeat": map[string]any{
 								"enabled":           true,
-								"interval_seconds":  30,
+								"interval_seconds":  int64(30),
 								"include_timestamp": true,
 								"include_stats":     false,
 								"format":            "comment",

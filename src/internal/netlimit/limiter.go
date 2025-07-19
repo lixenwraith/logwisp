@@ -28,7 +28,7 @@ type Limiter struct {
 	globalLimiter *limiter.TokenBucket
 
 	// Connection tracking
-	ipConnections map[string]*atomic.Int32
+	ipConnections map[string]*atomic.Int64
 	connMu        sync.RWMutex
 
 	// Statistics
@@ -49,7 +49,7 @@ type Limiter struct {
 type ipLimiter struct {
 	bucket      *limiter.TokenBucket
 	lastSeen    time.Time
-	connections atomic.Int32
+	connections atomic.Int64
 }
 
 // Creates a new net limiter
@@ -67,7 +67,7 @@ func New(cfg config.NetLimitConfig, logger *log.Logger) *Limiter {
 	l := &Limiter{
 		config:        cfg,
 		ipLimiters:    make(map[string]*ipLimiter),
-		ipConnections: make(map[string]*atomic.Int32),
+		ipConnections: make(map[string]*atomic.Int64),
 		lastCleanup:   time.Now(),
 		logger:        logger,
 		ctx:           ctx,
@@ -115,7 +115,7 @@ func (l *Limiter) Shutdown() {
 }
 
 // Checks if an HTTP request should be allowed
-func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int, message string) {
+func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int64, message string) {
 	if l == nil {
 		return true, 0, ""
 	}
@@ -148,7 +148,7 @@ func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int, me
 		counter, exists := l.ipConnections[ip]
 		l.connMu.RUnlock()
 
-		if exists && counter.Load() >= int32(l.config.MaxConnectionsPerIP) {
+		if exists && counter.Load() >= l.config.MaxConnectionsPerIP {
 			l.blockedRequests.Add(1)
 			statusCode = l.config.ResponseCode
 			if statusCode == 0 {
@@ -242,7 +242,7 @@ func (l *Limiter) AddConnection(remoteAddr string) {
 	l.connMu.Lock()
 	counter, exists := l.ipConnections[ip]
 	if !exists {
-		counter = &atomic.Int32{}
+		counter = &atomic.Int64{}
 		l.ipConnections[ip] = counter
 	}
 	l.connMu.Unlock()
@@ -362,7 +362,7 @@ func (l *Limiter) checkLimit(ip string) bool {
 			counter, exists := l.ipConnections[ip]
 			l.connMu.RUnlock()
 
-			if exists && counter.Load() >= int32(l.config.MaxConnectionsPerIP) {
+			if exists && counter.Load() >= l.config.MaxConnectionsPerIP {
 				return false
 			}
 		}

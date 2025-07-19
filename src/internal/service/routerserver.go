@@ -24,7 +24,7 @@ type routedSink struct {
 
 // routerServer handles HTTP requests for a specific port
 type routerServer struct {
-	port      int
+	port      int64
 	server    *fasthttp.Server
 	logger    *log.Logger
 	routes    map[string]*routedSink // path prefix -> sink

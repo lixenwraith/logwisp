@@ -44,7 +44,7 @@ type TCPClientSink struct {
 // TCPClientConfig holds TCP client sink configuration
 type TCPClientConfig struct {
 	Address      string
-	BufferSize   int
+	BufferSize   int64
 	DialTimeout  time.Duration
 	WriteTimeout time.Duration
 	KeepAlive    time.Duration
@@ -58,13 +58,13 @@ type TCPClientConfig struct {
 // NewTCPClientSink creates a new TCP client sink
 func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPClientSink, error) {
 	cfg := TCPClientConfig{
-		BufferSize:        1000,
+		BufferSize:        int64(1000),
 		DialTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		KeepAlive:         30 * time.Second,
 		ReconnectDelay:    time.Second,
 		MaxReconnectDelay: 30 * time.Second,
-		ReconnectBackoff:  1.5,
+		ReconnectBackoff:  float64(1.5),
 	}
 
 	// Extract address
@@ -81,25 +81,25 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 	cfg.Address = address
 
 	// Extract other options
-	if bufSize, ok := toInt(options["buffer_size"]); ok && bufSize > 0 {
+	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		cfg.BufferSize = bufSize
 	}
-	if dialTimeout, ok := toInt(options["dial_timeout_seconds"]); ok && dialTimeout > 0 {
+	if dialTimeout, ok := options["dial_timeout_seconds"].(int64); ok && dialTimeout > 0 {
 		cfg.DialTimeout = time.Duration(dialTimeout) * time.Second
 	}
-	if writeTimeout, ok := toInt(options["write_timeout_seconds"]); ok && writeTimeout > 0 {
+	if writeTimeout, ok := options["write_timeout_seconds"].(int64); ok && writeTimeout > 0 {
 		cfg.WriteTimeout = time.Duration(writeTimeout) * time.Second
 	}
-	if keepAlive, ok := toInt(options["keep_alive_seconds"]); ok && keepAlive > 0 {
+	if keepAlive, ok := options["keep_alive_seconds"].(int64); ok && keepAlive > 0 {
 		cfg.KeepAlive = time.Duration(keepAlive) * time.Second
 	}
-	if reconnectDelay, ok := toInt(options["reconnect_delay_ms"]); ok && reconnectDelay > 0 {
+	if reconnectDelay, ok := options["reconnect_delay_ms"].(int64); ok && reconnectDelay > 0 {
 		cfg.ReconnectDelay = time.Duration(reconnectDelay) * time.Millisecond
 	}
-	if maxReconnectDelay, ok := toInt(options["max_reconnect_delay_seconds"]); ok && maxReconnectDelay > 0 {
+	if maxReconnectDelay, ok := options["max_reconnect_delay_seconds"].(int64); ok && maxReconnectDelay > 0 {
 		cfg.MaxReconnectDelay = time.Duration(maxReconnectDelay) * time.Second
 	}
-	if backoff, ok := toFloat(options["reconnect_backoff"]); ok && backoff >= 1.0 {
+	if backoff, ok := options["reconnect_backoff"].(float64); ok && backoff >= 1.0 {
 		cfg.ReconnectBackoff = backoff
 	}
 
@@ -162,7 +162,7 @@ func (t *TCPClientSink) GetStats() SinkStats {
 	connected := t.conn != nil
 	t.connMu.RUnlock()
 
-	activeConns := int32(0)
+	activeConns := int64(0)
 	if connected {
 		activeConns = 1
 	}

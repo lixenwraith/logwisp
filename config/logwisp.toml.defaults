@@ -1,221 +1,244 @@
-# LogWisp Default Configuration and Guide
-# Default path: ~/.config/logwisp.toml
+# LogWisp Configuration Reference
+# Default location: ~/.config/logwisp/logwisp.toml
 # Override: logwisp --config /path/to/config.toml
+#
+# All values shown are defaults unless marked (required)
+
+# ============================================================================
+# GLOBAL OPTIONS
+# ============================================================================
+# router = false                    # Enable router mode (multi-pipeline HTTP routing)
+# background = false                # Run as background daemon
+# quiet = false                     # Suppress all output
+# disable_status_reporter = false   # Disable periodic status logging
 
 # ============================================================================
 # LOGGING (LogWisp's operational logs)
 # ============================================================================
 [logging]
-# Output mode: file, stdout, stderr, both, none
-output = "stderr"
+output = "stderr"                   # file, stdout, stderr, both, none
+level = "info"                      # debug, info, warn, error
 
-# Log level: debug, info, warn, error
-level = "info"
-
-# File output settings (when output includes "file")
 [logging.file]
-directory = "./logs"
-name = "logwisp"
-max_size_mb = 100
-max_total_size_mb = 1000
-retention_hours = 168.0  # 7 days
+directory = "./logs"                # Log file directory
+name = "logwisp"                    # Base filename
+max_size_mb = 100                   # Rotate after size
+max_total_size_mb = 1000           # Total size limit for all logs
+retention_hours = 168.0             # Delete logs older than (0 = disabled)
 
-# Console output settings
 [logging.console]
-target = "stderr"  # stdout, stderr, split
-format = "txt"     # txt, json
+target = "stderr"                   # stdout, stderr, split (split: info→stdout, error→stderr)
+format = "txt"                      # txt, json
 
 # ============================================================================
-# PIPELINE CONFIGURATION
+# PIPELINES
 # ============================================================================
-# Each [[pipelines]] defines an independent log processing pipeline
-# Structure: sources → filters → sinks
+# Define one or more [[pipelines]] blocks
+# Each pipeline: sources → [rate_limit] → [filters] → [format] → sinks
 
 [[pipelines]]
-# Unique pipeline identifier (used in router paths)
-name = "default"
+name = "default"                    # (required) Unique identifier
 
 # ----------------------------------------------------------------------------
-# SOURCES - Input data sources
+# PIPELINE RATE LIMITING (optional)
+# ----------------------------------------------------------------------------
+# [pipelines.rate_limit]
+# rate = 1000.0                     # Entries per second (0 = unlimited)
+# burst = 1000.0                    # Max burst size (defaults to rate)
+# policy = "drop"                   # drop, pass
+# max_entry_size_bytes = 0          # Max size per entry (0 = unlimited)
+
+# ----------------------------------------------------------------------------
+# SOURCES
 # ----------------------------------------------------------------------------
 [[pipelines.sources]]
-# Source type: directory, file, stdin
-type = "directory"
+type = "directory"                  # directory, file, stdin, http, tcp
 
-# Type-specific options
-options = {
-    path = "./",
-    pattern = "*.log",
-    check_interval_ms = 100  # How often to check for new entries (10-60000)
-}
+# Directory source options
+[pipelines.sources.options]
+path = "./"                         # (required) Directory path
+pattern = "*.log"                   # Glob pattern
+check_interval_ms = 100             # Scan interval (min: 10)
 
-# Additional source examples:
-# [[pipelines.sources]]
+# File source options (alternative)
 # type = "file"
-# options = { path = "/var/log/app.log" }
-#
-# [[pipelines.sources]]
-# type = "stdin"
-# options = {}
+# [pipelines.sources.options]
+# path = "/var/log/app.log"         # (required) File path
+
+# HTTP source options (alternative)
+# type = "http"
+# [pipelines.sources.options]
+# port = 8081                       # (required) Listen port
+# ingest_path = "/ingest"           # POST endpoint
+# buffer_size = 1000                # Entry buffer size
+# net_limit = {                     # Rate limiting
+#     enabled = true,
+#     requests_per_second = 100.0,
+#     burst_size = 200,
+#     limit_by = "ip"               # ip, global
+# }
+
+# TCP source options (alternative)
+# type = "tcp"
+# [pipelines.sources.options]
+# port = 9091                       # (required) Listen port
+# buffer_size = 1000                # Entry buffer size
+# net_limit = { ... }               # Same as HTTP
 
 # ----------------------------------------------------------------------------
-# FILTERS - Log entry filtering (optional)
+# FILTERS (optional)
 # ----------------------------------------------------------------------------
-# Multiple filters are applied sequentially - all must pass
-
 # [[pipelines.filters]]
-# type = "include"     # include (whitelist) or exclude (blacklist)
-# logic = "or"         # or (match any) or and (match all)
-# patterns = [
+# type = "include"                  # include (whitelist), exclude (blacklist)
+# logic = "or"                      # or (any match), and (all match)
+# patterns = [                      # Regular expressions
 #     "ERROR",
-#     "(?i)warn",      # Case-insensitive
-#     "\\bfatal\\b"    # Word boundary
+#     "(?i)warn",                   # Case-insensitive
+#     "\\bfatal\\b"                 # Word boundary
 # ]
 
 # ----------------------------------------------------------------------------
-# SINKS - Output destinations
+# FORMAT (optional)
+# ----------------------------------------------------------------------------
+# format = "raw"                    # raw, json, text
+# [pipelines.format_options]
+# # JSON formatter options
+# pretty = false                    # Pretty print JSON
+# timestamp_field = "timestamp"     # Field name for timestamp
+# level_field = "level"            # Field name for log level
+# message_field = "message"        # Field name for message
+# source_field = "source"          # Field name for source
+#
+# # Text formatter options
+# template = "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}"
+# timestamp_format = "2006-01-02T15:04:05Z07:00"  # Go time format
+
+# ----------------------------------------------------------------------------
+# SINKS
 # ----------------------------------------------------------------------------
 [[pipelines.sinks]]
-# Sink type: http, tcp, file, stdout, stderr
-type = "http"
+type = "http"                       # http, tcp, http_client, tcp_client, file, stdout, stderr
 
-# Type-specific options
-options = {
-    port = 8080,
-    buffer_size = 1000,
-    stream_path = "/stream",
-    status_path = "/status",
+# HTTP sink options (streaming server)
+[pipelines.sinks.options]
+port = 8080                         # (required) Listen port
+buffer_size = 1000                  # Entry buffer size
+stream_path = "/stream"             # SSE endpoint
+status_path = "/status"             # Status endpoint
 
-    # Heartbeat configuration
-    heartbeat = {
-        enabled = true,
-        interval_seconds = 30,
-        format = "comment",      # comment or json
-        include_timestamp = true,
-        include_stats = false
-    },
+[pipelines.sinks.options.heartbeat]
+enabled = true                      # Send periodic heartbeats
+interval_seconds = 30               # Heartbeat interval
+format = "comment"                  # comment, json
+include_timestamp = true            # Include timestamp in heartbeat
+include_stats = false               # Include statistics
 
-    # Rate limiting (optional)
-    rate_limit = {
-        enabled = false,
-        requests_per_second = 10.0,
-        burst_size = 20,
-        limit_by = "ip",         # ip or global
-        max_connections_per_ip = 5,
-        max_total_connections = 100,
-        response_code = 429,
-        response_message = "Rate limit exceeded"
-    }
+[pipelines.sinks.options.net_limit]
+enabled = false                     # Enable rate limiting
+requests_per_second = 10.0          # Request rate limit
+burst_size = 20                     # Token bucket burst
+limit_by = "ip"                     # ip, global
+max_connections_per_ip = 5          # Per-IP connection limit
+max_total_connections = 100         # Total connection limit
+response_code = 429                 # HTTP response code
+response_message = "Rate limit exceeded"
 
-    # SSL/TLS (planned)
-    # ssl = {
-    #     enabled = false,
-    #     cert_file = "/path/to/cert.pem",
-    #     key_file = "/path/to/key.pem"
-    # }
-}
-
-# Additional sink examples:
-
-# [[pipelines.sinks]]
+# TCP sink options (alternative)
 # type = "tcp"
-# options = {
-#     port = 9090,
-#     buffer_size = 5000,
-#     heartbeat = { enabled = true, interval_seconds = 60 }
+# [pipelines.sinks.options]
+# port = 9090                       # (required) Listen port
+# buffer_size = 1000
+# heartbeat = { ... }               # Same as HTTP
+# net_limit = { ... }               # Same as HTTP
+
+# HTTP client sink options (forward to remote)
+# type = "http_client"
+# [pipelines.sinks.options]
+# url = "https://logs.example.com/ingest"  # (required) Target URL
+# batch_size = 100                  # Entries per batch
+# batch_delay_ms = 1000             # Batch timeout
+# timeout_seconds = 30              # Request timeout
+# max_retries = 3                   # Retry attempts
+# retry_delay_ms = 1000             # Initial retry delay
+# retry_backoff = 2.0               # Exponential backoff multiplier
+# insecure_skip_verify = false      # Skip TLS verification
+# headers = {                       # Custom headers
+#     "Authorization" = "Bearer token",
+#     "X-Custom" = "value"
 # }
 
-# [[pipelines.sinks]]
+# TCP client sink options (forward to remote)
+# type = "tcp_client"
+# [pipelines.sinks.options]
+# address = "logs.example.com:9090" # (required) host:port
+# buffer_size = 1000
+# dial_timeout_seconds = 10         # Connection timeout
+# write_timeout_seconds = 30        # Write timeout
+# keep_alive_seconds = 30           # TCP keepalive
+# reconnect_delay_ms = 1000         # Initial reconnect delay
+# max_reconnect_delay_seconds = 30  # Max reconnect delay
+# reconnect_backoff = 1.5           # Exponential backoff
+
+# File sink options
 # type = "file"
-# options = {
-#     directory = "/var/log/logwisp",
-#     name = "app",
-#     max_size_mb = 100,
-#     retention_hours = 168.0
-# }
+# [pipelines.sinks.options]
+# directory = "/var/log/logwisp"    # (required) Output directory
+# name = "app"                      # (required) Base filename
+# max_size_mb = 100                 # Rotate after size
+# max_total_size_mb = 0             # Total size limit (0 = unlimited)
+# retention_hours = 0.0             # Delete old files (0 = disabled)
+# min_disk_free_mb = 1000           # Maintain free disk space
 
-# [[pipelines.sinks]]
-# type = "stdout"
-# options = { buffer_size = 500 }
+# Console sink options
+# type = "stdout"                   # or "stderr"
+# [pipelines.sinks.options]
+# buffer_size = 1000
+# target = "stdout"                 # Override for split mode
 
 # ----------------------------------------------------------------------------
-# AUTHENTICATION (optional, applies to network sinks)
+# AUTHENTICATION (optional, for network sinks)
 # ----------------------------------------------------------------------------
 # [pipelines.auth]
-# type = "none"  # none, basic, bearer
+# type = "none"                     # none, basic, bearer
+# ip_whitelist = []                 # Allowed IPs (empty = all)
+# ip_blacklist = []                 # Blocked IPs
 #
 # [pipelines.auth.basic_auth]
-# realm = "LogWisp"
-# users = [
-#     { username = "admin", password_hash = "$2a$10$..." }
-# ]
-# ip_whitelist = ["192.168.1.0/24"]
-
-# ============================================================================
-# COMPLETE EXAMPLES
-# ============================================================================
-
-# Example: Production logs with filtering and multiple outputs
-# [[pipelines]]
-# name = "production"
+# realm = "LogWisp"                 # WWW-Authenticate realm
+# users_file = ""                   # External users file
+# [[pipelines.auth.basic_auth.users]]
+# username = "admin"
+# password_hash = "$2a$10$..."      # bcrypt hash
 #
-# [[pipelines.sources]]
-# type = "directory"
-# options = { path = "/var/log/app", pattern = "*.log", check_interval_ms = 50 }
-#
-# [[pipelines.filters]]
-# type = "include"
-# patterns = ["ERROR", "WARN", "CRITICAL"]
-#
-# [[pipelines.filters]]
-# type = "exclude"
-# patterns = ["/health", "/metrics"]
-#
-# [[pipelines.sinks]]
-# type = "http"
-# options = {
-#     port = 8080,
-#     rate_limit = { enabled = true, requests_per_second = 25.0 }
-# }
-#
-# [[pipelines.sinks]]
-# type = "file"
-# options = { directory = "/var/log/archive", name = "errors" }
-
-# Example: Multi-source aggregation
-# [[pipelines]]
-# name = "aggregated"
-#
-# [[pipelines.sources]]
-# type = "directory"
-# options = { path = "/var/log/nginx", pattern = "*.log" }
-#
-# [[pipelines.sources]]
-# type = "directory"
-# options = { path = "/var/log/app", pattern = "*.log" }
-#
-# [[pipelines.sinks]]
-# type = "tcp"
-# options = { port = 9090 }
+# [pipelines.auth.bearer_auth]
+# tokens = ["token1", "token2"]     # Static tokens
+# [pipelines.auth.bearer_auth.jwt]
+# jwks_url = ""                     # JWKS endpoint
+# signing_key = ""                  # Static key (if not using JWKS)
+# issuer = ""                       # Expected issuer
+# audience = ""                     # Expected audience
 
 # ============================================================================
 # ROUTER MODE
 # ============================================================================
-# Run with: logwisp --router
-# Allows multiple pipelines to share HTTP ports via path-based routing
-# Access: http://localhost:8080/{pipeline_name}/stream
+# Enable with: logwisp --router or router = true
+# Combines multiple pipeline HTTP sinks on shared ports
+# Access pattern: http://localhost:8080/{pipeline_name}/stream
 # Global status: http://localhost:8080/status
 
 # ============================================================================
-# QUICK REFERENCE
+# CLI FLAGS
 # ============================================================================
-# Source types: directory, file, stdin
-# Sink types: http, tcp, file, stdout, stderr
-# Filter types: include, exclude
-# Filter logic: or, and
-#
-# Common patterns:
-# "(?i)error"          - Case-insensitive
-# "\\berror\\b"        - Word boundary
-# "^ERROR"             - Start of line
-# "status=[4-5]\\d{2}" - HTTP errors
+# --config, -c PATH                 # Config file path
+# --router, -r                      # Enable router mode
+# --background, -b                  # Run as daemon
+# --quiet, -q                       # Suppress output
+# --version, -v                     # Show version
+
+# ============================================================================
+# ENVIRONMENT VARIABLES
+# ============================================================================
+# LOGWISP_CONFIG_FILE               # Config filename
+# LOGWISP_CONFIG_DIR                # Config directory
+# LOGWISP_CONSOLE_TARGET            # Override console target
+# Any config value: LOGWISP_<SECTION>_<KEY> (uppercase, dots → underscores)

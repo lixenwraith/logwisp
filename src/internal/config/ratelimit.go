@@ -25,7 +25,7 @@ type RateLimitConfig struct {
 	// Policy defines the action to take when the limit is exceeded. "pass" or "drop".
 	Policy string `toml:"policy"`
 	// MaxEntrySizeBytes is the maximum allowed size for a single log entry. 0 = no limit.
-	MaxEntrySizeBytes int `toml:"max_entry_size_bytes"`
+	MaxEntrySizeBytes int64 `toml:"max_entry_size_bytes"`
 }
 
 func validateRateLimit(pipelineName string, cfg *RateLimitConfig) error {

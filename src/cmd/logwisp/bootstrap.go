@@ -68,17 +68,14 @@ func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service
 // initializeLogger sets up the logger based on configuration
 func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
-
-	var configArgs []string
+	logCfg := log.DefaultConfig()
 
 	if cfg.Quiet {
 		// In quiet mode, disable ALL logging output
-		configArgs = append(configArgs,
-			"disable_file=true",
-			"enable_stdout=false",
-			"level=255")
-
-		return logger.InitWithDefaults(configArgs...)
+		logCfg.Level = 255 // A level that disables all output
+		logCfg.DisableFile = true
+		logCfg.EnableStdout = false
+		return logger.ApplyConfig(logCfg)
 	}
 
 	// Determine log level
@@ -86,89 +83,75 @@ func initializeLogger(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("invalid log level: %w", err)
 	}
-	configArgs = append(configArgs, fmt.Sprintf("level=%d", levelValue))
+	logCfg.Level = levelValue
 
 	// Configure based on output mode
 	switch cfg.Logging.Output {
 	case "none":
-		configArgs = append(configArgs, "disable_file=true", "enable_stdout=false")
-
+		logCfg.DisableFile = true
+		logCfg.EnableStdout = false
 	case "stdout":
-		configArgs = append(configArgs,
-			"disable_file=true",
-			"enable_stdout=true",
-			"stdout_target=stdout")
-
+		logCfg.DisableFile = true
+		logCfg.EnableStdout = true
+		logCfg.StdoutTarget = "stdout"
 	case "stderr":
-		configArgs = append(configArgs,
-			"disable_file=true",
-			"enable_stdout=true",
-			"stdout_target=stderr")
-
+		logCfg.DisableFile = true
+		logCfg.EnableStdout = true
+		logCfg.StdoutTarget = "stderr"
 	case "file":
-		configArgs = append(configArgs, "enable_stdout=false")
-		configureFileLogging(&configArgs, cfg)
-
+		logCfg.EnableStdout = false
+		configureFileLogging(logCfg, cfg)
 	case "both":
-		configArgs = append(configArgs, "enable_stdout=true")
-		configureFileLogging(&configArgs, cfg)
-		configureConsoleTarget(&configArgs, cfg)
-
+		logCfg.EnableStdout = true
+		configureFileLogging(logCfg, cfg)
+		configureConsoleTarget(logCfg, cfg)
 	default:
 		return fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
 	}
 
 	// Apply format if specified
 	if cfg.Logging.Console != nil && cfg.Logging.Console.Format != "" {
-		configArgs = append(configArgs, fmt.Sprintf("format=%s", cfg.Logging.Console.Format))
+		logCfg.Format = cfg.Logging.Console.Format
 	}
 
-	return logger.InitWithDefaults(configArgs...)
+	return logger.ApplyConfig(logCfg)
 }
 
 // configureFileLogging sets up file-based logging parameters
-func configureFileLogging(configArgs *[]string, cfg *config.Config) {
+func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	if cfg.Logging.File != nil {
-		*configArgs = append(*configArgs,
-			fmt.Sprintf("directory=%s", cfg.Logging.File.Directory),
-			fmt.Sprintf("name=%s", cfg.Logging.File.Name),
-			fmt.Sprintf("max_size_mb=%d", cfg.Logging.File.MaxSizeMB),
-			fmt.Sprintf("max_total_size_mb=%d", cfg.Logging.File.MaxTotalSizeMB))
-
+		logCfg.Directory = cfg.Logging.File.Directory
+		logCfg.Name = cfg.Logging.File.Name
+		logCfg.MaxSizeMB = cfg.Logging.File.MaxSizeMB
+		logCfg.MaxTotalSizeMB = cfg.Logging.File.MaxTotalSizeMB
 		if cfg.Logging.File.RetentionHours > 0 {
-			*configArgs = append(*configArgs,
-				fmt.Sprintf("retention_period_hrs=%.1f", cfg.Logging.File.RetentionHours))
+			logCfg.RetentionPeriodHrs = cfg.Logging.File.RetentionHours
 		}
 	}
 }
 
 // configureConsoleTarget sets up console output parameters
-func configureConsoleTarget(configArgs *[]string, cfg *config.Config) {
+func configureConsoleTarget(logCfg *log.Config, cfg *config.Config) {
 	target := "stderr" // default
 
 	if cfg.Logging.Console != nil && cfg.Logging.Console.Target != "" {
 		target = cfg.Logging.Console.Target
 	}
 
-	// Split mode by configuring log package with level-based routing
-	if target == "split" {
-		*configArgs = append(*configArgs, "stdout_split_mode=true")
-		*configArgs = append(*configArgs, "stdout_target=split")
-	} else {
-		*configArgs = append(*configArgs, fmt.Sprintf("stdout_target=%s", target))
-	}
+	// Set the target, which can be "stdout", "stderr", or "split"
+	logCfg.StdoutTarget = target
 }
 
-func parseLogLevel(level string) (int, error) {
+func parseLogLevel(level string) (int64, error) {
 	switch strings.ToLower(level) {
 	case "debug":
-		return int(log.LevelDebug), nil
+		return log.LevelDebug, nil
 	case "info":
-		return int(log.LevelInfo), nil
+		return log.LevelInfo, nil
 	case "warn", "warning":
-		return int(log.LevelWarn), nil
+		return log.LevelWarn, nil
 	case "error":
-		return int(log.LevelError), nil
+		return log.LevelError, nil
 	default:
 		return 0, fmt.Errorf("unknown log level: %s", level)
 	}

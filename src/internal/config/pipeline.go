@@ -86,7 +86,7 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 
 		// Validate check interval if provided
 		if interval, ok := cfg.Options["check_interval_ms"]; ok {
-			if intVal, ok := toInt(interval); ok {
+			if intVal, ok := interval.(int64); ok {
 				if intVal < 10 {
 					return fmt.Errorf("pipeline '%s' source[%d]: check interval too small: %d ms (min: 10ms)",
 						pipelineName, sourceIndex, intVal)
@@ -102,7 +102,7 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 
 	case "http":
 		// Validate HTTP source options
-		port, ok := toInt(cfg.Options["port"])
+		port, ok := cfg.Options["port"].(int64)
 		if !ok || port < 1 || port > 65535 {
 			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing HTTP port",
 				pipelineName, sourceIndex)
@@ -125,7 +125,7 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 
 	case "tcp":
 		// Validate TCP source options
-		port, ok := toInt(cfg.Options["port"])
+		port, ok := cfg.Options["port"].(int64)
 		if !ok || port < 1 || port > 65535 {
 			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing TCP port",
 				pipelineName, sourceIndex)
@@ -146,7 +146,7 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 	return nil
 }
 
-func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts map[int]string) error {
+func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts map[int64]string) error {
 	if cfg.Type == "" {
 		return fmt.Errorf("pipeline '%s' sink[%d]: missing type", pipelineName, sinkIndex)
 	}
@@ -154,7 +154,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 	switch cfg.Type {
 	case "http":
 		// Extract and validate HTTP configuration
-		port, ok := toInt(cfg.Options["port"])
+		port, ok := cfg.Options["port"].(int64)
 		if !ok || port < 1 || port > 65535 {
 			return fmt.Errorf("pipeline '%s' sink[%d]: invalid or missing HTTP port",
 				pipelineName, sinkIndex)
@@ -168,7 +168,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		allPorts[port] = fmt.Sprintf("%s-http[%d]", pipelineName, sinkIndex)
 
 		// Validate buffer size
-		if bufSize, ok := toInt(cfg.Options["buffer_size"]); ok {
+		if bufSize, ok := cfg.Options["buffer_size"].(int64); ok {
 			if bufSize < 1 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: HTTP buffer size must be positive: %d",
 					pipelineName, sinkIndex, bufSize)
@@ -213,7 +213,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 
 	case "tcp":
 		// Extract and validate TCP configuration
-		port, ok := toInt(cfg.Options["port"])
+		port, ok := cfg.Options["port"].(int64)
 		if !ok || port < 1 || port > 65535 {
 			return fmt.Errorf("pipeline '%s' sink[%d]: invalid or missing TCP port",
 				pipelineName, sinkIndex)
@@ -227,7 +227,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		allPorts[port] = fmt.Sprintf("%s-tcp[%d]", pipelineName, sinkIndex)
 
 		// Validate buffer size
-		if bufSize, ok := toInt(cfg.Options["buffer_size"]); ok {
+		if bufSize, ok := cfg.Options["buffer_size"].(int64); ok {
 			if bufSize < 1 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: TCP buffer size must be positive: %d",
 					pipelineName, sinkIndex, bufSize)
@@ -275,7 +275,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		}
 
 		// Validate batch size
-		if batchSize, ok := toInt(cfg.Options["batch_size"]); ok {
+		if batchSize, ok := cfg.Options["batch_size"].(int64); ok {
 			if batchSize < 1 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: batch_size must be positive: %d",
 					pipelineName, sinkIndex, batchSize)
@@ -283,7 +283,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		}
 
 		// Validate timeout
-		if timeout, ok := toInt(cfg.Options["timeout_seconds"]); ok {
+		if timeout, ok := cfg.Options["timeout_seconds"].(int64); ok {
 			if timeout < 1 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: timeout_seconds must be positive: %d",
 					pipelineName, sinkIndex, timeout)
@@ -307,14 +307,14 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		}
 
 		// Validate timeouts
-		if dialTimeout, ok := toInt(cfg.Options["dial_timeout_seconds"]); ok {
+		if dialTimeout, ok := cfg.Options["dial_timeout_seconds"].(int64); ok {
 			if dialTimeout < 1 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: dial_timeout_seconds must be positive: %d",
 					pipelineName, sinkIndex, dialTimeout)
 			}
 		}
 
-		if writeTimeout, ok := toInt(cfg.Options["write_timeout_seconds"]); ok {
+		if writeTimeout, ok := cfg.Options["write_timeout_seconds"].(int64); ok {
 			if writeTimeout < 1 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: write_timeout_seconds must be positive: %d",
 					pipelineName, sinkIndex, writeTimeout)
@@ -336,21 +336,21 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		}
 
 		// Validate numeric options
-		if maxSize, ok := toInt(cfg.Options["max_size_mb"]); ok {
+		if maxSize, ok := cfg.Options["max_size_mb"].(int64); ok {
 			if maxSize < 1 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: max_size_mb must be positive: %d",
 					pipelineName, sinkIndex, maxSize)
 			}
 		}
 
-		if maxTotalSize, ok := toInt(cfg.Options["max_total_size_mb"]); ok {
+		if maxTotalSize, ok := cfg.Options["max_total_size_mb"].(int64); ok {
 			if maxTotalSize < 0 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: max_total_size_mb cannot be negative: %d",
 					pipelineName, sinkIndex, maxTotalSize)
 			}
 		}
 
-		if retention, ok := toFloat(cfg.Options["retention_hours"]); ok {
+		if retention, ok := cfg.Options["retention_hours"].(float64); ok {
 			if retention < 0 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: retention_hours cannot be negative: %f",
 					pipelineName, sinkIndex, retention)
