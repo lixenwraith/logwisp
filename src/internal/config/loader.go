@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,9 +75,9 @@ func Load(args []string) (*Config, error) {
 	cfg, err := lconfig.NewBuilder().
 		WithDefaults(defaults()).
 		WithEnvPrefix("LOGWISP_").
-		WithFile(configPath).
-		WithArgs(args).
 		WithEnvTransform(customEnvTransform).
+		WithArgs(args).
+		WithFile(configPath).
 		WithSources(
 			lconfig.SourceCLI,
 			lconfig.SourceEnv,
@@ -86,23 +87,24 @@ func Load(args []string) (*Config, error) {
 		Build()
 
 	if err != nil {
-		// Config file load errors
-		if strings.Contains(err.Error(), "not found") {
+		// Handle file not found errors - maintain existing behavior
+		if errors.Is(err, lconfig.ErrConfigNotFound) {
 			if isExplicit {
 				return nil, fmt.Errorf("config file not found: %s", configPath)
 			}
-			// If the default config file is not found, it's not an error.
+			// If the default config file is not found, it's not an error
 		} else {
 			return nil, fmt.Errorf("failed to load config: %w", err)
 		}
 	}
 
-	// Scan into final config struct
+	// Scan into final config struct - using new interface
 	finalConfig := &Config{}
-	if err := cfg.Scan("", finalConfig); err != nil {
+	if err := cfg.Scan(finalConfig); err != nil {
 		return nil, fmt.Errorf("failed to scan config: %w", err)
 	}
 
+	// Set config file path if it exists
 	if _, err := os.Stat(configPath); err == nil {
 		finalConfig.ConfigFile = configPath
 	}
@@ -160,7 +162,7 @@ func resolveConfigPath(args []string) (path string, isExplicit bool) {
 func customEnvTransform(path string) string {
 	env := strings.ReplaceAll(path, ".", "_")
 	env = strings.ToUpper(env)
-	env = "LOGWISP_" + env
+	// env = "LOGWISP_" + env // already added by WithEnvPrefix
 	return env
 }
 

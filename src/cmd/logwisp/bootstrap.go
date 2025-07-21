@@ -122,8 +122,8 @@ func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	if cfg.Logging.File != nil {
 		logCfg.Directory = cfg.Logging.File.Directory
 		logCfg.Name = cfg.Logging.File.Name
-		logCfg.MaxSizeMB = cfg.Logging.File.MaxSizeMB
-		logCfg.MaxTotalSizeMB = cfg.Logging.File.MaxTotalSizeMB
+		logCfg.MaxSizeKB = cfg.Logging.File.MaxSizeMB * 1000
+		logCfg.MaxTotalSizeKB = cfg.Logging.File.MaxTotalSizeMB * 1000
 		if cfg.Logging.File.RetentionHours > 0 {
 			logCfg.RetentionPeriodHrs = cfg.Logging.File.RetentionHours
 		}

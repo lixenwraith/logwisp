@@ -6,10 +6,10 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
-github.com/lixenwraith/config v0.0.0-20250719015120-e02ee494d440 h1:O6nHnpeDfIYQ1WxCtA2gkm8upQ4RW21DUMlQz5DKJCU=
-github.com/lixenwraith/config v0.0.0-20250719015120-e02ee494d440/go.mod h1:y7kgDrWIFROWJJ6ASM/SPTRRAj27FjRGWh2SDLcdQ68=
-github.com/lixenwraith/log v0.0.0-20250719031926-25f1c8eb54fa h1:Y2AYESKfvDVR1JxRU5aijrGPbbY/cDA28iUDDoSqb2M=
-github.com/lixenwraith/log v0.0.0-20250719031926-25f1c8eb54fa/go.mod h1:PkY5HFyCZZs2NSeACKbl26ibKqQ6bYyEitMjowgHe/s=
+github.com/lixenwraith/config v0.0.0-20250721005322-3b1023974d3d h1:h3IWdUA6Fyl5/lvNmPdtKtLFVnZos71aV3RHILYKY/M=
+github.com/lixenwraith/config v0.0.0-20250721005322-3b1023974d3d/go.mod h1:F8ieHeZgOCPsoym5eynx4kjupfLXBpvJfnX1GzX++EA=
+github.com/lixenwraith/log v0.0.0-20250720221103-db34b7e4a2aa h1:7x25rdA8azXtY46/MgDQIKTLpZv6TXtqMBCfzL5wSJ4=
+github.com/lixenwraith/log v0.0.0-20250720221103-db34b7e4a2aa/go.mod h1:asd0/TQplmacopOKWcqW0jysau/lWohR2Fe29KBSp2w=
 github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyuac5Z2hdY=
 github.com/mitchellh/mapstructure v1.5.0/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
 github.com/panjf2000/ants/v2 v2.11.3 h1:AfI0ngBoXJmYOpDh9m516vjqoUu2sLrIVgppI9TZVpg=

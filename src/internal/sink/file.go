@@ -40,35 +40,33 @@ func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	}
 
 	// Create configuration for the internal log writer
-	var configArgs []string
-	configArgs = append(configArgs,
-		fmt.Sprintf("directory=%s", directory),
-		fmt.Sprintf("name=%s", name),
-		"enable_stdout=false",  // File only
-		"show_timestamp=false", // We already have timestamps in entries
-		"show_level=false",     // We already have levels in entries
-	)
+	writerConfig := log.DefaultConfig()
+	writerConfig.Directory = directory
+	writerConfig.Name = name
+	writerConfig.EnableStdout = false  // File only
+	writerConfig.ShowTimestamp = false // We already have timestamps in entries
+	writerConfig.ShowLevel = false     // We already have levels in entries
 
 	// Add optional configurations
 	if maxSize, ok := options["max_size_mb"].(int64); ok && maxSize > 0 {
-		configArgs = append(configArgs, fmt.Sprintf("max_size_mb=%d", maxSize))
+		writerConfig.MaxSizeKB = maxSize * 1000
 	}
 
 	if maxTotalSize, ok := options["max_total_size_mb"].(int64); ok && maxTotalSize >= 0 {
-		configArgs = append(configArgs, fmt.Sprintf("max_total_size_mb=%d", maxTotalSize))
+		writerConfig.MaxTotalSizeKB = maxTotalSize * 1000
 	}
 
 	if retention, ok := options["retention_hours"].(int64); ok && retention > 0 {
-		configArgs = append(configArgs, fmt.Sprintf("retention_period_hrs=%.1f", retention))
+		writerConfig.RetentionPeriodHrs = float64(retention)
 	}
 
 	if minDiskFree, ok := options["min_disk_free_mb"].(int64); ok && minDiskFree > 0 {
-		configArgs = append(configArgs, fmt.Sprintf("min_disk_free_mb=%d", minDiskFree))
+		writerConfig.MinDiskFreeKB = minDiskFree * 1000
 	}
 
 	// Create internal logger for file writing
 	writer := log.NewLogger()
-	if err := writer.ApplyOverride(configArgs...); err != nil {
+	if err := writer.ApplyConfig(writerConfig); err != nil {
 		return nil, fmt.Errorf("failed to initialize file writer: %w", err)
 	}
 
