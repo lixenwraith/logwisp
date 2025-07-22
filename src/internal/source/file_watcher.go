@@ -1,4 +1,4 @@
-// FILE: src/internal/source/file_watcher.go
+// FILE: logwisp/src/internal/source/file_watcher.go
 package source
 
 import (
@@ -79,7 +79,7 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 	}
 }
 
-// FILE: src/internal/source/file_watcher.go
+// FILE: logwisp/src/internal/source/file_watcher.go
 func (w *fileWatcher) seekToEnd() error {
 	file, err := os.Open(w.path)
 	if err != nil {

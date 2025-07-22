@@ -1,4 +1,4 @@
-// FILE: src/internal/filter/filter.go
+// FILE: logwisp/src/internal/filter/filter.go
 package filter
 
 import (

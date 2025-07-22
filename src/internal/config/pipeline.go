@@ -1,4 +1,4 @@
-// FILE: src/internal/config/pipeline.go
+// FILE: logwisp/src/internal/config/pipeline.go
 package config
 
 import (

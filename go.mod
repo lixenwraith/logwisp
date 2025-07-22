@@ -4,7 +4,7 @@ go 1.24.5
 
 require (
 	github.com/lixenwraith/config v0.0.0-20250721005322-3b1023974d3d
-	github.com/lixenwraith/log v0.0.0-20250720221103-db34b7e4a2aa
+	github.com/lixenwraith/log v0.0.0-20250722012845-16a3079e46e2
 	github.com/panjf2000/gnet/v2 v2.9.1
 	github.com/valyala/fasthttp v1.64.0
 )
@@ -23,3 +23,5 @@ require (
 	golang.org/x/sys v0.34.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
+
+replace github.com/mitchellh/mapstructure => github.com/go-viper/mapstructure v1.6.0

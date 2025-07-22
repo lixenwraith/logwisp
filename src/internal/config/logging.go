@@ -1,4 +1,4 @@
-// FILE: src/internal/config/logging.go
+// FILE: logwisp/src/internal/config/logging.go
 package config
 
 import "fmt"

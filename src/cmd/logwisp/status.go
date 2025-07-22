@@ -1,4 +1,4 @@
-// FILE: src/cmd/logwisp/status.go
+// FILE: logwisp/src/cmd/logwisp/status.go
 package main
 
 import (

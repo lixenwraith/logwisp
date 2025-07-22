@@ -1,4 +1,4 @@
-// FILE: src/internal/sink/console.go
+// FILE: logwisp/src/internal/sink/console.go
 package sink
 
 import (

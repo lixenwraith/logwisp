@@ -1,4 +1,4 @@
-// FILE: src/cmd/logwisp/bootstrap.go
+// FILE: logwisp/src/cmd/logwisp/bootstrap.go
 package main
 
 import (

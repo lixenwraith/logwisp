@@ -1,4 +1,4 @@
-// FILE: src/internal/netlimit/limiter.go
+// FILE: logwisp/src/internal/netlimit/limiter.go
 package netlimit
 
 import (

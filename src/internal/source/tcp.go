@@ -1,4 +1,4 @@
-// FILE: src/internal/source/tcp.go
+// FILE: logwisp/src/internal/source/tcp.go
 package source
 
 import (
@@ -15,6 +15,7 @@ import (
 	"logwisp/src/internal/netlimit"
 
 	"github.com/lixenwraith/log"
+	"github.com/lixenwraith/log/compat"
 	"github.com/panjf2000/gnet/v2"
 )
 
@@ -109,7 +110,11 @@ func (t *TCPSource) Start() error {
 
 	addr := fmt.Sprintf("tcp://:%d", t.port)
 
-	// Start gnet server in background
+	// Create a gnet adapter using the existing logger instance
+	gnetLogger := compat.NewGnetAdapter(t.logger)
+
+	// Start gnet server
+	errChan := make(chan error, 1)
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
@@ -118,7 +123,7 @@ func (t *TCPSource) Start() error {
 			"port", t.port)
 
 		err := gnet.Run(t.server, addr,
-			gnet.WithLogger(noopLogger{}),
+			gnet.WithLogger(gnetLogger),
 			gnet.WithMulticore(true),
 			gnet.WithReusePort(true),
 		)
@@ -128,11 +133,21 @@ func (t *TCPSource) Start() error {
 				"port", t.port,
 				"error", err)
 		}
+		errChan <- err
 	}()
 
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
-	return nil
+	// Wait briefly for server to start or fail
+	select {
+	case err := <-errChan:
+		// Server failed immediately
+		close(t.done)
+		t.wg.Wait()
+		return err
+	case <-time.After(100 * time.Millisecond):
+		// Server started successfully
+		t.logger.Info("msg", "TCP server started", "port", t.port)
+		return nil
+	}
 }
 
 func (t *TCPSource) Stop() {
@@ -378,10 +393,11 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 }
 
 // noopLogger implements gnet's Logger interface but discards everything
-type noopLogger struct{}
+// type noopLogger struct{}
+// func (n noopLogger) Debugf(format string, args ...any) {}
+// func (n noopLogger) Infof(format string, args ...any)  {}
+// func (n noopLogger) Warnf(format string, args ...any)  {}
+// func (n noopLogger) Errorf(format string, args ...any) {}
+// func (n noopLogger) Fatalf(format string, args ...any) {}
 
-func (n noopLogger) Debugf(format string, args ...any) {}
-func (n noopLogger) Infof(format string, args ...any)  {}
-func (n noopLogger) Warnf(format string, args ...any)  {}
-func (n noopLogger) Errorf(format string, args ...any) {}
-func (n noopLogger) Fatalf(format string, args ...any) {}
+// Usage: gnet.Run(..., gnet.WithLogger(noopLogger{}), ...)

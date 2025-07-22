@@ -1,4 +1,4 @@
-// FILE: src/internal/config/validation.go
+// FILE: logwisp/src/internal/config/validation.go
 package config
 
 import (

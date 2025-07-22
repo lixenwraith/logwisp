@@ -1,4 +1,4 @@
-// FILE: src/internal/config/ssl.go
+// FILE: logwisp/src/internal/config/ssl.go
 package config
 
 import "fmt"

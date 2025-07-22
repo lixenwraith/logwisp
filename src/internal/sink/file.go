@@ -1,4 +1,4 @@
-// FILE: src/internal/sink/file.go
+// FILE: logwisp/src/internal/sink/file.go
 package sink
 
 import (
@@ -70,7 +70,13 @@ func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Fo
 		return nil, fmt.Errorf("failed to initialize file writer: %w", err)
 	}
 
+	// Start the internal file writer
+	if err := writer.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start file writer: %w", err)
+	}
+
 	// Buffer size for input channel
+	// TODO: Make this configurable
 	bufferSize := int64(1000)
 	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		bufferSize = bufSize

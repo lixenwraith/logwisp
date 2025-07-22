@@ -1,4 +1,4 @@
-// FILE: src/internal/config/loader.go
+// FILE: logwisp/src/internal/config/loader.go
 package config
 
 import (

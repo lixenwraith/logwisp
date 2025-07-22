@@ -1,4 +1,4 @@
-// FILE: src/internal/service/pipeline.go
+// FILE: logwisp/src/internal/service/pipeline.go
 package service
 
 import (

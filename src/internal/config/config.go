@@ -1,4 +1,4 @@
-// FILE: src/internal/config/config.go
+// FILE: logwisp/src/internal/config/config.go
 package config
 
 type Config struct {

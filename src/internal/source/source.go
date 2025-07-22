@@ -1,4 +1,4 @@
-// FILE: src/internal/source/source.go
+// FILE: logwisp/src/internal/source/source.go
 package source
 
 import (

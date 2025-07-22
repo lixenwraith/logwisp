@@ -1,4 +1,4 @@
-// FILE: src/internal/format/raw.go
+// FILE: logwisp/src/internal/format/raw.go
 package format
 
 import (

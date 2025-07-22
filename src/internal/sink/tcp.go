@@ -1,10 +1,11 @@
-// FILE: src/internal/sink/tcp.go
+// FILE: logwisp/src/internal/sink/tcp.go
 package sink
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/lixenwraith/log/compat"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -138,7 +139,10 @@ func (t *TCPSink) Start(ctx context.Context) error {
 	// Configure gnet
 	addr := fmt.Sprintf("tcp://:%d", t.config.Port)
 
-	// Run gnet in separate goroutine to avoid blocking
+	// Create a gnet adapter using the existing logger instance
+	gnetLogger := compat.NewGnetAdapter(t.logger)
+
+	// Start gnet server
 	errChan := make(chan error, 1)
 	go func() {
 		t.logger.Info("msg", "Starting TCP server",
@@ -146,7 +150,7 @@ func (t *TCPSink) Start(ctx context.Context) error {
 			"port", t.config.Port)
 
 		err := gnet.Run(t.server, addr,
-			gnet.WithLogger(noopLogger{}),
+			gnet.WithLogger(gnetLogger),
 			gnet.WithMulticore(true),
 			gnet.WithReusePort(true),
 		)
@@ -383,10 +387,10 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 }
 
 // noopLogger implements gnet Logger interface but discards everything
-type noopLogger struct{}
-
-func (n noopLogger) Debugf(format string, args ...any) {}
-func (n noopLogger) Infof(format string, args ...any)  {}
-func (n noopLogger) Warnf(format string, args ...any)  {}
-func (n noopLogger) Errorf(format string, args ...any) {}
-func (n noopLogger) Fatalf(format string, args ...any) {}
+// type noopLogger struct{}
+//
+// func (n noopLogger) Debugf(format string, args ...any) {}
+// func (n noopLogger) Infof(format string, args ...any)  {}
+// func (n noopLogger) Warnf(format string, args ...any)  {}
+// func (n noopLogger) Errorf(format string, args ...any) {}
+// func (n noopLogger) Fatalf(format string, args ...any) {}

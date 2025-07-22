@@ -1,4 +1,4 @@
-// FILE: src/internal/sink/http.go
+// FILE: logwisp/src/internal/sink/http.go
 package sink
 
 import (

@@ -1,4 +1,4 @@
-// FILE: src/internal/format/json.go
+// FILE: logwisp/src/internal/format/json.go
 package format
 
 import (

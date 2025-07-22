@@ -1,4 +1,4 @@
-// FILE: src/internal/limiter/token_bucket.go
+// FILE: logwisp/src/internal/limiter/token_bucket.go
 package limiter
 
 import (

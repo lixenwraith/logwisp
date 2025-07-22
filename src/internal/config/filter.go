@@ -1,4 +1,4 @@
-// FILE: src/internal/config/filter.go
+// FILE: logwisp/src/internal/config/filter.go
 package config
 
 import (

@@ -1,4 +1,4 @@
-// FILE: src/internal/source/stdin.go
+// FILE: logwisp/src/internal/source/stdin.go
 package source
 
 import (

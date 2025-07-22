@@ -1,4 +1,4 @@
-// FILE: src/internal/service/service.go
+// FILE: logwisp/src/internal/service/service.go
 package service
 
 import (

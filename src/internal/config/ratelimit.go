@@ -1,4 +1,4 @@
-// FILE: src/internal/config/ratelimit.go
+// FILE: logwisp/src/internal/config/ratelimit.go
 package config
 
 import (

@@ -1,4 +1,4 @@
-// FILE: src/cmd/logwisp/main.go
+// FILE: logwisp/src/cmd/logwisp/main.go
 package main
 
 import (
@@ -22,6 +22,9 @@ var logger *log.Logger
 func main() {
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
+
+	// Early check for help flag to avoid unnecessary config loading
+	CheckAndDisplayHelp(os.Args[1:])
 
 	// Load configuration with automatic CLI parsing
 	cfg, err := config.Load(os.Args[1:])
@@ -58,11 +61,16 @@ func main() {
 		os.Exit(0) // The parent process exits successfully.
 	}
 
-	// Initialize logger
+	// Initialize logger instance and apply configuration
 	if err := initializeLogger(cfg); err != nil {
 		FatalError(1, "Failed to initialize logger: %v\n", err)
 	}
 	defer shutdownLogger()
+
+	// Start the logger
+	if err := logger.Start(); err != nil {
+		FatalError(1, "Failed to start logger: %v\n", err)
+	}
 
 	// Log startup information
 	logger.Info("msg", "LogWisp starting",

@@ -1,4 +1,4 @@
-// FILE: src/internal/version/version.go
+// FILE: logwisp/src/internal/version/version.go
 package version
 
 import "fmt"

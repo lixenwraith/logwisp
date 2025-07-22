@@ -1,4 +1,4 @@
-// FILE: src/internal/filter/chain.go
+// FILE: logwisp/src/internal/filter/chain.go
 package filter
 
 import (

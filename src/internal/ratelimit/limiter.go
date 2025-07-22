@@ -1,4 +1,4 @@
-// FILE: src/internal/ratelimit/limiter.go
+// FILE: logwisp/src/internal/ratelimit/limiter.go
 package ratelimit
 
 import (
