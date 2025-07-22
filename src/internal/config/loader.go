@@ -26,6 +26,7 @@ func defaults() *Config {
 
 		// Runtime behavior defaults
 		DisableStatusReporter: false,
+		ConfigAutoReload:      false,
 
 		// Child process indicator
 		BackgroundDaemon: false,

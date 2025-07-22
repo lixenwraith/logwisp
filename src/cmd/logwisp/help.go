@@ -20,6 +20,7 @@ Application Control:
 
 Runtime Behavior:
       --disable-status-reporter  Disable the periodic status reporter.
+      --config-auto-reload       Enable config reload and pipeline reconfiguration on config file change.
 
 Configuration Sources (Precedence: CLI > Env > File > Defaults):
   - CLI flags override all other settings.

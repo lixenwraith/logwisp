@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -10,14 +11,16 @@ import (
 )
 
 // statusReporter periodically logs service status
-func statusReporter(service *service.Service) {
+func statusReporter(service *service.Service, ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Clean shutdown
+			return
 		case <-ticker.C:
-			// ⚠️ FIXED: Add nil check and safe access for service stats
 			if service == nil {
 				logger.Warn("msg", "Status reporter: service is nil",
 					"component", "status_reporter")

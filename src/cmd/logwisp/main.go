@@ -84,55 +84,96 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Setup signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+	// Service and hot reload management
+	var reloadManager *ReloadManager
 
-	// Bootstrap the service
-	svc, router, err := bootstrapService(ctx, cfg)
-	if err != nil {
-		logger.Error("msg", "Failed to bootstrap service", "error", err)
-		os.Exit(1)
+	if cfg.ConfigAutoReload && cfg.ConfigFile != "" {
+		// Use reload manager for dynamic configuration
+		logger.Info("msg", "Config auto-reload enabled",
+			"config_file", cfg.ConfigFile)
+
+		reloadManager = NewReloadManager(cfg.ConfigFile, cfg, logger)
+
+		if err := reloadManager.Start(ctx); err != nil {
+			logger.Error("msg", "Failed to start reload manager", "error", err)
+			os.Exit(1)
+		}
+		defer reloadManager.Shutdown()
+
+		// Setup signal handler with reload support
+		signalHandler := NewSignalHandler(reloadManager, logger)
+		defer signalHandler.Stop()
+
+		// Handle signals in background
+		go func() {
+			sig := signalHandler.Handle(ctx)
+			if sig != nil {
+				logger.Info("msg", "Shutdown signal received",
+					"signal", sig)
+				cancel() // Trigger shutdown
+			}
+		}()
+	} else {
+		// Traditional static bootstrap
+		logger.Info("msg", "Config auto-reload disabled")
+
+		svc, router, err := bootstrapService(ctx, cfg)
+		if err != nil {
+			logger.Error("msg", "Failed to bootstrap service", "error", err)
+			os.Exit(1)
+		}
+
+		// Start status reporter if enabled (static mode)
+		if !cfg.DisableStatusReporter {
+			go statusReporter(svc, ctx)
+		}
+
+		// Setup traditional signal handling
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+
+		// Wait for shutdown signal
+		sig := <-sigChan
+
+		// Handle SIGKILL for immediate shutdown
+		if sig == syscall.SIGKILL {
+			os.Exit(137) // Standard exit code for SIGKILL (128 + 9)
+		}
+
+		logger.Info("msg", "Shutdown signal received, starting graceful shutdown...")
+
+		// Shutdown router first if using it
+		if router != nil {
+			logger.Info("msg", "Shutting down HTTP router...")
+			router.Shutdown()
+		}
+
+		// Shutdown service with timeout
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+
+		done := make(chan struct{})
+		go func() {
+			svc.Shutdown()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			logger.Info("msg", "Shutdown complete")
+		case <-shutdownCtx.Done():
+			logger.Error("msg", "Shutdown timeout exceeded - forcing exit")
+			os.Exit(1)
+		}
+
+		return // Exit from static mode
 	}
 
-	// Start status reporter if enabled
-	if !cfg.DisableStatusReporter {
-		go statusReporter(svc)
-	}
+	// Wait for context cancellation
+	<-ctx.Done()
 
-	// Wait for shutdown signal
-	sig := <-sigChan
-
-	// Handle SIGKILL for immediate shutdown
-	if sig == syscall.SIGKILL {
-		os.Exit(137) // Standard exit code for SIGKILL (128 + 9)
-	}
-
-	logger.Info("msg", "Shutdown signal received, starting graceful shutdown...")
-
-	// Shutdown router first if using it
-	if router != nil {
-		logger.Info("msg", "Shutting down HTTP router...")
-		router.Shutdown()
-	}
-
-	// Shutdown service with timeout
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	done := make(chan struct{})
-	go func() {
-		svc.Shutdown()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		logger.Info("msg", "Shutdown complete")
-	case <-shutdownCtx.Done():
-		logger.Error("msg", "Shutdown timeout exceeded - forcing exit")
-		os.Exit(1)
-	}
+	// Shutdown is handled by ReloadManager.Shutdown() in defer
+	logger.Info("msg", "Shutdown complete")
 }
 
 func shutdownLogger() {
