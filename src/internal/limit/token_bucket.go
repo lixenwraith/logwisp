@@ -1,5 +1,5 @@
-// FILE: logwisp/src/internal/limiter/token_bucket.go
-package limiter
+// FILE: logwisp/src/internal/limit/token_bucket.go
+package limit
 
 import (
 	"sync"

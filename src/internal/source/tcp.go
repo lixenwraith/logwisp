@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/netlimit"
+	"logwisp/src/internal/core"
+	"logwisp/src/internal/limit"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/compat"
@@ -24,13 +25,13 @@ type TCPSource struct {
 	port        int64
 	bufferSize  int64
 	server      *tcpSourceServer
-	subscribers []chan LogEntry
+	subscribers []chan core.LogEntry
 	mu          sync.RWMutex
 	done        chan struct{}
 	engine      *gnet.Engine
 	engineMu    sync.Mutex
 	wg          sync.WaitGroup
-	netLimiter  *netlimit.Limiter
+	netLimiter  *limit.NetLimiter
 	logger      *log.Logger
 
 	// Statistics
@@ -86,18 +87,18 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 				cfg.MaxTotalConnections = maxTotal
 			}
 
-			t.netLimiter = netlimit.New(cfg, logger)
+			t.netLimiter = limit.NewNetLimiter(cfg, logger)
 		}
 	}
 
 	return t, nil
 }
 
-func (t *TCPSource) Subscribe() <-chan LogEntry {
+func (t *TCPSource) Subscribe() <-chan core.LogEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	ch := make(chan LogEntry, t.bufferSize)
+	ch := make(chan core.LogEntry, t.bufferSize)
 	t.subscribers = append(t.subscribers, ch)
 	return ch
 }
@@ -205,7 +206,7 @@ func (t *TCPSource) GetStats() SourceStats {
 	}
 }
 
-func (t *TCPSource) publish(entry LogEntry) bool {
+func (t *TCPSource) publish(entry core.LogEntry) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -360,7 +361,7 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 		rawSize := int64(len(line))
 
 		// Parse JSON log entry
-		var entry LogEntry
+		var entry core.LogEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
 			s.source.invalidEntries.Add(1)
 			s.source.logger.Debug("msg", "Invalid JSON log entry",

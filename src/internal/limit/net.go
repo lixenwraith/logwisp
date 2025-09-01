@@ -1,5 +1,5 @@
-// FILE: logwisp/src/internal/netlimit/limiter.go
-package netlimit
+// FILE: logwisp/src/internal/limit/net.go
+package limit
 
 import (
 	"context"
@@ -10,13 +10,12 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/limiter"
 
 	"github.com/lixenwraith/log"
 )
 
-// Limiter manages net limiting for a transport
-type Limiter struct {
+// NetLimiter manages net limiting for a transport
+type NetLimiter struct {
 	config config.NetLimitConfig
 	logger *log.Logger
 
@@ -25,7 +24,7 @@ type Limiter struct {
 	ipMu       sync.RWMutex
 
 	// Global limiter for the transport
-	globalLimiter *limiter.TokenBucket
+	globalLimiter *TokenBucket
 
 	// Connection tracking
 	ipConnections map[string]*atomic.Int64
@@ -47,13 +46,13 @@ type Limiter struct {
 }
 
 type ipLimiter struct {
-	bucket      *limiter.TokenBucket
+	bucket      *TokenBucket
 	lastSeen    time.Time
 	connections atomic.Int64
 }
 
 // Creates a new net limiter
-func New(cfg config.NetLimitConfig, logger *log.Logger) *Limiter {
+func NewNetLimiter(cfg config.NetLimitConfig, logger *log.Logger) *NetLimiter {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -64,7 +63,7 @@ func New(cfg config.NetLimitConfig, logger *log.Logger) *Limiter {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	l := &Limiter{
+	l := &NetLimiter{
 		config:        cfg,
 		ipLimiters:    make(map[string]*ipLimiter),
 		ipConnections: make(map[string]*atomic.Int64),
@@ -77,7 +76,7 @@ func New(cfg config.NetLimitConfig, logger *log.Logger) *Limiter {
 
 	// Create global limiter if not using per-IP limiting
 	if cfg.LimitBy == "global" {
-		l.globalLimiter = limiter.NewTokenBucket(
+		l.globalLimiter = NewTokenBucket(
 			float64(cfg.BurstSize),
 			cfg.RequestsPerSecond,
 		)
@@ -95,7 +94,7 @@ func New(cfg config.NetLimitConfig, logger *log.Logger) *Limiter {
 	return l
 }
 
-func (l *Limiter) Shutdown() {
+func (l *NetLimiter) Shutdown() {
 	if l == nil {
 		return
 	}
@@ -115,7 +114,7 @@ func (l *Limiter) Shutdown() {
 }
 
 // Checks if an HTTP request should be allowed
-func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int64, message string) {
+func (l *NetLimiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int64, message string) {
 	if l == nil {
 		return true, 0, ""
 	}
@@ -185,7 +184,7 @@ func (l *Limiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int64, 
 }
 
 // Checks if a TCP connection should be allowed
-func (l *Limiter) CheckTCP(remoteAddr net.Addr) bool {
+func (l *NetLimiter) CheckTCP(remoteAddr net.Addr) bool {
 	if l == nil {
 		return true
 	}
@@ -224,7 +223,7 @@ func isIPv4(ip string) bool {
 }
 
 // Tracks a new connection for an IP
-func (l *Limiter) AddConnection(remoteAddr string) {
+func (l *NetLimiter) AddConnection(remoteAddr string) {
 	if l == nil {
 		return
 	}
@@ -254,7 +253,7 @@ func (l *Limiter) AddConnection(remoteAddr string) {
 }
 
 // Removes a connection for an IP
-func (l *Limiter) RemoveConnection(remoteAddr string) {
+func (l *NetLimiter) RemoveConnection(remoteAddr string) {
 	if l == nil {
 		return
 	}
@@ -291,7 +290,7 @@ func (l *Limiter) RemoveConnection(remoteAddr string) {
 }
 
 // Returns net limiter statistics
-func (l *Limiter) GetStats() map[string]any {
+func (l *NetLimiter) GetStats() map[string]any {
 	if l == nil {
 		return map[string]any{
 			"enabled": false,
@@ -324,7 +323,7 @@ func (l *Limiter) GetStats() map[string]any {
 }
 
 // Performs the actual net limit check
-func (l *Limiter) checkLimit(ip string) bool {
+func (l *NetLimiter) checkLimit(ip string) bool {
 	// Maybe run cleanup
 	l.maybeCleanup()
 
@@ -339,7 +338,7 @@ func (l *Limiter) checkLimit(ip string) bool {
 		if !exists {
 			// Create new limiter for this IP
 			lim = &ipLimiter{
-				bucket: limiter.NewTokenBucket(
+				bucket: NewTokenBucket(
 					float64(l.config.BurstSize),
 					l.config.RequestsPerSecond,
 				),
@@ -378,7 +377,7 @@ func (l *Limiter) checkLimit(ip string) bool {
 }
 
 // Runs cleanup if enough time has passed
-func (l *Limiter) maybeCleanup() {
+func (l *NetLimiter) maybeCleanup() {
 	l.cleanupMu.Lock()
 	defer l.cleanupMu.Unlock()
 
@@ -391,7 +390,7 @@ func (l *Limiter) maybeCleanup() {
 }
 
 // Removes stale IP limiters
-func (l *Limiter) cleanup() {
+func (l *NetLimiter) cleanup() {
 	staleTimeout := 5 * time.Minute
 	now := time.Now()
 
@@ -414,7 +413,7 @@ func (l *Limiter) cleanup() {
 }
 
 // Runs periodic cleanup
-func (l *Limiter) cleanupLoop() {
+func (l *NetLimiter) cleanupLoop() {
 	defer close(l.cleanupDone)
 
 	ticker := time.NewTicker(1 * time.Minute)

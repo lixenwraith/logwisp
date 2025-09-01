@@ -4,7 +4,7 @@ package format
 import (
 	"fmt"
 
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
 )
@@ -12,7 +12,7 @@ import (
 // Formatter defines the interface for transforming a LogEntry into a byte slice.
 type Formatter interface {
 	// Format takes a LogEntry and returns the formatted log as a byte slice.
-	Format(entry source.LogEntry) ([]byte, error)
+	Format(entry core.LogEntry) ([]byte, error)
 
 	// Name returns the formatter type name
 	Name() string

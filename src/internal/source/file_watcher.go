@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"logwisp/src/internal/core"
+
 	"github.com/lixenwraith/log"
 )
 
@@ -31,7 +33,7 @@ type WatcherInfo struct {
 
 type fileWatcher struct {
 	path         string
-	callback     func(LogEntry)
+	callback     func(core.LogEntry)
 	position     int64
 	size         int64
 	inode        uint64
@@ -44,7 +46,7 @@ type fileWatcher struct {
 	logger       *log.Logger
 }
 
-func newFileWatcher(path string, callback func(LogEntry), logger *log.Logger) *fileWatcher {
+func newFileWatcher(path string, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
 	w := &fileWatcher{
 		path:     path,
 		callback: callback,
@@ -229,7 +231,7 @@ func (w *fileWatcher) checkFile() error {
 		w.position = 0 // Reset position on rotation
 		w.mu.Unlock()
 
-		w.callback(LogEntry{
+		w.callback(core.LogEntry{
 			Time:    time.Now(),
 			Source:  filepath.Base(w.path),
 			Level:   "INFO",
@@ -309,7 +311,7 @@ func (w *fileWatcher) checkFile() error {
 	return nil
 }
 
-func (w *fileWatcher) parseLine(line string) LogEntry {
+func (w *fileWatcher) parseLine(line string) core.LogEntry {
 	var jsonLog struct {
 		Time    string          `json:"time"`
 		Level   string          `json:"level"`
@@ -323,7 +325,7 @@ func (w *fileWatcher) parseLine(line string) LogEntry {
 			timestamp = time.Now()
 		}
 
-		return LogEntry{
+		return core.LogEntry{
 			Time:    timestamp,
 			Source:  filepath.Base(w.path),
 			Level:   jsonLog.Level,
@@ -334,7 +336,7 @@ func (w *fileWatcher) parseLine(line string) LogEntry {
 
 	level := extractLogLevel(line)
 
-	return LogEntry{
+	return core.LogEntry{
 		Time:    time.Now(),
 		Source:  filepath.Base(w.path),
 		Level:   level,

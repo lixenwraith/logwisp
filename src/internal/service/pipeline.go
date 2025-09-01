@@ -3,13 +3,13 @@ package service
 
 import (
 	"context"
-	"logwisp/src/internal/ratelimit"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/filter"
+	"logwisp/src/internal/limit"
 	"logwisp/src/internal/sink"
 	"logwisp/src/internal/source"
 
@@ -21,7 +21,7 @@ type Pipeline struct {
 	Name        string
 	Config      config.PipelineConfig
 	Sources     []source.Source
-	RateLimiter *ratelimit.Limiter
+	RateLimiter *limit.RateLimiter
 	FilterChain *filter.Chain
 	Sinks       []sink.Sink
 	Stats       *PipelineStats

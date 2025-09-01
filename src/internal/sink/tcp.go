@@ -5,24 +5,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/lixenwraith/log/compat"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/netlimit"
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/limit"
 
 	"github.com/lixenwraith/log"
+	"github.com/lixenwraith/log/compat"
 	"github.com/panjf2000/gnet/v2"
 )
 
 // TCPSink streams log entries via TCP
 type TCPSink struct {
-	input       chan source.LogEntry
+	input       chan core.LogEntry
 	config      TCPConfig
 	server      *tcpServer
 	done        chan struct{}
@@ -31,7 +31,7 @@ type TCPSink struct {
 	engine      *gnet.Engine
 	engineMu    sync.Mutex
 	wg          sync.WaitGroup
-	netLimiter  *netlimit.Limiter
+	netLimiter  *limit.NetLimiter
 	logger      *log.Logger
 	formatter   format.Formatter
 
@@ -106,7 +106,7 @@ func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.For
 	}
 
 	t := &TCPSink{
-		input:     make(chan source.LogEntry, cfg.BufferSize),
+		input:     make(chan core.LogEntry, cfg.BufferSize),
 		config:    cfg,
 		done:      make(chan struct{}),
 		startTime: time.Now(),
@@ -116,13 +116,13 @@ func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.For
 	t.lastProcessed.Store(time.Time{})
 
 	if cfg.NetLimit != nil && cfg.NetLimit.Enabled {
-		t.netLimiter = netlimit.New(*cfg.NetLimit, logger)
+		t.netLimiter = limit.NewNetLimiter(*cfg.NetLimit, logger)
 	}
 
 	return t, nil
 }
 
-func (t *TCPSink) Input() chan<- source.LogEntry {
+func (t *TCPSink) Input() chan<- core.LogEntry {
 	return t.input
 }
 
@@ -133,7 +133,7 @@ func (t *TCPSink) Start(ctx context.Context) error {
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
-		t.broadcastLoop()
+		t.broadcastLoop(ctx)
 	}()
 
 	// Configure gnet
@@ -161,6 +161,18 @@ func (t *TCPSink) Start(ctx context.Context) error {
 				"error", err)
 		}
 		errChan <- err
+	}()
+
+	// Monitor context for shutdown
+	go func() {
+		<-ctx.Done()
+		t.engineMu.Lock()
+		if t.engine != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			(*t.engine).Stop(shutdownCtx)
+		}
+		t.engineMu.Unlock()
 	}()
 
 	// Wait briefly for server to start or fail
@@ -221,7 +233,7 @@ func (t *TCPSink) GetStats() SinkStats {
 	}
 }
 
-func (t *TCPSink) broadcastLoop() {
+func (t *TCPSink) broadcastLoop(ctx context.Context) {
 	var ticker *time.Ticker
 	var tickerChan <-chan time.Time
 
@@ -233,6 +245,8 @@ func (t *TCPSink) broadcastLoop() {
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case entry, ok := <-t.input:
 			if !ok {
 				return
@@ -278,7 +292,7 @@ func (t *TCPSink) broadcastLoop() {
 }
 
 // Create heartbeat as a proper LogEntry
-func (t *TCPSink) createHeartbeatEntry() source.LogEntry {
+func (t *TCPSink) createHeartbeatEntry() core.LogEntry {
 	message := "heartbeat"
 
 	// Build fields for heartbeat metadata
@@ -292,7 +306,7 @@ func (t *TCPSink) createHeartbeatEntry() source.LogEntry {
 
 	fieldsJSON, _ := json.Marshal(fields)
 
-	return source.LogEntry{
+	return core.LogEntry{
 		Time:    time.Now(),
 		Source:  "logwisp-tcp",
 		Level:   "INFO",
@@ -385,12 +399,3 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 	c.Discard(-1)
 	return gnet.None
 }
-
-// noopLogger implements gnet Logger interface but discards everything
-// type noopLogger struct{}
-//
-// func (n noopLogger) Debugf(format string, args ...any) {}
-// func (n noopLogger) Infof(format string, args ...any)  {}
-// func (n noopLogger) Warnf(format string, args ...any)  {}
-// func (n noopLogger) Errorf(format string, args ...any) {}
-// func (n noopLogger) Fatalf(format string, args ...any) {}

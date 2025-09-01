@@ -1,20 +1,19 @@
-// FILE: logwisp/src/internal/ratelimit/limiter.go
-package ratelimit
+// FILE: logwisp/src/internal/limit/rate.go
+package limit
 
 import (
 	"strings"
 	"sync/atomic"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/limiter"
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
 )
 
-// Limiter enforces rate limits on log entries flowing through a pipeline.
-type Limiter struct {
-	bucket *limiter.TokenBucket
+// RateLimiter enforces rate limits on log entries flowing through a pipeline.
+type RateLimiter struct {
+	bucket *TokenBucket
 	policy config.RateLimitPolicy
 	logger *log.Logger
 
@@ -24,8 +23,8 @@ type Limiter struct {
 	droppedCount       atomic.Uint64
 }
 
-// New creates a new rate limiter. If cfg.Rate is 0, it returns nil.
-func New(cfg config.RateLimitConfig, logger *log.Logger) (*Limiter, error) {
+// NewRateLimiter creates a new rate limiter. If cfg.Rate is 0, it returns nil.
+func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimiter, error) {
 	if cfg.Rate <= 0 {
 		return nil, nil // No rate limit
 	}
@@ -43,15 +42,15 @@ func New(cfg config.RateLimitConfig, logger *log.Logger) (*Limiter, error) {
 		policy = config.PolicyPass
 	}
 
-	l := &Limiter{
-		bucket:            limiter.NewTokenBucket(burst, cfg.Rate),
+	l := &RateLimiter{
+		bucket:            NewTokenBucket(burst, cfg.Rate),
 		policy:            policy,
 		logger:            logger,
 		maxEntrySizeBytes: cfg.MaxEntrySizeBytes,
 	}
 
 	if cfg.Rate > 0 {
-		l.bucket = limiter.NewTokenBucket(burst, cfg.Rate)
+		l.bucket = NewTokenBucket(burst, cfg.Rate)
 	}
 
 	return l, nil
@@ -59,7 +58,7 @@ func New(cfg config.RateLimitConfig, logger *log.Logger) (*Limiter, error) {
 
 // Allow checks if a log entry is allowed to pass based on the rate limit.
 // It returns true if the entry should pass, false if it should be dropped.
-func (l *Limiter) Allow(entry source.LogEntry) bool {
+func (l *RateLimiter) Allow(entry core.LogEntry) bool {
 	if l == nil || l.policy == config.PolicyPass {
 		return true
 	}
@@ -85,7 +84,7 @@ func (l *Limiter) Allow(entry source.LogEntry) bool {
 }
 
 // GetStats returns the statistics for the limiter.
-func (l *Limiter) GetStats() map[string]any {
+func (l *RateLimiter) GetStats() map[string]any {
 	if l == nil {
 		return map[string]any{
 			"enabled": false,

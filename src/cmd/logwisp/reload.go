@@ -21,7 +21,7 @@ type ReloadManager struct {
 	service     *service.Service
 	router      *service.HTTPRouter
 	cfg         *config.Config
-	lcfg        *lconfig.Config // TODO: use the same cfg struct
+	lcfg        *lconfig.Config
 	logger      *log.Logger
 	mu          sync.RWMutex
 	reloadingMu sync.Mutex
@@ -62,10 +62,15 @@ func (rm *ReloadManager) Start(ctx context.Context) error {
 		rm.startStatusReporter(ctx, svc)
 	}
 
-	// Create lconfig instance for file watching
+	// Create lconfig instance for file watching, logwisp config is always TOML
 	lcfg, err := lconfig.NewBuilder().
 		WithFile(rm.configPath).
 		WithTarget(rm.cfg).
+		WithFileFormat("toml").
+		WithSecurityOptions(lconfig.SecurityOptions{
+			PreventPathTraversal: true,
+			MaxFileSize:          10 * 1024 * 1024,
+		}).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create config watcher: %w", err)
@@ -78,7 +83,7 @@ func (rm *ReloadManager) Start(ctx context.Context) error {
 		PollInterval:      time.Second,
 		Debounce:          500 * time.Millisecond,
 		ReloadTimeout:     30 * time.Second,
-		VerifyPermissions: true, // SECURITY: Prevent malicious config replacement
+		VerifyPermissions: true, // TODO: Prevent malicious config replacement, to be implemented
 	}
 	lcfg.AutoUpdateWithOptions(watchOpts)
 
@@ -304,6 +309,14 @@ func (rm *ReloadManager) stopStatusReporter() {
 		rm.statusReporterCancel = nil
 		rm.logger.Debug("msg", "Stopped status reporter")
 	}
+}
+
+// SaveConfig is a wrapper to save the config
+func (rm *ReloadManager) SaveConfig(path string) error {
+	if rm.lcfg == nil {
+		return fmt.Errorf("no lconfig instance available")
+	}
+	return rm.lcfg.Save(path)
 }
 
 // Shutdown stops the reload manager

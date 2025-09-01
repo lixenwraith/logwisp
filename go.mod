@@ -3,10 +3,10 @@ module logwisp
 go 1.24.5
 
 require (
-	github.com/lixenwraith/config v0.0.0-20250721005322-3b1023974d3d
+	github.com/lixenwraith/config v0.0.0-20250901201021-59a461e31cd4
 	github.com/lixenwraith/log v0.0.0-20250722012845-16a3079e46e2
-	github.com/panjf2000/gnet/v2 v2.9.1
-	github.com/valyala/fasthttp v1.64.0
+	github.com/panjf2000/gnet/v2 v2.9.3
+	github.com/valyala/fasthttp v1.65.0
 )
 
 require (
@@ -20,8 +20,9 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.34.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/mitchellh/mapstructure => github.com/go-viper/mapstructure v1.6.0

@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
@@ -19,10 +19,10 @@ import (
 
 // HTTPClientSink forwards log entries to a remote HTTP endpoint
 type HTTPClientSink struct {
-	input     chan source.LogEntry
+	input     chan core.LogEntry
 	config    HTTPClientConfig
 	client    *fasthttp.Client
-	batch     []source.LogEntry
+	batch     []core.LogEntry
 	batchMu   sync.Mutex
 	done      chan struct{}
 	wg        sync.WaitGroup
@@ -127,9 +127,9 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 	}
 
 	h := &HTTPClientSink{
-		input:     make(chan source.LogEntry, cfg.BufferSize),
+		input:     make(chan core.LogEntry, cfg.BufferSize),
 		config:    cfg,
-		batch:     make([]source.LogEntry, 0, cfg.BatchSize),
+		batch:     make([]core.LogEntry, 0, cfg.BatchSize),
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
@@ -162,7 +162,7 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 	return h, nil
 }
 
-func (h *HTTPClientSink) Input() chan<- source.LogEntry {
+func (h *HTTPClientSink) Input() chan<- core.LogEntry {
 	return h.input
 }
 
@@ -188,7 +188,7 @@ func (h *HTTPClientSink) Stop() {
 	h.batchMu.Lock()
 	if len(h.batch) > 0 {
 		batch := h.batch
-		h.batch = make([]source.LogEntry, 0, h.config.BatchSize)
+		h.batch = make([]core.LogEntry, 0, h.config.BatchSize)
 		h.batchMu.Unlock()
 		h.sendBatch(batch)
 	} else {
@@ -246,7 +246,7 @@ func (h *HTTPClientSink) processLoop(ctx context.Context) {
 			// Check if batch is full
 			if int64(len(h.batch)) >= h.config.BatchSize {
 				batch := h.batch
-				h.batch = make([]source.LogEntry, 0, h.config.BatchSize)
+				h.batch = make([]core.LogEntry, 0, h.config.BatchSize)
 				h.batchMu.Unlock()
 
 				// Send batch in background
@@ -275,7 +275,7 @@ func (h *HTTPClientSink) batchTimer(ctx context.Context) {
 			h.batchMu.Lock()
 			if len(h.batch) > 0 {
 				batch := h.batch
-				h.batch = make([]source.LogEntry, 0, h.config.BatchSize)
+				h.batch = make([]core.LogEntry, 0, h.config.BatchSize)
 				h.batchMu.Unlock()
 
 				// Send batch in background
@@ -292,7 +292,7 @@ func (h *HTTPClientSink) batchTimer(ctx context.Context) {
 	}
 }
 
-func (h *HTTPClientSink) sendBatch(batch []source.LogEntry) {
+func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 	h.activeConnections.Add(1)
 	defer h.activeConnections.Add(-1)
 

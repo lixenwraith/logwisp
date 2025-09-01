@@ -2,24 +2,15 @@
 package source
 
 import (
-	"encoding/json"
 	"time"
-)
 
-// LogEntry represents a single log record
-type LogEntry struct {
-	Time    time.Time       `json:"time"`
-	Source  string          `json:"source"`
-	Level   string          `json:"level,omitempty"`
-	Message string          `json:"message"`
-	Fields  json.RawMessage `json:"fields,omitempty"`
-	RawSize int64           `json:"-"`
-}
+	"logwisp/src/internal/core"
+)
 
 // Source represents an input data stream
 type Source interface {
 	// Subscribe returns a channel that receives log entries
-	Subscribe() <-chan LogEntry
+	Subscribe() <-chan core.LogEntry
 
 	// Start begins reading from the source
 	Start() error

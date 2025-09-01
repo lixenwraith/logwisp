@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/core"
+
 	"github.com/lixenwraith/log"
 )
 
@@ -21,7 +23,7 @@ type DirectorySource struct {
 	path           string
 	pattern        string
 	checkInterval  time.Duration
-	subscribers    []chan LogEntry
+	subscribers    []chan core.LogEntry
 	watchers       map[string]*fileWatcher
 	mu             sync.RWMutex
 	ctx            context.Context
@@ -69,11 +71,11 @@ func NewDirectorySource(options map[string]any, logger *log.Logger) (*DirectoryS
 	return ds, nil
 }
 
-func (ds *DirectorySource) Subscribe() <-chan LogEntry {
+func (ds *DirectorySource) Subscribe() <-chan core.LogEntry {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
-	ch := make(chan LogEntry, 1000)
+	ch := make(chan core.LogEntry, 1000)
 	ds.subscribers = append(ds.subscribers, ch)
 	return ch
 }
@@ -145,7 +147,7 @@ func (ds *DirectorySource) GetStats() SourceStats {
 	}
 }
 
-func (ds *DirectorySource) publish(entry LogEntry) {
+func (ds *DirectorySource) publish(entry core.LogEntry) {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 

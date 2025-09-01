@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
 )
@@ -44,7 +44,7 @@ func NewChain(configs []config.FilterConfig, logger *log.Logger) (*Chain, error)
 
 // Apply runs all filters in sequence
 // Returns true if the entry passes all filters
-func (c *Chain) Apply(entry source.LogEntry) bool {
+func (c *Chain) Apply(entry core.LogEntry) bool {
 	c.totalProcessed.Add(1)
 
 	// No filters means pass everything

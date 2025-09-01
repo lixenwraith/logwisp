@@ -11,6 +11,7 @@ type Config struct {
 	// Runtime behavior flags
 	DisableStatusReporter bool `toml:"disable_status_reporter"`
 	ConfigAutoReload      bool `toml:"config_auto_reload"`
+	ConfigSaveOnExit      bool `toml:"config_save_on_exit"`
 
 	// Internal flag indicating demonized child process
 	BackgroundDaemon bool `toml:"background-daemon"`

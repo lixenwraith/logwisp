@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/netlimit"
+	"logwisp/src/internal/core"
+	"logwisp/src/internal/limit"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
@@ -21,11 +22,11 @@ type HTTPSource struct {
 	ingestPath  string
 	bufferSize  int64
 	server      *fasthttp.Server
-	subscribers []chan LogEntry
+	subscribers []chan core.LogEntry
 	mu          sync.RWMutex
 	done        chan struct{}
 	wg          sync.WaitGroup
-	netLimiter  *netlimit.Limiter
+	netLimiter  *limit.NetLimiter
 	logger      *log.Logger
 
 	// Statistics
@@ -89,18 +90,18 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 				cfg.MaxConnectionsPerIP = maxPerIP
 			}
 
-			h.netLimiter = netlimit.New(cfg, logger)
+			h.netLimiter = limit.NewNetLimiter(cfg, logger)
 		}
 	}
 
 	return h, nil
 }
 
-func (h *HTTPSource) Subscribe() <-chan LogEntry {
+func (h *HTTPSource) Subscribe() <-chan core.LogEntry {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	ch := make(chan LogEntry, h.bufferSize)
+	ch := make(chan core.LogEntry, h.bufferSize)
 	h.subscribers = append(h.subscribers, ch)
 	return ch
 }
@@ -255,11 +256,11 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 	})
 }
 
-func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
-	var entries []LogEntry
+func (h *HTTPSource) parseEntries(body []byte) ([]core.LogEntry, error) {
+	var entries []core.LogEntry
 
 	// Try to parse as single JSON object first
-	var single LogEntry
+	var single core.LogEntry
 	if err := json.Unmarshal(body, &single); err == nil {
 		// Validate required fields
 		if single.Message == "" {
@@ -277,7 +278,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 	}
 
 	// Try to parse as JSON array
-	var array []LogEntry
+	var array []core.LogEntry
 	if err := json.Unmarshal(body, &array); err == nil {
 		// TODO: Placeholder; For array, divide total size by entry count as approximation
 		approxSizePerEntry := int64(len(body) / len(array))
@@ -304,7 +305,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 			continue
 		}
 
-		var entry LogEntry
+		var entry core.LogEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
 		}
@@ -330,7 +331,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]LogEntry, error) {
 	return entries, nil
 }
 
-func (h *HTTPSource) publish(entry LogEntry) bool {
+func (h *HTTPSource) publish(entry core.LogEntry) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

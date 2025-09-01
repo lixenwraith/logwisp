@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/netlimit"
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/limit"
 	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
@@ -24,7 +24,7 @@ import (
 
 // HTTPSink streams log entries via Server-Sent Events
 type HTTPSink struct {
-	input         chan source.LogEntry
+	input         chan core.LogEntry
 	config        HTTPConfig
 	server        *fasthttp.Server
 	activeClients atomic.Int64
@@ -43,7 +43,7 @@ type HTTPSink struct {
 	standalone bool
 
 	// Net limiting
-	netLimiter *netlimit.Limiter
+	netLimiter *limit.NetLimiter
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -126,7 +126,7 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	}
 
 	h := &HTTPSink{
-		input:      make(chan source.LogEntry, cfg.BufferSize),
+		input:      make(chan core.LogEntry, cfg.BufferSize),
 		config:     cfg,
 		startTime:  time.Now(),
 		done:       make(chan struct{}),
@@ -140,18 +140,17 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 
 	// Initialize net limiter if configured
 	if cfg.NetLimit != nil && cfg.NetLimit.Enabled {
-		h.netLimiter = netlimit.New(*cfg.NetLimit, logger)
+		h.netLimiter = limit.NewNetLimiter(*cfg.NetLimit, logger)
 	}
 
 	return h, nil
 }
 
-func (h *HTTPSink) Input() chan<- source.LogEntry {
+func (h *HTTPSink) Input() chan<- core.LogEntry {
 	return h.input
 }
 
 func (h *HTTPSink) Start(ctx context.Context) error {
-	// TODO: use or remove unused ctx
 	if !h.standalone {
 		// In router mode, don't start our own server
 		h.logger.Debug("msg", "HTTP sink in router mode, skipping server start",
@@ -182,6 +181,16 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 		err := h.server.ListenAndServe(addr)
 		if err != nil {
 			errChan <- err
+		}
+	}()
+
+	// Monitor context for shutdown signal
+	go func() {
+		<-ctx.Done()
+		if h.server != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			h.server.ShutdownWithContext(shutdownCtx)
 		}
 	}()
 
@@ -299,7 +308,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 	ctx.Response.Header.Set("X-Accel-Buffering", "no")
 
 	// Create subscription for this client
-	clientChan := make(chan source.LogEntry, h.config.BufferSize)
+	clientChan := make(chan core.LogEntry, h.config.BufferSize)
 	clientDone := make(chan struct{})
 
 	// Subscribe to input channel
@@ -415,7 +424,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 	ctx.SetBodyStreamWriter(streamFunc)
 }
 
-func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry source.LogEntry) error {
+func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry core.LogEntry) error {
 	formatted, err := h.formatter.Format(entry)
 	if err != nil {
 		return err
@@ -434,7 +443,7 @@ func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry source.LogEntry) err
 	return nil
 }
 
-func (h *HTTPSink) createHeartbeatEntry() source.LogEntry {
+func (h *HTTPSink) createHeartbeatEntry() core.LogEntry {
 	message := "heartbeat"
 
 	// Build fields for heartbeat metadata
@@ -448,7 +457,7 @@ func (h *HTTPSink) createHeartbeatEntry() source.LogEntry {
 
 	fieldsJSON, _ := json.Marshal(fields)
 
-	return source.LogEntry{
+	return core.LogEntry{
 		Time:    time.Now(),
 		Source:  "logwisp-http",
 		Level:   "INFO",

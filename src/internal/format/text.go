@@ -8,7 +8,7 @@ import (
 	"text/template"
 	"time"
 
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
 )
@@ -59,7 +59,7 @@ func NewTextFormatter(options map[string]any, logger *log.Logger) (*TextFormatte
 }
 
 // Format formats the log entry using the template
-func (f *TextFormatter) Format(entry source.LogEntry) ([]byte, error) {
+func (f *TextFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Prepare data for template
 	data := map[string]any{
 		"Timestamp": entry.Time,

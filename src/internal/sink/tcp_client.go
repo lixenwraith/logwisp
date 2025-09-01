@@ -10,15 +10,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
 )
 
 // TCPClientSink forwards log entries to a remote TCP endpoint
 type TCPClientSink struct {
-	input     chan source.LogEntry
+	input     chan core.LogEntry
 	config    TCPClientConfig
 	conn      net.Conn
 	connMu    sync.RWMutex
@@ -104,7 +104,7 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 	}
 
 	t := &TCPClientSink{
-		input:     make(chan source.LogEntry, cfg.BufferSize),
+		input:     make(chan core.LogEntry, cfg.BufferSize),
 		config:    cfg,
 		done:      make(chan struct{}),
 		startTime: time.Now(),
@@ -117,7 +117,7 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 	return t, nil
 }
 
-func (t *TCPClientSink) Input() chan<- source.LogEntry {
+func (t *TCPClientSink) Input() chan<- core.LogEntry {
 	return t.input
 }
 
@@ -345,7 +345,7 @@ func (t *TCPClientSink) processLoop(ctx context.Context) {
 	}
 }
 
-func (t *TCPClientSink) sendEntry(entry source.LogEntry) error {
+func (t *TCPClientSink) sendEntry(entry core.LogEntry) error {
 	// Get current connection
 	t.connMu.RLock()
 	conn := t.conn

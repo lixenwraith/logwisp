@@ -7,12 +7,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/core"
+
 	"github.com/lixenwraith/log"
 )
 
 // StdinSource reads log entries from standard input
 type StdinSource struct {
-	subscribers    []chan LogEntry
+	subscribers    []chan core.LogEntry
 	done           chan struct{}
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
@@ -32,8 +34,8 @@ func NewStdinSource(options map[string]any, logger *log.Logger) (*StdinSource, e
 	return s, nil
 }
 
-func (s *StdinSource) Subscribe() <-chan LogEntry {
-	ch := make(chan LogEntry, 1000)
+func (s *StdinSource) Subscribe() <-chan core.LogEntry {
+	ch := make(chan core.LogEntry, 1000)
 	s.subscribers = append(s.subscribers, ch)
 	return ch
 }
@@ -77,7 +79,7 @@ func (s *StdinSource) readLoop() {
 				continue
 			}
 
-			entry := LogEntry{
+			entry := core.LogEntry{
 				Time:    time.Now(),
 				Source:  "stdin",
 				Message: line,
@@ -96,7 +98,7 @@ func (s *StdinSource) readLoop() {
 	}
 }
 
-func (s *StdinSource) publish(entry LogEntry) {
+func (s *StdinSource) publish(entry core.LogEntry) {
 	s.totalEntries.Add(1)
 	s.lastEntryTime.Store(entry.Time)
 

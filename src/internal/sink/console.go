@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
 )
@@ -23,7 +23,7 @@ type ConsoleConfig struct {
 
 // StdoutSink writes log entries to stdout
 type StdoutSink struct {
-	input     chan source.LogEntry
+	input     chan core.LogEntry
 	config    ConsoleConfig
 	output    io.Writer
 	done      chan struct{}
@@ -53,7 +53,7 @@ func NewStdoutSink(options map[string]any, logger *log.Logger, formatter format.
 	}
 
 	s := &StdoutSink{
-		input:     make(chan source.LogEntry, config.BufferSize),
+		input:     make(chan core.LogEntry, config.BufferSize),
 		config:    config,
 		output:    os.Stdout,
 		done:      make(chan struct{}),
@@ -66,7 +66,7 @@ func NewStdoutSink(options map[string]any, logger *log.Logger, formatter format.
 	return s, nil
 }
 
-func (s *StdoutSink) Input() chan<- source.LogEntry {
+func (s *StdoutSink) Input() chan<- core.LogEntry {
 	return s.input
 }
 
@@ -136,7 +136,7 @@ func (s *StdoutSink) processLoop(ctx context.Context) {
 
 // StderrSink writes log entries to stderr
 type StderrSink struct {
-	input     chan source.LogEntry
+	input     chan core.LogEntry
 	config    ConsoleConfig
 	output    io.Writer
 	done      chan struct{}
@@ -166,7 +166,7 @@ func NewStderrSink(options map[string]any, logger *log.Logger, formatter format.
 	}
 
 	s := &StderrSink{
-		input:     make(chan source.LogEntry, config.BufferSize),
+		input:     make(chan core.LogEntry, config.BufferSize),
 		config:    config,
 		output:    os.Stderr,
 		done:      make(chan struct{}),
@@ -179,7 +179,7 @@ func NewStderrSink(options map[string]any, logger *log.Logger, formatter format.
 	return s, nil
 }
 
-func (s *StderrSink) Input() chan<- source.LogEntry {
+func (s *StderrSink) Input() chan<- core.LogEntry {
 	return s.input
 }
 

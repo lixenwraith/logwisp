@@ -5,13 +5,13 @@ import (
 	"context"
 	"time"
 
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/core"
 )
 
 // Sink represents an output destination for log entries
 type Sink interface {
 	// Input returns the channel for sending log entries to this sink
-	Input() chan<- source.LogEntry
+	Input() chan<- core.LogEntry
 
 	// Start begins processing log entries
 	Start(ctx context.Context) error

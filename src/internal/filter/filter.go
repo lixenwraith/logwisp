@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 
 	"logwisp/src/internal/config"
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
 )
@@ -61,7 +61,7 @@ func New(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 }
 
 // Apply checks if a log entry should be passed through
-func (f *Filter) Apply(entry source.LogEntry) bool {
+func (f *Filter) Apply(entry core.LogEntry) bool {
 	f.totalProcessed.Add(1)
 
 	// No patterns means pass everything

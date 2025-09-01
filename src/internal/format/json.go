@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
 )
@@ -52,7 +52,7 @@ func NewJSONFormatter(options map[string]any, logger *log.Logger) (*JSONFormatte
 }
 
 // Format formats the log entry as JSON
-func (f *JSONFormatter) Format(entry source.LogEntry) ([]byte, error) {
+func (f *JSONFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Start with a clean map
 	output := make(map[string]any)
 
@@ -122,7 +122,7 @@ func (f *JSONFormatter) Name() string {
 
 // FormatBatch formats multiple entries as a JSON array
 // This is a special method for sinks that need to batch entries
-func (f *JSONFormatter) FormatBatch(entries []source.LogEntry) ([]byte, error) {
+func (f *JSONFormatter) FormatBatch(entries []core.LogEntry) ([]byte, error) {
 	// For batching, we need to create an array of formatted objects
 	batch := make([]json.RawMessage, 0, len(entries))
 

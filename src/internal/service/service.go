@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/filter"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/ratelimit"
+	"logwisp/src/internal/limit"
 	"logwisp/src/internal/sink"
 	"logwisp/src/internal/source"
 
@@ -81,7 +82,7 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 
 	// Create pipeline rate limiter
 	if cfg.RateLimit != nil {
-		limiter, err := ratelimit.New(*cfg.RateLimit, s.logger)
+		limiter, err := limit.NewRateLimiter(*cfg.RateLimit, s.logger)
 		if err != nil {
 			pipelineCancel()
 			return fmt.Errorf("failed to create pipeline rate limiter: %w", err)
@@ -163,7 +164,7 @@ func (s *Service) wirePipeline(p *Pipeline) {
 
 		// Create a processing goroutine for this source
 		p.wg.Add(1)
-		go func(source source.Source, entries <-chan source.LogEntry) {
+		go func(source source.Source, entries <-chan core.LogEntry) {
 			defer p.wg.Done()
 
 			// Panic recovery to prevent single source from crashing pipeline

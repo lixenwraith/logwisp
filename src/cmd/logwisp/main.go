@@ -160,6 +160,8 @@ func main() {
 
 		select {
 		case <-done:
+			// Save configuration after graceful shutdown (no reload manager in static mode)
+			saveConfigurationOnExit(cfg, nil, logger)
 			logger.Info("msg", "Shutdown complete")
 		case <-shutdownCtx.Done():
 			logger.Error("msg", "Shutdown timeout exceeded - forcing exit")
@@ -172,6 +174,9 @@ func main() {
 	// Wait for context cancellation
 	<-ctx.Done()
 
+	// Save configuration before final shutdown, handled by reloadManager
+	saveConfigurationOnExit(cfg, reloadManager, logger)
+
 	// Shutdown is handled by ReloadManager.Shutdown() in defer
 	logger.Info("msg", "Shutdown complete")
 }
@@ -182,5 +187,49 @@ func shutdownLogger() {
 			// Best effort - can't log the shutdown error
 			Error("Logger shutdown error: %v\n", err)
 		}
+	}
+}
+
+// saveConfigurationOnExit saves the configuration to file on exist
+func saveConfigurationOnExit(cfg *config.Config, reloadManager *ReloadManager, logger *log.Logger) {
+	// Only save if explicitly enabled and we have a valid path
+	if !cfg.ConfigSaveOnExit || cfg.ConfigFile == "" {
+		return
+	}
+
+	// Create a context with timeout for save operation
+	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Perform save in goroutine to respect timeout
+	done := make(chan error, 1)
+	go func() {
+		var err error
+		if reloadManager != nil && reloadManager.lcfg != nil {
+			// Use existing lconfig instance from reload manager
+			// This ensures we save through the same configuration system
+			err = reloadManager.lcfg.Save(cfg.ConfigFile)
+		} else {
+			// Static mode: create temporary lconfig for saving
+			err = cfg.SaveToFile(cfg.ConfigFile)
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			logger.Error("msg", "Failed to save configuration on exit",
+				"path", cfg.ConfigFile,
+				"error", err)
+			// Don't fail the exit on save error
+		} else {
+			logger.Info("msg", "Configuration saved successfully",
+				"path", cfg.ConfigFile)
+		}
+	case <-saveCtx.Done():
+		logger.Error("msg", "Configuration save timeout exceeded",
+			"path", cfg.ConfigFile,
+			"timeout", "5s")
 	}
 }

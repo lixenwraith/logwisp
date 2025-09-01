@@ -2,7 +2,7 @@
 package format
 
 import (
-	"logwisp/src/internal/source"
+	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
 )
@@ -20,7 +20,7 @@ func NewRawFormatter(options map[string]any, logger *log.Logger) (*RawFormatter,
 }
 
 // Format returns the message with a newline appended
-func (f *RawFormatter) Format(entry source.LogEntry) ([]byte, error) {
+func (f *RawFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Simply return the message with newline
 	return append([]byte(entry.Message), '\n'), nil
 }

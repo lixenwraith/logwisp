@@ -7,15 +7,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
 )
 
 // FileSink writes log entries to files with rotation
 type FileSink struct {
-	input     chan source.LogEntry
+	input     chan core.LogEntry
 	writer    *log.Logger // Internal logger instance for file writing
 	done      chan struct{}
 	startTime time.Time
@@ -83,7 +83,7 @@ func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	}
 
 	fs := &FileSink{
-		input:     make(chan source.LogEntry, bufferSize),
+		input:     make(chan core.LogEntry, bufferSize),
 		writer:    writer,
 		done:      make(chan struct{}),
 		startTime: time.Now(),
@@ -95,7 +95,7 @@ func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	return fs, nil
 }
 
-func (fs *FileSink) Input() chan<- source.LogEntry {
+func (fs *FileSink) Input() chan<- core.LogEntry {
 	return fs.input
 }
 
