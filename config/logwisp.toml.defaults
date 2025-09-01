@@ -11,6 +11,8 @@
 # background = false                # Run as background daemon
 # quiet = false                     # Suppress all output
 # disable_status_reporter = false   # Disable periodic status logging
+# config_auto_reload = false        # Auto-reload on config change
+# config_save_on_exit = false       # Save config on shutdown
 
 # ============================================================================
 # LOGGING (LogWisp's operational logs)
@@ -219,12 +221,27 @@ response_message = "Rate limit exceeded"
 # audience = ""                     # Expected audience
 
 # ============================================================================
+# HOT RELOAD
+# ============================================================================
+# Enable with: --config-auto-reload
+# Manual reload: kill -HUP $(pidof logwisp)
+# Updates pipelines, filters, formatters without restart
+# Logging changes require restart
+
+# ============================================================================
 # ROUTER MODE
 # ============================================================================
 # Enable with: logwisp --router or router = true
 # Combines multiple pipeline HTTP sinks on shared ports
 # Access pattern: http://localhost:8080/{pipeline_name}/stream
 # Global status: http://localhost:8080/status
+
+# ============================================================================
+# SIGNALS
+# ============================================================================
+# SIGINT/SIGTERM: Graceful shutdown
+# SIGHUP/SIGUSR1: Reload config (when auto-reload enabled)
+# SIGKILL: Immediate shutdown
 
 # ============================================================================
 # CLI FLAGS

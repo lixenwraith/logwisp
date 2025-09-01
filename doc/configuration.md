@@ -20,6 +20,8 @@ LogWisp supports three configuration methods with the following precedence:
 | Show version | `--version` | `LOGWISP_VERSION` | `version = true` |
 | Quiet mode | `--quiet` | `LOGWISP_QUIET` | `quiet = true` |
 | Disable status reporter | `--disable-status-reporter` | `LOGWISP_DISABLE_STATUS_REPORTER` | `disable_status_reporter = true` |
+| Config auto-reload | `--config-auto-reload` | `LOGWISP_CONFIG_AUTO_RELOAD` | `config_auto_reload = true` |
+| Config save on exit | `--config-save-on-exit` | `LOGWISP_CONFIG_SAVE_ON_EXIT` | `config_save_on_exit = true` |
 | Config file | `--config <path>` | `LOGWISP_CONFIG_FILE` | N/A |
 | Config directory | N/A | `LOGWISP_CONFIG_DIR` | N/A |
 | **Logging** |
@@ -51,6 +53,29 @@ Note: `N` represents array indices (0-based).
 2. Environment: `$LOGWISP_CONFIG_FILE` and `$LOGWISP_CONFIG_DIR`
 3. User config: `~/.config/logwisp/logwisp.toml`
 4. Current directory: `./logwisp.toml`
+
+## Hot Reload
+
+LogWisp supports automatic configuration reloading without restart:
+
+```bash
+# Enable hot reload
+logwisp --config-auto-reload --config /etc/logwisp/config.toml
+
+# Manual reload via signal
+kill -HUP $(pidof logwisp)  # or SIGUSR1
+```
+
+Hot reload updates:
+- Pipeline configurations
+- Filters
+- Formatters
+- Rate limits
+- Router mode changes
+
+Not reloaded (requires restart):
+- Logging configuration
+- Background mode
 
 ## Configuration Structure
 
@@ -106,6 +131,28 @@ options = { ... }
 ## Pipeline Configuration
 
 Each `[[pipelines]]` section defines an independent processing pipeline.
+
+### Pipeline Formatters
+
+Control output format per pipeline:
+
+```toml
+[[pipelines]]
+name = "json-output"
+format = "json"  # raw, json, text
+
+[pipelines.format_options]
+# JSON formatter
+pretty = false
+timestamp_field = "timestamp"
+level_field = "level"
+message_field = "message"
+source_field = "source"
+
+# Text formatter
+template = "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Message}}"
+timestamp_format = "2006-01-02T15:04:05Z07:00"
+```
 
 ### Sources
 
@@ -310,6 +357,28 @@ options = {
 ```toml
 [[pipelines]]
 name = "app"
+
+[[pipelines.sources]]
+type = "directory"
+options = { path = "/var/log/app", pattern = "*.log" }
+
+[[pipelines.sinks]]
+type = "http"
+options = { port = 8080 }
+```
+
+### Hot Reload with JSON Output
+
+```toml
+config_auto_reload = true
+config_save_on_exit = true
+
+[[pipelines]]
+name = "app"
+format = "json"
+
+[pipelines.format_options]
+pretty = true
 
 [[pipelines.sources]]
 type = "directory"

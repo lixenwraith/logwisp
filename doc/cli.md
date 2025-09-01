@@ -35,6 +35,19 @@ Suppress all output (overrides logging configuration) except sinks.
 Disable periodic status reporting.
 - **Example**: `logwisp --disable-status-reporter`
 
+### `--config-auto-reload`
+Enable automatic configuration reloading on file changes.
+- **Example**: `logwisp --config-auto-reload --config /etc/logwisp/config.toml`
+- Monitors configuration file for changes
+- Reloads pipelines without restart
+- Preserves connections during reload
+
+### `--config-save-on-exit`
+Save current configuration to file on exit.
+- **Example**: `logwisp --config-save-on-exit`
+- Useful with runtime modifications
+- Requires valid config file path
+
 ## Logging Options
 
 Override configuration file settings:
@@ -172,9 +185,12 @@ logwisp --pipelines.0.name filtered \
 - `0`: Success
 - `1`: General error
 - `2`: Configuration file not found
+- `137`: SIGKILL received
 
 ## Signals
 
 - `SIGINT` (Ctrl+C): Graceful shutdown
 - `SIGTERM`: Graceful shutdown
+- `SIGHUP`: Reload configuration (when auto-reload enabled)
+- `SIGUSR1`: Reload configuration (when auto-reload enabled)
 - `SIGKILL`: Immediate shutdown (exit code 137)
