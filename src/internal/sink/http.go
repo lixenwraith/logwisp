@@ -11,10 +11,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
 	"logwisp/src/internal/limit"
+	"logwisp/src/internal/tls"
 	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
@@ -35,19 +37,24 @@ type HTTPSink struct {
 	logger        *log.Logger
 	formatter     format.Formatter
 
+	// Security components
+	authenticator *auth.Authenticator
+	tlsManager    *tls.Manager
+	authConfig    *config.AuthConfig
+
 	// Path configuration
 	streamPath string
 	statusPath string
 
-	// For router integration
-	standalone bool
-
 	// Net limiting
 	netLimiter *limit.NetLimiter
+	ipChecker  *limit.IPChecker
 
 	// Statistics
 	totalProcessed atomic.Uint64
 	lastProcessed  atomic.Value // time.Time
+	authFailures   atomic.Uint64
+	authSuccesses  atomic.Uint64
 }
 
 // HTTPConfig holds HTTP sink configuration
@@ -98,6 +105,32 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 		}
 	}
 
+	// Extract SSL config
+	if ssl, ok := options["ssl"].(map[string]any); ok {
+		cfg.SSL = &config.SSLConfig{}
+		cfg.SSL.Enabled, _ = ssl["enabled"].(bool)
+		if certFile, ok := ssl["cert_file"].(string); ok {
+			cfg.SSL.CertFile = certFile
+		}
+		if keyFile, ok := ssl["key_file"].(string); ok {
+			cfg.SSL.KeyFile = keyFile
+		}
+		cfg.SSL.ClientAuth, _ = ssl["client_auth"].(bool)
+		if caFile, ok := ssl["client_ca_file"].(string); ok {
+			cfg.SSL.ClientCAFile = caFile
+		}
+		cfg.SSL.VerifyClientCert, _ = ssl["verify_client_cert"].(bool)
+		if minVer, ok := ssl["min_version"].(string); ok {
+			cfg.SSL.MinVersion = minVer
+		}
+		if maxVer, ok := ssl["max_version"].(string); ok {
+			cfg.SSL.MaxVersion = maxVer
+		}
+		if ciphers, ok := ssl["cipher_suites"].(string); ok {
+			cfg.SSL.CipherSuites = ciphers
+		}
+	}
+
 	// Extract net limit config
 	if rl, ok := options["net_limit"].(map[string]any); ok {
 		cfg.NetLimit = &config.NetLimitConfig{}
@@ -132,7 +165,6 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 		done:       make(chan struct{}),
 		streamPath: cfg.StreamPath,
 		statusPath: cfg.StatusPath,
-		standalone: true,
 		logger:     logger,
 		formatter:  formatter,
 	}
@@ -151,13 +183,6 @@ func (h *HTTPSink) Input() chan<- core.LogEntry {
 }
 
 func (h *HTTPSink) Start(ctx context.Context) error {
-	if !h.standalone {
-		// In router mode, don't start our own server
-		h.logger.Debug("msg", "HTTP sink in router mode, skipping server start",
-			"component", "http_sink")
-		return nil
-	}
-
 	// Create fasthttp adapter for logging
 	fasthttpLogger := compat.NewFastHTTPAdapter(h.logger)
 
@@ -166,6 +191,12 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 		DisableKeepalive:  false,
 		StreamRequestBody: true,
 		Logger:            fasthttpLogger,
+	}
+
+	// Configure TLS if enabled
+	if h.tlsManager != nil {
+		tlsConfig := h.tlsManager.GetHTTPConfig()
+		h.server.TLSConfig = tlsConfig
 	}
 
 	addr := fmt.Sprintf(":%d", h.config.Port)
@@ -178,7 +209,16 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 			"port", h.config.Port,
 			"stream_path", h.streamPath,
 			"status_path", h.statusPath)
-		err := h.server.ListenAndServe(addr)
+
+		var err error
+		if h.tlsManager != nil {
+			// HTTPS server
+			err = h.server.ListenAndServeTLS(addr, "", "")
+		} else {
+			// HTTP server
+			err = h.server.ListenAndServe(addr)
+		}
+
 		if err != nil {
 			errChan <- err
 		}
@@ -210,8 +250,8 @@ func (h *HTTPSink) Stop() {
 	// Signal all client handlers to stop
 	close(h.done)
 
-	// Shutdown HTTP server if in standalone mode
-	if h.standalone && h.server != nil {
+	// Shutdown HTTP server
+	if h.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		h.server.ShutdownWithContext(ctx)
@@ -231,6 +271,18 @@ func (h *HTTPSink) GetStats() SinkStats {
 		netLimitStats = h.netLimiter.GetStats()
 	}
 
+	var authStats map[string]any
+	if h.authenticator != nil {
+		authStats = h.authenticator.GetStats()
+		authStats["failures"] = h.authFailures.Load()
+		authStats["successes"] = h.authSuccesses.Load()
+	}
+
+	var tlsStats map[string]any
+	if h.tlsManager != nil {
+		tlsStats = h.tlsManager.GetStats()
+	}
+
 	return SinkStats{
 		Type:              "http",
 		TotalProcessed:    h.totalProcessed.Load(),
@@ -245,42 +297,83 @@ func (h *HTTPSink) GetStats() SinkStats {
 				"status": h.statusPath,
 			},
 			"net_limit": netLimitStats,
+			"auth":      authStats,
+			"tls":       tlsStats,
 		},
 	}
 }
 
-// SetRouterMode configures the sink for use with a router
-func (h *HTTPSink) SetRouterMode() {
-	h.standalone = false
-	h.logger.Debug("msg", "HTTP sink set to router mode",
-		"component", "http_sink")
-}
-
-// RouteRequest handles a request from the router
-func (h *HTTPSink) RouteRequest(ctx *fasthttp.RequestCtx) {
-	h.requestHandler(ctx)
-}
-
 func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
-	// Check net limit first
 	remoteAddr := ctx.RemoteAddr().String()
-	if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
-		ctx.SetStatusCode(int(statusCode))
-		ctx.SetContentType("application/json")
-		json.NewEncoder(ctx).Encode(map[string]any{
-			"error":       message,
-			"retry_after": "60", // seconds
-		})
-		return
+
+	// Check IP access control
+	if h.ipChecker != nil {
+		if !h.ipChecker.IsAllowed(ctx.RemoteAddr()) {
+			ctx.SetStatusCode(fasthttp.StatusForbidden)
+			ctx.SetContentType("text/plain")
+			ctx.SetBodyString("Forbidden")
+			return
+		}
+	}
+
+	// Check net limit
+	if h.netLimiter != nil {
+		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
+			ctx.SetStatusCode(int(statusCode))
+			ctx.SetContentType("application/json")
+			json.NewEncoder(ctx).Encode(map[string]any{
+				"error":       message,
+				"retry_after": "60", // seconds
+			})
+			return
+		}
 	}
 
 	path := string(ctx.Path())
 
+	// Status endpoint doesn't require auth
+	if path == h.statusPath {
+		h.handleStatus(ctx)
+		return
+	}
+
+	// Authenticate request
+	var session *auth.Session
+	if h.authenticator != nil {
+		authHeader := string(ctx.Request.Header.Peek("Authorization"))
+		var err error
+		session, err = h.authenticator.AuthenticateHTTP(authHeader, remoteAddr)
+		if err != nil {
+			h.authFailures.Add(1)
+			h.logger.Warn("msg", "Authentication failed",
+				"component", "http_sink",
+				"remote_addr", remoteAddr,
+				"error", err)
+
+			// Return 401 with WWW-Authenticate header
+			ctx.SetStatusCode(fasthttp.StatusUnauthorized)
+			if h.authConfig.Type == "basic" && h.authConfig.BasicAuth != nil {
+				realm := h.authConfig.BasicAuth.Realm
+				if realm == "" {
+					realm = "LogWisp"
+				}
+				ctx.Response.Header.Set("WWW-Authenticate", fmt.Sprintf("Basic realm=\"%s\"", realm))
+			} else if h.authConfig.Type == "bearer" {
+				ctx.Response.Header.Set("WWW-Authenticate", "Bearer")
+			}
+
+			ctx.SetContentType("application/json")
+			json.NewEncoder(ctx).Encode(map[string]string{
+				"error": "Authentication required",
+			})
+			return
+		}
+		h.authSuccesses.Add(1)
+	}
+
 	switch path {
 	case h.streamPath:
-		h.handleStream(ctx)
-	case h.statusPath:
-		h.handleStatus(ctx)
+		h.handleStream(ctx, session)
 	default:
 		ctx.SetStatusCode(fasthttp.StatusNotFound)
 		ctx.SetContentType("application/json")
@@ -292,7 +385,7 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	}
 }
 
-func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
+func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session) {
 	// Track connection for net limiting
 	remoteAddr := ctx.RemoteAddr().String()
 	if h.netLimiter != nil {
@@ -330,7 +423,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 				case <-h.done:
 					return
 				default:
-					// Drop if client buffer full, may flood logging for slow client
+					// Drop if client buffer full
 					h.logger.Debug("msg", "Dropped entry for slow client",
 						"component", "http_sink",
 						"remote_addr", remoteAddr)
@@ -348,6 +441,8 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 		newCount := h.activeClients.Add(1)
 		h.logger.Debug("msg", "HTTP client connected",
 			"remote_addr", remoteAddr,
+			"username", session.Username,
+			"auth_method", session.Method,
 			"active_clients", newCount)
 
 		h.wg.Add(1)
@@ -356,6 +451,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 			newCount := h.activeClients.Add(-1)
 			h.logger.Debug("msg", "HTTP client disconnected",
 				"remote_addr", remoteAddr,
+				"username", session.Username,
 				"active_clients", newCount)
 			h.wg.Done()
 		}()
@@ -364,12 +460,15 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 		clientID := fmt.Sprintf("%d", time.Now().UnixNano())
 		connectionInfo := map[string]any{
 			"client_id":   clientID,
+			"username":    session.Username,
+			"auth_method": session.Method,
 			"stream_path": h.streamPath,
 			"status_path": h.statusPath,
 			"buffer_size": h.config.BufferSize,
+			"tls":         h.tlsManager != nil,
 		}
 		data, _ := json.Marshal(connectionInfo)
-		fmt.Fprintf(w, "event: connected\ndata: %s\n", data)
+		fmt.Fprintf(w, "event: connected\ndata: %s\n\n", data)
 		w.Flush()
 
 		var ticker *time.Ticker
@@ -402,6 +501,13 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 				}
 
 			case <-tickerChan:
+				// Validate session is still active
+				if h.authenticator != nil && !h.authenticator.ValidateSession(session.ID) {
+					fmt.Fprintf(w, "event: disconnect\ndata: {\"reason\":\"session_expired\"}\n\n")
+					w.Flush()
+					return
+				}
+
 				heartbeatEntry := h.createHeartbeatEntry()
 				if err := h.formatEntryForSSE(w, heartbeatEntry); err != nil {
 					h.logger.Error("msg", "Failed to format heartbeat",
@@ -437,8 +543,10 @@ func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry core.LogEntry) error
 	lines := bytes.Split(formatted, []byte{'\n'})
 	for _, line := range lines {
 		// SSE needs "data: " prefix for each line
+		// TODO: validate above, is 'data: ' really necessary? make it optional if it works without it?
 		fmt.Fprintf(w, "data: %s\n", line)
 	}
+	fmt.Fprintf(w, "\n") // Empty line to terminate event
 
 	return nil
 }
@@ -478,6 +586,26 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
+	var authStats any
+	if h.authenticator != nil {
+		authStats = h.authenticator.GetStats()
+		authStats.(map[string]any)["failures"] = h.authFailures.Load()
+		authStats.(map[string]any)["successes"] = h.authSuccesses.Load()
+	} else {
+		authStats = map[string]any{
+			"enabled": false,
+		}
+	}
+
+	var tlsStats any
+	if h.tlsManager != nil {
+		tlsStats = h.tlsManager.GetStats()
+	} else {
+		tlsStats = map[string]any{
+			"enabled": false,
+		}
+	}
+
 	status := map[string]any{
 		"service": "LogWisp",
 		"version": version.Short(),
@@ -487,7 +615,6 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 			"active_clients": h.activeClients.Load(),
 			"buffer_size":    h.config.BufferSize,
 			"uptime_seconds": int(time.Since(h.startTime).Seconds()),
-			"mode":           map[string]bool{"standalone": h.standalone, "router": !h.standalone},
 		},
 		"endpoints": map[string]string{
 			"transport": h.streamPath,
@@ -499,10 +626,14 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 				"interval": h.config.Heartbeat.IntervalSeconds,
 				"format":   h.config.Heartbeat.Format,
 			},
-			"ssl": map[string]bool{
-				"enabled": h.config.SSL != nil && h.config.SSL.Enabled,
-			},
+			"tls":       tlsStats,
+			"auth":      authStats,
 			"net_limit": netLimitStats,
+		},
+		"statistics": map[string]any{
+			"total_processed": h.totalProcessed.Load(),
+			"auth_failures":   h.authFailures.Load(),
+			"auth_successes":  h.authSuccesses.Load(),
 		},
 	}
 
@@ -523,4 +654,34 @@ func (h *HTTPSink) GetStreamPath() string {
 // GetStatusPath returns the configured status endpoint path
 func (h *HTTPSink) GetStatusPath() string {
 	return h.statusPath
+}
+
+func (h *HTTPSink) SetNetAccessConfig(cfg *config.NetAccessConfig) {
+	h.ipChecker = limit.NewIPChecker(cfg, h.logger)
+	if h.ipChecker != nil {
+		h.logger.Info("msg", "IP access control configured for HTTP sink",
+			"component", "http_sink")
+	}
+}
+
+// SetAuthConfig configures http sink authentication
+func (h *HTTPSink) SetAuthConfig(authCfg *config.AuthConfig) {
+	if authCfg == nil || authCfg.Type == "none" {
+		return
+	}
+
+	h.authConfig = authCfg
+	authenticator, err := auth.New(authCfg, h.logger)
+	if err != nil {
+		h.logger.Error("msg", "Failed to initialize authenticator for HTTP sink",
+			"component", "http_sink",
+			"error", err)
+		// Continue without auth
+		return
+	}
+	h.authenticator = authenticator
+
+	h.logger.Info("msg", "Authentication configured for HTTP sink",
+		"component", "http_sink",
+		"auth_type", authCfg.Type)
 }

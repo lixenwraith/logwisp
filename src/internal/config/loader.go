@@ -19,7 +19,6 @@ type LoadContext struct {
 func defaults() *Config {
 	return &Config{
 		// Top-level flag defaults
-		UseRouter:   false,
 		Background:  false,
 		ShowVersion: false,
 		Quiet:       false,

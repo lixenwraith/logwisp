@@ -72,6 +72,11 @@ func (c *Config) validate() error {
 			}
 		}
 
+		// Validate net access if present
+		if err := validateNetAccess(pipeline.Name, pipeline.NetAccess); err != nil {
+			return err
+		}
+
 		// Validate auth if present
 		if err := validateAuth(pipeline.Name, pipeline.Auth); err != nil {
 			return err

@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 )
 
@@ -31,4 +32,14 @@ type SinkStats struct {
 	StartTime         time.Time
 	LastProcessed     time.Time
 	Details           map[string]any
+}
+
+// NetAccessSetter is an interface for sinks that can accept network access configuration
+type NetAccessSetter interface {
+	SetNetAccessConfig(cfg *config.NetAccessConfig)
+}
+
+// AuthSetter is an interface for sinks that can accept an AuthConfig.
+type AuthSetter interface {
+	SetAuthConfig(auth *config.AuthConfig)
 }

@@ -14,16 +14,9 @@ import (
 )
 
 // bootstrapService creates and initializes the log transport service
-func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, *service.HTTPRouter, error) {
+func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, error) {
 	// Create service with logger dependency injection
 	svc := service.New(ctx, logger)
-
-	// Create HTTP router if requested
-	var router *service.HTTPRouter
-	if cfg.UseRouter {
-		router = service.NewHTTPRouter(svc, logger)
-		logger.Info("msg", "HTTP router mode enabled")
-	}
 
 	// Initialize pipelines
 	successCount := 0
@@ -37,32 +30,19 @@ func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service
 				"error", err)
 			continue
 		}
-
-		// If using router mode, register HTTP sinks
-		if cfg.UseRouter {
-			pipeline, err := svc.GetPipeline(pipelineCfg.Name)
-			if err == nil && len(pipeline.HTTPSinks) > 0 {
-				if err := router.RegisterPipeline(pipeline); err != nil {
-					logger.Error("msg", "Failed to register pipeline with router",
-						"pipeline", pipelineCfg.Name,
-						"error", err)
-				}
-			}
-		}
-
 		successCount++
-		displayPipelineEndpoints(pipelineCfg, cfg.UseRouter)
+		displayPipelineEndpoints(pipelineCfg)
 	}
 
 	if successCount == 0 {
-		return nil, nil, fmt.Errorf("no pipelines successfully started (attempted %d)", len(cfg.Pipelines))
+		return nil, fmt.Errorf("no pipelines successfully started (attempted %d)", len(cfg.Pipelines))
 	}
 
 	logger.Info("msg", "LogWisp started",
 		"version", version.Short(),
 		"pipelines", successCount)
 
-	return svc, router, nil
+	return svc, nil
 }
 
 // initializeLogger sets up the logger based on configuration

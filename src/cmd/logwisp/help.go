@@ -16,7 +16,6 @@ Application Control:
   -v, --version            Display version information and exit.
   -b, --background         Run LogWisp in the background as a daemon.
   -q, --quiet              Suppress all console output, including errors.
-      --router             Enable HTTP router mode for multiplexing pipelines.
 
 Runtime Behavior:
       --disable-status-reporter  Disable the periodic status reporter.
@@ -24,7 +23,7 @@ Runtime Behavior:
 
 Configuration Sources (Precedence: CLI > Env > File > Defaults):
   - CLI flags override all other settings.
-  - Environment variables (e.g., LOGWISP_ROUTER=true) override file settings.
+  - Environment variables override file settings.
   - TOML configuration file is the primary method for defining pipelines.
 
 Logging ([logging] section or LOGWISP_LOGGING_* env vars):

@@ -109,7 +109,7 @@ func logPipelineStatus(name string, stats map[string]any) {
 }
 
 // displayPipelineEndpoints logs the configured endpoints for a pipeline
-func displayPipelineEndpoints(cfg config.PipelineConfig, routerMode bool) {
+func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	// Display sink endpoints
 	for i, sinkCfg := range cfg.Sinks {
 		switch sinkCfg.Type {
@@ -144,19 +144,11 @@ func displayPipelineEndpoints(cfg config.PipelineConfig, routerMode bool) {
 					statusPath = path
 				}
 
-				if routerMode {
-					logger.Info("msg", "HTTP endpoints configured",
-						"pipeline", cfg.Name,
-						"sink_index", i,
-						"stream_path", fmt.Sprintf("/%s%s", cfg.Name, streamPath),
-						"status_path", fmt.Sprintf("/%s%s", cfg.Name, statusPath))
-				} else {
-					logger.Info("msg", "HTTP endpoints configured",
-						"pipeline", cfg.Name,
-						"sink_index", i,
-						"stream_url", fmt.Sprintf("http://localhost:%d%s", port, streamPath),
-						"status_url", fmt.Sprintf("http://localhost:%d%s", port, statusPath))
-				}
+				logger.Info("msg", "HTTP endpoints configured",
+					"pipeline", cfg.Name,
+					"sink_index", i,
+					"stream_url", fmt.Sprintf("http://localhost:%d%s", port, streamPath),
+					"status_url", fmt.Sprintf("http://localhost:%d%s", port, statusPath))
 
 				// Display net limit info if configured
 				if rl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {

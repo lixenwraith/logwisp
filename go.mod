@@ -1,12 +1,15 @@
 module logwisp
 
-go 1.24.5
+go 1.25.1
 
 require (
-	github.com/lixenwraith/config v0.0.0-20250901201021-59a461e31cd4
-	github.com/lixenwraith/log v0.0.0-20250722012845-16a3079e46e2
+	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/lixenwraith/config v0.0.0-20250908085506-537a4d49d2c3
+	github.com/lixenwraith/log v0.0.0-20250908085352-2df52dfb9208
 	github.com/panjf2000/gnet/v2 v2.9.3
 	github.com/valyala/fasthttp v1.65.0
+	golang.org/x/crypto v0.42.0
+	golang.org/x/term v0.35.0
 )
 
 require (
@@ -19,8 +22,8 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sys v0.36.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

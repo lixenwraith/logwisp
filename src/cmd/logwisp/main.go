@@ -77,7 +77,6 @@ func main() {
 		"version", version.String(),
 		"config_file", cfg.ConfigFile,
 		"log_output", cfg.Logging.Output,
-		"router_mode", cfg.UseRouter,
 		"background_mode", cfg.Background)
 
 	// Create context for shutdown
@@ -117,7 +116,7 @@ func main() {
 		// Traditional static bootstrap
 		logger.Info("msg", "Config auto-reload disabled")
 
-		svc, router, err := bootstrapService(ctx, cfg)
+		svc, err := bootstrapService(ctx, cfg)
 		if err != nil {
 			logger.Error("msg", "Failed to bootstrap service", "error", err)
 			os.Exit(1)
@@ -141,12 +140,6 @@ func main() {
 		}
 
 		logger.Info("msg", "Shutdown signal received, starting graceful shutdown...")
-
-		// Shutdown router first if using it
-		if router != nil {
-			logger.Info("msg", "Shutting down HTTP router...")
-			router.Shutdown()
-		}
 
 		// Shutdown service with timeout
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)

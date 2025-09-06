@@ -1,7 +1,11 @@
 // FILE: logwisp/src/internal/config/auth.go
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+	"strings"
+)
 
 type AuthConfig struct {
 	// Authentication type: "none", "basic", "bearer", "mtls"
@@ -12,10 +16,6 @@ type AuthConfig struct {
 
 	// Bearer token auth
 	BearerAuth *BearerAuthConfig `toml:"bearer_auth"`
-
-	// IP-based access control
-	IPWhitelist []string `toml:"ip_whitelist"`
-	IPBlacklist []string `toml:"ip_blacklist"`
 }
 
 type BasicAuthConfig struct {

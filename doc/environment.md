@@ -18,7 +18,6 @@ Examples:
 ```bash
 LOGWISP_CONFIG_FILE=/etc/logwisp/config.toml
 LOGWISP_CONFIG_DIR=/etc/logwisp
-LOGWISP_ROUTER=true
 LOGWISP_BACKGROUND=true
 LOGWISP_QUIET=true
 LOGWISP_DISABLE_STATUS_REPORTER=true
@@ -221,7 +220,6 @@ LOGWISP_PIPELINES_0_SINKS_0_OPTIONS_TARGET=stdout
 #!/usr/bin/env bash
 
 # General settings
-export LOGWISP_ROUTER=true
 export LOGWISP_DISABLE_STATUS_REPORTER=false
 
 # Logging

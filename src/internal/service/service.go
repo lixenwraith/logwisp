@@ -113,20 +113,12 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 
 	// Create sinks
 	for i, sinkCfg := range cfg.Sinks {
-		sinkInst, err := s.createSink(sinkCfg, formatter) // Pass formatter
+		sinkInst, err := s.createSink(sinkCfg, formatter)
 		if err != nil {
 			pipelineCancel()
 			return fmt.Errorf("failed to create sink[%d]: %w", i, err)
 		}
 		pipeline.Sinks = append(pipeline.Sinks, sinkInst)
-
-		// Track HTTP/TCP sinks for router mode
-		switch s := sinkInst.(type) {
-		case *sink.HTTPSink:
-			pipeline.HTTPSinks = append(pipeline.HTTPSinks, s)
-		case *sink.TCPSink:
-			pipeline.TCPSinks = append(pipeline.TCPSinks, s)
-		}
 	}
 
 	// Start all sources
@@ -145,6 +137,16 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 		}
 	}
 
+	// Configure authentication for sinks that support it
+	for _, sinkInst := range pipeline.Sinks {
+		if setter, ok := sinkInst.(sink.NetAccessSetter); ok {
+			setter.SetNetAccessConfig(cfg.NetAccess)
+		}
+		if setter, ok := sinkInst.(sink.AuthSetter); ok {
+			setter.SetAuthConfig(cfg.Auth)
+		}
+	}
+
 	// Wire sources to sinks through filters
 	s.wirePipeline(pipeline)
 
@@ -152,7 +154,9 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 	pipeline.startStatsUpdater(pipelineCtx)
 
 	s.pipelines[cfg.Name] = pipeline
-	s.logger.Info("msg", "Pipeline created successfully", "pipeline", cfg.Name)
+	s.logger.Info("msg", "Pipeline created successfully",
+		"pipeline", cfg.Name,
+		"auth_enabled", cfg.Auth != nil && cfg.Auth.Type != "none")
 	return nil
 }
 
@@ -268,19 +272,19 @@ func (s *Service) createSink(cfg config.SinkConfig, formatter format.Formatter) 
 
 	switch cfg.Type {
 	case "http":
-		return sink.NewHTTPSink(cfg.Options, s.logger, formatter) // needs implementation
+		return sink.NewHTTPSink(cfg.Options, s.logger, formatter)
 	case "tcp":
-		return sink.NewTCPSink(cfg.Options, s.logger, formatter) // needs implementation
+		return sink.NewTCPSink(cfg.Options, s.logger, formatter)
 	case "http_client":
-		return sink.NewHTTPClientSink(cfg.Options, s.logger, formatter) // needs verification
+		return sink.NewHTTPClientSink(cfg.Options, s.logger, formatter)
 	case "tcp_client":
-		return sink.NewTCPClientSink(cfg.Options, s.logger, formatter) // needs implementation
+		return sink.NewTCPClientSink(cfg.Options, s.logger, formatter)
 	case "file":
 		return sink.NewFileSink(cfg.Options, s.logger, formatter)
 	case "stdout":
-		return sink.NewStdoutSink(cfg.Options, s.logger, formatter) // needs implementation
+		return sink.NewStdoutSink(cfg.Options, s.logger, formatter)
 	case "stderr":
-		return sink.NewStderrSink(cfg.Options, s.logger, formatter) // needs implementation
+		return sink.NewStderrSink(cfg.Options, s.logger, formatter)
 	default:
 		return nil, fmt.Errorf("unknown sink type: %s", cfg.Type)
 	}

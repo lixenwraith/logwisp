@@ -30,10 +30,6 @@ type Pipeline struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-
-	// For HTTP sinks in router mode
-	HTTPSinks []*sink.HTTPSink
-	TCPSinks  []*sink.TCPSink
 }
 
 // PipelineStats contains statistics for a pipeline

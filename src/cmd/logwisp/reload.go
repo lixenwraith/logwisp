@@ -19,7 +19,6 @@ import (
 type ReloadManager struct {
 	configPath  string
 	service     *service.Service
-	router      *service.HTTPRouter
 	cfg         *config.Config
 	lcfg        *lconfig.Config
 	logger      *log.Logger
@@ -47,14 +46,13 @@ func NewReloadManager(configPath string, initialCfg *config.Config, logger *log.
 // Start begins watching for configuration changes
 func (rm *ReloadManager) Start(ctx context.Context) error {
 	// Bootstrap initial service
-	svc, router, err := bootstrapService(ctx, rm.cfg)
+	svc, err := bootstrapService(ctx, rm.cfg)
 	if err != nil {
 		return fmt.Errorf("failed to bootstrap initial service: %w", err)
 	}
 
 	rm.mu.Lock()
 	rm.service = svc
-	rm.router = router
 	rm.mu.Unlock()
 
 	// Start status reporter for initial service
@@ -149,11 +147,6 @@ func (rm *ReloadManager) shouldReload(path string) bool {
 		return true
 	}
 
-	// Router mode changes require reload
-	if path == "router" || path == "use_router" {
-		return true
-	}
-
 	// Logging changes don't require service reload
 	if strings.HasPrefix(path, "logging.") {
 		return false
@@ -214,12 +207,11 @@ func (rm *ReloadManager) performReload(ctx context.Context) error {
 	// Get current service snapshot
 	rm.mu.RLock()
 	oldService := rm.service
-	oldRouter := rm.router
 	rm.mu.RUnlock()
 
 	// Try to bootstrap with new configuration
 	rm.logger.Debug("msg", "Bootstrapping new service with updated config")
-	newService, newRouter, err := bootstrapService(ctx, newCfg)
+	newService, err := bootstrapService(ctx, newCfg)
 	if err != nil {
 		// Bootstrap failed - keep old services running
 		return fmt.Errorf("failed to bootstrap new service (old service still active): %w", err)
@@ -228,7 +220,6 @@ func (rm *ReloadManager) performReload(ctx context.Context) error {
 	// Bootstrap succeeded - swap services atomically
 	rm.mu.Lock()
 	rm.service = newService
-	rm.router = newRouter
 	rm.cfg = newCfg
 	rm.mu.Unlock()
 
@@ -237,21 +228,16 @@ func (rm *ReloadManager) performReload(ctx context.Context) error {
 
 	// Gracefully shutdown old services
 	// This happens after the swap to minimize downtime
-	go rm.shutdownOldServices(oldRouter, oldService)
+	go rm.shutdownOldServices(oldService)
 
 	return nil
 }
 
 // shutdownOldServices gracefully shuts down old services
-func (rm *ReloadManager) shutdownOldServices(router *service.HTTPRouter, svc *service.Service) {
+func (rm *ReloadManager) shutdownOldServices(svc *service.Service) {
 	// Give connections time to drain
 	rm.logger.Debug("msg", "Draining connections from old services")
 	time.Sleep(2 * time.Second)
-
-	if router != nil {
-		rm.logger.Info("msg", "Shutting down old router")
-		router.Shutdown()
-	}
 
 	if svc != nil {
 		rm.logger.Info("msg", "Shutting down old service")
@@ -337,14 +323,8 @@ func (rm *ReloadManager) Shutdown() {
 
 	// Shutdown current services
 	rm.mu.RLock()
-	currentRouter := rm.router
 	currentService := rm.service
 	rm.mu.RUnlock()
-
-	if currentRouter != nil {
-		rm.logger.Info("msg", "Shutting down router")
-		currentRouter.Shutdown()
-	}
 
 	if currentService != nil {
 		rm.logger.Info("msg", "Shutting down service")
@@ -357,11 +337,4 @@ func (rm *ReloadManager) GetService() *service.Service {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.service
-}
-
-// GetRouter returns the current router (thread-safe)
-func (rm *ReloadManager) GetRouter() *service.HTTPRouter {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	return rm.router
 }

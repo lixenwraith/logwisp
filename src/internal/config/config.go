@@ -3,7 +3,6 @@ package config
 
 type Config struct {
 	// Top-level flags for application control
-	UseRouter   bool `toml:"router"`
 	Background  bool `toml:"background"`
 	ShowVersion bool `toml:"version"`
 	Quiet       bool `toml:"quiet"`

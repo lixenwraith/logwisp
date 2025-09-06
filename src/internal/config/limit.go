@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -26,6 +27,37 @@ type RateLimitConfig struct {
 	Policy string `toml:"policy"`
 	// MaxEntrySizeBytes is the maximum allowed size for a single log entry. 0 = no limit.
 	MaxEntrySizeBytes int64 `toml:"max_entry_size_bytes"`
+}
+
+func validateNetAccess(pipelineName string, cfg *NetAccessConfig) error {
+	if cfg == nil {
+		return nil
+	}
+
+	// Validate CIDR notation
+	for _, cidr := range cfg.IPWhitelist {
+		if !strings.Contains(cidr, "/") {
+			cidr = cidr + "/32"
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			if net.ParseIP(cidr) == nil {
+				return fmt.Errorf("pipeline '%s': invalid IP whitelist entry: %s", pipelineName, cidr)
+			}
+		}
+	}
+
+	for _, cidr := range cfg.IPBlacklist {
+		if !strings.Contains(cidr, "/") {
+			cidr = cidr + "/32"
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			if net.ParseIP(cidr) == nil {
+				return fmt.Errorf("pipeline '%s': invalid IP blacklist entry: %s", pipelineName, cidr)
+			}
+		}
+	}
+
+	return nil
 }
 
 func validateRateLimit(pipelineName string, cfg *RateLimitConfig) error {

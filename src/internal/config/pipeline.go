@@ -20,6 +20,9 @@ type PipelineConfig struct {
 	// Rate limiting
 	RateLimit *RateLimitConfig `toml:"rate_limit"`
 
+	// Network access control (IP filtering)
+	NetAccess *NetAccessConfig `toml:"net_access"`
+
 	// Filter configuration
 	Filters []FilterConfig `toml:"filters"`
 
@@ -32,6 +35,12 @@ type PipelineConfig struct {
 
 	// Authentication/Authorization (applies to network sinks)
 	Auth *AuthConfig `toml:"auth"`
+}
+
+// NetAccessConfig defines IP-based access control lists
+type NetAccessConfig struct {
+	IPWhitelist []string `toml:"ip_whitelist"`
+	IPBlacklist []string `toml:"ip_blacklist"`
 }
 
 // SourceConfig represents an input data source
