@@ -3,8 +3,6 @@ package config
 
 import (
 	"fmt"
-	"net"
-	"strings"
 )
 
 type AuthConfig struct {

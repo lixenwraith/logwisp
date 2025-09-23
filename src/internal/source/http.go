@@ -4,6 +4,8 @@ package source
 import (
 	"encoding/json"
 	"fmt"
+	"logwisp/src/internal/tls"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +30,10 @@ type HTTPSource struct {
 	wg          sync.WaitGroup
 	netLimiter  *limit.NetLimiter
 	logger      *log.Logger
+
+	// CHANGED: Add TLS support
+	tlsManager *tls.Manager
+	sslConfig  *config.SSLConfig
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -94,6 +100,28 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 		}
 	}
 
+	// Extract SSL config after existing options
+	if ssl, ok := options["ssl"].(map[string]any); ok {
+		h.sslConfig = &config.SSLConfig{}
+		h.sslConfig.Enabled, _ = ssl["enabled"].(bool)
+		if certFile, ok := ssl["cert_file"].(string); ok {
+			h.sslConfig.CertFile = certFile
+		}
+		if keyFile, ok := ssl["key_file"].(string); ok {
+			h.sslConfig.KeyFile = keyFile
+		}
+		// TODO: extract other SSL options similar to tcp_client_sink
+
+		// Create TLS manager
+		if h.sslConfig.Enabled {
+			tlsManager, err := tls.NewManager(h.sslConfig, logger)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create TLS manager: %w", err)
+			}
+			h.tlsManager = tlsManager
+		}
+	}
+
 	return h, nil
 }
 
@@ -123,9 +151,19 @@ func (h *HTTPSource) Start() error {
 		h.logger.Info("msg", "HTTP source server starting",
 			"component", "http_source",
 			"port", h.port,
-			"ingest_path", h.ingestPath)
+			"ingest_path", h.ingestPath,
+			"tls_enabled", h.tlsManager != nil)
 
-		if err := h.server.ListenAndServe(addr); err != nil {
+		var err error
+		// Check for TLS manager and start the appropriate server type
+		if h.tlsManager != nil {
+			h.server.TLSConfig = h.tlsManager.GetHTTPConfig()
+			err = h.server.ListenAndServeTLS(addr, h.sslConfig.CertFile, h.sslConfig.KeyFile)
+		} else {
+			err = h.server.ListenAndServe(addr)
+		}
+
+		if err != nil {
 			h.logger.Error("msg", "HTTP source server failed",
 				"component", "http_source",
 				"port", h.port,
@@ -134,7 +172,7 @@ func (h *HTTPSource) Start() error {
 	}()
 
 	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) // TODO: standardize and better manage timers
 	return nil
 }
 
@@ -202,8 +240,21 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Check net limit
+	// Extract and validate IP
 	remoteAddr := ctx.RemoteAddr().String()
+	ipStr, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		if ip := net.ParseIP(ipStr); ip != nil && ip.To4() == nil {
+			ctx.SetStatusCode(fasthttp.StatusForbidden)
+			ctx.SetContentType("application/json")
+			json.NewEncoder(ctx).Encode(map[string]string{
+				"error": "IPv4-only (IPv6 not supported)",
+			})
+			return
+		}
+	}
+
+	// Check net limit
 	if h.netLimiter != nil {
 		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
 			ctx.SetStatusCode(int(statusCode))
@@ -280,7 +331,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]core.LogEntry, error) {
 	// Try to parse as JSON array
 	var array []core.LogEntry
 	if err := json.Unmarshal(body, &array); err == nil {
-		// TODO: Placeholder; For array, divide total size by entry count as approximation
+		// NOTE: Placeholder; For array, divide total size by entry count as approximation
 		approxSizePerEntry := int64(len(body) / len(array))
 		for i, entry := range array {
 			if entry.Message == "" {
@@ -292,7 +343,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]core.LogEntry, error) {
 			if entry.Source == "" {
 				array[i].Source = "http"
 			}
-			// TODO: Placeholder
+			// NOTE: Placeholder
 			array[i].RawSize = approxSizePerEntry
 		}
 		return array, nil

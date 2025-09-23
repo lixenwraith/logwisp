@@ -20,8 +20,8 @@ type Manager struct {
 	logger    *log.Logger
 }
 
-// New creates a TLS configuration from SSL config
-func New(cfg *config.SSLConfig, logger *log.Logger) (*Manager, error) {
+// NewManager creates a TLS configuration from SSL config
+func NewManager(cfg *config.SSLConfig, logger *log.Logger) (*Manager, error) {
 	if cfg == nil || !cfg.Enabled {
 		return nil, nil
 	}

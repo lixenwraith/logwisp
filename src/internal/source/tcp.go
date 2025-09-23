@@ -5,19 +5,29 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/limit"
+	"logwisp/src/internal/tls"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/compat"
 	"github.com/panjf2000/gnet/v2"
+)
+
+const (
+	maxClientBufferSize     = 10 * 1024 * 1024 // 10MB max per client
+	maxLineLength           = 1 * 1024 * 1024  // 1MB max per log line
+	maxEncryptedDataPerRead = 1 * 1024 * 1024  // 1MB max encrypted data per read
+	maxCumulativeEncrypted  = 20 * 1024 * 1024 // 20MB total encrypted before processing
 )
 
 // TCPSource receives log entries via TCP connections
@@ -32,6 +42,8 @@ type TCPSource struct {
 	engineMu    sync.Mutex
 	wg          sync.WaitGroup
 	netLimiter  *limit.NetLimiter
+	tlsManager  *tls.Manager
+	sslConfig   *config.SSLConfig
 	logger      *log.Logger
 
 	// Statistics
@@ -91,6 +103,32 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 		}
 	}
 
+	// Extract SSL config and initialize TLS manager
+	if ssl, ok := options["ssl"].(map[string]any); ok {
+		t.sslConfig = &config.SSLConfig{}
+		t.sslConfig.Enabled, _ = ssl["enabled"].(bool)
+		if certFile, ok := ssl["cert_file"].(string); ok {
+			t.sslConfig.CertFile = certFile
+		}
+		if keyFile, ok := ssl["key_file"].(string); ok {
+			t.sslConfig.KeyFile = keyFile
+		}
+		t.sslConfig.ClientAuth, _ = ssl["client_auth"].(bool)
+		if caFile, ok := ssl["client_ca_file"].(string); ok {
+			t.sslConfig.ClientCAFile = caFile
+		}
+		t.sslConfig.VerifyClientCert, _ = ssl["verify_client_cert"].(bool)
+
+		// Create TLS manager if enabled
+		if t.sslConfig.Enabled {
+			tlsManager, err := tls.NewManager(t.sslConfig, logger)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create TLS manager: %w", err)
+			}
+			t.tlsManager = tlsManager
+		}
+	}
+
 	return t, nil
 }
 
@@ -121,7 +159,8 @@ func (t *TCPSource) Start() error {
 		defer t.wg.Done()
 		t.logger.Info("msg", "TCP source server starting",
 			"component", "tcp_source",
-			"port", t.port)
+			"port", t.port,
+			"tls_enabled", t.tlsManager != nil)
 
 		err := gnet.Run(t.server, addr,
 			gnet.WithLogger(gnetLogger),
@@ -233,8 +272,14 @@ func (t *TCPSource) publish(entry core.LogEntry) bool {
 
 // tcpClient represents a connected TCP client
 type tcpClient struct {
-	conn   gnet.Conn
-	buffer bytes.Buffer
+	conn                gnet.Conn
+	buffer              bytes.Buffer
+	authenticated       bool
+	session             *auth.Session
+	authTimeout         time.Time
+	tlsBridge           *tls.GNetTLSConn
+	maxBufferSeen       int
+	cumulativeEncrypted int64
 }
 
 // tcpSourceServer handles gnet events
@@ -265,8 +310,7 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 
 	// Check net limit
 	if s.source.netLimiter != nil {
-		remoteStr := c.RemoteAddr().String()
-		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteStr)
+		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddr)
 		if err != nil {
 			s.source.logger.Warn("msg", "Failed to parse TCP address",
 				"component", "tcp_source",
@@ -283,7 +327,21 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		}
 
 		// Track connection
-		s.source.netLimiter.AddConnection(remoteStr)
+		s.source.netLimiter.AddConnection(remoteAddr)
+	}
+
+	// Create client state
+	client := &tcpClient{conn: c}
+
+	// Initialize TLS bridge if enabled
+	if s.source.tlsManager != nil {
+		tlsConfig := s.source.tlsManager.GetTCPConfig()
+		client.tlsBridge = tls.NewServerConn(c, tlsConfig)
+		client.tlsBridge.Handshake() // Start async handshake
+
+		s.source.logger.Debug("msg", "TLS handshake initiated",
+			"component", "tcp_source",
+			"remote_addr", remoteAddr)
 	}
 
 	// Create client state
@@ -295,7 +353,8 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	s.source.logger.Debug("msg", "TCP connection opened",
 		"component", "tcp_source",
 		"remote_addr", remoteAddr,
-		"active_connections", newCount)
+		"active_connections", newCount,
+		"tls_enabled", s.source.tlsManager != nil)
 
 	return nil, gnet.None
 }
@@ -305,8 +364,17 @@ func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
 
 	// Remove client state
 	s.mu.Lock()
+	client := s.clients[c]
 	delete(s.clients, c)
 	s.mu.Unlock()
+
+	// Clean up TLS bridge if present
+	if client != nil && client.tlsBridge != nil {
+		client.tlsBridge.Close()
+		s.source.logger.Debug("msg", "TLS connection closed",
+			"component", "tcp_source",
+			"remote_addr", remoteAddr)
+	}
 
 	// Remove connection tracking
 	if s.source.netLimiter != nil {
@@ -340,8 +408,112 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 
+	// Check encrypted data size BEFORE processing through TLS
+	if len(data) > maxEncryptedDataPerRead {
+		s.source.logger.Warn("msg", "Encrypted data per read limit exceeded",
+			"component", "tcp_source",
+			"remote_addr", c.RemoteAddr().String(),
+			"data_size", len(data),
+			"limit", maxEncryptedDataPerRead)
+		s.source.invalidEntries.Add(1)
+		return gnet.Close
+	}
+
+	// Track cumulative encrypted data to prevent slow accumulation
+	client.cumulativeEncrypted += int64(len(data))
+	if client.cumulativeEncrypted > maxCumulativeEncrypted {
+		s.source.logger.Warn("msg", "Cumulative encrypted data limit exceeded",
+			"component", "tcp_source",
+			"remote_addr", c.RemoteAddr().String(),
+			"total_encrypted", client.cumulativeEncrypted,
+			"limit", maxCumulativeEncrypted)
+		s.source.invalidEntries.Add(1)
+		return gnet.Close
+	}
+
+	// Process through TLS bridge if present
+	if client.tlsBridge != nil {
+		// Feed encrypted data into TLS engine
+		if err := client.tlsBridge.ProcessIncoming(data); err != nil {
+			if errors.Is(err, tls.ErrTLSBackpressure) {
+				s.source.logger.Warn("msg", "TLS backpressure, closing slow client",
+					"component", "tcp_source",
+					"remote_addr", c.RemoteAddr().String())
+			} else {
+				s.source.logger.Error("msg", "TLS processing error",
+					"component", "tcp_source",
+					"remote_addr", c.RemoteAddr().String(),
+					"error", err)
+			}
+			return gnet.Close
+		}
+
+		// Check if handshake is complete
+		if !client.tlsBridge.IsHandshakeDone() {
+			// Still handshaking, wait for more data
+			return gnet.None
+		}
+
+		// Check handshake result
+		_, hsErr := client.tlsBridge.HandshakeComplete()
+		if hsErr != nil {
+			s.source.logger.Error("msg", "TLS handshake failed",
+				"component", "tcp_source",
+				"remote_addr", c.RemoteAddr().String(),
+				"error", hsErr)
+			return gnet.Close
+		}
+
+		// Read decrypted plaintext
+		data = client.tlsBridge.Read()
+		if data == nil || len(data) == 0 {
+			// No plaintext available yet
+			return gnet.None
+		}
+		// Reset cumulative counter after successful decryption and processing
+		client.cumulativeEncrypted = 0
+	}
+
+	// Check buffer size before appending
+	if client.buffer.Len()+len(data) > maxClientBufferSize {
+		s.source.logger.Warn("msg", "Client buffer limit exceeded",
+			"component", "tcp_source",
+			"remote_addr", c.RemoteAddr().String(),
+			"buffer_size", client.buffer.Len(),
+			"incoming_size", len(data))
+		s.source.invalidEntries.Add(1)
+		return gnet.Close
+	}
+
 	// Append to client buffer
 	client.buffer.Write(data)
+
+	// Track high buffer
+	if client.buffer.Len() > client.maxBufferSeen {
+		client.maxBufferSeen = client.buffer.Len()
+	}
+
+	// Check for suspiciously long lines before attempting to read
+	if client.buffer.Len() > maxLineLength {
+		// Scan for newline in current buffer
+		bufBytes := client.buffer.Bytes()
+		hasNewline := false
+		for _, b := range bufBytes {
+			if b == '\n' {
+				hasNewline = true
+				break
+			}
+		}
+
+		if !hasNewline {
+			s.source.logger.Warn("msg", "Line too long without newline",
+				"component", "tcp_source",
+				"remote_addr", c.RemoteAddr().String(),
+				"buffer_size", client.buffer.Len())
+			s.source.invalidEntries.Add(1)
+			return gnet.Close
+		}
+	}
 
 	// Process complete lines
 	for {

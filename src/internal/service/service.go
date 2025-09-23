@@ -139,9 +139,6 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 
 	// Configure authentication for sinks that support it
 	for _, sinkInst := range pipeline.Sinks {
-		if setter, ok := sinkInst.(sink.NetAccessSetter); ok {
-			setter.SetNetAccessConfig(cfg.NetAccess)
-		}
 		if setter, ok := sinkInst.(sink.AuthSetter); ok {
 			setter.SetAuthConfig(cfg.Auth)
 		}

@@ -3,8 +3,10 @@ package auth
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -15,7 +17,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/lixenwraith/log"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/time/rate"
 )
+
+// Prevent unbounded map growth
+const maxAuthTrackedIPs = 10000
 
 // Authenticator handles all authentication methods for a pipeline
 type Authenticator struct {
@@ -30,6 +36,18 @@ type Authenticator struct {
 	// Session tracking
 	sessions  map[string]*Session
 	sessionMu sync.RWMutex
+
+	// Brute-force protection
+	ipAuthAttempts map[string]*ipAuthState
+	authMu         sync.RWMutex
+}
+
+// ADDED: Per-IP auth attempt tracking
+type ipAuthState struct {
+	limiter      *rate.Limiter
+	failCount    int
+	lastAttempt  time.Time
+	blockedUntil time.Time
 }
 
 // Session represents an authenticated connection
@@ -50,11 +68,12 @@ func New(cfg *config.AuthConfig, logger *log.Logger) (*Authenticator, error) {
 	}
 
 	a := &Authenticator{
-		config:       cfg,
-		logger:       logger,
-		basicUsers:   make(map[string]string),
-		bearerTokens: make(map[string]bool),
-		sessions:     make(map[string]*Session),
+		config:         cfg,
+		logger:         logger,
+		basicUsers:     make(map[string]string),
+		bearerTokens:   make(map[string]bool),
+		sessions:       make(map[string]*Session),
+		ipAuthAttempts: make(map[string]*ipAuthState),
 	}
 
 	// Initialize Basic Auth users
@@ -82,6 +101,7 @@ func New(cfg *config.AuthConfig, logger *log.Logger) (*Authenticator, error) {
 			a.jwtParser = jwt.NewParser(
 				jwt.WithValidMethods([]string{"HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}),
 				jwt.WithLeeway(5*time.Second),
+				jwt.WithExpirationRequired(),
 			)
 
 			// Setup key function
@@ -102,11 +122,137 @@ func New(cfg *config.AuthConfig, logger *log.Logger) (*Authenticator, error) {
 	// Start session cleanup
 	go a.sessionCleanup()
 
+	// Start auth attempt cleanup
+	go a.authAttemptCleanup()
+
 	logger.Info("msg", "Authenticator initialized",
 		"component", "auth",
 		"type", cfg.Type)
 
 	return a, nil
+}
+
+// Check and enforce rate limits
+func (a *Authenticator) checkRateLimit(remoteAddr string) error {
+	ip, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		ip = remoteAddr // Fallback for malformed addresses
+	}
+
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+
+	state, exists := a.ipAuthAttempts[ip]
+	now := time.Now()
+
+	if !exists {
+		// Check map size limit before creating new entry
+		if len(a.ipAuthAttempts) >= maxAuthTrackedIPs {
+			// Evict an old entry using simplified LRU
+			// Sample 20 random entries and evict the oldest
+			const sampleSize = 20
+			var oldestIP string
+			oldestTime := now
+
+			// Build sample
+			sampled := 0
+			for sampledIP, sampledState := range a.ipAuthAttempts {
+				if sampledState.lastAttempt.Before(oldestTime) {
+					oldestIP = sampledIP
+					oldestTime = sampledState.lastAttempt
+				}
+				sampled++
+				if sampled >= sampleSize {
+					break
+				}
+			}
+
+			// Evict the oldest from our sample
+			if oldestIP != "" {
+				delete(a.ipAuthAttempts, oldestIP)
+				a.logger.Debug("msg", "Evicted old auth attempt state",
+					"component", "auth",
+					"evicted_ip", oldestIP,
+					"last_seen", oldestTime)
+			}
+		}
+
+		// Create new state for this IP
+		// 5 attempts per minute, burst of 3
+		state = &ipAuthState{
+			limiter:     rate.NewLimiter(rate.Every(12*time.Second), 3),
+			lastAttempt: now,
+		}
+		a.ipAuthAttempts[ip] = state
+	}
+
+	// Check if IP is temporarily blocked
+	if now.Before(state.blockedUntil) {
+		remaining := state.blockedUntil.Sub(now)
+		a.logger.Warn("msg", "IP temporarily blocked",
+			"component", "auth",
+			"ip", ip,
+			"remaining", remaining)
+		// Sleep to slow down even blocked attempts
+		time.Sleep(2 * time.Second)
+		return fmt.Errorf("temporarily blocked, try again in %v", remaining.Round(time.Second))
+	}
+
+	// Check rate limit
+	if !state.limiter.Allow() {
+		state.failCount++
+
+		// Only set new blockedUntil if not already blocked
+		// This prevents indefinite block extension
+		if state.blockedUntil.IsZero() || now.After(state.blockedUntil) {
+			// Progressive blocking: 2^failCount minutes
+			blockMinutes := 1 << min(state.failCount, 6) // Cap at 64 minutes
+			state.blockedUntil = now.Add(time.Duration(blockMinutes) * time.Minute)
+
+			a.logger.Warn("msg", "Rate limit exceeded, blocking IP",
+				"component", "auth",
+				"ip", ip,
+				"fail_count", state.failCount,
+				"block_duration", time.Duration(blockMinutes)*time.Minute)
+		}
+
+		return fmt.Errorf("rate limit exceeded")
+	}
+
+	state.lastAttempt = now
+	return nil
+}
+
+// Record failed attempt
+func (a *Authenticator) recordFailure(remoteAddr string) {
+	ip, _, _ := net.SplitHostPort(remoteAddr)
+	if ip == "" {
+		ip = remoteAddr
+	}
+
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+
+	if state, exists := a.ipAuthAttempts[ip]; exists {
+		state.failCount++
+		state.lastAttempt = time.Now()
+	}
+}
+
+// Reset failure count on success
+func (a *Authenticator) recordSuccess(remoteAddr string) {
+	ip, _, _ := net.SplitHostPort(remoteAddr)
+	if ip == "" {
+		ip = remoteAddr
+	}
+
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+
+	if state, exists := a.ipAuthAttempts[ip]; exists {
+		state.failCount = 0
+		state.blockedUntil = time.Time{}
+	}
 }
 
 // AuthenticateHTTP handles HTTP authentication headers
@@ -120,14 +266,31 @@ func (a *Authenticator) AuthenticateHTTP(authHeader, remoteAddr string) (*Sessio
 		}, nil
 	}
 
+	// Check rate limit
+	if err := a.checkRateLimit(remoteAddr); err != nil {
+		return nil, err
+	}
+
+	var session *Session
+	var err error
+
 	switch a.config.Type {
 	case "basic":
-		return a.authenticateBasic(authHeader, remoteAddr)
+		session, err = a.authenticateBasic(authHeader, remoteAddr)
 	case "bearer":
-		return a.authenticateBearer(authHeader, remoteAddr)
+		session, err = a.authenticateBearer(authHeader, remoteAddr)
 	default:
-		return nil, fmt.Errorf("unsupported auth type: %s", a.config.Type)
+		err = fmt.Errorf("unsupported auth type: %s", a.config.Type)
 	}
+
+	if err != nil {
+		a.recordFailure(remoteAddr)
+		time.Sleep(500 * time.Millisecond)
+		return nil, err
+	}
+
+	a.recordSuccess(remoteAddr)
+	return session, nil
 }
 
 // AuthenticateTCP handles TCP connection authentication
@@ -141,32 +304,54 @@ func (a *Authenticator) AuthenticateTCP(method, credentials, remoteAddr string) 
 		}, nil
 	}
 
+	// Check rate limit first
+	if err := a.checkRateLimit(remoteAddr); err != nil {
+		return nil, err
+	}
+
+	var session *Session
+	var err error
+
 	// TCP auth protocol: AUTH <method> <credentials>
 	switch strings.ToLower(method) {
 	case "token":
 		if a.config.Type != "bearer" {
-			return nil, fmt.Errorf("token auth not configured")
+			err = fmt.Errorf("token auth not configured")
+		} else {
+			session, err = a.validateToken(credentials, remoteAddr)
 		}
-		return a.validateToken(credentials, remoteAddr)
 
 	case "basic":
 		if a.config.Type != "basic" {
-			return nil, fmt.Errorf("basic auth not configured")
+			err = fmt.Errorf("basic auth not configured")
+		} else {
+			// Expect base64(username:password)
+			decoded, decErr := base64.StdEncoding.DecodeString(credentials)
+			if decErr != nil {
+				err = fmt.Errorf("invalid credentials encoding")
+			} else {
+				parts := strings.SplitN(string(decoded), ":", 2)
+				if len(parts) != 2 {
+					err = fmt.Errorf("invalid credentials format")
+				} else {
+					session, err = a.validateBasicAuth(parts[0], parts[1], remoteAddr)
+				}
+			}
 		}
-		// Expect base64(username:password)
-		decoded, err := base64.StdEncoding.DecodeString(credentials)
-		if err != nil {
-			return nil, fmt.Errorf("invalid credentials encoding")
-		}
-		parts := strings.SplitN(string(decoded), ":", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid credentials format")
-		}
-		return a.validateBasicAuth(parts[0], parts[1], remoteAddr)
 
 	default:
-		return nil, fmt.Errorf("unsupported auth method: %s", method)
+		err = fmt.Errorf("unsupported auth method: %s", method)
 	}
+
+	if err != nil {
+		a.recordFailure(remoteAddr)
+		// Add delay on failure
+		time.Sleep(500 * time.Millisecond)
+		return nil, err
+	}
+
+	a.recordSuccess(remoteAddr)
+	return session, nil
 }
 
 func (a *Authenticator) authenticateBasic(authHeader, remoteAddr string) (*Session, error) {
@@ -255,6 +440,23 @@ func (a *Authenticator) validateToken(token, remoteAddr string) (*Session, error
 			return nil, fmt.Errorf("invalid JWT token")
 		}
 
+		// Explicit expiration check
+		if exp, ok := claims["exp"].(float64); ok {
+			if time.Now().Unix() > int64(exp) {
+				return nil, fmt.Errorf("token expired")
+			}
+		} else {
+			// Reject tokens without expiration
+			return nil, fmt.Errorf("token missing expiration claim")
+		}
+
+		// Check not-before claim
+		if nbf, ok := claims["nbf"].(float64); ok {
+			if time.Now().Unix() < int64(nbf) {
+				return nil, fmt.Errorf("token not yet valid")
+			}
+		}
+
 		// Check issuer if configured
 		if a.config.BearerAuth.JWT.Issuer != "" {
 			if iss, ok := claims["iss"].(string); !ok || iss != a.config.BearerAuth.JWT.Issuer {
@@ -264,7 +466,20 @@ func (a *Authenticator) validateToken(token, remoteAddr string) (*Session, error
 
 		// Check audience if configured
 		if a.config.BearerAuth.JWT.Audience != "" {
-			if aud, ok := claims["aud"].(string); !ok || aud != a.config.BearerAuth.JWT.Audience {
+			// Handle both string and []string audience formats
+			audValid := false
+			switch aud := claims["aud"].(type) {
+			case string:
+				audValid = aud == a.config.BearerAuth.JWT.Audience
+			case []interface{}:
+				for _, aa := range aud {
+					if audStr, ok := aa.(string); ok && audStr == a.config.BearerAuth.JWT.Audience {
+						audValid = true
+						break
+					}
+				}
+			}
+			if !audValid {
 				return nil, fmt.Errorf("invalid token audience")
 			}
 		}
@@ -322,6 +537,27 @@ func (a *Authenticator) sessionCleanup() {
 	}
 }
 
+// Cleanup old auth attempts
+func (a *Authenticator) authAttemptCleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		a.authMu.Lock()
+		now := time.Now()
+		for ip, state := range a.ipAuthAttempts {
+			// Remove entries older than 1 hour with no recent activity
+			if now.Sub(state.lastAttempt) > time.Hour {
+				delete(a.ipAuthAttempts, ip)
+				a.logger.Debug("msg", "Cleaned up auth attempt state",
+					"component", "auth",
+					"ip", ip)
+			}
+		}
+		a.authMu.Unlock()
+	}
+}
+
 func (a *Authenticator) loadUsersFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -366,7 +602,12 @@ func (a *Authenticator) loadUsersFile(path string) error {
 }
 
 func generateSessionID() string {
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix())
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to a less secure method if crypto/rand fails
+		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+	}
+	return base64.URLEncoding.EncodeToString(b)
 }
 
 // ValidateSession checks if a session is still valid

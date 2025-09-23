@@ -48,7 +48,6 @@ type HTTPSink struct {
 
 	// Net limiting
 	netLimiter *limit.NetLimiter
-	ipChecker  *limit.IPChecker
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -156,6 +155,22 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 		if maxTotal, ok := rl["max_total_connections"].(int64); ok {
 			cfg.NetLimit.MaxTotalConnections = maxTotal
 		}
+		if ipWhitelist, ok := rl["ip_whitelist"].([]any); ok {
+			cfg.NetLimit.IPWhitelist = make([]string, 0, len(ipWhitelist))
+			for _, entry := range ipWhitelist {
+				if str, ok := entry.(string); ok {
+					cfg.NetLimit.IPWhitelist = append(cfg.NetLimit.IPWhitelist, str)
+				}
+			}
+		}
+		if ipBlacklist, ok := rl["ip_blacklist"].([]any); ok {
+			cfg.NetLimit.IPBlacklist = make([]string, 0, len(ipBlacklist))
+			for _, entry := range ipBlacklist {
+				if str, ok := entry.(string); ok {
+					cfg.NetLimit.IPBlacklist = append(cfg.NetLimit.IPBlacklist, str)
+				}
+			}
+		}
 	}
 
 	h := &HTTPSink{
@@ -195,8 +210,10 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 
 	// Configure TLS if enabled
 	if h.tlsManager != nil {
-		tlsConfig := h.tlsManager.GetHTTPConfig()
-		h.server.TLSConfig = tlsConfig
+		h.server.TLSConfig = h.tlsManager.GetHTTPConfig()
+		h.logger.Info("msg", "TLS enabled for HTTP sink",
+			"component", "http_sink",
+			"port", h.config.Port)
 	}
 
 	addr := fmt.Sprintf(":%d", h.config.Port)
@@ -208,12 +225,13 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 			"component", "http_sink",
 			"port", h.config.Port,
 			"stream_path", h.streamPath,
-			"status_path", h.statusPath)
+			"status_path", h.statusPath,
+			"tls_enabled", h.tlsManager != nil)
 
 		var err error
 		if h.tlsManager != nil {
 			// HTTPS server
-			err = h.server.ListenAndServeTLS(addr, "", "")
+			err = h.server.ListenAndServeTLS(addr, h.config.SSL.CertFile, h.config.SSL.KeyFile)
 		} else {
 			// HTTP server
 			err = h.server.ListenAndServe(addr)
@@ -306,24 +324,18 @@ func (h *HTTPSink) GetStats() SinkStats {
 func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	remoteAddr := ctx.RemoteAddr().String()
 
-	// Check IP access control
-	if h.ipChecker != nil {
-		if !h.ipChecker.IsAllowed(ctx.RemoteAddr()) {
-			ctx.SetStatusCode(fasthttp.StatusForbidden)
-			ctx.SetContentType("text/plain")
-			ctx.SetBodyString("Forbidden")
-			return
-		}
-	}
-
 	// Check net limit
 	if h.netLimiter != nil {
 		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
 			ctx.SetStatusCode(int(statusCode))
 			ctx.SetContentType("application/json")
+			h.logger.Warn("msg", "Net limited",
+				"component", "http_sink",
+				"remote_addr", remoteAddr,
+				"status_code", statusCode,
+				"error", message)
 			json.NewEncoder(ctx).Encode(map[string]any{
-				"error":       message,
-				"retry_after": "60", // seconds
+				"error": "Too many requests",
 			})
 			return
 		}
@@ -355,7 +367,7 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 			if h.authConfig.Type == "basic" && h.authConfig.BasicAuth != nil {
 				realm := h.authConfig.BasicAuth.Realm
 				if realm == "" {
-					realm = "LogWisp"
+					realm = "Restricted"
 				}
 				ctx.Response.Header.Set("WWW-Authenticate", fmt.Sprintf("Basic realm=\"%s\"", realm))
 			} else if h.authConfig.Type == "bearer" {
@@ -364,7 +376,7 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 
 			ctx.SetContentType("application/json")
 			json.NewEncoder(ctx).Encode(map[string]string{
-				"error": "Authentication required",
+				"error": "Unauthorized",
 			})
 			return
 		}
@@ -379,8 +391,6 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 		ctx.SetContentType("application/json")
 		json.NewEncoder(ctx).Encode(map[string]any{
 			"error": "Not Found",
-			"message": fmt.Sprintf("Available endpoints: %s (SSE transport), %s (status)",
-				h.streamPath, h.statusPath),
 		})
 	}
 }
@@ -654,14 +664,6 @@ func (h *HTTPSink) GetStreamPath() string {
 // GetStatusPath returns the configured status endpoint path
 func (h *HTTPSink) GetStatusPath() string {
 	return h.statusPath
-}
-
-func (h *HTTPSink) SetNetAccessConfig(cfg *config.NetAccessConfig) {
-	h.ipChecker = limit.NewIPChecker(cfg, h.logger)
-	if h.ipChecker != nil {
-		h.logger.Info("msg", "IP access control configured for HTTP sink",
-			"component", "http_sink")
-	}
 }
 
 // SetAuthConfig configures http sink authentication

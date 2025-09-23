@@ -4,8 +4,12 @@ package sink
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,6 +59,7 @@ type HTTPClientConfig struct {
 
 	// TLS configuration
 	InsecureSkipVerify bool
+	CAFile             string
 }
 
 // NewHTTPClientSink creates a new HTTP client sink
@@ -126,6 +131,11 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 		cfg.Headers["Content-Type"] = "application/json"
 	}
 
+	// Extract TLS options
+	if caFile, ok := options["ca_file"].(string); ok && caFile != "" {
+		cfg.CAFile = caFile
+	}
+
 	h := &HTTPClientSink{
 		input:     make(chan core.LogEntry, cfg.BufferSize),
 		config:    cfg,
@@ -147,17 +157,28 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 		DisableHeaderNamesNormalizing: true,
 	}
 
-	// TODO: Implement custom TLS configuration, including InsecureSkipVerify,
-	// by setting a custom dialer on the fasthttp.Client.
-	// For example:
-	// if cfg.InsecureSkipVerify {
-	//     h.client.Dial = func(addr string) (net.Conn, error) {
-	//         return fasthttp.DialDualStackTimeout(addr, cfg.Timeout, &tls.Config{
-	//             InsecureSkipVerify: true,
-	//         })
-	//     }
-	// }
-	// FIXED: Removed incorrect TLS configuration that referenced non-existent field
+	// Configure TLS if using HTTPS
+	if strings.HasPrefix(cfg.URL, "https://") {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+		}
+
+		// Load custom CA if provided
+		if cfg.CAFile != "" {
+			caCert, err := os.ReadFile(cfg.CAFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read CA file: %w", err)
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return nil, fmt.Errorf("failed to parse CA certificate")
+			}
+			tlsConfig.RootCAs = caCertPool
+		}
+
+		// Set TLS config directly on the client
+		h.client.TLSConfig = tlsConfig
+	}
 
 	return h, nil
 }
@@ -341,15 +362,22 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 		if attempt > 0 {
 			// Wait before retry
 			time.Sleep(retryDelay)
-			retryDelay = time.Duration(float64(retryDelay) * h.config.RetryBackoff)
+
+			// Calculate new delay with overflow protection
+			newDelay := time.Duration(float64(retryDelay) * h.config.RetryBackoff)
+
+			// Cap at maximum to prevent integer overflow
+			if newDelay > h.config.Timeout || newDelay < retryDelay {
+				// Either exceeded max or overflowed (negative/wrapped)
+				retryDelay = h.config.Timeout
+			} else {
+				retryDelay = newDelay
+			}
 		}
 
-		// TODO: defer placement issue
-		// Create request
+		// Acquire resources inside loop, release immediately after use
 		req := fasthttp.AcquireRequest()
-		defer fasthttp.ReleaseRequest(req)
 		resp := fasthttp.AcquireResponse()
-		defer fasthttp.ReleaseResponse(resp)
 
 		req.SetRequestURI(h.config.URL)
 		req.Header.SetMethod("POST")
@@ -362,35 +390,50 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 
 		// Send request
 		err := h.client.DoTimeout(req, resp, h.config.Timeout)
+
+		// Capture response before releasing
+		statusCode := resp.StatusCode()
+		var responseBody []byte
+		if len(resp.Body()) > 0 {
+			responseBody = make([]byte, len(resp.Body()))
+			copy(responseBody, resp.Body())
+		}
+
+		// Release immediately, not deferred
+		fasthttp.ReleaseRequest(req)
+		fasthttp.ReleaseResponse(resp)
+
+		// Handle errors
 		if err != nil {
 			lastErr = fmt.Errorf("request failed: %w", err)
 			h.logger.Warn("msg", "HTTP request failed",
 				"component", "http_client_sink",
 				"attempt", attempt+1,
+				"max_retries", h.config.MaxRetries,
 				"error", err)
 			continue
 		}
 
 		// Check response status
-		statusCode := resp.StatusCode()
 		if statusCode >= 200 && statusCode < 300 {
 			// Success
 			h.logger.Debug("msg", "Batch sent successfully",
 				"component", "http_client_sink",
 				"batch_size", len(batch),
-				"status_code", statusCode)
+				"status_code", statusCode,
+				"attempt", attempt+1)
 			return
 		}
 
 		// Non-2xx status
-		lastErr = fmt.Errorf("server returned status %d: %s", statusCode, resp.Body())
+		lastErr = fmt.Errorf("server returned status %d: %s", statusCode, responseBody)
 
 		// Don't retry on 4xx errors (client errors)
 		if statusCode >= 400 && statusCode < 500 {
 			h.logger.Error("msg", "Batch rejected by server",
 				"component", "http_client_sink",
 				"status_code", statusCode,
-				"response", string(resp.Body()),
+				"response", string(responseBody),
 				"batch_size", len(batch))
 			h.failedBatches.Add(1)
 			return
@@ -400,13 +443,14 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 			"component", "http_client_sink",
 			"attempt", attempt+1,
 			"status_code", statusCode,
-			"response", string(resp.Body()))
+			"response", string(responseBody))
 	}
 
-	// All retries failed
-	h.logger.Error("msg", "Failed to send batch after retries",
+	// All retries exhausted
+	h.logger.Error("msg", "Failed to send batch after all retries",
 		"component", "http_client_sink",
 		"batch_size", len(batch),
+		"retries", h.config.MaxRetries,
 		"last_error", lastErr)
 	h.failedBatches.Add(1)
 }

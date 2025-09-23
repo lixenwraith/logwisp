@@ -20,9 +20,6 @@ type PipelineConfig struct {
 	// Rate limiting
 	RateLimit *RateLimitConfig `toml:"rate_limit"`
 
-	// Network access control (IP filtering)
-	NetAccess *NetAccessConfig `toml:"net_access"`
-
 	// Filter configuration
 	Filters []FilterConfig `toml:"filters"`
 
@@ -35,12 +32,6 @@ type PipelineConfig struct {
 
 	// Authentication/Authorization (applies to network sinks)
 	Auth *AuthConfig `toml:"auth"`
-}
-
-// NetAccessConfig defines IP-based access control lists
-type NetAccessConfig struct {
-	IPWhitelist []string `toml:"ip_whitelist"`
-	IPBlacklist []string `toml:"ip_blacklist"`
 }
 
 // SourceConfig represents an input data source
@@ -132,6 +123,13 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 			}
 		}
 
+		// CHANGED: Validate SSL if present
+		if ssl, ok := cfg.Options["ssl"].(map[string]any); ok {
+			if err := validateSSLOptions("HTTP source", pipelineName, sourceIndex, ssl); err != nil {
+				return err
+			}
+		}
+
 	case "tcp":
 		// Validate TCP source options
 		port, ok := cfg.Options["port"].(int64)
@@ -143,6 +141,13 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 		// Validate net_limit if present within Options
 		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
 			if err := validateNetLimitOptions("TCP source", pipelineName, sourceIndex, rl); err != nil {
+				return err
+			}
+		}
+
+		// CHANGED: Validate SSL if present
+		if ssl, ok := cfg.Options["ssl"].(map[string]any); ok {
+			if err := validateSSLOptions("TCP source", pipelineName, sourceIndex, ssl); err != nil {
 				return err
 			}
 		}

@@ -1,7 +1,11 @@
 // FILE: logwisp/src/internal/config/server.go
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+	"strings"
+)
 
 type TCPConfig struct {
 	Enabled    bool  `toml:"enabled"`
@@ -49,6 +53,10 @@ type NetLimitConfig struct {
 	// Enable net limiting
 	Enabled bool `toml:"enabled"`
 
+	// IP Access Control Lists
+	IPWhitelist []string `toml:"ip_whitelist"`
+	IPBlacklist []string `toml:"ip_blacklist"`
+
 	// Requests per second per client
 	RequestsPerSecond float64 `toml:"requests_per_second"`
 
@@ -88,6 +96,33 @@ func validateHeartbeatOptions(serverType, pipelineName string, sinkIndex int, hb
 func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl map[string]any) error {
 	if enabled, ok := rl["enabled"].(bool); !ok || !enabled {
 		return nil
+	}
+
+	// Validate IP lists if present
+	if ipWhitelist, ok := rl["ip_whitelist"].([]any); ok {
+		for i, entry := range ipWhitelist {
+			entryStr, ok := entry.(string)
+			if !ok {
+				continue
+			}
+			if err := validateIPv4Entry(entryStr); err != nil {
+				return fmt.Errorf("pipeline '%s' sink[%d] %s: whitelist[%d] %v",
+					pipelineName, sinkIndex, serverType, i, err)
+			}
+		}
+	}
+
+	if ipBlacklist, ok := rl["ip_blacklist"].([]any); ok {
+		for i, entry := range ipBlacklist {
+			entryStr, ok := entry.(string)
+			if !ok {
+				continue
+			}
+			if err := validateIPv4Entry(entryStr); err != nil {
+				return fmt.Errorf("pipeline '%s' sink[%d] %s: blacklist[%d] %v",
+					pipelineName, sinkIndex, serverType, i, err)
+			}
+		}
 	}
 
 	// Validate requests per second
@@ -130,6 +165,40 @@ func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl 
 			return fmt.Errorf("pipeline '%s' sink[%d] %s: max_connections_per_ip (%d) cannot exceed max_total_connections (%d)",
 				pipelineName, sinkIndex, serverType, maxPerIP, maxTotal)
 		}
+	}
+
+	return nil
+}
+
+// validateIPv4Entry ensures an IP or CIDR is IPv4
+func validateIPv4Entry(entry string) error {
+	// Handle single IP
+	if !strings.Contains(entry, "/") {
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return fmt.Errorf("invalid IP address: %s", entry)
+		}
+		if ip.To4() == nil {
+			return fmt.Errorf("IPv6 not supported (IPv4-only): %s", entry)
+		}
+		return nil
+	}
+
+	// Handle CIDR
+	ipAddr, ipNet, err := net.ParseCIDR(entry)
+	if err != nil {
+		return fmt.Errorf("invalid CIDR: %s", entry)
+	}
+
+	// Check if the IP is IPv4
+	if ipAddr.To4() == nil {
+		return fmt.Errorf("IPv6 CIDR not supported (IPv4-only): %s", entry)
+	}
+
+	// Verify the network mask is appropriate for IPv4
+	_, bits := ipNet.Mask.Size()
+	if bits != 32 {
+		return fmt.Errorf("invalid IPv4 CIDR mask (got %d bits, expected 32): %s", bits, entry)
 	}
 
 	return nil
