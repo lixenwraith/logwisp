@@ -60,6 +60,8 @@ type HTTPClientConfig struct {
 	// TLS configuration
 	InsecureSkipVerify bool
 	CAFile             string
+	CertFile           string
+	KeyFile            string
 }
 
 // NewHTTPClientSink creates a new HTTP client sink
@@ -136,6 +138,30 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 		cfg.CAFile = caFile
 	}
 
+	// Extract client certificate options from SSL config
+	if ssl, ok := options["ssl"].(map[string]any); ok {
+		if enabled, _ := ssl["enabled"].(bool); enabled {
+			// Extract client certificate files for mTLS
+			if certFile, ok := ssl["cert_file"].(string); ok && certFile != "" {
+				if keyFile, ok := ssl["key_file"].(string); ok && keyFile != "" {
+					// These will be used below when configuring TLS
+					cfg.CertFile = certFile // Need to add these fields to HTTPClientConfig
+					cfg.KeyFile = keyFile
+				}
+			}
+			// Extract CA file from ssl config if not already set
+			if cfg.CAFile == "" {
+				if caFile, ok := ssl["ca_file"].(string); ok {
+					cfg.CAFile = caFile
+				}
+			}
+			// Extract insecure skip verify from ssl config
+			if insecure, ok := ssl["insecure_skip_verify"].(bool); ok {
+				cfg.InsecureSkipVerify = insecure
+			}
+		}
+	}
+
 	h := &HTTPClientSink{
 		input:     make(chan core.LogEntry, cfg.BufferSize),
 		config:    cfg,
@@ -163,17 +189,32 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 			InsecureSkipVerify: cfg.InsecureSkipVerify,
 		}
 
-		// Load custom CA if provided
+		// Load custom CA for server verification if provided
 		if cfg.CAFile != "" {
 			caCert, err := os.ReadFile(cfg.CAFile)
 			if err != nil {
-				return nil, fmt.Errorf("failed to read CA file: %w", err)
+				return nil, fmt.Errorf("failed to read CA file '%s': %w", cfg.CAFile, err)
 			}
 			caCertPool := x509.NewCertPool()
 			if !caCertPool.AppendCertsFromPEM(caCert) {
-				return nil, fmt.Errorf("failed to parse CA certificate")
+				return nil, fmt.Errorf("failed to parse CA certificate from '%s'", cfg.CAFile)
 			}
 			tlsConfig.RootCAs = caCertPool
+			logger.Debug("msg", "Custom CA loaded for server verification",
+				"component", "http_client_sink",
+				"ca_file", cfg.CAFile)
+		}
+
+		// Load client certificate for mTLS if provided
+		if cfg.CertFile != "" && cfg.KeyFile != "" {
+			cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load client certificate: %w", err)
+			}
+			tlsConfig.Certificates = []tls.Certificate{cert}
+			logger.Info("msg", "Client certificate loaded for mTLS",
+				"component", "http_client_sink",
+				"cert_file", cfg.CertFile)
 		}
 
 		// Set TLS config directly on the client

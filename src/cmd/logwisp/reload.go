@@ -4,8 +4,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"logwisp/src/internal/config"
@@ -115,7 +117,7 @@ func (rm *ReloadManager) watchLoop(ctx context.Context) {
 					"action", "keeping current configuration")
 				continue
 			case "permissions_changed":
-				// SECURITY: Config file permissions changed suspiciously
+				// Config file permissions changed suspiciously, overlap with file permission check
 				rm.logger.Error("msg", "Configuration file permissions changed",
 					"action", "reload blocked for security")
 				continue
@@ -132,12 +134,51 @@ func (rm *ReloadManager) watchLoop(ctx context.Context) {
 				}
 			}
 
+			// Verify file permissions before reload
+			if err := verifyFilePermissions(rm.configPath); err != nil {
+				rm.logger.Error("msg", "Configuration file permission check failed",
+					"path", rm.configPath,
+					"error", err,
+					"action", "reload blocked for security")
+				continue
+			}
+
 			// Trigger reload for any pipeline-related change
 			if rm.shouldReload(changedPath) {
 				rm.triggerReload(ctx)
 			}
 		}
 	}
+}
+
+// Verify file permissions for security
+func verifyFilePermissions(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to stat config file: %w", err)
+	}
+
+	// Extract file mode and system stats
+	mode := info.Mode()
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("unable to get file ownership info")
+	}
+
+	// Check ownership - must be current user or root
+	currentUID := uint32(os.Getuid())
+	if stat.Uid != currentUID && stat.Uid != 0 {
+		return fmt.Errorf("config file owned by uid %d, expected %d or 0", stat.Uid, currentUID)
+	}
+
+	// Check permissions - must not be writable by group or other
+	perm := mode.Perm()
+	if perm&0022 != 0 {
+		// Group or other has write permission
+		return fmt.Errorf("insecure permissions %04o - file must not be writable by group/other", perm)
+	}
+
+	return nil
 }
 
 // shouldReload determines if a config change requires service reload

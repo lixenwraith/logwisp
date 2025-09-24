@@ -108,7 +108,7 @@ func New(cfg *config.AuthConfig, logger *log.Logger) (*Authenticator, error) {
 			if cfg.BearerAuth.JWT.SigningKey != "" {
 				// Static key
 				key := []byte(cfg.BearerAuth.JWT.SigningKey)
-				a.jwtKeyFunc = func(token *jwt.Token) (interface{}, error) {
+				a.jwtKeyFunc = func(token *jwt.Token) (any, error) {
 					return key, nil
 				}
 			} else if cfg.BearerAuth.JWT.JWKSURL != "" {
@@ -378,7 +378,7 @@ func (a *Authenticator) validateBasicAuth(username, password, remoteAddr string)
 	a.mu.RUnlock()
 
 	if !exists {
-		// ☢ SECURITY: Perform bcrypt anyway to prevent timing attacks
+		// Perform bcrypt anyway to prevent timing attacks
 		bcrypt.CompareHashAndPassword([]byte("$2a$10$dummy.hash.to.prevent.timing.attacks"), []byte(password))
 		return nil, fmt.Errorf("invalid credentials")
 	}
@@ -471,7 +471,7 @@ func (a *Authenticator) validateToken(token, remoteAddr string) (*Session, error
 			switch aud := claims["aud"].(type) {
 			case string:
 				audValid = aud == a.config.BearerAuth.JWT.Audience
-			case []interface{}:
+			case []any:
 				for _, aa := range aud {
 					if audStr, ok := aa.(string); ok && audStr == a.config.BearerAuth.JWT.Audience {
 						audValid = true

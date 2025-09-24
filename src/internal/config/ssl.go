@@ -19,6 +19,9 @@ type SSLConfig struct {
 	// Option to skip verification for clients
 	InsecureSkipVerify bool `toml:"insecure_skip_verify"`
 
+	// CA file for client to trust specific server certificates
+	CAFile string `toml:"ca_file"`
+
 	// TLS version constraints
 	MinVersion string `toml:"min_version"` // "TLS1.2", "TLS1.3"
 	MaxVersion string `toml:"max_version"`

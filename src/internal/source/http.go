@@ -110,7 +110,21 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 		if keyFile, ok := ssl["key_file"].(string); ok {
 			h.sslConfig.KeyFile = keyFile
 		}
-		// TODO: extract other SSL options similar to tcp_client_sink
+		h.sslConfig.ClientAuth, _ = ssl["client_auth"].(bool)
+		if caFile, ok := ssl["client_ca_file"].(string); ok {
+			h.sslConfig.ClientCAFile = caFile
+		}
+		h.sslConfig.VerifyClientCert, _ = ssl["verify_client_cert"].(bool)
+		h.sslConfig.InsecureSkipVerify, _ = ssl["insecure_skip_verify"].(bool)
+		if minVer, ok := ssl["min_version"].(string); ok {
+			h.sslConfig.MinVersion = minVer
+		}
+		if maxVer, ok := ssl["max_version"].(string); ok {
+			h.sslConfig.MaxVersion = maxVer
+		}
+		if ciphers, ok := ssl["cipher_suites"].(string); ok {
+			h.sslConfig.CipherSuites = ciphers
+		}
 
 		// Create TLS manager
 		if h.sslConfig.Enabled {
@@ -146,6 +160,7 @@ func (h *HTTPSource) Start() error {
 
 	// Start server in background
 	h.wg.Add(1)
+	errChan := make(chan error, 1)
 	go func() {
 		defer h.wg.Done()
 		h.logger.Info("msg", "HTTP source server starting",
@@ -168,12 +183,19 @@ func (h *HTTPSource) Start() error {
 				"component", "http_source",
 				"port", h.port,
 				"error", err)
+			errChan <- err
 		}
 	}()
 
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond) // TODO: standardize and better manage timers
-	return nil
+	// Robust server startup check with timeout
+	select {
+	case err := <-errChan:
+		// Server failed to start
+		return fmt.Errorf("HTTP server failed to start: %w", err)
+	case <-time.After(250 * time.Millisecond):
+		// Server started successfully (no immediate error)
+		return nil
+	}
 }
 
 func (h *HTTPSource) Stop() {
@@ -331,7 +353,8 @@ func (h *HTTPSource) parseEntries(body []byte) ([]core.LogEntry, error) {
 	// Try to parse as JSON array
 	var array []core.LogEntry
 	if err := json.Unmarshal(body, &array); err == nil {
-		// NOTE: Placeholder; For array, divide total size by entry count as approximation
+		// For array, divide total size by entry count as approximation
+		// Accurate calculation adds too much complexity and processing
 		approxSizePerEntry := int64(len(body) / len(array))
 		for i, entry := range array {
 			if entry.Message == "" {
@@ -343,7 +366,6 @@ func (h *HTTPSource) parseEntries(body []byte) ([]core.LogEntry, error) {
 			if entry.Source == "" {
 				array[i].Source = "http"
 			}
-			// NOTE: Placeholder
 			array[i].RawSize = approxSizePerEntry
 		}
 		return array, nil

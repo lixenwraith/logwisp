@@ -552,8 +552,7 @@ func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry core.LogEntry) error
 	// Multi-line content handler
 	lines := bytes.Split(formatted, []byte{'\n'})
 	for _, line := range lines {
-		// SSE needs "data: " prefix for each line
-		// TODO: validate above, is 'data: ' really necessary? make it optional if it works without it?
+		// SSE needs "data: " prefix for each line based on W3C spec
 		fmt.Fprintf(w, "data: %s\n", line)
 	}
 	fmt.Fprintf(w, "\n") // Empty line to terminate event

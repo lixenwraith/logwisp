@@ -4,9 +4,12 @@ package sink
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +57,7 @@ type TCPClientConfig struct {
 	BufferSize   int64
 	DialTimeout  time.Duration
 	WriteTimeout time.Duration
+	ReadTimeout  time.Duration
 	KeepAlive    time.Duration
 
 	// Reconnection settings
@@ -71,6 +75,7 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 		BufferSize:        int64(1000),
 		DialTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
+		ReadTimeout:       10 * time.Second,
 		KeepAlive:         30 * time.Second,
 		ReconnectDelay:    time.Second,
 		MaxReconnectDelay: 30 * time.Second,
@@ -99,6 +104,9 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 	}
 	if writeTimeout, ok := options["write_timeout_seconds"].(int64); ok && writeTimeout > 0 {
 		cfg.WriteTimeout = time.Duration(writeTimeout) * time.Second
+	}
+	if readTimeout, ok := options["read_timeout_seconds"].(int64); ok && readTimeout > 0 {
+		cfg.ReadTimeout = time.Duration(readTimeout) * time.Second
 	}
 	if keepAlive, ok := options["keep_alive_seconds"].(int64); ok && keepAlive > 0 {
 		cfg.KeepAlive = time.Duration(keepAlive) * time.Second
@@ -130,6 +138,9 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 		if insecure, ok := ssl["insecure_skip_verify"].(bool); ok {
 			cfg.SSL.InsecureSkipVerify = insecure
 		}
+		if caFile, ok := ssl["ca_file"].(string); ok {
+			cfg.SSL.CAFile = caFile
+		}
 	}
 
 	t := &TCPClientSink{
@@ -145,17 +156,10 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 
 	// Initialize TLS manager if SSL is configured
 	if cfg.SSL != nil && cfg.SSL.Enabled {
-		tlsManager, err := tlspkg.NewManager(cfg.SSL, logger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create TLS manager: %w", err)
+		// Build custom TLS config for client
+		t.tlsConfig = &tls.Config{
+			InsecureSkipVerify: cfg.SSL.InsecureSkipVerify,
 		}
-		t.tlsManager = tlsManager
-
-		// Get client TLS config
-		t.tlsConfig = tlsManager.GetTCPConfig()
-
-		// ADDED: Client-specific TLS config adjustments
-		t.tlsConfig.InsecureSkipVerify = cfg.SSL.InsecureSkipVerify
 
 		// Extract server name from address for SNI
 		host, _, err := net.SplitHostPort(cfg.Address)
@@ -164,13 +168,48 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 		}
 		t.tlsConfig.ServerName = host
 
+		// Load custom CA for server verification
+		if cfg.SSL.CAFile != "" {
+			caCert, err := os.ReadFile(cfg.SSL.CAFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read CA file '%s': %w", cfg.SSL.CAFile, err)
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return nil, fmt.Errorf("failed to parse CA certificate from '%s'", cfg.SSL.CAFile)
+			}
+			t.tlsConfig.RootCAs = caCertPool
+			logger.Debug("msg", "Custom CA loaded for server verification",
+				"component", "tcp_client_sink",
+				"ca_file", cfg.SSL.CAFile)
+		}
+
+		// Load client certificate for mTLS
+		if cfg.SSL.CertFile != "" && cfg.SSL.KeyFile != "" {
+			cert, err := tls.LoadX509KeyPair(cfg.SSL.CertFile, cfg.SSL.KeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load client certificate: %w", err)
+			}
+			t.tlsConfig.Certificates = []tls.Certificate{cert}
+			logger.Info("msg", "Client certificate loaded for mTLS",
+				"component", "tcp_client_sink",
+				"cert_file", cfg.SSL.CertFile)
+		}
+
+		// Set minimum TLS version if configured
+		if cfg.SSL.MinVersion != "" {
+			t.tlsConfig.MinVersion = parseTLSVersion(cfg.SSL.MinVersion, tls.VersionTLS12)
+		} else {
+			t.tlsConfig.MinVersion = tls.VersionTLS12 // Default minimum
+		}
+
 		logger.Info("msg", "TLS enabled for TCP client",
 			"component", "tcp_client_sink",
 			"address", cfg.Address,
 			"server_name", host,
-			"insecure", cfg.SSL.InsecureSkipVerify)
+			"insecure", cfg.SSL.InsecureSkipVerify,
+			"mtls", cfg.SSL.CertFile != "")
 	}
-
 	return t, nil
 }
 
@@ -381,8 +420,7 @@ func (t *TCPClientSink) monitorConnection(conn net.Conn) {
 			return
 		case <-ticker.C:
 			// Set read deadline
-			// TODO: Add t.config.ReadTimeout and after addition use it instead of static value
-			if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+			if err := conn.SetReadDeadline(time.Now().Add(t.config.ReadTimeout)); err != nil {
 				t.logger.Debug("msg", "Failed to set read deadline", "error", err)
 				return
 			}
@@ -479,5 +517,21 @@ func tlsVersionString(version uint16) string {
 		return "TLS1.3"
 	default:
 		return fmt.Sprintf("0x%04x", version)
+	}
+}
+
+// parseTLSVersion converts string to TLS version constant
+func parseTLSVersion(version string, defaultVersion uint16) uint16 {
+	switch strings.ToUpper(version) {
+	case "TLS1.0", "TLS10":
+		return tls.VersionTLS10
+	case "TLS1.1", "TLS11":
+		return tls.VersionTLS11
+	case "TLS1.2", "TLS12":
+		return tls.VersionTLS12
+	case "TLS1.3", "TLS13":
+		return tls.VersionTLS13
+	default:
+		return defaultVersion
 	}
 }

@@ -20,11 +20,16 @@ import (
 var logger *log.Logger
 
 func main() {
+	// Handle subcommands before any config loading
+	// This prevents flag conflicts with lixenwraith/config
+	router := NewCommandRouter()
+	if router.Route(os.Args) {
+		// Subcommand was handled, exit already called
+		return
+	}
+
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
-
-	// Early check for help flag to avoid unnecessary config loading
-	CheckAndDisplayHelp(os.Args[1:])
 
 	// Load configuration with automatic CLI parsing
 	cfg, err := config.Load(os.Args[1:])

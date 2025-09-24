@@ -8,39 +8,42 @@ import (
 
 const helpText = `LogWisp: A flexible log transport and processing tool.
 
-Usage: logwisp [options]
+Usage: 
+  logwisp [command] [options]
+  logwisp [options]
+
+Commands:
+  auth                     Generate authentication credentials
+  version                  Display version information
 
 Application Control:
-  -c, --config <path>      (string) Path to configuration file (default: logwisp.toml).
-  -h, --help               Display this help message and exit.
-  -v, --version            Display version information and exit.
-  -b, --background         Run LogWisp in the background as a daemon.
-  -q, --quiet              Suppress all console output, including errors.
+  -c, --config <path>      Path to configuration file (default: logwisp.toml)
+  -h, --help               Display this help message and exit
+  -v, --version            Display version information and exit  
+  -b, --background         Run LogWisp in the background as a daemon
+  -q, --quiet              Suppress all console output, including errors
 
 Runtime Behavior:
-      --disable-status-reporter  Disable the periodic status reporter.
-      --config-auto-reload       Enable config reload and pipeline reconfiguration on config file change.
+      --disable-status-reporter  Disable the periodic status reporter
+      --config-auto-reload       Enable config reload on file change
+
+For command-specific help:
+  logwisp <command> --help
 
 Configuration Sources (Precedence: CLI > Env > File > Defaults):
-  - CLI flags override all other settings.
-  - Environment variables override file settings.
-  - TOML configuration file is the primary method for defining pipelines.
+  - CLI flags override all other settings
+  - Environment variables override file settings  
+  - TOML configuration file is the primary method
 
-Logging ([logging] section or LOGWISP_LOGGING_* env vars):
-  output = "stderr"        (string) Log output: none, stdout, stderr, file, both.
-  level = "info"           (string) Log level: debug, info, warn, error.
-  [logging.file]           Settings for file logging (directory, name, rotation).
-  [logging.console]        Settings for console logging (target, format).
-
-Pipelines ([[pipelines]] array in TOML):
-  Each pipeline defines a complete data flow from sources to sinks.
-  name = "my_pipeline"     (string) Unique name for the pipeline.
-  sources = [...]          (array)  Data inputs (e.g., directory, stdin, http, tcp).
-  sinks = [...]            (array)  Data outputs (e.g., http, tcp, file, stdout, stderr, http_client).
-  filters = [...]          (array)  Optional filters to include/exclude logs based on regex.
-  rate_limit = {...}       (object) Optional rate limiting for the entire pipeline.
-  auth = {...}             (object) Optional authentication for network sinks.
-  format = "json"          (string) Optional output formatter for the pipeline (raw, text, json).
+Examples:
+  # Generate password for admin user
+  logwisp auth -u admin
+  
+  # Start service with custom config
+  logwisp -c /etc/logwisp/prod.toml
+  
+  # Run in background
+  logwisp -b --config-auto-reload
 
 For detailed configuration options, please refer to the documentation.
 `
