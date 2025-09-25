@@ -138,25 +138,25 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 		cfg.CAFile = caFile
 	}
 
-	// Extract client certificate options from SSL config
-	if ssl, ok := options["ssl"].(map[string]any); ok {
-		if enabled, _ := ssl["enabled"].(bool); enabled {
+	// Extract client certificate options from TLS config
+	if tc, ok := options["tls"].(map[string]any); ok {
+		if enabled, _ := tc["enabled"].(bool); enabled {
 			// Extract client certificate files for mTLS
-			if certFile, ok := ssl["cert_file"].(string); ok && certFile != "" {
-				if keyFile, ok := ssl["key_file"].(string); ok && keyFile != "" {
+			if certFile, ok := tc["cert_file"].(string); ok && certFile != "" {
+				if keyFile, ok := tc["key_file"].(string); ok && keyFile != "" {
 					// These will be used below when configuring TLS
 					cfg.CertFile = certFile // Need to add these fields to HTTPClientConfig
 					cfg.KeyFile = keyFile
 				}
 			}
-			// Extract CA file from ssl config if not already set
+			// Extract CA file from TLS config if not already set
 			if cfg.CAFile == "" {
-				if caFile, ok := ssl["ca_file"].(string); ok {
+				if caFile, ok := tc["ca_file"].(string); ok {
 					cfg.CAFile = caFile
 				}
 			}
-			// Extract insecure skip verify from ssl config
-			if insecure, ok := ssl["insecure_skip_verify"].(bool); ok {
+			// Extract insecure skip verify from TLS config
+			if insecure, ok := tc["insecure_skip_verify"].(bool); ok {
 				cfg.InsecureSkipVerify = insecure
 			}
 		}

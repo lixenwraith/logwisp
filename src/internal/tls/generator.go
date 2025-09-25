@@ -92,8 +92,7 @@ func (c *CertGeneratorCommand) Execute(args []string) error {
 	}
 }
 
-// Crate and manage private CA
-// TODO: Future implementation, not useful without implementation of generateServerCert, generateClientCert
+// Create and manage private CA
 func (c *CertGeneratorCommand) generateCA(cn, org, country string, days, bits int, certFile, keyFile string) error {
 	// Generate RSA key
 	priv, err := rsa.GenerateKey(rand.Reader, bits)
@@ -102,8 +101,9 @@ func (c *CertGeneratorCommand) generateCA(cn, org, country string, days, bits in
 	}
 
 	// Create certificate template
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{org},
 			Country:      []string{country},
@@ -111,11 +111,9 @@ func (c *CertGeneratorCommand) generateCA(cn, org, country string, days, bits in
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().AddDate(0, 0, days),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		MaxPathLen:            1,
 	}
 
 	// Generate certificate
@@ -133,25 +131,12 @@ func (c *CertGeneratorCommand) generateCA(cn, org, country string, days, bits in
 	}
 
 	// Save certificate
-	certOut, err := os.Create(certFile)
-	if err != nil {
-		return fmt.Errorf("failed to create cert file: %w", err)
+	if err := saveCert(certFile, certDER); err != nil {
+		return err
 	}
-	defer certOut.Close()
-
-	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	// Save private key
-	keyOut, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create key file: %w", err)
+	if err := saveKey(keyFile, priv); err != nil {
+		return err
 	}
-	defer keyOut.Close()
-
-	pem.Encode(keyOut, &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(priv),
-	})
 
 	fmt.Printf("✓ CA certificate generated:\n")
 	fmt.Printf("  Certificate: %s\n", certFile)
@@ -162,7 +147,6 @@ func (c *CertGeneratorCommand) generateCA(cn, org, country string, days, bits in
 	return nil
 }
 
-// Added parseHosts helper for IP/hostname parsing
 func parseHosts(hostList string) ([]string, []net.IP) {
 	var dnsNames []string
 	var ipAddrs []net.IP
@@ -196,11 +180,7 @@ func (c *CertGeneratorCommand) generateSelfSigned(cn, org, country, hosts string
 	dnsNames, ipAddrs := parseHosts(hosts)
 
 	// 3. Create the certificate template
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		return fmt.Errorf("failed to generate serial number: %w", err)
-	}
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 
 	template := x509.Certificate{
 		SerialNumber: serialNumber,
@@ -235,25 +215,14 @@ func (c *CertGeneratorCommand) generateSelfSigned(cn, org, country, hosts string
 	}
 
 	// 6. Save the certificate with 0644 permissions
-	certOut, err := os.Create(certFile)
-	if err != nil {
-		return fmt.Errorf("failed to create certificate file: %w", err)
+	if err := saveCert(certFile, certDER); err != nil {
+		return err
 	}
-	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	certOut.Close()
-
-	// 7. Save the private key with 0600 permissions
-	keyOut, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create key file: %w", err)
+	if err := saveKey(keyFile, priv); err != nil {
+		return err
 	}
-	pem.Encode(keyOut, &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(priv),
-	})
-	keyOut.Close()
 
-	// 8. Print summary
+	// 7. Print summary
 	fmt.Printf("\n✓ Self-signed certificate generated:\n")
 	fmt.Printf("  Certificate: %s\n", certFile)
 	fmt.Printf("  Private Key: %s (mode 0600)\n", keyFile)
@@ -266,10 +235,187 @@ func (c *CertGeneratorCommand) generateSelfSigned(cn, org, country, hosts string
 	return nil
 }
 
+// Generate server cert with CA
 func (c *CertGeneratorCommand) generateServerCert(cn, org, country, hosts, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
-	return fmt.Errorf("server certificate generation with CA is not implemented; use --self-signed instead")
+	caCert, caKey, err := loadCA(caFile, caKeyFile)
+	if err != nil {
+		return err
+	}
+
+	priv, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return fmt.Errorf("failed to generate server private key: %w", err)
+	}
+
+	dnsNames, ipAddrs := parseHosts(hosts)
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	certExpiry := time.Now().AddDate(0, 0, days)
+	if certExpiry.After(caCert.NotAfter) {
+		return fmt.Errorf("certificate validity period (%d days) exceeds CA expiry (%s)", days, caCert.NotAfter.Format(time.RFC3339))
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   cn,
+			Organization: []string{org},
+			Country:      []string{country},
+		},
+		NotBefore:   time.Now(),
+		NotAfter:    certExpiry,
+		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:    dnsNames,
+		IPAddresses: ipAddrs,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, caCert, &priv.PublicKey, caKey)
+	if err != nil {
+		return fmt.Errorf("failed to sign server certificate: %w", err)
+	}
+
+	if certFile == "" {
+		certFile = "server.crt"
+	}
+	if keyFile == "" {
+		keyFile = "server.key"
+	}
+
+	if err := saveCert(certFile, certDER); err != nil {
+		return err
+	}
+	if err := saveKey(keyFile, priv); err != nil {
+		return err
+	}
+
+	fmt.Printf("\n✓ Server certificate generated:\n")
+	fmt.Printf("  Certificate: %s\n", certFile)
+	fmt.Printf("  Private Key: %s (mode 0600)\n", keyFile)
+	fmt.Printf("  Signed by:   CN=%s\n", caCert.Subject.CommonName)
+	if len(hosts) > 0 {
+		fmt.Printf("  Hosts (SANs): %s\n", hosts)
+	}
+	return nil
 }
 
+// Generate client cert with CA
 func (c *CertGeneratorCommand) generateClientCert(cn, org, country, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
-	return fmt.Errorf("client certificate generation with CA is not implemented; use --self-signed instead")
+	caCert, caKey, err := loadCA(caFile, caKeyFile)
+	if err != nil {
+		return err
+	}
+
+	priv, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return fmt.Errorf("failed to generate client private key: %w", err)
+	}
+
+	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	certExpiry := time.Now().AddDate(0, 0, days)
+	if certExpiry.After(caCert.NotAfter) {
+		return fmt.Errorf("certificate validity period (%d days) exceeds CA expiry (%s)", days, caCert.NotAfter.Format(time.RFC3339))
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   cn,
+			Organization: []string{org},
+			Country:      []string{country},
+		},
+		NotBefore:   time.Now(),
+		NotAfter:    certExpiry,
+		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, caCert, &priv.PublicKey, caKey)
+	if err != nil {
+		return fmt.Errorf("failed to sign client certificate: %w", err)
+	}
+
+	if certFile == "" {
+		certFile = "client.crt"
+	}
+	if keyFile == "" {
+		keyFile = "client.key"
+	}
+
+	if err := saveCert(certFile, certDER); err != nil {
+		return err
+	}
+	if err := saveKey(keyFile, priv); err != nil {
+		return err
+	}
+
+	fmt.Printf("\n✓ Client certificate generated:\n")
+	fmt.Printf("  Certificate: %s\n", certFile)
+	fmt.Printf("  Private Key: %s (mode 0600)\n", keyFile)
+	fmt.Printf("  Signed by:   CN=%s\n", caCert.Subject.CommonName)
+	return nil
+}
+
+// Load cert with CA
+func loadCA(caFile, caKeyFile string) (*x509.Certificate, *rsa.PrivateKey, error) {
+	if caFile == "" || caKeyFile == "" {
+		return nil, nil, fmt.Errorf("--ca-cert and --ca-key are required for signing")
+	}
+
+	caCertPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read CA certificate: %w", err)
+	}
+	caCertBlock, _ := pem.Decode(caCertPEM)
+	if caCertBlock == nil {
+		return nil, nil, fmt.Errorf("failed to decode CA certificate PEM")
+	}
+	caCert, err := x509.ParseCertificate(caCertBlock.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+
+	if !caCert.IsCA {
+		return nil, nil, fmt.Errorf("provided certificate is not a valid CA")
+	}
+
+	caKeyPEM, err := os.ReadFile(caKeyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read CA key: %w", err)
+	}
+	caKeyBlock, _ := pem.Decode(caKeyPEM)
+	if caKeyBlock == nil {
+		return nil, nil, fmt.Errorf("failed to decode CA key PEM")
+	}
+	caKey, err := x509.ParsePKCS1PrivateKey(caKeyBlock.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse CA private key: %w", err)
+	}
+
+	// Verify key matches certificate
+	if caCert.PublicKey.(*rsa.PublicKey).N.Cmp(caKey.N) != 0 {
+		return nil, nil, fmt.Errorf("CA private key does not match CA certificate")
+	}
+
+	return caCert, caKey, nil
+}
+
+func saveCert(filename string, derBytes []byte) error {
+	certOut, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create cert file %s: %w", filename, err)
+	}
+	defer certOut.Close()
+	return pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+}
+
+func saveKey(filename string, key *rsa.PrivateKey) error {
+	keyOut, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create key file %s: %w", filename, err)
+	}
+	defer keyOut.Close()
+	return pem.Encode(keyOut, &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
 }

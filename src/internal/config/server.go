@@ -12,8 +12,8 @@ type TCPConfig struct {
 	Port       int64 `toml:"port"`
 	BufferSize int64 `toml:"buffer_size"`
 
-	// SSL/TLS Configuration
-	SSL *SSLConfig `toml:"ssl"`
+	// TLS Configuration
+	TLS *TLSConfig `toml:"tls"`
 
 	// Net limiting
 	NetLimit *NetLimitConfig `toml:"net_limit"`
@@ -31,8 +31,8 @@ type HTTPConfig struct {
 	StreamPath string `toml:"stream_path"`
 	StatusPath string `toml:"status_path"`
 
-	// SSL/TLS Configuration
-	SSL *SSLConfig `toml:"ssl"`
+	// TLS Configuration
+	TLS *TLSConfig `toml:"tls"`
 
 	// Nate limiting
 	NetLimit *NetLimitConfig `toml:"net_limit"`

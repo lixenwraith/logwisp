@@ -123,9 +123,9 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 			}
 		}
 
-		// CHANGED: Validate SSL if present
-		if ssl, ok := cfg.Options["ssl"].(map[string]any); ok {
-			if err := validateSSLOptions("HTTP source", pipelineName, sourceIndex, ssl); err != nil {
+		// Validate TLS if present
+		if tls, ok := cfg.Options["tls"].(map[string]any); ok {
+			if err := validateTLSOptions("HTTP source", pipelineName, sourceIndex, tls); err != nil {
 				return err
 			}
 		}
@@ -145,9 +145,9 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 			}
 		}
 
-		// CHANGED: Validate SSL if present
-		if ssl, ok := cfg.Options["ssl"].(map[string]any); ok {
-			if err := validateSSLOptions("TCP source", pipelineName, sourceIndex, ssl); err != nil {
+		// Validate TLS if present
+		if tls, ok := cfg.Options["tls"].(map[string]any); ok {
+			if err := validateTLSOptions("TCP source", pipelineName, sourceIndex, tls); err != nil {
 				return err
 			}
 		}
@@ -211,9 +211,9 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-		// Validate SSL if present
-		if ssl, ok := cfg.Options["ssl"].(map[string]any); ok {
-			if err := validateSSLOptions("HTTP", pipelineName, sinkIndex, ssl); err != nil {
+		// Validate TLS if present
+		if tls, ok := cfg.Options["tls"].(map[string]any); ok {
+			if err := validateTLSOptions("HTTP", pipelineName, sinkIndex, tls); err != nil {
 				return err
 			}
 		}
@@ -255,9 +255,9 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-		// Validate SSL if present
-		if ssl, ok := cfg.Options["ssl"].(map[string]any); ok {
-			if err := validateSSLOptions("TCP", pipelineName, sinkIndex, ssl); err != nil {
+		// Validate TLS if present
+		if tls, ok := cfg.Options["tls"].(map[string]any); ok {
+			if err := validateTLSOptions("TCP", pipelineName, sinkIndex, tls); err != nil {
 				return err
 			}
 		}

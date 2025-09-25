@@ -66,7 +66,7 @@ type TCPClientConfig struct {
 	ReconnectBackoff  float64
 
 	// TLS config
-	SSL *config.SSLConfig
+	TLS *config.TLSConfig
 }
 
 // NewTCPClientSink creates a new TCP client sink
@@ -121,25 +121,25 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 		cfg.ReconnectBackoff = backoff
 	}
 
-	// Extract SSL config
-	if ssl, ok := options["ssl"].(map[string]any); ok {
-		cfg.SSL = &config.SSLConfig{}
-		cfg.SSL.Enabled, _ = ssl["enabled"].(bool)
-		if certFile, ok := ssl["cert_file"].(string); ok {
-			cfg.SSL.CertFile = certFile
+	// Extract TLS config
+	if tc, ok := options["tls"].(map[string]any); ok {
+		cfg.TLS = &config.TLSConfig{}
+		cfg.TLS.Enabled, _ = tc["enabled"].(bool)
+		if certFile, ok := tc["cert_file"].(string); ok {
+			cfg.TLS.CertFile = certFile
 		}
-		if keyFile, ok := ssl["key_file"].(string); ok {
-			cfg.SSL.KeyFile = keyFile
+		if keyFile, ok := tc["key_file"].(string); ok {
+			cfg.TLS.KeyFile = keyFile
 		}
-		cfg.SSL.ClientAuth, _ = ssl["client_auth"].(bool)
-		if caFile, ok := ssl["client_ca_file"].(string); ok {
-			cfg.SSL.ClientCAFile = caFile
+		cfg.TLS.ClientAuth, _ = tc["client_auth"].(bool)
+		if caFile, ok := tc["client_ca_file"].(string); ok {
+			cfg.TLS.ClientCAFile = caFile
 		}
-		if insecure, ok := ssl["insecure_skip_verify"].(bool); ok {
-			cfg.SSL.InsecureSkipVerify = insecure
+		if insecure, ok := tc["insecure_skip_verify"].(bool); ok {
+			cfg.TLS.InsecureSkipVerify = insecure
 		}
-		if caFile, ok := ssl["ca_file"].(string); ok {
-			cfg.SSL.CAFile = caFile
+		if caFile, ok := tc["ca_file"].(string); ok {
+			cfg.TLS.CAFile = caFile
 		}
 	}
 
@@ -154,11 +154,11 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 	t.lastProcessed.Store(time.Time{})
 	t.connectionUptime.Store(time.Duration(0))
 
-	// Initialize TLS manager if SSL is configured
-	if cfg.SSL != nil && cfg.SSL.Enabled {
+	// Initialize TLS manager if TLS is configured
+	if cfg.TLS != nil && cfg.TLS.Enabled {
 		// Build custom TLS config for client
 		t.tlsConfig = &tls.Config{
-			InsecureSkipVerify: cfg.SSL.InsecureSkipVerify,
+			InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,
 		}
 
 		// Extract server name from address for SNI
@@ -169,36 +169,36 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 		t.tlsConfig.ServerName = host
 
 		// Load custom CA for server verification
-		if cfg.SSL.CAFile != "" {
-			caCert, err := os.ReadFile(cfg.SSL.CAFile)
+		if cfg.TLS.CAFile != "" {
+			caCert, err := os.ReadFile(cfg.TLS.CAFile)
 			if err != nil {
-				return nil, fmt.Errorf("failed to read CA file '%s': %w", cfg.SSL.CAFile, err)
+				return nil, fmt.Errorf("failed to read CA file '%s': %w", cfg.TLS.CAFile, err)
 			}
 			caCertPool := x509.NewCertPool()
 			if !caCertPool.AppendCertsFromPEM(caCert) {
-				return nil, fmt.Errorf("failed to parse CA certificate from '%s'", cfg.SSL.CAFile)
+				return nil, fmt.Errorf("failed to parse CA certificate from '%s'", cfg.TLS.CAFile)
 			}
 			t.tlsConfig.RootCAs = caCertPool
 			logger.Debug("msg", "Custom CA loaded for server verification",
 				"component", "tcp_client_sink",
-				"ca_file", cfg.SSL.CAFile)
+				"ca_file", cfg.TLS.CAFile)
 		}
 
 		// Load client certificate for mTLS
-		if cfg.SSL.CertFile != "" && cfg.SSL.KeyFile != "" {
-			cert, err := tls.LoadX509KeyPair(cfg.SSL.CertFile, cfg.SSL.KeyFile)
+		if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
+			cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load client certificate: %w", err)
 			}
 			t.tlsConfig.Certificates = []tls.Certificate{cert}
 			logger.Info("msg", "Client certificate loaded for mTLS",
 				"component", "tcp_client_sink",
-				"cert_file", cfg.SSL.CertFile)
+				"cert_file", cfg.TLS.CertFile)
 		}
 
 		// Set minimum TLS version if configured
-		if cfg.SSL.MinVersion != "" {
-			t.tlsConfig.MinVersion = parseTLSVersion(cfg.SSL.MinVersion, tls.VersionTLS12)
+		if cfg.TLS.MinVersion != "" {
+			t.tlsConfig.MinVersion = parseTLSVersion(cfg.TLS.MinVersion, tls.VersionTLS12)
 		} else {
 			t.tlsConfig.MinVersion = tls.VersionTLS12 // Default minimum
 		}
@@ -207,8 +207,8 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 			"component", "tcp_client_sink",
 			"address", cfg.Address,
 			"server_name", host,
-			"insecure", cfg.SSL.InsecureSkipVerify,
-			"mtls", cfg.SSL.CertFile != "")
+			"insecure", cfg.TLS.InsecureSkipVerify,
+			"mtls", cfg.TLS.CertFile != "")
 	}
 	return t, nil
 }

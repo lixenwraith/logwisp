@@ -61,7 +61,7 @@ type TCPConfig struct {
 	Port       int64
 	BufferSize int64
 	Heartbeat  *config.HeartbeatConfig
-	SSL        *config.SSLConfig
+	TLS        *config.TLSConfig
 	NetLimit   *config.NetLimitConfig
 }
 
@@ -94,29 +94,29 @@ func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.For
 		}
 	}
 
-	// Extract SSL config
-	if ssl, ok := options["ssl"].(map[string]any); ok {
-		cfg.SSL = &config.SSLConfig{}
-		cfg.SSL.Enabled, _ = ssl["enabled"].(bool)
-		if certFile, ok := ssl["cert_file"].(string); ok {
-			cfg.SSL.CertFile = certFile
+	// Extract TLS config
+	if tc, ok := options["tls"].(map[string]any); ok {
+		cfg.TLS = &config.TLSConfig{}
+		cfg.TLS.Enabled, _ = tc["enabled"].(bool)
+		if certFile, ok := tc["cert_file"].(string); ok {
+			cfg.TLS.CertFile = certFile
 		}
-		if keyFile, ok := ssl["key_file"].(string); ok {
-			cfg.SSL.KeyFile = keyFile
+		if keyFile, ok := tc["key_file"].(string); ok {
+			cfg.TLS.KeyFile = keyFile
 		}
-		cfg.SSL.ClientAuth, _ = ssl["client_auth"].(bool)
-		if caFile, ok := ssl["client_ca_file"].(string); ok {
-			cfg.SSL.ClientCAFile = caFile
+		cfg.TLS.ClientAuth, _ = tc["client_auth"].(bool)
+		if caFile, ok := tc["client_ca_file"].(string); ok {
+			cfg.TLS.ClientCAFile = caFile
 		}
-		cfg.SSL.VerifyClientCert, _ = ssl["verify_client_cert"].(bool)
-		if minVer, ok := ssl["min_version"].(string); ok {
-			cfg.SSL.MinVersion = minVer
+		cfg.TLS.VerifyClientCert, _ = tc["verify_client_cert"].(bool)
+		if minVer, ok := tc["min_version"].(string); ok {
+			cfg.TLS.MinVersion = minVer
 		}
-		if maxVer, ok := ssl["max_version"].(string); ok {
-			cfg.SSL.MaxVersion = maxVer
+		if maxVer, ok := tc["max_version"].(string); ok {
+			cfg.TLS.MaxVersion = maxVer
 		}
-		if ciphers, ok := ssl["cipher_suites"].(string); ok {
-			cfg.SSL.CipherSuites = ciphers
+		if ciphers, ok := tc["cipher_suites"].(string); ok {
+			cfg.TLS.CipherSuites = ciphers
 		}
 	}
 
@@ -627,19 +627,6 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 
-	// // Check auth timeout
-	// if !client.authenticated && time.Now().After(client.authTimeout) {
-	// 	s.sink.logger.Warn("msg", "Authentication timeout",
-	// 		"component", "tcp_sink",
-	// 		"remote_addr", c.RemoteAddr().String())
-	// 	if client.tlsBridge != nil && client.tlsBridge.IsHandshakeDone() {
-	// 		client.tlsBridge.Write([]byte("AUTH TIMEOUT\n"))
-	// 	} else if client.tlsBridge == nil {
-	// 		c.AsyncWrite([]byte("AUTH TIMEOUT\n"), nil)
-	// 	}
-	// 	return gnet.Close
-	// }
-
 	// Read all available data
 	data, err := c.Next(-1)
 	if err != nil {
@@ -801,9 +788,9 @@ func (t *TCPSink) SetAuthConfig(authCfg *config.AuthConfig) {
 	}
 	t.authenticator = authenticator
 
-	// Initialize TLS manager if SSL is configured
-	if t.config.SSL != nil && t.config.SSL.Enabled {
-		tlsManager, err := tls.NewManager(t.config.SSL, t.logger)
+	// Initialize TLS manager if TLS is configured
+	if t.config.TLS != nil && t.config.TLS.Enabled {
+		tlsManager, err := tls.NewManager(t.config.TLS, t.logger)
 		if err != nil {
 			t.logger.Error("msg", "Failed to create TLS manager",
 				"component", "tcp_sink",

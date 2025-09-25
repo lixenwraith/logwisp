@@ -63,7 +63,7 @@ type HTTPConfig struct {
 	StreamPath string
 	StatusPath string
 	Heartbeat  *config.HeartbeatConfig
-	SSL        *config.SSLConfig
+	TLS        *config.TLSConfig
 	NetLimit   *config.NetLimitConfig
 }
 
@@ -104,29 +104,29 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 		}
 	}
 
-	// Extract SSL config
-	if ssl, ok := options["ssl"].(map[string]any); ok {
-		cfg.SSL = &config.SSLConfig{}
-		cfg.SSL.Enabled, _ = ssl["enabled"].(bool)
-		if certFile, ok := ssl["cert_file"].(string); ok {
-			cfg.SSL.CertFile = certFile
+	// Extract TLS config
+	if tc, ok := options["tls"].(map[string]any); ok {
+		cfg.TLS = &config.TLSConfig{}
+		cfg.TLS.Enabled, _ = tc["enabled"].(bool)
+		if certFile, ok := tc["cert_file"].(string); ok {
+			cfg.TLS.CertFile = certFile
 		}
-		if keyFile, ok := ssl["key_file"].(string); ok {
-			cfg.SSL.KeyFile = keyFile
+		if keyFile, ok := tc["key_file"].(string); ok {
+			cfg.TLS.KeyFile = keyFile
 		}
-		cfg.SSL.ClientAuth, _ = ssl["client_auth"].(bool)
-		if caFile, ok := ssl["client_ca_file"].(string); ok {
-			cfg.SSL.ClientCAFile = caFile
+		cfg.TLS.ClientAuth, _ = tc["client_auth"].(bool)
+		if caFile, ok := tc["client_ca_file"].(string); ok {
+			cfg.TLS.ClientCAFile = caFile
 		}
-		cfg.SSL.VerifyClientCert, _ = ssl["verify_client_cert"].(bool)
-		if minVer, ok := ssl["min_version"].(string); ok {
-			cfg.SSL.MinVersion = minVer
+		cfg.TLS.VerifyClientCert, _ = tc["verify_client_cert"].(bool)
+		if minVer, ok := tc["min_version"].(string); ok {
+			cfg.TLS.MinVersion = minVer
 		}
-		if maxVer, ok := ssl["max_version"].(string); ok {
-			cfg.SSL.MaxVersion = maxVer
+		if maxVer, ok := tc["max_version"].(string); ok {
+			cfg.TLS.MaxVersion = maxVer
 		}
-		if ciphers, ok := ssl["cipher_suites"].(string); ok {
-			cfg.SSL.CipherSuites = ciphers
+		if ciphers, ok := tc["cipher_suites"].(string); ok {
+			cfg.TLS.CipherSuites = ciphers
 		}
 	}
 
@@ -231,7 +231,7 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 		var err error
 		if h.tlsManager != nil {
 			// HTTPS server
-			err = h.server.ListenAndServeTLS(addr, h.config.SSL.CertFile, h.config.SSL.KeyFile)
+			err = h.server.ListenAndServeTLS(addr, h.config.TLS.CertFile, h.config.TLS.KeyFile)
 		} else {
 			// HTTP server
 			err = h.server.ListenAndServe(addr)

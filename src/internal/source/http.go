@@ -4,7 +4,6 @@ package source
 import (
 	"encoding/json"
 	"fmt"
-	"logwisp/src/internal/tls"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -13,6 +12,7 @@ import (
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/limit"
+	"logwisp/src/internal/tls"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
@@ -33,7 +33,7 @@ type HTTPSource struct {
 
 	// CHANGED: Add TLS support
 	tlsManager *tls.Manager
-	sslConfig  *config.SSLConfig
+	tlsConfig  *config.TLSConfig
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -77,7 +77,7 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 				Enabled: true,
 			}
 
-			if rps, ok := toFloat(rl["requests_per_second"]); ok {
+			if rps, ok := rl["requests_per_second"].(float64); ok {
 				cfg.RequestsPerSecond = rps
 			}
 			if burst, ok := rl["burst_size"].(int64); ok {
@@ -100,35 +100,35 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 		}
 	}
 
-	// Extract SSL config after existing options
-	if ssl, ok := options["ssl"].(map[string]any); ok {
-		h.sslConfig = &config.SSLConfig{}
-		h.sslConfig.Enabled, _ = ssl["enabled"].(bool)
-		if certFile, ok := ssl["cert_file"].(string); ok {
-			h.sslConfig.CertFile = certFile
+	// Extract TLS config after existing options
+	if tc, ok := options["tls"].(map[string]any); ok {
+		h.tlsConfig = &config.TLSConfig{}
+		h.tlsConfig.Enabled, _ = tc["enabled"].(bool)
+		if certFile, ok := tc["cert_file"].(string); ok {
+			h.tlsConfig.CertFile = certFile
 		}
-		if keyFile, ok := ssl["key_file"].(string); ok {
-			h.sslConfig.KeyFile = keyFile
+		if keyFile, ok := tc["key_file"].(string); ok {
+			h.tlsConfig.KeyFile = keyFile
 		}
-		h.sslConfig.ClientAuth, _ = ssl["client_auth"].(bool)
-		if caFile, ok := ssl["client_ca_file"].(string); ok {
-			h.sslConfig.ClientCAFile = caFile
+		h.tlsConfig.ClientAuth, _ = tc["client_auth"].(bool)
+		if caFile, ok := tc["client_ca_file"].(string); ok {
+			h.tlsConfig.ClientCAFile = caFile
 		}
-		h.sslConfig.VerifyClientCert, _ = ssl["verify_client_cert"].(bool)
-		h.sslConfig.InsecureSkipVerify, _ = ssl["insecure_skip_verify"].(bool)
-		if minVer, ok := ssl["min_version"].(string); ok {
-			h.sslConfig.MinVersion = minVer
+		h.tlsConfig.VerifyClientCert, _ = tc["verify_client_cert"].(bool)
+		h.tlsConfig.InsecureSkipVerify, _ = tc["insecure_skip_verify"].(bool)
+		if minVer, ok := tc["min_version"].(string); ok {
+			h.tlsConfig.MinVersion = minVer
 		}
-		if maxVer, ok := ssl["max_version"].(string); ok {
-			h.sslConfig.MaxVersion = maxVer
+		if maxVer, ok := tc["max_version"].(string); ok {
+			h.tlsConfig.MaxVersion = maxVer
 		}
-		if ciphers, ok := ssl["cipher_suites"].(string); ok {
-			h.sslConfig.CipherSuites = ciphers
+		if ciphers, ok := tc["cipher_suites"].(string); ok {
+			h.tlsConfig.CipherSuites = ciphers
 		}
 
 		// Create TLS manager
-		if h.sslConfig.Enabled {
-			tlsManager, err := tls.NewManager(h.sslConfig, logger)
+		if h.tlsConfig.Enabled {
+			tlsManager, err := tls.NewManager(h.tlsConfig, logger)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create TLS manager: %w", err)
 			}
@@ -173,7 +173,7 @@ func (h *HTTPSource) Start() error {
 		// Check for TLS manager and start the appropriate server type
 		if h.tlsManager != nil {
 			h.server.TLSConfig = h.tlsManager.GetHTTPConfig()
-			err = h.server.ListenAndServeTLS(addr, h.sslConfig.CertFile, h.sslConfig.KeyFile)
+			err = h.server.ListenAndServeTLS(addr, h.tlsConfig.CertFile, h.tlsConfig.KeyFile)
 		} else {
 			err = h.server.ListenAndServe(addr)
 		}
@@ -452,18 +452,4 @@ func splitLines(data []byte) [][]byte {
 	}
 
 	return lines
-}
-
-// Helper function for type conversion
-func toFloat(v any) (float64, bool) {
-	switch val := v.(type) {
-	case float64:
-		return val, true
-	case int:
-		return float64(val), true
-	case int64:
-		return float64(val), true
-	default:
-		return 0, false
-	}
 }

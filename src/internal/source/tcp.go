@@ -43,7 +43,7 @@ type TCPSource struct {
 	wg          sync.WaitGroup
 	netLimiter  *limit.NetLimiter
 	tlsManager  *tls.Manager
-	sslConfig   *config.SSLConfig
+	tlsConfig   *config.TLSConfig
 	logger      *log.Logger
 
 	// Statistics
@@ -83,7 +83,7 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 				Enabled: true,
 			}
 
-			if rps, ok := toFloat(rl["requests_per_second"]); ok {
+			if rps, ok := rl["requests_per_second"].(float64); ok {
 				cfg.RequestsPerSecond = rps
 			}
 			if burst, ok := rl["burst_size"].(int64); ok {
@@ -103,25 +103,25 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 		}
 	}
 
-	// Extract SSL config and initialize TLS manager
-	if ssl, ok := options["ssl"].(map[string]any); ok {
-		t.sslConfig = &config.SSLConfig{}
-		t.sslConfig.Enabled, _ = ssl["enabled"].(bool)
-		if certFile, ok := ssl["cert_file"].(string); ok {
-			t.sslConfig.CertFile = certFile
+	// Extract TLS config and initialize TLS manager
+	if tc, ok := options["tls"].(map[string]any); ok {
+		t.tlsConfig = &config.TLSConfig{}
+		t.tlsConfig.Enabled, _ = tc["enabled"].(bool)
+		if certFile, ok := tc["cert_file"].(string); ok {
+			t.tlsConfig.CertFile = certFile
 		}
-		if keyFile, ok := ssl["key_file"].(string); ok {
-			t.sslConfig.KeyFile = keyFile
+		if keyFile, ok := tc["key_file"].(string); ok {
+			t.tlsConfig.KeyFile = keyFile
 		}
-		t.sslConfig.ClientAuth, _ = ssl["client_auth"].(bool)
-		if caFile, ok := ssl["client_ca_file"].(string); ok {
-			t.sslConfig.ClientCAFile = caFile
+		t.tlsConfig.ClientAuth, _ = tc["client_auth"].(bool)
+		if caFile, ok := tc["client_ca_file"].(string); ok {
+			t.tlsConfig.ClientCAFile = caFile
 		}
-		t.sslConfig.VerifyClientCert, _ = ssl["verify_client_cert"].(bool)
+		t.tlsConfig.VerifyClientCert, _ = tc["verify_client_cert"].(bool)
 
 		// Create TLS manager if enabled
-		if t.sslConfig.Enabled {
-			tlsManager, err := tls.NewManager(t.sslConfig, logger)
+		if t.tlsConfig.Enabled {
+			tlsManager, err := tls.NewManager(t.tlsConfig, logger)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create TLS manager: %w", err)
 			}

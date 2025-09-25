@@ -15,13 +15,13 @@ import (
 
 // Manager handles TLS configuration for servers
 type Manager struct {
-	config    *config.SSLConfig
+	config    *config.TLSConfig
 	tlsConfig *tls.Config
 	logger    *log.Logger
 }
 
-// NewManager creates a TLS configuration from SSL config
-func NewManager(cfg *config.SSLConfig, logger *log.Logger) (*Manager, error) {
+// NewManager creates a TLS configuration from TLS config
+func NewManager(cfg *config.TLSConfig, logger *log.Logger) (*Manager, error) {
 	if cfg == nil || !cfg.Enabled {
 		return nil, nil
 	}
@@ -83,7 +83,6 @@ func NewManager(cfg *config.SSLConfig, logger *log.Logger) (*Manager, error) {
 	}
 
 	// Set secure defaults
-	m.tlsConfig.PreferServerCipherSuites = true
 	m.tlsConfig.SessionTicketsDisabled = false
 	m.tlsConfig.Renegotiation = tls.RenegotiateNever
 
