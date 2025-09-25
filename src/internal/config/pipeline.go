@@ -108,6 +108,14 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 				pipelineName, sourceIndex)
 		}
 
+		// Validate host if provided
+		if host, ok := cfg.Options["host"].(string); ok && host != "" {
+			if net.ParseIP(host) == nil {
+				return fmt.Errorf("pipeline '%s' source[%d]: invalid IP address: %s",
+					pipelineName, sourceIndex, host)
+			}
+		}
+
 		// Validate path if provided
 		if ingestPath, ok := cfg.Options["ingest_path"].(string); ok {
 			if !strings.HasPrefix(ingestPath, "/") {
@@ -136,6 +144,14 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 		if !ok || port < 1 || port > 65535 {
 			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing TCP port",
 				pipelineName, sourceIndex)
+		}
+
+		// Validate host if provided
+		if host, ok := cfg.Options["host"].(string); ok && host != "" {
+			if net.ParseIP(host) == nil {
+				return fmt.Errorf("pipeline '%s' source[%d]: invalid IP address: %s",
+					pipelineName, sourceIndex, host)
+			}
 		}
 
 		// Validate net_limit if present within Options
@@ -172,6 +188,14 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		if !ok || port < 1 || port > 65535 {
 			return fmt.Errorf("pipeline '%s' sink[%d]: invalid or missing HTTP port",
 				pipelineName, sinkIndex)
+		}
+
+		// Validate host if provided
+		if host, ok := cfg.Options["host"].(string); ok && host != "" {
+			if net.ParseIP(host) == nil {
+				return fmt.Errorf("pipeline '%s' sink[%d]: invalid IP address: %s",
+					pipelineName, sinkIndex, host)
+			}
 		}
 
 		// Check port conflicts
@@ -231,6 +255,14 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		if !ok || port < 1 || port > 65535 {
 			return fmt.Errorf("pipeline '%s' sink[%d]: invalid or missing TCP port",
 				pipelineName, sinkIndex)
+		}
+
+		// Validate host if provided
+		if host, ok := cfg.Options["host"].(string); ok && host != "" {
+			if net.ParseIP(host) == nil {
+				return fmt.Errorf("pipeline '%s' sink[%d]: invalid IP address: %s",
+					pipelineName, sinkIndex, host)
+			}
 		}
 
 		// Check port conflicts

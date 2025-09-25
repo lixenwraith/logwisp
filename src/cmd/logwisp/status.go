@@ -10,7 +10,7 @@ import (
 	"logwisp/src/internal/service"
 )
 
-// statusReporter periodically logs service status
+// Periodically logs service status
 func statusReporter(service *service.Service, ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -60,7 +60,7 @@ func statusReporter(service *service.Service, ctx context.Context) {
 	}
 }
 
-// logPipelineStatus logs the status of an individual pipeline
+// Logs the status of an individual pipeline
 func logPipelineStatus(name string, stats map[string]any) {
 	statusFields := []any{
 		"msg", "Pipeline status",
@@ -108,18 +108,23 @@ func logPipelineStatus(name string, stats map[string]any) {
 	logger.Debug(statusFields...)
 }
 
-// displayPipelineEndpoints logs the configured endpoints for a pipeline
+// Logs the configured endpoints for a pipeline
 func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	// Display sink endpoints
 	for i, sinkCfg := range cfg.Sinks {
 		switch sinkCfg.Type {
 		case "tcp":
 			if port, ok := sinkCfg.Options["port"].(int64); ok {
+				host := "0.0.0.0" // Get host or default to 0.0.0.0
+				if h, ok := sinkCfg.Options["host"].(string); ok && h != "" {
+					host = h
+				}
+
 				logger.Info("msg", "TCP endpoint configured",
 					"component", "main",
 					"pipeline", cfg.Name,
 					"sink_index", i,
-					"port", port)
+					"listen", fmt.Sprintf("%s:%d", host, port))
 
 				// Display net limit info if configured
 				if rl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
@@ -135,6 +140,11 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 
 		case "http":
 			if port, ok := sinkCfg.Options["port"].(int64); ok {
+				host := "0.0.0.0"
+				if h, ok := sinkCfg.Options["host"].(string); ok && h != "" {
+					host = h
+				}
+
 				streamPath := "/transport"
 				statusPath := "/status"
 				if path, ok := sinkCfg.Options["stream_path"].(string); ok {
@@ -147,8 +157,9 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 				logger.Info("msg", "HTTP endpoints configured",
 					"pipeline", cfg.Name,
 					"sink_index", i,
-					"stream_url", fmt.Sprintf("http://localhost:%d%s", port, streamPath),
-					"status_url", fmt.Sprintf("http://localhost:%d%s", port, statusPath))
+					"listen", fmt.Sprintf("%s:%d", host, port),
+					"stream_url", fmt.Sprintf("http://%s:%d%s", host, port, streamPath),
+					"status_url", fmt.Sprintf("http://%s:%d%s", host, port, statusPath))
 
 				// Display net limit info if configured
 				if rl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
@@ -178,6 +189,56 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 				"pipeline", cfg.Name,
 				"sink_index", i,
 				"type", sinkCfg.Type)
+		}
+	}
+
+	// Display source endpoints with host support
+	for i, sourceCfg := range cfg.Sources {
+		switch sourceCfg.Type {
+		case "http":
+			if port, ok := sourceCfg.Options["port"].(int64); ok {
+				host := "0.0.0.0"
+				if h, ok := sourceCfg.Options["host"].(string); ok && h != "" {
+					host = h
+				}
+
+				displayHost := host
+				if host == "0.0.0.0" {
+					displayHost = "localhost"
+				}
+
+				ingestPath := "/ingest"
+				if path, ok := sourceCfg.Options["ingest_path"].(string); ok {
+					ingestPath = path
+				}
+
+				logger.Info("msg", "HTTP source configured",
+					"pipeline", cfg.Name,
+					"source_index", i,
+					"listen", fmt.Sprintf("%s:%d", host, port),
+					"ingest_url", fmt.Sprintf("http://%s:%d%s", displayHost, port, ingestPath))
+			}
+
+		case "tcp":
+			if port, ok := sourceCfg.Options["port"].(int64); ok {
+				host := "0.0.0.0"
+				if h, ok := sourceCfg.Options["host"].(string); ok && h != "" {
+					host = h
+				}
+
+				displayHost := host
+				if host == "0.0.0.0" {
+					displayHost = "localhost"
+				}
+
+				logger.Info("msg", "TCP source configured",
+					"pipeline", cfg.Name,
+					"source_index", i,
+					"listen", fmt.Sprintf("%s:%d", host, port),
+					"endpoint", fmt.Sprintf("%s:%d", displayHost, port))
+			}
+
+			// TODO: missing other types of source, to be added
 		}
 	}
 

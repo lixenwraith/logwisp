@@ -20,6 +20,7 @@ import (
 
 // HTTPSource receives log entries via HTTP POST requests
 type HTTPSource struct {
+	host        string
 	port        int64
 	ingestPath  string
 	bufferSize  int64
@@ -45,6 +46,11 @@ type HTTPSource struct {
 
 // NewHTTPSource creates a new HTTP server source
 func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, error) {
+	host := "0.0.0.0"
+	if h, ok := options["host"].(string); ok && h != "" {
+		host = h
+	}
+
 	port, ok := options["port"].(int64)
 	if !ok || port < 1 || port > 65535 {
 		return nil, fmt.Errorf("http source requires valid 'port' option")
@@ -61,6 +67,7 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 	}
 
 	h := &HTTPSource{
+		host:       host,
 		port:       port,
 		ingestPath: ingestPath,
 		bufferSize: bufferSize,
@@ -156,7 +163,8 @@ func (h *HTTPSource) Start() error {
 		CloseOnShutdown:   true,
 	}
 
-	addr := fmt.Sprintf(":%d", h.port)
+	// Use configured host and port
+	addr := fmt.Sprintf("%s:%d", h.host, h.port)
 
 	// Start server in background
 	h.wg.Add(1)

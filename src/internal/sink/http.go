@@ -37,6 +37,12 @@ type HTTPSink struct {
 	logger        *log.Logger
 	formatter     format.Formatter
 
+	// Broker architecture
+	clients      map[uint64]chan core.LogEntry
+	clientsMu    sync.RWMutex
+	unregister   chan uint64
+	nextClientID atomic.Uint64
+
 	// Security components
 	authenticator *auth.Authenticator
 	tlsManager    *tls.Manager
@@ -58,6 +64,7 @@ type HTTPSink struct {
 
 // HTTPConfig holds HTTP sink configuration
 type HTTPConfig struct {
+	Host       string
 	Port       int64
 	BufferSize int64
 	StreamPath string
@@ -70,6 +77,7 @@ type HTTPConfig struct {
 // NewHTTPSink creates a new HTTP streaming sink
 func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*HTTPSink, error) {
 	cfg := HTTPConfig{
+		Host:       "0.0.0.0",
 		Port:       8080,
 		BufferSize: 1000,
 		StreamPath: "/transport",
@@ -77,6 +85,9 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	}
 
 	// Extract configuration from options
+	if host, ok := options["host"].(string); ok && host != "" {
+		cfg.Host = host
+	}
 	if port, ok := options["port"].(int64); ok {
 		cfg.Port = port
 	}
@@ -182,8 +193,19 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 		statusPath: cfg.StatusPath,
 		logger:     logger,
 		formatter:  formatter,
+		clients:    make(map[uint64]chan core.LogEntry),
+		unregister: make(chan uint64, 10), // Buffered for non-blocking
 	}
 	h.lastProcessed.Store(time.Time{})
+
+	// Initialize TLS manager
+	if cfg.TLS != nil && cfg.TLS.Enabled {
+		tlsManager, err := tls.NewManager(cfg.TLS, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create TLS manager: %w", err)
+		}
+		h.tlsManager = tlsManager
+	}
 
 	// Initialize net limiter if configured
 	if cfg.NetLimit != nil && cfg.NetLimit.Enabled {
@@ -198,6 +220,10 @@ func (h *HTTPSink) Input() chan<- core.LogEntry {
 }
 
 func (h *HTTPSink) Start(ctx context.Context) error {
+	// Start central broker goroutine
+	h.wg.Add(1)
+	go h.brokerLoop(ctx)
+
 	// Create fasthttp adapter for logging
 	fasthttpLogger := compat.NewFastHTTPAdapter(h.logger)
 
@@ -216,13 +242,15 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 			"port", h.config.Port)
 	}
 
-	addr := fmt.Sprintf(":%d", h.config.Port)
+	// Use configured host and port
+	addr := fmt.Sprintf("%s:%d", h.config.Host, h.config.Port)
 
 	// Run server in separate goroutine to avoid blocking
 	errChan := make(chan error, 1)
 	go func() {
 		h.logger.Info("msg", "HTTP server started",
 			"component", "http_sink",
+			"host", h.config.Host,
 			"port", h.config.Port,
 			"stream_path", h.streamPath,
 			"status_path", h.statusPath,
@@ -262,6 +290,99 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	}
 }
 
+// Broadcasts only to active clients
+func (h *HTTPSink) brokerLoop(ctx context.Context) {
+	defer h.wg.Done()
+
+	var ticker *time.Ticker
+	var tickerChan <-chan time.Time
+
+	if h.config.Heartbeat != nil && h.config.Heartbeat.Enabled {
+		ticker = time.NewTicker(time.Duration(h.config.Heartbeat.IntervalSeconds) * time.Second)
+		tickerChan = ticker.C
+		defer ticker.Stop()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			h.logger.Debug("msg", "Broker loop stopping due to context cancellation",
+				"component", "http_sink")
+			return
+		case <-h.done:
+			h.logger.Debug("msg", "Broker loop stopping due to shutdown signal",
+				"component", "http_sink")
+			return
+
+		case clientID := <-h.unregister:
+			// Broker owns channel cleanup
+			h.clientsMu.Lock()
+			if clientChan, exists := h.clients[clientID]; exists {
+				delete(h.clients, clientID)
+				close(clientChan)
+				h.logger.Debug("msg", "Unregistered client",
+					"component", "http_sink",
+					"client_id", clientID)
+			}
+			h.clientsMu.Unlock()
+
+		case entry, ok := <-h.input:
+			if !ok {
+				h.logger.Debug("msg", "Input channel closed, broker stopping",
+					"component", "http_sink")
+				return
+			}
+
+			h.totalProcessed.Add(1)
+			h.lastProcessed.Store(time.Now())
+
+			// Broadcast to all active clients
+			h.clientsMu.RLock()
+			clientCount := len(h.clients)
+			if clientCount > 0 {
+				slowClients := 0
+				for id, ch := range h.clients {
+					select {
+					case ch <- entry:
+						// Successfully sent
+					default:
+						// Client buffer full
+						slowClients++
+						if slowClients == 1 { // Log only once per broadcast
+							h.logger.Debug("msg", "Dropped entry for slow client(s)",
+								"component", "http_sink",
+								"client_id", id,
+								"slow_clients", slowClients,
+								"total_clients", clientCount)
+						}
+					}
+				}
+			}
+			// If no clients connected, entry is discarded (no buffering)
+			h.clientsMu.RUnlock()
+
+		case <-tickerChan:
+			// Send global heartbeat to all clients
+			if h.config.Heartbeat != nil && h.config.Heartbeat.Enabled {
+				heartbeatEntry := h.createHeartbeatEntry()
+
+				h.clientsMu.RLock()
+				for id, ch := range h.clients {
+					select {
+					case ch <- heartbeatEntry:
+					default:
+						// Client buffer full, skip heartbeat
+						h.logger.Debug("msg", "Skipped heartbeat for slow client",
+							"component", "http_sink",
+							"client_id", id)
+					}
+				}
+				h.clientsMu.RUnlock()
+			}
+		}
+	}
+}
+
 func (h *HTTPSink) Stop() {
 	h.logger.Info("msg", "Stopping HTTP sink")
 
@@ -277,6 +398,17 @@ func (h *HTTPSink) Stop() {
 
 	// Wait for all active client handlers to finish
 	h.wg.Wait()
+
+	// Close unregister channel after all clients have finished
+	close(h.unregister)
+
+	// Close all client channels
+	h.clientsMu.Lock()
+	for _, ch := range h.clients {
+		close(ch)
+	}
+	h.clients = make(map[uint64]chan core.LogEntry)
+	h.clientsMu.Unlock()
 
 	h.logger.Info("msg", "HTTP sink stopped")
 }
@@ -381,6 +513,15 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 			return
 		}
 		h.authSuccesses.Add(1)
+	} else {
+		// Create anonymous session for unauthenticated connections
+		session = &auth.Session{
+			ID:         fmt.Sprintf("anon-%d", time.Now().UnixNano()),
+			Username:   "anonymous",
+			Method:     "none",
+			RemoteAddr: remoteAddr,
+			CreatedAt:  time.Now(),
+		}
 	}
 
 	switch path {
@@ -404,72 +545,57 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 	}
 
 	// Set SSE headers
-	ctx.Response.Header.Set("Content-Type", "text/event-transport")
+	ctx.Response.Header.Set("Content-Type", "text/event-stream")
 	ctx.Response.Header.Set("Cache-Control", "no-cache")
 	ctx.Response.Header.Set("Connection", "keep-alive")
 	ctx.Response.Header.Set("Access-Control-Allow-Origin", "*")
 	ctx.Response.Header.Set("X-Accel-Buffering", "no")
 
-	// Create subscription for this client
+	// Register new client with broker
+	clientID := h.nextClientID.Add(1)
 	clientChan := make(chan core.LogEntry, h.config.BufferSize)
-	clientDone := make(chan struct{})
 
-	// Subscribe to input channel
-	go func() {
-		defer close(clientChan)
-		for {
-			select {
-			case entry, ok := <-h.input:
-				if !ok {
-					return
-				}
-				h.totalProcessed.Add(1)
-				h.lastProcessed.Store(time.Now())
+	h.clientsMu.Lock()
+	h.clients[clientID] = clientChan
+	h.clientsMu.Unlock()
 
-				select {
-				case clientChan <- entry:
-				case <-clientDone:
-					return
-				case <-h.done:
-					return
-				default:
-					// Drop if client buffer full
-					h.logger.Debug("msg", "Dropped entry for slow client",
-						"component", "http_sink",
-						"remote_addr", remoteAddr)
-				}
-			case <-clientDone:
-				return
-			case <-h.done:
-				return
-			}
-		}
-	}()
-
-	// Define the transport writer function
+	// Define the stream writer function
 	streamFunc := func(w *bufio.Writer) {
-		newCount := h.activeClients.Add(1)
+		connectCount := h.activeClients.Add(1)
 		h.logger.Debug("msg", "HTTP client connected",
+			"component", "http_sink",
 			"remote_addr", remoteAddr,
 			"username", session.Username,
 			"auth_method", session.Method,
-			"active_clients", newCount)
+			"client_id", clientID,
+			"active_clients", connectCount)
 
+		// Track goroutine lifecycle with waitgroup
 		h.wg.Add(1)
+
+		// Cleanup signals unregister
 		defer func() {
-			close(clientDone)
-			newCount := h.activeClients.Add(-1)
+			disconnectCount := h.activeClients.Add(-1)
 			h.logger.Debug("msg", "HTTP client disconnected",
+				"component", "http_sink",
 				"remote_addr", remoteAddr,
 				"username", session.Username,
-				"active_clients", newCount)
+				"client_id", clientID,
+				"active_clients", disconnectCount)
+
+			// Signal broker to cleanup this client's channel
+			select {
+			case h.unregister <- clientID:
+			case <-h.done:
+				// Shutting down, don't block
+			}
+
 			h.wg.Done()
 		}()
 
-		// Send initial connected event
-		clientID := fmt.Sprintf("%d", time.Now().UnixNano())
+		// Send initial connected event with metadata
 		connectionInfo := map[string]any{
-			"client_id":   clientID,
+			"client_id":   fmt.Sprintf("%d", clientID),
 			"username":    session.Username,
 			"auth_method": session.Method,
 			"stream_path": h.streamPath,
@@ -479,27 +605,33 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 		}
 		data, _ := json.Marshal(connectionInfo)
 		fmt.Fprintf(w, "event: connected\ndata: %s\n\n", data)
-		w.Flush()
+		if err := w.Flush(); err != nil {
+			return
+		}
 
+		// Setup heartbeat ticker if enabled
 		var ticker *time.Ticker
 		var tickerChan <-chan time.Time
 
-		if h.config.Heartbeat.Enabled {
+		if h.config.Heartbeat != nil && h.config.Heartbeat.Enabled {
 			ticker = time.NewTicker(time.Duration(h.config.Heartbeat.IntervalSeconds) * time.Second)
 			tickerChan = ticker.C
 			defer ticker.Stop()
 		}
 
+		// Main streaming loop
 		for {
 			select {
 			case entry, ok := <-clientChan:
 				if !ok {
+					// Channel closed, client being removed
 					return
 				}
 
 				if err := h.formatEntryForSSE(w, entry); err != nil {
 					h.logger.Error("msg", "Failed to format log entry",
 						"component", "http_sink",
+						"client_id", clientID,
 						"error", err,
 						"entry_source", entry.Source)
 					continue
@@ -512,18 +644,22 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 
 			case <-tickerChan:
 				// Validate session is still active
-				if h.authenticator != nil && !h.authenticator.ValidateSession(session.ID) {
+				if h.authenticator != nil && session != nil && !h.authenticator.ValidateSession(session.ID) {
 					fmt.Fprintf(w, "event: disconnect\ndata: {\"reason\":\"session_expired\"}\n\n")
 					w.Flush()
 					return
 				}
 
-				heartbeatEntry := h.createHeartbeatEntry()
-				if err := h.formatEntryForSSE(w, heartbeatEntry); err != nil {
-					h.logger.Error("msg", "Failed to format heartbeat",
-						"component", "http_sink",
-						"error", err)
+				// Heartbeat is sent from broker, additional client-specific heartbeat is sent here
+				// This provides per-client heartbeat validation with session check
+				sessionHB := map[string]any{
+					"type":          "session_heartbeat",
+					"client_id":     fmt.Sprintf("%d", clientID),
+					"session_valid": true,
 				}
+				hbData, _ := json.Marshal(sessionHB)
+				fmt.Fprintf(w, "event: heartbeat\ndata: %s\n\n", hbData)
+
 				if err := w.Flush(); err != nil {
 					return
 				}
@@ -650,19 +786,24 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetBody(data)
 }
 
-// GetActiveConnections returns the current number of active clients
+// Returns the current number of active clients
 func (h *HTTPSink) GetActiveConnections() int64 {
 	return h.activeClients.Load()
 }
 
-// GetStreamPath returns the configured transport endpoint path
+// Returns the configured transport endpoint path
 func (h *HTTPSink) GetStreamPath() string {
 	return h.streamPath
 }
 
-// GetStatusPath returns the configured status endpoint path
+// Returns the configured status endpoint path
 func (h *HTTPSink) GetStatusPath() string {
 	return h.statusPath
+}
+
+// Returns the configured host
+func (h *HTTPSink) GetHost() string {
+	return h.config.Host
 }
 
 // SetAuthConfig configures http sink authentication

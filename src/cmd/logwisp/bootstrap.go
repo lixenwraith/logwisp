@@ -50,6 +50,12 @@ func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 	logCfg := log.DefaultConfig()
 
+	// Prevent empty directory creation if file logging is not configured
+	if cfg.Logging.Output != "file" && cfg.Logging.Output != "all" {
+		logCfg.DisableFile = true
+		logCfg.Directory = ""
+	}
+
 	if cfg.Quiet {
 		// In quiet mode, disable ALL logging output
 		logCfg.Level = 255 // A level that disables all output
@@ -68,23 +74,31 @@ func initializeLogger(cfg *config.Config) error {
 	// Configure based on output mode
 	switch cfg.Logging.Output {
 	case "none":
-		logCfg.DisableFile = true
 		logCfg.EnableStdout = false
 	case "stdout":
-		logCfg.DisableFile = true
 		logCfg.EnableStdout = true
 		logCfg.StdoutTarget = "stdout"
 	case "stderr":
-		logCfg.DisableFile = true
 		logCfg.EnableStdout = true
 		logCfg.StdoutTarget = "stderr"
+	case "split":
+		// Console-only with split output: INFO/DEBUG to stdout, WARN/ERROR to stderr
+		logCfg.EnableStdout = true
+		logCfg.StdoutTarget = "split"
 	case "file":
+		logCfg.DisableFile = false
 		logCfg.EnableStdout = false
 		configureFileLogging(logCfg, cfg)
 	case "both":
+		logCfg.DisableFile = false
 		logCfg.EnableStdout = true
+		logCfg.StdoutTarget = "stdout"
 		configureFileLogging(logCfg, cfg)
-		configureConsoleTarget(logCfg, cfg)
+	case "all":
+		logCfg.DisableFile = false
+		logCfg.EnableStdout = true
+		logCfg.StdoutTarget = "split"
+		configureFileLogging(logCfg, cfg)
 	default:
 		return fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
 	}
@@ -97,7 +111,7 @@ func initializeLogger(cfg *config.Config) error {
 	return logger.ApplyConfig(logCfg)
 }
 
-// configureFileLogging sets up file-based logging parameters
+// Sets up file-based logging parameters
 func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	if cfg.Logging.File != nil {
 		logCfg.Directory = cfg.Logging.File.Directory
@@ -108,18 +122,6 @@ func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 			logCfg.RetentionPeriodHrs = cfg.Logging.File.RetentionHours
 		}
 	}
-}
-
-// configureConsoleTarget sets up console output parameters
-func configureConsoleTarget(logCfg *log.Config, cfg *config.Config) {
-	target := "stderr" // default
-
-	if cfg.Logging.Console != nil && cfg.Logging.Console.Target != "" {
-		target = cfg.Logging.Console.Target
-	}
-
-	// Set the target, which can be "stdout", "stderr", or "split"
-	logCfg.StdoutTarget = target
 }
 
 func parseLogLevel(level string) (int64, error) {

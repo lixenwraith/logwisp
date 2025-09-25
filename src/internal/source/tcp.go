@@ -32,6 +32,7 @@ const (
 
 // TCPSource receives log entries via TCP connections
 type TCPSource struct {
+	host        string
 	port        int64
 	bufferSize  int64
 	server      *tcpSourceServer
@@ -57,6 +58,11 @@ type TCPSource struct {
 
 // NewTCPSource creates a new TCP server source
 func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error) {
+	host := "0.0.0.0"
+	if h, ok := options["host"].(string); ok && h != "" {
+		host = h
+	}
+
 	port, ok := options["port"].(int64)
 	if !ok || port < 1 || port > 65535 {
 		return nil, fmt.Errorf("tcp source requires valid 'port' option")
@@ -68,6 +74,7 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 	}
 
 	t := &TCPSource{
+		host:       host,
 		port:       port,
 		bufferSize: bufferSize,
 		done:       make(chan struct{}),
@@ -147,7 +154,8 @@ func (t *TCPSource) Start() error {
 		clients: make(map[gnet.Conn]*tcpClient),
 	}
 
-	addr := fmt.Sprintf("tcp://:%d", t.port)
+	// Use configured host and port
+	addr := fmt.Sprintf("tcp://%s:%d", t.host, t.port)
 
 	// Create a gnet adapter using the existing logger instance
 	gnetLogger := compat.NewGnetAdapter(t.logger)

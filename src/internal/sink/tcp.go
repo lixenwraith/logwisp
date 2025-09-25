@@ -58,6 +58,7 @@ type TCPSink struct {
 
 // TCPConfig holds TCP sink configuration
 type TCPConfig struct {
+	Host       string
 	Port       int64
 	BufferSize int64
 	Heartbeat  *config.HeartbeatConfig
@@ -68,11 +69,15 @@ type TCPConfig struct {
 // NewTCPSink creates a new TCP streaming sink
 func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPSink, error) {
 	cfg := TCPConfig{
+		Host:       "0.0.0.0",
 		Port:       int64(9090),
 		BufferSize: int64(1000),
 	}
 
 	// Extract configuration from options
+	if host, ok := options["host"].(string); ok && host != "" {
+		cfg.Host = host
+	}
 	if port, ok := options["port"].(int64); ok {
 		cfg.Port = port
 	}
@@ -199,7 +204,7 @@ func (t *TCPSink) Start(ctx context.Context) error {
 	}()
 
 	// Configure gnet options
-	addr := fmt.Sprintf("tcp://:%d", t.config.Port)
+	addr := fmt.Sprintf("tcp://%s:%d", t.config.Host, t.config.Port)
 
 	// Create a gnet adapter using the existing logger instance
 	gnetLogger := compat.NewGnetAdapter(t.logger)
@@ -317,7 +322,7 @@ func (t *TCPSink) broadcastLoop(ctx context.Context) {
 	var ticker *time.Ticker
 	var tickerChan <-chan time.Time
 
-	if t.config.Heartbeat.Enabled {
+	if t.config.Heartbeat != nil && t.config.Heartbeat.Enabled {
 		ticker = time.NewTicker(time.Duration(t.config.Heartbeat.IntervalSeconds) * time.Second)
 		tickerChan = ticker.C
 		defer ticker.Stop()

@@ -50,7 +50,7 @@ func DefaultLogConfig() *LogConfig {
 		Output: "stderr",
 		Level:  "info",
 		File: &LogFileConfig{
-			Directory:      "./logs",
+			Directory:      "./log",
 			Name:           "logwisp",
 			MaxSizeMB:      100,
 			MaxTotalSizeMB: 1000,
