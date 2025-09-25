@@ -48,7 +48,7 @@ Examples:
 For detailed configuration options, please refer to the documentation.
 `
 
-// CheckAndDisplayHelp scans arguments for help flags and prints help text if found.
+// Scans arguments for help flags and prints help text if found.
 func CheckAndDisplayHelp(args []string) {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {

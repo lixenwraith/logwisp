@@ -9,7 +9,7 @@ import (
 	"logwisp/src/internal/core"
 )
 
-// Sink represents an output destination for log entries
+// Represents an output destination for log entries
 type Sink interface {
 	// Input returns the channel for sending log entries to this sink
 	Input() chan<- core.LogEntry
@@ -24,7 +24,7 @@ type Sink interface {
 	GetStats() SinkStats
 }
 
-// SinkStats contains statistics about a sink
+// Contains statistics about a sink
 type SinkStats struct {
 	Type              string
 	TotalProcessed    uint64
@@ -34,7 +34,7 @@ type SinkStats struct {
 	Details           map[string]any
 }
 
-// AuthSetter is an interface for sinks that can accept an AuthConfig.
+// Interface for sinks that can accept an AuthConfig
 type AuthSetter interface {
 	SetAuthConfig(auth *config.AuthConfig)
 }

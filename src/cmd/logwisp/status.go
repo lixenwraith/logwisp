@@ -145,7 +145,7 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 					host = h
 				}
 
-				streamPath := "/transport"
+				streamPath := "/stream"
 				statusPath := "/status"
 				if path, ok := sinkCfg.Options["stream_path"].(string); ok {
 					streamPath = path

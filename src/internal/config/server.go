@@ -170,7 +170,7 @@ func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl 
 	return nil
 }
 
-// validateIPv4Entry ensures an IP or CIDR is IPv4
+// Ensures an IP or CIDR is IPv4
 func validateIPv4Entry(entry string) error {
 	// Handle single IP
 	if !strings.Contains(entry, "/") {

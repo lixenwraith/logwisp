@@ -24,7 +24,7 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-// HTTPSink streams log entries via Server-Sent Events
+// Streams log entries via Server-Sent Events
 type HTTPSink struct {
 	input         chan core.LogEntry
 	config        HTTPConfig
@@ -62,7 +62,7 @@ type HTTPSink struct {
 	authSuccesses  atomic.Uint64
 }
 
-// HTTPConfig holds HTTP sink configuration
+// Holds HTTP sink configuration
 type HTTPConfig struct {
 	Host       string
 	Port       int64
@@ -74,13 +74,13 @@ type HTTPConfig struct {
 	NetLimit   *config.NetLimitConfig
 }
 
-// NewHTTPSink creates a new HTTP streaming sink
+// Creates a new HTTP streaming sink
 func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*HTTPSink, error) {
 	cfg := HTTPConfig{
 		Host:       "0.0.0.0",
 		Port:       8080,
 		BufferSize: 1000,
-		StreamPath: "/transport",
+		StreamPath: "/stream",
 		StatusPath: "/status",
 	}
 
@@ -806,7 +806,7 @@ func (h *HTTPSink) GetHost() string {
 	return h.config.Host
 }
 
-// SetAuthConfig configures http sink authentication
+// Configures http sink authentication
 func (h *HTTPSink) SetAuthConfig(authCfg *config.AuthConfig) {
 	if authCfg == nil || authCfg.Type == "none" {
 		return

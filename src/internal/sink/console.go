@@ -15,13 +15,13 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// ConsoleConfig holds common configuration for console sinks
+// Holds common configuration for console sinks
 type ConsoleConfig struct {
 	Target     string // "stdout", "stderr", or "split"
 	BufferSize int64
 }
 
-// StdoutSink writes log entries to stdout
+// Writes log entries to stdout
 type StdoutSink struct {
 	input     chan core.LogEntry
 	config    ConsoleConfig
@@ -36,7 +36,7 @@ type StdoutSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-// NewStdoutSink creates a new stdout sink
+// Creates a new stdout sink
 func NewStdoutSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*StdoutSink, error) {
 	config := ConsoleConfig{
 		Target:     "stdout",
@@ -134,7 +134,7 @@ func (s *StdoutSink) processLoop(ctx context.Context) {
 	}
 }
 
-// StderrSink writes log entries to stderr
+// Writes log entries to stderr
 type StderrSink struct {
 	input     chan core.LogEntry
 	config    ConsoleConfig
@@ -149,7 +149,7 @@ type StderrSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-// NewStderrSink creates a new stderr sink
+// Creates a new stderr sink
 func NewStderrSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*StderrSink, error) {
 	config := ConsoleConfig{
 		Target:     "stderr",

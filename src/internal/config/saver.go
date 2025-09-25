@@ -7,8 +7,7 @@ import (
 	lconfig "github.com/lixenwraith/config"
 )
 
-// SaveToFile saves the configuration to the specified file path.
-// It uses the lconfig library's atomic file saving capabilities.
+// Saves the configuration to the specified file path.
 func (c *Config) SaveToFile(path string) error {
 	if path == "" {
 		return fmt.Errorf("cannot save config: path is empty")

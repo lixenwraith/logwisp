@@ -20,7 +20,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// WatcherInfo contains information about a file watcher
+// Contains information about a file watcher
 type WatcherInfo struct {
 	Path         string
 	Size         int64
@@ -81,7 +81,6 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 	}
 }
 
-// FILE: logwisp/src/internal/source/file_watcher.go
 func (w *fileWatcher) seekToEnd() error {
 	file, err := os.Open(w.path)
 	if err != nil {

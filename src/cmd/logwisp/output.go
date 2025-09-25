@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// OutputHandler manages all application output respecting quiet mode
+// Manages all application output respecting quiet mode
 type OutputHandler struct {
 	quiet  bool
 	mu     sync.RWMutex
@@ -19,7 +19,7 @@ type OutputHandler struct {
 // Global output handler instance
 var output *OutputHandler
 
-// InitOutputHandler initializes the global output handler
+// Initializes the global output handler
 func InitOutputHandler(quiet bool) {
 	output = &OutputHandler{
 		quiet:  quiet,
@@ -28,7 +28,7 @@ func InitOutputHandler(quiet bool) {
 	}
 }
 
-// Print writes to stdout if not in quiet mode
+// Writes to stdout if not in quiet mode
 func (o *OutputHandler) Print(format string, args ...any) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -38,7 +38,7 @@ func (o *OutputHandler) Print(format string, args ...any) {
 	}
 }
 
-// Error writes to stderr if not in quiet mode
+// Writes to stderr if not in quiet mode
 func (o *OutputHandler) Error(format string, args ...any) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -48,20 +48,20 @@ func (o *OutputHandler) Error(format string, args ...any) {
 	}
 }
 
-// FatalError writes to stderr and exits (respects quiet mode)
+// Writes to stderr and exits (respects quiet mode)
 func (o *OutputHandler) FatalError(code int, format string, args ...any) {
 	o.Error(format, args...)
 	os.Exit(code)
 }
 
-// IsQuiet returns the current quiet mode status
+// Returns the current quiet mode status
 func (o *OutputHandler) IsQuiet() bool {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return o.quiet
 }
 
-// SetQuiet updates quiet mode (useful for testing)
+// Updates quiet mode (useful for testing)
 func (o *OutputHandler) SetQuiet(quiet bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

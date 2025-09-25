@@ -22,7 +22,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// TCPClientSink forwards log entries to a remote TCP endpoint
+// Forwards log entries to a remote TCP endpoint
 type TCPClientSink struct {
 	input     chan core.LogEntry
 	config    TCPClientConfig
@@ -51,7 +51,7 @@ type TCPClientSink struct {
 	connectionUptime atomic.Value // time.Duration
 }
 
-// TCPClientConfig holds TCP client sink configuration
+// Holds TCP client sink configuration
 type TCPClientConfig struct {
 	Address      string
 	BufferSize   int64
@@ -69,7 +69,7 @@ type TCPClientConfig struct {
 	TLS *config.TLSConfig
 }
 
-// NewTCPClientSink creates a new TCP client sink
+// Creates a new TCP client sink
 func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPClientSink, error) {
 	cfg := TCPClientConfig{
 		BufferSize:        int64(1000),
@@ -504,7 +504,7 @@ func (t *TCPClientSink) sendEntry(entry core.LogEntry) error {
 	return nil
 }
 
-// tlsVersionString returns human-readable TLS version
+// Returns human-readable TLS version
 func tlsVersionString(version uint16) string {
 	switch version {
 	case tls.VersionTLS10:
@@ -520,7 +520,7 @@ func tlsVersionString(version uint16) string {
 	}
 }
 
-// parseTLSVersion converts string to TLS version constant
+// Converts string to TLS version constant
 func parseTLSVersion(version string, defaultVersion uint16) uint16 {
 	switch strings.ToUpper(version) {
 	case "TLS1.0", "TLS10":

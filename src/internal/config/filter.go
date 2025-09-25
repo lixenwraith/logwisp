@@ -6,7 +6,7 @@ import (
 	"regexp"
 )
 
-// FilterType represents the filter type
+// Represents the filter type
 type FilterType string
 
 const (
@@ -14,7 +14,7 @@ const (
 	FilterTypeExclude FilterType = "exclude" // Blacklist - matching logs are dropped
 )
 
-// FilterLogic represents how multiple patterns are combined
+// Represents how multiple patterns are combined
 type FilterLogic string
 
 const (
@@ -22,7 +22,7 @@ const (
 	FilterLogicAnd FilterLogic = "and" // Match all patterns
 )
 
-// FilterConfig represents filter configuration
+// Represents filter configuration
 type FilterConfig struct {
 	Type     FilterType  `toml:"type"`
 	Logic    FilterLogic `toml:"logic"`

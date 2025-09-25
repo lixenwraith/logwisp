@@ -24,7 +24,7 @@ import (
 	"github.com/panjf2000/gnet/v2"
 )
 
-// TCPSink streams log entries via TCP
+// Streams log entries via TCP
 type TCPSink struct {
 	input       chan core.LogEntry
 	config      TCPConfig
@@ -56,7 +56,7 @@ type TCPSink struct {
 	errorMu                sync.Mutex
 }
 
-// TCPConfig holds TCP sink configuration
+// Holds TCP sink configuration
 type TCPConfig struct {
 	Host       string
 	Port       int64
@@ -66,7 +66,7 @@ type TCPConfig struct {
 	NetLimit   *config.NetLimitConfig
 }
 
-// NewTCPSink creates a new TCP streaming sink
+// Creates a new TCP streaming sink
 func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPSink, error) {
 	cfg := TCPConfig{
 		Host:       "0.0.0.0",
@@ -480,12 +480,12 @@ func (t *TCPSink) createHeartbeatEntry() core.LogEntry {
 	}
 }
 
-// GetActiveConnections returns the current number of connections
+// Returns the current number of connections
 func (t *TCPSink) GetActiveConnections() int64 {
 	return t.activeConns.Load()
 }
 
-// tcpClient represents a connected TCP client with auth state
+// Represents a connected TCP client with auth state
 type tcpClient struct {
 	conn           gnet.Conn
 	buffer         bytes.Buffer
@@ -496,7 +496,7 @@ type tcpClient struct {
 	authTimeoutSet bool
 }
 
-// tcpServer handles gnet events with authentication
+// Handles gnet events with authentication
 type tcpServer struct {
 	gnet.BuiltinEventEngine
 	sink    *TCPSink
@@ -777,7 +777,7 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 	return gnet.None
 }
 
-// SetAuthConfig configures tcp sink authentication
+// Configures tcp sink authentication
 func (t *TCPSink) SetAuthConfig(authCfg *config.AuthConfig) {
 	if authCfg == nil || authCfg.Type == "none" {
 		return

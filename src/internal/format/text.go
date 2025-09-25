@@ -13,14 +13,14 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// TextFormatter produces human-readable text logs using templates
+// Produces human-readable text logs using templates
 type TextFormatter struct {
 	template        *template.Template
 	timestampFormat string
 	logger          *log.Logger
 }
 
-// NewTextFormatter creates a new text formatter
+// Creates a new text formatter
 func NewTextFormatter(options map[string]any, logger *log.Logger) (*TextFormatter, error) {
 	// Default template
 	templateStr := "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}{{ if .Fields }} {{.Fields}}{{ end }}"
@@ -58,7 +58,7 @@ func NewTextFormatter(options map[string]any, logger *log.Logger) (*TextFormatte
 	return f, nil
 }
 
-// Format formats the log entry using the template
+// Formats the log entry using the template
 func (f *TextFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Prepare data for template
 	data := map[string]any{
@@ -102,7 +102,7 @@ func (f *TextFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	return result, nil
 }
 
-// Name returns the formatter name
+// Returns the formatter name
 func (f *TextFormatter) Name() string {
 	return "text"
 }

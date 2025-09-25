@@ -23,7 +23,7 @@ import (
 // Prevent unbounded map growth
 const maxAuthTrackedIPs = 10000
 
-// Authenticator handles all authentication methods for a pipeline
+// Handles all authentication methods for a pipeline
 type Authenticator struct {
 	config       *config.AuthConfig
 	logger       *log.Logger
@@ -42,7 +42,7 @@ type Authenticator struct {
 	authMu         sync.RWMutex
 }
 
-// ADDED: Per-IP auth attempt tracking
+// Per-IP auth attempt tracking
 type ipAuthState struct {
 	limiter      *rate.Limiter
 	failCount    int
@@ -50,7 +50,7 @@ type ipAuthState struct {
 	blockedUntil time.Time
 }
 
-// Session represents an authenticated connection
+// Represents an authenticated connection
 type Session struct {
 	ID           string
 	Username     string
@@ -61,7 +61,7 @@ type Session struct {
 	Metadata     map[string]any
 }
 
-// New creates a new authenticator from config
+// Creates a new authenticator from config
 func New(cfg *config.AuthConfig, logger *log.Logger) (*Authenticator, error) {
 	if cfg == nil || cfg.Type == "none" {
 		return nil, nil
@@ -255,7 +255,7 @@ func (a *Authenticator) recordSuccess(remoteAddr string) {
 	}
 }
 
-// AuthenticateHTTP handles HTTP authentication headers
+// Handles HTTP authentication headers
 func (a *Authenticator) AuthenticateHTTP(authHeader, remoteAddr string) (*Session, error) {
 	if a == nil || a.config.Type == "none" {
 		return &Session{
@@ -293,7 +293,7 @@ func (a *Authenticator) AuthenticateHTTP(authHeader, remoteAddr string) (*Sessio
 	return session, nil
 }
 
-// AuthenticateTCP handles TCP connection authentication
+// Handles TCP connection authentication
 func (a *Authenticator) AuthenticateTCP(method, credentials, remoteAddr string) (*Session, error) {
 	if a == nil || a.config.Type == "none" {
 		return &Session{
@@ -610,7 +610,7 @@ func generateSessionID() string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-// ValidateSession checks if a session is still valid
+// Checks if a session is still valid
 func (a *Authenticator) ValidateSession(sessionID string) bool {
 	if a == nil {
 		return true
@@ -632,7 +632,7 @@ func (a *Authenticator) ValidateSession(sessionID string) bool {
 	return true
 }
 
-// GetStats returns authentication statistics
+// Returns authentication statistics
 func (a *Authenticator) GetStats() map[string]any {
 	if a == nil {
 		return map[string]any{"enabled": false}

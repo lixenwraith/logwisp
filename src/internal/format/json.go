@@ -11,7 +11,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// JSONFormatter produces structured JSON logs
+// Produces structured JSON logs
 type JSONFormatter struct {
 	pretty         bool
 	timestampField string
@@ -21,7 +21,7 @@ type JSONFormatter struct {
 	logger         *log.Logger
 }
 
-// NewJSONFormatter creates a new JSON formatter
+// Creates a new JSON formatter
 func NewJSONFormatter(options map[string]any, logger *log.Logger) (*JSONFormatter, error) {
 	f := &JSONFormatter{
 		timestampField: "timestamp",
@@ -51,7 +51,7 @@ func NewJSONFormatter(options map[string]any, logger *log.Logger) (*JSONFormatte
 	return f, nil
 }
 
-// Format formats the log entry as JSON
+// Formats the log entry as JSON
 func (f *JSONFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Start with a clean map
 	output := make(map[string]any)
@@ -115,12 +115,12 @@ func (f *JSONFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	return append(result, '\n'), nil
 }
 
-// Name returns the formatter name
+// Returns the formatter name
 func (f *JSONFormatter) Name() string {
 	return "json"
 }
 
-// FormatBatch formats multiple entries as a JSON array
+// Formats multiple entries as a JSON array
 // This is a special method for sinks that need to batch entries
 func (f *JSONFormatter) FormatBatch(entries []core.LogEntry) ([]byte, error) {
 	// For batching, we need to create an array of formatted objects

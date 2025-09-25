@@ -21,7 +21,7 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-// HTTPClientSink forwards log entries to a remote HTTP endpoint
+// Forwards log entries to a remote HTTP endpoint
 type HTTPClientSink struct {
 	input     chan core.LogEntry
 	config    HTTPClientConfig
@@ -43,7 +43,7 @@ type HTTPClientSink struct {
 	activeConnections atomic.Int64
 }
 
-// HTTPClientConfig holds HTTP client sink configuration
+// Holds HTTP client sink configuration
 type HTTPClientConfig struct {
 	URL        string
 	BufferSize int64
@@ -64,7 +64,7 @@ type HTTPClientConfig struct {
 	KeyFile            string
 }
 
-// NewHTTPClientSink creates a new HTTP client sink
+// Creates a new HTTP client sink
 func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*HTTPClientSink, error) {
 	cfg := HTTPClientConfig{
 		BufferSize:   int64(1000),

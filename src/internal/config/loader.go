@@ -11,11 +11,6 @@ import (
 	lconfig "github.com/lixenwraith/config"
 )
 
-// LoadContext holds all configuration sources
-type LoadContext struct {
-	FlagConfig any // Parsed command-line flags from main
-}
-
 func defaults() *Config {
 	return &Config{
 		// Top-level flag defaults
@@ -69,7 +64,7 @@ func defaults() *Config {
 	}
 }
 
-// Load is the single entry point for loading all configuration
+// Single entry point for loading all configuration
 func Load(args []string) (*Config, error) {
 	configPath, isExplicit := resolveConfigPath(args)
 	// Build configuration with all sources
@@ -124,7 +119,7 @@ func Load(args []string) (*Config, error) {
 	return finalConfig, finalConfig.validate()
 }
 
-// resolveConfigPath returns the configuration file path
+// Returns the configuration file path
 func resolveConfigPath(args []string) (path string, isExplicit bool) {
 	// 1. Check for --config flag in command-line arguments (highest precedence)
 	for i, arg := range args {
@@ -167,7 +162,7 @@ func customEnvTransform(path string) string {
 	return env
 }
 
-// applyConsoleTargetOverrides centralizes console target configuration
+// Centralizes console target configuration
 func applyConsoleTargetOverrides(cfg *Config) error {
 	// Check environment variable for console target override
 	consoleTarget := os.Getenv("LOGWISP_CONSOLE_TARGET")

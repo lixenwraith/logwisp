@@ -23,7 +23,7 @@ func main() {
 	// Handle subcommands before any config loading
 	// This prevents flag conflicts with lixenwraith/config
 	router := NewCommandRouter()
-	if router.Route(os.Args) {
+	if router.Route(os.Args) != nil {
 		// Subcommand was handled, exit already called
 		return
 	}
@@ -188,7 +188,7 @@ func shutdownLogger() {
 	}
 }
 
-// saveConfigurationOnExit saves the configuration to file on exist
+// Saves the configuration to file on exist
 func saveConfigurationOnExit(cfg *config.Config, reloadManager *ReloadManager, logger *log.Logger) {
 	// Only save if explicitly enabled and we have a valid path
 	if !cfg.ConfigSaveOnExit || cfg.ConfigFile == "" {

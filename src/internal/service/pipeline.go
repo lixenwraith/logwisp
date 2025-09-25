@@ -16,7 +16,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Pipeline manages the flow of data from sources through filters to sinks
+// Manages the flow of data from sources through filters to sinks
 type Pipeline struct {
 	Name        string
 	Config      config.PipelineConfig
@@ -32,7 +32,7 @@ type Pipeline struct {
 	wg     sync.WaitGroup
 }
 
-// PipelineStats contains statistics for a pipeline
+// Contains statistics for a pipeline
 type PipelineStats struct {
 	StartTime                      time.Time
 	TotalEntriesProcessed          atomic.Uint64
@@ -43,7 +43,7 @@ type PipelineStats struct {
 	FilterStats                    map[string]any
 }
 
-// Shutdown gracefully stops the pipeline
+// Gracefully stops the pipeline
 func (p *Pipeline) Shutdown() {
 	p.logger.Info("msg", "Shutting down pipeline",
 		"component", "pipeline",
@@ -81,7 +81,7 @@ func (p *Pipeline) Shutdown() {
 		"pipeline", p.Name)
 }
 
-// GetStats returns pipeline statistics
+// Returns pipeline statistics
 func (p *Pipeline) GetStats() map[string]any {
 	// Recovery to handle concurrent access during shutdown
 	// When service is shutting down, sources/sinks might be nil or partially stopped
@@ -157,7 +157,7 @@ func (p *Pipeline) GetStats() map[string]any {
 	}
 }
 
-// startStatsUpdater runs periodic stats updates
+// Runs periodic stats updates
 func (p *Pipeline) startStatsUpdater(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)

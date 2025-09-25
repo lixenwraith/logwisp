@@ -11,7 +11,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// RateLimiter enforces rate limits on log entries flowing through a pipeline.
+// Enforces rate limits on log entries flowing through a pipeline.
 type RateLimiter struct {
 	bucket *TokenBucket
 	policy config.RateLimitPolicy
@@ -23,7 +23,7 @@ type RateLimiter struct {
 	droppedCount       atomic.Uint64
 }
 
-// NewRateLimiter creates a new rate limiter. If cfg.Rate is 0, it returns nil.
+// Creates a new rate limiter. If cfg.Rate is 0, it returns nil.
 func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimiter, error) {
 	if cfg.Rate <= 0 {
 		return nil, nil // No rate limit
@@ -56,7 +56,7 @@ func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimite
 	return l, nil
 }
 
-// Allow checks if a log entry is allowed to pass based on the rate limit.
+// Checks if a log entry is allowed to pass based on the rate limit.
 // It returns true if the entry should pass, false if it should be dropped.
 func (l *RateLimiter) Allow(entry core.LogEntry) bool {
 	if l == nil || l.policy == config.PolicyPass {

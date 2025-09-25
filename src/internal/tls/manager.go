@@ -13,14 +13,14 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Manager handles TLS configuration for servers
+// Handles TLS configuration for servers
 type Manager struct {
 	config    *config.TLSConfig
 	tlsConfig *tls.Config
 	logger    *log.Logger
 }
 
-// NewManager creates a TLS configuration from TLS config
+// Creates a TLS configuration from TLS config
 func NewManager(cfg *config.TLSConfig, logger *log.Logger) (*Manager, error) {
 	if cfg == nil || !cfg.Enabled {
 		return nil, nil
@@ -96,7 +96,7 @@ func NewManager(cfg *config.TLSConfig, logger *log.Logger) (*Manager, error) {
 	return m, nil
 }
 
-// GetConfig returns the TLS configuration
+// Returns the TLS configuration
 func (m *Manager) GetConfig() *tls.Config {
 	if m == nil {
 		return nil
@@ -105,7 +105,7 @@ func (m *Manager) GetConfig() *tls.Config {
 	return m.tlsConfig.Clone()
 }
 
-// GetHTTPConfig returns TLS config suitable for HTTP servers
+// Returns TLS config suitable for HTTP servers
 func (m *Manager) GetHTTPConfig() *tls.Config {
 	if m == nil {
 		return nil
@@ -117,7 +117,7 @@ func (m *Manager) GetHTTPConfig() *tls.Config {
 	return cfg
 }
 
-// GetTCPConfig returns TLS config for raw TCP connections
+// Returns TLS config for raw TCP connections
 func (m *Manager) GetTCPConfig() *tls.Config {
 	if m == nil {
 		return nil
@@ -129,7 +129,7 @@ func (m *Manager) GetTCPConfig() *tls.Config {
 	return cfg
 }
 
-// ValidateClientCert validates a client certificate for mTLS
+// Validates a client certificate for mTLS
 func (m *Manager) ValidateClientCert(rawCerts [][]byte) error {
 	if m == nil || !m.config.ClientAuth {
 		return nil
@@ -217,7 +217,7 @@ func parseCipherSuites(suites string) []uint16 {
 	return result
 }
 
-// GetStats returns TLS statistics
+// Returns TLS statistics
 func (m *Manager) GetStats() map[string]any {
 	if m == nil {
 		return map[string]any{"enabled": false}

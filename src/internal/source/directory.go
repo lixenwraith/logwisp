@@ -18,7 +18,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// DirectorySource monitors a directory for log files
+// Monitors a directory for log files
 type DirectorySource struct {
 	path           string
 	pattern        string
@@ -36,7 +36,7 @@ type DirectorySource struct {
 	logger         *log.Logger
 }
 
-// NewDirectorySource creates a new directory monitoring source
+// Creates a new directory monitoring source
 func NewDirectorySource(options map[string]any, logger *log.Logger) (*DirectorySource, error) {
 	path, ok := options["path"].(string)
 	if !ok {

@@ -10,7 +10,7 @@ var (
 	BuildTime = "unknown"
 )
 
-// returns a formatted version string
+// Returns a formatted version string
 func String() string {
 	if Version == "dev" {
 		return fmt.Sprintf("dev (commit: %s, built: %s)", GitCommit, BuildTime)
@@ -18,7 +18,7 @@ func String() string {
 	return fmt.Sprintf("%s (commit: %s, built: %s)", Version, GitCommit, BuildTime)
 }
 
-// returns just the version tag
+// Returns just the version tag
 func Short() string {
 	return Version
 }

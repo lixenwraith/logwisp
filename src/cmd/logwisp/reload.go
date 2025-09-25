@@ -17,7 +17,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// ReloadManager handles configuration hot reload
+// Handles configuration hot reload
 type ReloadManager struct {
 	configPath  string
 	service     *service.Service
@@ -35,7 +35,7 @@ type ReloadManager struct {
 	statusReporterMu     sync.Mutex
 }
 
-// NewReloadManager creates a new reload manager
+// Creates a new reload manager
 func NewReloadManager(configPath string, initialCfg *config.Config, logger *log.Logger) *ReloadManager {
 	return &ReloadManager{
 		configPath: configPath,
@@ -45,7 +45,7 @@ func NewReloadManager(configPath string, initialCfg *config.Config, logger *log.
 	}
 }
 
-// Start begins watching for configuration changes
+// Begins watching for configuration changes
 func (rm *ReloadManager) Start(ctx context.Context) error {
 	// Bootstrap initial service
 	svc, err := bootstrapService(ctx, rm.cfg)
@@ -97,7 +97,7 @@ func (rm *ReloadManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// watchLoop monitors configuration changes
+// Monitors configuration changes
 func (rm *ReloadManager) watchLoop(ctx context.Context) {
 	defer rm.wg.Done()
 
@@ -181,7 +181,7 @@ func verifyFilePermissions(path string) error {
 	return nil
 }
 
-// shouldReload determines if a config change requires service reload
+// Determines if a config change requires service reload
 func (rm *ReloadManager) shouldReload(path string) bool {
 	// Pipeline changes always require reload
 	if strings.HasPrefix(path, "pipelines.") || path == "pipelines" {
@@ -201,7 +201,7 @@ func (rm *ReloadManager) shouldReload(path string) bool {
 	return false
 }
 
-// triggerReload performs the actual reload
+// Performs the actual reload
 func (rm *ReloadManager) triggerReload(ctx context.Context) {
 	// Prevent concurrent reloads
 	rm.reloadingMu.Lock()
@@ -235,7 +235,7 @@ func (rm *ReloadManager) triggerReload(ctx context.Context) {
 	rm.logger.Info("msg", "Configuration hot reload completed successfully")
 }
 
-// performReload executes the reload process
+// Executes the reload process
 func (rm *ReloadManager) performReload(ctx context.Context) error {
 	// Get updated config from lconfig
 	updatedCfg, err := rm.lcfg.AsStruct()
@@ -274,7 +274,7 @@ func (rm *ReloadManager) performReload(ctx context.Context) error {
 	return nil
 }
 
-// shutdownOldServices gracefully shuts down old services
+// Gracefully shuts down old services
 func (rm *ReloadManager) shutdownOldServices(svc *service.Service) {
 	// Give connections time to drain
 	rm.logger.Debug("msg", "Draining connections from old services")
@@ -288,7 +288,7 @@ func (rm *ReloadManager) shutdownOldServices(svc *service.Service) {
 	rm.logger.Debug("msg", "Old services shutdown complete")
 }
 
-// startStatusReporter starts a new status reporter
+// Starts a new status reporter
 func (rm *ReloadManager) startStatusReporter(ctx context.Context, svc *service.Service) {
 	rm.statusReporterMu.Lock()
 	defer rm.statusReporterMu.Unlock()
@@ -301,7 +301,7 @@ func (rm *ReloadManager) startStatusReporter(ctx context.Context, svc *service.S
 	rm.logger.Debug("msg", "Started status reporter")
 }
 
-// restartStatusReporter stops old and starts new status reporter
+// Stops old and starts new status reporter
 func (rm *ReloadManager) restartStatusReporter(ctx context.Context, newService *service.Service) {
 	if rm.cfg.DisableStatusReporter {
 		// Just stop the old one if disabled
@@ -326,7 +326,7 @@ func (rm *ReloadManager) restartStatusReporter(ctx context.Context, newService *
 	rm.logger.Debug("msg", "Started new status reporter")
 }
 
-// stopStatusReporter stops the status reporter
+// Stops the status reporter
 func (rm *ReloadManager) stopStatusReporter() {
 	rm.statusReporterMu.Lock()
 	defer rm.statusReporterMu.Unlock()
@@ -338,7 +338,7 @@ func (rm *ReloadManager) stopStatusReporter() {
 	}
 }
 
-// SaveConfig is a wrapper to save the config
+// Wrapper to save the config
 func (rm *ReloadManager) SaveConfig(path string) error {
 	if rm.lcfg == nil {
 		return fmt.Errorf("no lconfig instance available")
@@ -346,7 +346,7 @@ func (rm *ReloadManager) SaveConfig(path string) error {
 	return rm.lcfg.Save(path)
 }
 
-// Shutdown stops the reload manager
+// Stops the reload manager
 func (rm *ReloadManager) Shutdown() {
 	rm.logger.Info("msg", "Shutting down reload manager")
 
@@ -373,7 +373,7 @@ func (rm *ReloadManager) Shutdown() {
 	}
 }
 
-// GetService returns the current service (thread-safe)
+// Returns the current service (thread-safe)
 func (rm *ReloadManager) GetService() *service.Service {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()

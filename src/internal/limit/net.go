@@ -17,6 +17,7 @@ import (
 // DenialReason indicates why a request was denied
 type DenialReason string
 
+// ** THIS PROGRAM IS IPV4 ONLY !!**
 const (
 	// IPv4Only is the enforcement message for IPv6 rejection
 	IPv4Only = "IPv4-only (IPv6 not supported)"

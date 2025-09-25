@@ -14,13 +14,13 @@ import (
 	"golang.org/x/term"
 )
 
-// GeneratorCommand handles auth credential generation
+// Handles auth credential generation
 type GeneratorCommand struct {
 	output io.Writer
 	errOut io.Writer
 }
 
-// NewGeneratorCommand creates a new auth generator command handler
+// Creates a new auth generator command handler
 func NewGeneratorCommand() *GeneratorCommand {
 	return &GeneratorCommand{
 		output: os.Stdout,
@@ -28,7 +28,7 @@ func NewGeneratorCommand() *GeneratorCommand {
 	}
 }
 
-// Execute runs the auth generation command with provided arguments
+// Runs the auth generation command with provided arguments
 func (g *GeneratorCommand) Execute(args []string) error {
 	cmd := flag.NewFlagSet("auth", flag.ContinueOnError)
 	cmd.SetOutput(g.errOut)
@@ -108,7 +108,7 @@ func (g *GeneratorCommand) generatePasswordHash(username, password string, cost 
 
 func (g *GeneratorCommand) generateToken(length int) error {
 	if length < 16 {
-		fmt.Fprintln(g.errOut, "⚠️  Warning: tokens < 16 bytes are cryptographically weak")
+		fmt.Fprintln(g.errOut, "Warning: tokens < 16 bytes are cryptographically weak")
 	}
 	if length > 512 {
 		return fmt.Errorf("token length exceeds maximum (512 bytes)")

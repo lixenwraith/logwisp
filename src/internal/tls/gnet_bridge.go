@@ -22,7 +22,7 @@ var (
 // Maximum plaintext buffer size to prevent memory exhaustion
 const maxPlaintextBufferSize = 32 * 1024 * 1024 // 32MB
 
-// GNetTLSConn bridges gnet.Conn with crypto/tls via io.Pipe
+// Bridges gnet.Conn with crypto/tls via io.Pipe
 type GNetTLSConn struct {
 	gnetConn gnet.Conn
 	tlsConn  *tls.Conn
@@ -51,7 +51,7 @@ type GNetTLSConn struct {
 	logger  interface{ Warn(args ...any) } // Minimal logger interface
 }
 
-// NewServerConn creates a server-side TLS bridge
+// Creates a server-side TLS bridge
 func NewServerConn(gnetConn gnet.Conn, config *tls.Config) *GNetTLSConn {
 	tc := &GNetTLSConn{
 		gnetConn:      gnetConn,
@@ -81,7 +81,7 @@ func NewServerConn(gnetConn gnet.Conn, config *tls.Config) *GNetTLSConn {
 	return tc
 }
 
-// NewClientConn creates a client-side TLS bridge (similar changes)
+// Creates a client-side TLS bridge (similar changes)
 func NewClientConn(gnetConn gnet.Conn, config *tls.Config, serverName string) *GNetTLSConn {
 	tc := &GNetTLSConn{
 		gnetConn:       gnetConn,
@@ -113,7 +113,7 @@ func NewClientConn(gnetConn gnet.Conn, config *tls.Config, serverName string) *G
 	return tc
 }
 
-// ProcessIncoming feeds encrypted data from network into TLS engine (non-blocking)
+// Feeds encrypted data from network into TLS engine (non-blocking)
 func (tc *GNetTLSConn) ProcessIncoming(encryptedData []byte) error {
 	if tc.closed.Load() {
 		return ErrConnectionClosed
@@ -134,7 +134,7 @@ func (tc *GNetTLSConn) ProcessIncoming(encryptedData []byte) error {
 	}
 }
 
-// pumpCipherToNetwork sends TLS-encrypted data to network
+// Sends TLS-encrypted data to network
 func (tc *GNetTLSConn) pumpCipherToNetwork() {
 	defer tc.wg.Done()
 
@@ -159,7 +159,7 @@ func (tc *GNetTLSConn) pumpCipherToNetwork() {
 	}
 }
 
-// pumpPlaintextFromTLS reads decrypted data from TLS
+// Reads decrypted data from TLS
 func (tc *GNetTLSConn) pumpPlaintextFromTLS() {
 	defer tc.wg.Done()
 	buf := make([]byte, 32768) // 32KB read buffer
@@ -197,7 +197,7 @@ func (tc *GNetTLSConn) pumpPlaintextFromTLS() {
 	}
 }
 
-// Read returns available decrypted plaintext (non-blocking)
+// Returns available decrypted plaintext (non-blocking)
 func (tc *GNetTLSConn) Read() []byte {
 	tc.plainMu.Lock()
 	defer tc.plainMu.Unlock()
@@ -212,7 +212,7 @@ func (tc *GNetTLSConn) Read() []byte {
 	return data
 }
 
-// Write encrypts plaintext and queues for network transmission
+// Encrypts plaintext and queues for network transmission
 func (tc *GNetTLSConn) Write(plaintext []byte) (int, error) {
 	if tc.closed.Load() {
 		return 0, ErrConnectionClosed
@@ -225,7 +225,7 @@ func (tc *GNetTLSConn) Write(plaintext []byte) (int, error) {
 	return tc.tlsConn.Write(plaintext)
 }
 
-// Handshake initiates TLS handshake asynchronously
+// Initiates TLS handshake asynchronously
 func (tc *GNetTLSConn) Handshake() {
 	tc.handshakeOnce.Do(func() {
 		go func() {
@@ -235,7 +235,7 @@ func (tc *GNetTLSConn) Handshake() {
 	})
 }
 
-// IsHandshakeDone checks if handshake is complete
+// Checks if handshake is complete
 func (tc *GNetTLSConn) IsHandshakeDone() bool {
 	select {
 	case <-tc.handshakeDone:
@@ -245,13 +245,13 @@ func (tc *GNetTLSConn) IsHandshakeDone() bool {
 	}
 }
 
-// HandshakeComplete waits for handshake completion
+// Waits for handshake completion
 func (tc *GNetTLSConn) HandshakeComplete() (<-chan struct{}, error) {
 	<-tc.handshakeDone
 	return tc.handshakeDone, tc.handshakeErr
 }
 
-// Close shuts down the bridge
+// Shuts down the bridge
 func (tc *GNetTLSConn) Close() error {
 	tc.closeOnce.Do(func() {
 		tc.closed.Store(true)
@@ -269,12 +269,12 @@ func (tc *GNetTLSConn) Close() error {
 	return nil
 }
 
-// GetConnectionState returns TLS connection state
+// Returns TLS connection state
 func (tc *GNetTLSConn) GetConnectionState() tls.ConnectionState {
 	return tc.tlsConn.ConnectionState()
 }
 
-// GetError returns last error
+// Returns last error
 func (tc *GNetTLSConn) GetError() error {
 	if err, ok := tc.lastErr.Load().(error); ok {
 		return err
@@ -282,7 +282,7 @@ func (tc *GNetTLSConn) GetError() error {
 	return nil
 }
 
-// channelConn implements net.Conn over channels
+// Implements net.Conn over channels
 type channelConn struct {
 	incoming   <-chan []byte
 	outgoing   chan<- []byte

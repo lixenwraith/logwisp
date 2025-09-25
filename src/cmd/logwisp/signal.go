@@ -10,14 +10,14 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// SignalHandler manages OS signals
+// Manages OS signals
 type SignalHandler struct {
 	reloadManager *ReloadManager
 	logger        *log.Logger
 	sigChan       chan os.Signal
 }
 
-// NewSignalHandler creates a signal handler
+// Creates a signal handler
 func NewSignalHandler(rm *ReloadManager, logger *log.Logger) *SignalHandler {
 	sh := &SignalHandler{
 		reloadManager: rm,
@@ -36,7 +36,7 @@ func NewSignalHandler(rm *ReloadManager, logger *log.Logger) *SignalHandler {
 	return sh
 }
 
-// Handle processes signals
+// Processes signals
 func (sh *SignalHandler) Handle(ctx context.Context) os.Signal {
 	for {
 		select {
@@ -58,7 +58,7 @@ func (sh *SignalHandler) Handle(ctx context.Context) os.Signal {
 	}
 }
 
-// Stop cleans up signal handling
+// Cleans up signal handling
 func (sh *SignalHandler) Stop() {
 	signal.Stop(sh.sigChan)
 	close(sh.sigChan)

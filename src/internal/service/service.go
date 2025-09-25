@@ -28,8 +28,8 @@ type Service struct {
 	logger    *log.Logger
 }
 
-// New creates a new service
-func New(ctx context.Context, logger *log.Logger) *Service {
+// Creates a new service
+func NewService(ctx context.Context, logger *log.Logger) *Service {
 	serviceCtx, cancel := context.WithCancel(ctx)
 	return &Service{
 		pipelines: make(map[string]*Pipeline),
@@ -39,7 +39,7 @@ func New(ctx context.Context, logger *log.Logger) *Service {
 	}
 }
 
-// NewPipeline creates and starts a new pipeline
+// Creates and starts a new pipeline
 func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,7 +104,7 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 	var formatter format.Formatter
 	var err error
 	if cfg.Format != "" || len(cfg.FormatOptions) > 0 {
-		formatter, err = format.New(cfg.Format, cfg.FormatOptions, s.logger)
+		formatter, err = format.NewFormatter(cfg.Format, cfg.FormatOptions, s.logger)
 		if err != nil {
 			pipelineCancel()
 			return fmt.Errorf("failed to create formatter: %w", err)
@@ -157,7 +157,7 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 	return nil
 }
 
-// wirePipeline connects sources to sinks through filters
+// Connects sources to sinks through filters
 func (s *Service) wirePipeline(p *Pipeline) {
 	// For each source, subscribe and process entries
 	for _, src := range p.Sources {
@@ -234,7 +234,7 @@ func (s *Service) wirePipeline(p *Pipeline) {
 	}
 }
 
-// createSource creates a source instance based on configuration
+// Creates a source instance based on configuration
 func (s *Service) createSource(cfg config.SourceConfig) (source.Source, error) {
 	switch cfg.Type {
 	case "directory":
@@ -250,7 +250,7 @@ func (s *Service) createSource(cfg config.SourceConfig) (source.Source, error) {
 	}
 }
 
-// createSink creates a sink instance based on configuration
+// Creates a sink instance based on configuration
 func (s *Service) createSink(cfg config.SinkConfig, formatter format.Formatter) (sink.Sink, error) {
 	if formatter == nil {
 		// Default formatters for different sink types
@@ -261,7 +261,7 @@ func (s *Service) createSink(cfg config.SinkConfig, formatter format.Formatter) 
 		}
 
 		var err error
-		formatter, err = format.New(defaultFormat, nil, s.logger)
+		formatter, err = format.NewFormatter(defaultFormat, nil, s.logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create default formatter: %w", err)
 		}
@@ -287,7 +287,7 @@ func (s *Service) createSink(cfg config.SinkConfig, formatter format.Formatter) 
 	}
 }
 
-// GetPipeline returns a pipeline by name
+// Returns a pipeline by name
 func (s *Service) GetPipeline(name string) (*Pipeline, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -299,14 +299,7 @@ func (s *Service) GetPipeline(name string) (*Pipeline, error) {
 	return pipeline, nil
 }
 
-// ListStreams is deprecated, use ListPipelines
-func (s *Service) ListStreams() []string {
-	s.logger.Warn("msg", "ListStreams is deprecated, use ListPipelines",
-		"component", "service")
-	return s.ListPipelines()
-}
-
-// ListPipelines returns all pipeline names
+// Returns all pipeline names
 func (s *Service) ListPipelines() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -318,14 +311,7 @@ func (s *Service) ListPipelines() []string {
 	return names
 }
 
-// RemoveStream is deprecated, use RemovePipeline
-func (s *Service) RemoveStream(name string) error {
-	s.logger.Warn("msg", "RemoveStream is deprecated, use RemovePipeline",
-		"component", "service")
-	return s.RemovePipeline(name)
-}
-
-// RemovePipeline stops and removes a pipeline
+// Stops and removes a pipeline
 func (s *Service) RemovePipeline(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -346,7 +332,7 @@ func (s *Service) RemovePipeline(name string) error {
 	return nil
 }
 
-// Shutdown stops all pipelines
+// Stops all pipelines
 func (s *Service) Shutdown() {
 	s.logger.Info("msg", "Service shutdown initiated")
 
@@ -374,7 +360,7 @@ func (s *Service) Shutdown() {
 	s.logger.Info("msg", "Service shutdown complete")
 }
 
-// GetGlobalStats returns statistics for all pipelines
+// Returns statistics for all pipelines
 func (s *Service) GetGlobalStats() map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

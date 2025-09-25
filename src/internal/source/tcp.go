@@ -30,7 +30,7 @@ const (
 	maxCumulativeEncrypted  = 20 * 1024 * 1024 // 20MB total encrypted before processing
 )
 
-// TCPSource receives log entries via TCP connections
+// Receives log entries via TCP connections
 type TCPSource struct {
 	host        string
 	port        int64
@@ -56,7 +56,7 @@ type TCPSource struct {
 	lastEntryTime  atomic.Value // time.Time
 }
 
-// NewTCPSource creates a new TCP server source
+// Creates a new TCP server source
 func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error) {
 	host := "0.0.0.0"
 	if h, ok := options["host"].(string); ok && h != "" {
@@ -278,7 +278,7 @@ func (t *TCPSource) publish(entry core.LogEntry) bool {
 	return true
 }
 
-// tcpClient represents a connected TCP client
+// Represents a connected TCP client
 type tcpClient struct {
 	conn                gnet.Conn
 	buffer              bytes.Buffer
@@ -290,7 +290,7 @@ type tcpClient struct {
 	cumulativeEncrypted int64
 }
 
-// tcpSourceServer handles gnet events
+// Handles gnet events
 type tcpSourceServer struct {
 	gnet.BuiltinEventEngine
 	source  *TCPSource

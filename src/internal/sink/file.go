@@ -13,7 +13,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// FileSink writes log entries to files with rotation
+// Writes log entries to files with rotation
 type FileSink struct {
 	input     chan core.LogEntry
 	writer    *log.Logger // Internal logger instance for file writing
@@ -27,7 +27,7 @@ type FileSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-// NewFileSink creates a new file sink
+// Creates a new file sink
 func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*FileSink, error) {
 	directory, ok := options["directory"].(string)
 	if !ok || directory == "" {

@@ -12,30 +12,37 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// StdinSource reads log entries from standard input
+// Reads log entries from standard input
 type StdinSource struct {
 	subscribers    []chan core.LogEntry
 	done           chan struct{}
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
+	bufferSize     int64
 	startTime      time.Time
 	lastEntryTime  atomic.Value // time.Time
 	logger         *log.Logger
 }
 
-// NewStdinSource creates a new stdin source
 func NewStdinSource(options map[string]any, logger *log.Logger) (*StdinSource, error) {
-	s := &StdinSource{
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
+	bufferSize := int64(1000) // default
+	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
+		bufferSize = bufSize
 	}
-	s.lastEntryTime.Store(time.Time{})
-	return s, nil
+
+	source := &StdinSource{
+		bufferSize:  bufferSize,
+		subscribers: make([]chan core.LogEntry, 0),
+		done:        make(chan struct{}),
+		logger:      logger,
+		startTime:   time.Now(),
+	}
+	source.lastEntryTime.Store(time.Time{})
+	return source, nil
 }
 
 func (s *StdinSource) Subscribe() <-chan core.LogEntry {
-	ch := make(chan core.LogEntry, 1000)
+	ch := make(chan core.LogEntry, s.bufferSize)
 	s.subscribers = append(s.subscribers, ch)
 	return ch
 }

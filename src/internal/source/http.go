@@ -18,11 +18,11 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-// HTTPSource receives log entries via HTTP POST requests
+// Receives log entries via HTTP POST requests
 type HTTPSource struct {
 	host        string
 	port        int64
-	ingestPath  string
+	path        string
 	bufferSize  int64
 	server      *fasthttp.Server
 	subscribers []chan core.LogEntry
@@ -32,7 +32,7 @@ type HTTPSource struct {
 	netLimiter  *limit.NetLimiter
 	logger      *log.Logger
 
-	// CHANGED: Add TLS support
+	// Add TLS support
 	tlsManager *tls.Manager
 	tlsConfig  *config.TLSConfig
 
@@ -44,7 +44,7 @@ type HTTPSource struct {
 	lastEntryTime  atomic.Value // time.Time
 }
 
-// NewHTTPSource creates a new HTTP server source
+// Creates a new HTTP server source
 func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, error) {
 	host := "0.0.0.0"
 	if h, ok := options["host"].(string); ok && h != "" {
@@ -57,7 +57,7 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 	}
 
 	ingestPath := "/ingest"
-	if path, ok := options["ingest_path"].(string); ok && path != "" {
+	if path, ok := options["path"].(string); ok && path != "" {
 		ingestPath = path
 	}
 
@@ -69,7 +69,7 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 	h := &HTTPSource{
 		host:       host,
 		port:       port,
-		ingestPath: ingestPath,
+		path:       ingestPath,
 		bufferSize: bufferSize,
 		done:       make(chan struct{}),
 		startTime:  time.Now(),
@@ -174,7 +174,7 @@ func (h *HTTPSource) Start() error {
 		h.logger.Info("msg", "HTTP source server starting",
 			"component", "http_source",
 			"port", h.port,
-			"ingest_path", h.ingestPath,
+			"path", h.path,
 			"tls_enabled", h.tlsManager != nil)
 
 		var err error
@@ -251,7 +251,7 @@ func (h *HTTPSource) GetStats() SourceStats {
 		LastEntryTime:  lastEntry,
 		Details: map[string]any{
 			"port":            h.port,
-			"ingest_path":     h.ingestPath,
+			"path":            h.path,
 			"invalid_entries": h.invalidEntries.Load(),
 			"net_limit":       netLimitStats,
 		},
@@ -260,12 +260,12 @@ func (h *HTTPSource) GetStats() SourceStats {
 
 func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 	// Only handle POST to the configured ingest path
-	if string(ctx.Method()) != "POST" || string(ctx.Path()) != h.ingestPath {
+	if string(ctx.Method()) != "POST" || string(ctx.Path()) != h.path {
 		ctx.SetStatusCode(fasthttp.StatusNotFound)
 		ctx.SetContentType("application/json")
 		json.NewEncoder(ctx).Encode(map[string]string{
 			"error": "Not Found",
-			"hint":  fmt.Sprintf("POST logs to %s", h.ingestPath),
+			"hint":  fmt.Sprintf("POST logs to %s", h.path),
 		})
 		return
 	}
@@ -437,7 +437,7 @@ func (h *HTTPSource) publish(entry core.LogEntry) bool {
 	return true
 }
 
-// splitLines splits bytes into lines, handling both \n and \r\n
+// Splits bytes into lines, handling both \n and \r\n
 func splitLines(data []byte) [][]byte {
 	var lines [][]byte
 	start := 0

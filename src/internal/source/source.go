@@ -7,7 +7,7 @@ import (
 	"logwisp/src/internal/core"
 )
 
-// Source represents an input data stream
+// Represents an input data stream
 type Source interface {
 	// Subscribe returns a channel that receives log entries
 	Subscribe() <-chan core.LogEntry
@@ -22,7 +22,7 @@ type Source interface {
 	GetStats() SourceStats
 }
 
-// SourceStats contains statistics about a source
+// Contains statistics about a source
 type SourceStats struct {
 	Type           string
 	TotalEntries   uint64

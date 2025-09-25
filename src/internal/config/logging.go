@@ -3,7 +3,7 @@ package config
 
 import "fmt"
 
-// LogConfig represents logging configuration for LogWisp
+// Represents logging configuration for LogWisp
 type LogConfig struct {
 	// Output mode: "file", "stdout", "stderr", "both", "none"
 	Output string `toml:"output"`
@@ -44,10 +44,10 @@ type LogConsoleConfig struct {
 	Format string `toml:"format"`
 }
 
-// DefaultLogConfig returns sensible logging defaults
+// Returns sensible logging defaults
 func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
-		Output: "stderr",
+		Output: "stdout",
 		Level:  "info",
 		File: &LogFileConfig{
 			Directory:      "./log",
@@ -57,7 +57,7 @@ func DefaultLogConfig() *LogConfig {
 			RetentionHours: 168, // 7 days
 		},
 		Console: &LogConsoleConfig{
-			Target: "stderr",
+			Target: "stdout",
 			Format: "txt",
 		},
 	}
@@ -66,7 +66,7 @@ func DefaultLogConfig() *LogConfig {
 func validateLogConfig(cfg *LogConfig) error {
 	validOutputs := map[string]bool{
 		"file": true, "stdout": true, "stderr": true,
-		"both": true, "none": true,
+		"both": true, "all": true, "none": true,
 	}
 	if !validOutputs[cfg.Output] {
 		return fmt.Errorf("invalid log output mode: %s", cfg.Output)

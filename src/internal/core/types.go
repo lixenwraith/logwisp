@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// LogEntry represents a single log record flowing through the pipeline
+// Represents a single log record flowing through the pipeline
 type LogEntry struct {
 	Time    time.Time       `json:"time"`
 	Source  string          `json:"source"`

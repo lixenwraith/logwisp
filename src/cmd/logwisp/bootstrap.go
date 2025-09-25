@@ -13,10 +13,10 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// bootstrapService creates and initializes the log transport service
+// Creates and initializes the log transport service
 func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, error) {
 	// Create service with logger dependency injection
-	svc := service.New(ctx, logger)
+	svc := service.NewService(ctx, logger)
 
 	// Initialize pipelines
 	successCount := 0
@@ -45,7 +45,7 @@ func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service
 	return svc, nil
 }
 
-// initializeLogger sets up the logger based on configuration
+// Sets up the logger based on configuration
 func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 	logCfg := log.DefaultConfig()
@@ -82,7 +82,6 @@ func initializeLogger(cfg *config.Config) error {
 		logCfg.EnableStdout = true
 		logCfg.StdoutTarget = "stderr"
 	case "split":
-		// Console-only with split output: INFO/DEBUG to stdout, WARN/ERROR to stderr
 		logCfg.EnableStdout = true
 		logCfg.StdoutTarget = "split"
 	case "file":

@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// PipelineConfig represents a data processing pipeline
+// Represents a data processing pipeline
 type PipelineConfig struct {
 	// Pipeline identifier (used in logs and metrics)
 	Name string `toml:"name"`
@@ -34,16 +34,16 @@ type PipelineConfig struct {
 	Auth *AuthConfig `toml:"auth"`
 }
 
-// SourceConfig represents an input data source
+// Represents an input data source
 type SourceConfig struct {
-	// Source type: "directory", "file", "stdin", etc.
+	// Source type: "directory", "stdin", "tcp", "http"
 	Type string `toml:"type"`
 
 	// Type-specific configuration options
 	Options map[string]any `toml:"options"`
 }
 
-// SinkConfig represents an output destination
+// Represents an output destination
 type SinkConfig struct {
 	// Sink type: "http", "tcp", "file", "stdout", "stderr"
 	Type string `toml:"type"`
@@ -59,7 +59,7 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 
 	switch cfg.Type {
 	case "directory":
-		// Validate directory source options
+		// Validate path
 		path, ok := cfg.Options["path"].(string)
 		if !ok || path == "" {
 			return fmt.Errorf("pipeline '%s' source[%d]: directory source requires 'path' option",
@@ -72,7 +72,7 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 				pipelineName, sourceIndex)
 		}
 
-		// Validate pattern if provided
+		// Validate pattern
 		if pattern, ok := cfg.Options["pattern"].(string); ok && pattern != "" {
 			// Try to compile as glob pattern (will be converted to regex internally)
 			if strings.Count(pattern, "*") == 0 && strings.Count(pattern, "?") == 0 {
@@ -84,7 +84,7 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 			}
 		}
 
-		// Validate check interval if provided
+		// Validate check interval
 		if interval, ok := cfg.Options["check_interval_ms"]; ok {
 			if intVal, ok := interval.(int64); ok {
 				if intVal < 10 {
@@ -98,17 +98,16 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 		}
 
 	case "stdin":
-		// No specific validation needed for stdin
-
-	case "http":
-		// Validate HTTP source options
-		port, ok := cfg.Options["port"].(int64)
-		if !ok || port < 1 || port > 65535 {
-			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing HTTP port",
-				pipelineName, sourceIndex)
+		// Validate buffer size
+		if bufSize, ok := cfg.Options["buffer_size"].(int64); ok {
+			if bufSize < 1 {
+				return fmt.Errorf("pipeline '%s' source[%d]: stdin buffer_size must be positive: %d",
+					pipelineName, sourceIndex, bufSize)
+			}
 		}
 
-		// Validate host if provided
+	case "http":
+		// Validate host
 		if host, ok := cfg.Options["host"].(string); ok && host != "" {
 			if net.ParseIP(host) == nil {
 				return fmt.Errorf("pipeline '%s' source[%d]: invalid IP address: %s",
@@ -116,22 +115,29 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 			}
 		}
 
-		// Validate path if provided
-		if ingestPath, ok := cfg.Options["ingest_path"].(string); ok {
-			if !strings.HasPrefix(ingestPath, "/") {
+		// Validate port
+		port, ok := cfg.Options["port"].(int64)
+		if !ok || port < 1 || port > 65535 {
+			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing HTTP port",
+				pipelineName, sourceIndex)
+		}
+
+		// Validate path
+		if path, ok := cfg.Options["ingest_path"].(string); ok {
+			if !strings.HasPrefix(path, "/") {
 				return fmt.Errorf("pipeline '%s' source[%d]: ingest path must start with /: %s",
-					pipelineName, sourceIndex, ingestPath)
+					pipelineName, sourceIndex, path)
 			}
 		}
 
-		// Validate net_limit if present within Options
+		// Validate net_limit
 		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
 			if err := validateNetLimitOptions("HTTP source", pipelineName, sourceIndex, rl); err != nil {
 				return err
 			}
 		}
 
-		// Validate TLS if present
+		// Validate TLS
 		if tls, ok := cfg.Options["tls"].(map[string]any); ok {
 			if err := validateTLSOptions("HTTP source", pipelineName, sourceIndex, tls); err != nil {
 				return err
@@ -139,14 +145,7 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 		}
 
 	case "tcp":
-		// Validate TCP source options
-		port, ok := cfg.Options["port"].(int64)
-		if !ok || port < 1 || port > 65535 {
-			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing TCP port",
-				pipelineName, sourceIndex)
-		}
-
-		// Validate host if provided
+		// Validate host
 		if host, ok := cfg.Options["host"].(string); ok && host != "" {
 			if net.ParseIP(host) == nil {
 				return fmt.Errorf("pipeline '%s' source[%d]: invalid IP address: %s",
@@ -154,14 +153,21 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 			}
 		}
 
-		// Validate net_limit if present within Options
+		// Validate port
+		port, ok := cfg.Options["port"].(int64)
+		if !ok || port < 1 || port > 65535 {
+			return fmt.Errorf("pipeline '%s' source[%d]: invalid or missing TCP port",
+				pipelineName, sourceIndex)
+		}
+
+		// Validate net_limit
 		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
 			if err := validateNetLimitOptions("TCP source", pipelineName, sourceIndex, rl); err != nil {
 				return err
 			}
 		}
 
-		// Validate TLS if present
+		// Validate TLS
 		if tls, ok := cfg.Options["tls"].(map[string]any); ok {
 			if err := validateTLSOptions("TCP source", pipelineName, sourceIndex, tls); err != nil {
 				return err
@@ -337,7 +343,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		}
 
 	case "tcp_client":
-		// FIXED: Added validation for TCP client sink
+		// Added validation for TCP client sink
 		// Validate address
 		address, ok := cfg.Options["address"].(string)
 		if !ok || address == "" {
@@ -368,20 +374,21 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 		}
 
 	case "file":
-		// Validate file sink options
+		// Validate directory
 		directory, ok := cfg.Options["directory"].(string)
 		if !ok || directory == "" {
 			return fmt.Errorf("pipeline '%s' sink[%d]: file sink requires 'directory' option",
 				pipelineName, sinkIndex)
 		}
 
+		// Validate filename
 		name, ok := cfg.Options["name"].(string)
 		if !ok || name == "" {
 			return fmt.Errorf("pipeline '%s' sink[%d]: file sink requires 'name' option",
 				pipelineName, sinkIndex)
 		}
 
-		// Validate numeric options
+		// Validate size options
 		if maxSize, ok := cfg.Options["max_size_mb"].(int64); ok {
 			if maxSize < 1 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: max_size_mb must be positive: %d",
@@ -396,6 +403,14 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
+		if minDiskFree, ok := cfg.Options["min_disk_free_mb"].(int64); ok {
+			if minDiskFree < 0 {
+				return fmt.Errorf("pipeline '%s' sink[%d]: min_disk_free_mb cannot be negative: %d",
+					pipelineName, sinkIndex, minDiskFree)
+			}
+		}
+
+		// Validate retention period
 		if retention, ok := cfg.Options["retention_hours"].(float64); ok {
 			if retention < 0 {
 				return fmt.Errorf("pipeline '%s' sink[%d]: retention_hours cannot be negative: %f",

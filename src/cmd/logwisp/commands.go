@@ -3,25 +3,25 @@ package main
 
 import (
 	"fmt"
-	"logwisp/src/internal/tls"
 	"os"
 
 	"logwisp/src/internal/auth"
+	"logwisp/src/internal/tls"
 	"logwisp/src/internal/version"
 )
 
-// CommandRouter handles subcommand routing before main app initialization
+// Handles subcommand routing before main app initialization
 type CommandRouter struct {
 	commands map[string]CommandHandler
 }
 
-// CommandHandler defines the interface for subcommands
+// Defines the interface for subcommands
 type CommandHandler interface {
 	Execute(args []string) error
 	Description() string
 }
 
-// NewCommandRouter creates and initializes the command router
+// Creates and initializes the command router
 func NewCommandRouter() *CommandRouter {
 	router := &CommandRouter{
 		commands: make(map[string]CommandHandler),
@@ -36,11 +36,10 @@ func NewCommandRouter() *CommandRouter {
 	return router
 }
 
-// Route checks for and executes subcommands
-// Returns true if a subcommand was handled
-func (r *CommandRouter) Route(args []string) bool {
+// Checks for and executes subcommands
+func (r *CommandRouter) Route(args []string) error {
 	if len(args) < 1 {
-		return false
+		return nil
 	}
 
 	// Check for help flags anywhere in args
@@ -73,10 +72,10 @@ func (r *CommandRouter) Route(args []string) bool {
 		}
 	}
 
-	return false
+	return nil
 }
 
-// ShowCommands displays available subcommands
+// Displays available subcommands
 func (r *CommandRouter) ShowCommands() {
 	fmt.Fprintln(os.Stderr, "  auth       Generate authentication credentials")
 	fmt.Fprintln(os.Stderr, "  tls        Generate TLS certificates")
@@ -85,7 +84,7 @@ func (r *CommandRouter) ShowCommands() {
 	fmt.Fprintln(os.Stderr, "\nUse 'logwisp <command> --help' for command-specific help")
 }
 
-// helpCommand implementation
+// TODO: Future: refactor with a new command interface
 type helpCommand struct{}
 
 func (c *helpCommand) Execute(args []string) error {

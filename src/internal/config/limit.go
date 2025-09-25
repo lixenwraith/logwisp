@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// RateLimitPolicy defines the action to take when a rate limit is exceeded.
+// Defines the action to take when a rate limit is exceeded.
 type RateLimitPolicy int
 
 const (
@@ -16,7 +16,7 @@ const (
 	PolicyDrop
 )
 
-// RateLimitConfig defines the configuration for pipeline-level rate limiting.
+// Defines the configuration for pipeline-level rate limiting.
 type RateLimitConfig struct {
 	// Rate is the number of log entries allowed per second. Default: 0 (disabled).
 	Rate float64 `toml:"rate"`
