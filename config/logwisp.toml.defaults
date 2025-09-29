@@ -12,7 +12,7 @@ config_save_on_exit = false       # Persist runtime changes
 
 ### Logging Configuration
 [logging]
-output = "stdout"                 # file|stdout|stderr|both|all|none
+output = "stdout"                 # file|stdout|stderr|split|all|none
 level = "info"                    # debug|info|warn|error
 
 [logging.file]

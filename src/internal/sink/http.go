@@ -225,6 +225,7 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	fasthttpLogger := compat.NewFastHTTPAdapter(h.logger)
 
 	h.server = &fasthttp.Server{
+		Name:              fmt.Sprintf("LogWisp/%s", version.Short()),
 		Handler:           h.requestHandler,
 		DisableKeepalive:  false,
 		StreamRequestBody: true,

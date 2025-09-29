@@ -121,6 +121,11 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 		pipeline.Sinks = append(pipeline.Sinks, sinkInst)
 	}
 
+	// Configure authentication for sources that support it before starting them
+	for _, sourceInst := range pipeline.Sources {
+		sourceInst.SetAuth(cfg.Auth)
+	}
+
 	// Start all sources
 	for i, src := range pipeline.Sources {
 		if err := src.Start(); err != nil {
@@ -129,9 +134,9 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 		}
 	}
 
-	// Configure authentication for sources that support it
-	for _, sourceInst := range pipeline.Sources {
-		sourceInst.SetAuth(cfg.Auth)
+	// Configure authentication for sinks that support it before starting them
+	for _, sinkInst := range pipeline.Sinks {
+		sinkInst.SetAuth(cfg.Auth)
 	}
 
 	// Start all sinks
@@ -140,11 +145,6 @@ func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
 			pipeline.Shutdown()
 			return fmt.Errorf("failed to start sink[%d]: %w", i, err)
 		}
-	}
-
-	// Configure authentication for sinks that support it
-	for _, sinkInst := range pipeline.Sinks {
-		sinkInst.SetAuth(cfg.Auth)
 	}
 
 	// Wire sources to sinks through filters

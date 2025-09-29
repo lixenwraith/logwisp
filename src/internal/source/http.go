@@ -4,16 +4,17 @@ package source
 import (
 	"encoding/json"
 	"fmt"
-	"logwisp/src/internal/auth"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/limit"
 	"logwisp/src/internal/tls"
+	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
@@ -180,6 +181,7 @@ func (h *HTTPSource) Subscribe() <-chan core.LogEntry {
 
 func (h *HTTPSource) Start() error {
 	h.server = &fasthttp.Server{
+		Name:               fmt.Sprintf("LogWisp/%s", version.Short()),
 		Handler:            h.requestHandler,
 		DisableKeepalive:   false,
 		StreamRequestBody:  true,

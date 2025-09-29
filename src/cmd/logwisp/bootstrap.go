@@ -50,16 +50,10 @@ func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 	logCfg := log.DefaultConfig()
 
-	// Prevent empty directory creation if file logging is not configured
-	if cfg.Logging.Output != "file" && cfg.Logging.Output != "all" {
-		logCfg.DisableFile = true
-		logCfg.Directory = ""
-	}
-
 	if cfg.Quiet {
 		// In quiet mode, disable ALL logging output
 		logCfg.Level = 255 // A level that disables all output
-		logCfg.DisableFile = true
+		logCfg.EnableFile = false
 		logCfg.EnableConsole = false
 		return logger.ApplyConfig(logCfg)
 	}
@@ -74,22 +68,26 @@ func initializeLogger(cfg *config.Config) error {
 	// Configure based on output mode
 	switch cfg.Logging.Output {
 	case "none":
+		logCfg.EnableFile = false
 		logCfg.EnableConsole = false
 	case "stdout":
+		logCfg.EnableFile = false
 		logCfg.EnableConsole = true
 		logCfg.ConsoleTarget = "stdout"
 	case "stderr":
+		logCfg.EnableFile = false
 		logCfg.EnableConsole = true
 		logCfg.ConsoleTarget = "stderr"
 	case "split":
+		logCfg.EnableFile = false
 		logCfg.EnableConsole = true
 		logCfg.ConsoleTarget = "split"
 	case "file":
-		logCfg.DisableFile = false
+		logCfg.EnableFile = true
 		logCfg.EnableConsole = false
 		configureFileLogging(logCfg, cfg)
 	case "all":
-		logCfg.DisableFile = false
+		logCfg.EnableFile = true
 		logCfg.EnableConsole = true
 		logCfg.ConsoleTarget = "split"
 		configureFileLogging(logCfg, cfg)

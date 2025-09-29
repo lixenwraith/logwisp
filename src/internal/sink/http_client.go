@@ -8,8 +8,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
-	"logwisp/src/internal/auth"
-	"logwisp/src/internal/config"
 	"net/url"
 	"os"
 	"strings"
@@ -17,8 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/auth"
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
+	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
@@ -440,6 +441,8 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 		req.Header.SetMethod("POST")
 		req.Header.SetContentType("application/json")
 		req.SetBody(body)
+
+		req.Header.Set("User-Agent", fmt.Sprintf("LogWisp/%s", version.Short()))
 
 		// Add Basic Auth header if credentials configured
 		if h.config.Username != "" && h.config.Password != "" {
