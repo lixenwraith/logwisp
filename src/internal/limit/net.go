@@ -49,8 +49,11 @@ type NetLimiter struct {
 	globalLimiter *TokenBucket
 
 	// Connection tracking
-	ipConnections map[string]*connTracker
-	connMu        sync.RWMutex
+	ipConnections    map[string]*connTracker
+	userConnections  map[string]*connTracker
+	tokenConnections map[string]*connTracker
+	totalConnections atomic.Int64
+	connMu           sync.RWMutex
 
 	// Statistics
 	totalRequests      atomic.Uint64
@@ -102,28 +105,22 @@ func NewNetLimiter(cfg config.NetLimitConfig, logger *log.Logger) *NetLimiter {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	l := &NetLimiter{
-		config:        cfg,
-		logger:        logger,
-		ipWhitelist:   make([]*net.IPNet, 0),
-		ipBlacklist:   make([]*net.IPNet, 0),
-		ipLimiters:    make(map[string]*ipLimiter),
-		ipConnections: make(map[string]*connTracker),
-		lastCleanup:   time.Now(),
-		ctx:           ctx,
-		cancel:        cancel,
-		cleanupDone:   make(chan struct{}),
+		config:           cfg,
+		logger:           logger,
+		ipWhitelist:      make([]*net.IPNet, 0),
+		ipBlacklist:      make([]*net.IPNet, 0),
+		ipLimiters:       make(map[string]*ipLimiter),
+		ipConnections:    make(map[string]*connTracker),
+		userConnections:  make(map[string]*connTracker),
+		tokenConnections: make(map[string]*connTracker),
+		lastCleanup:      time.Now(),
+		ctx:              ctx,
+		cancel:           cancel,
+		cleanupDone:      make(chan struct{}),
 	}
 
 	// Parse IP lists
 	l.parseIPLists(cfg)
-
-	// Create global limiter if configured
-	if cfg.Enabled && cfg.LimitBy == "global" {
-		l.globalLimiter = NewTokenBucket(
-			float64(cfg.BurstSize),
-			cfg.RequestsPerSecond,
-		)
-	}
 
 	// Start cleanup goroutine only if rate limiting is enabled
 	if cfg.Enabled {
@@ -138,7 +135,10 @@ func NewNetLimiter(cfg config.NetLimitConfig, logger *log.Logger) *NetLimiter {
 		"blacklist_rules", len(l.ipBlacklist),
 		"requests_per_second", cfg.RequestsPerSecond,
 		"burst_size", cfg.BurstSize,
-		"limit_by", cfg.LimitBy)
+		"max_connections_per_ip", cfg.MaxConnectionsPerIP,
+		"max_connections_per_user", cfg.MaxConnectionsPerUser,
+		"max_connections_per_token", cfg.MaxConnectionsPerToken,
+		"max_connections_total", cfg.MaxConnectionsTotal)
 
 	return l
 }
@@ -276,7 +276,7 @@ func (l *NetLimiter) Shutdown() {
 	}
 }
 
-// Checks if an HTTP request should be allowed
+// Checks if an HTTP request should be allowed: IP access control + connection limits (IP only) + calls
 func (l *NetLimiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int64, message string) {
 	if l == nil {
 		return true, 0, ""
@@ -343,7 +343,7 @@ func (l *NetLimiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int6
 	}
 
 	// Check rate limit
-	if !l.checkLimit(ipStr) {
+	if !l.checkIPLimit(ipStr) {
 		l.blockedByRateLimit.Add(1)
 		statusCode = l.config.ResponseCode
 		if statusCode == 0 {
@@ -372,7 +372,7 @@ func (l *NetLimiter) updateConnectionActivity(ip string) {
 	}
 }
 
-// Checks if a TCP connection should be allowed
+// Checks if a TCP connection should be allowed: IP access control + calls checkIPLimit()
 func (l *NetLimiter) CheckTCP(remoteAddr net.Addr) bool {
 	if l == nil {
 		return true
@@ -412,7 +412,7 @@ func (l *NetLimiter) CheckTCP(remoteAddr net.Addr) bool {
 
 	// Check rate limit
 	ipStr := tcpAddr.IP.String()
-	if !l.checkLimit(ipStr) {
+	if !l.checkIPLimit(ipStr) {
 		l.blockedByRateLimit.Add(1)
 		return false
 	}
@@ -531,17 +531,40 @@ func (l *NetLimiter) GetStats() map[string]any {
 		return map[string]any{"enabled": false}
 	}
 
+	// Get active rate limiters count
 	l.ipMu.RLock()
 	activeIPs := len(l.ipLimiters)
 	l.ipMu.RUnlock()
 
+	// Get connection tracker counts and calculate total active connections
 	l.connMu.RLock()
-	totalConnections := 0
+	ipConnTrackers := len(l.ipConnections)
+	userConnTrackers := len(l.userConnections)
+	tokenConnTrackers := len(l.tokenConnections)
+
+	// Calculate actual connection count by summing all IP connections
+	// Potentially more accurate than totalConnections counter which might drift
+	// TODO: test and refactor if they match
+	actualIPConnections := 0
 	for _, tracker := range l.ipConnections {
-		totalConnections += int(tracker.connections.Load())
+		actualIPConnections += int(tracker.connections.Load())
 	}
+
+	actualUserConnections := 0
+	for _, tracker := range l.userConnections {
+		actualUserConnections += int(tracker.connections.Load())
+	}
+
+	actualTokenConnections := 0
+	for _, tracker := range l.tokenConnections {
+		actualTokenConnections += int(tracker.connections.Load())
+	}
+
+	// Use the counter for total (should match actualIPConnections in most cases)
+	totalConns := l.totalConnections.Load()
 	l.connMu.RUnlock()
 
+	// Calculate total blocked
 	totalBlocked := l.blockedByBlacklist.Load() +
 		l.blockedByWhitelist.Load() +
 		l.blockedByRateLimit.Load() +
@@ -559,23 +582,39 @@ func (l *NetLimiter) GetStats() map[string]any {
 			"conn_limit": l.blockedByConnLimit.Load(),
 			"invalid_ip": l.blockedByInvalidIP.Load(),
 		},
-		"active_ips":        activeIPs,
-		"total_connections": totalConnections,
-		"acl": map[string]int{
-			"whitelist_rules": len(l.ipWhitelist),
-			"blacklist_rules": len(l.ipBlacklist),
-		},
-		"rate_limit": map[string]any{
+		"rate_limiting": map[string]any{
 			"enabled":             l.config.Enabled,
 			"requests_per_second": l.config.RequestsPerSecond,
 			"burst_size":          l.config.BurstSize,
-			"limit_by":            l.config.LimitBy,
+			"active_ip_limiters":  activeIPs, // IPs being rate-limited
+		},
+		"access_control": map[string]any{
+			"whitelist_rules": len(l.ipWhitelist),
+			"blacklist_rules": len(l.ipBlacklist),
+		},
+		"connections": map[string]any{
+			// Actual counts
+			"total_active":             totalConns,             // Counter-based total
+			"active_ip_connections":    actualIPConnections,    // Sum of all IP connections
+			"active_user_connections":  actualUserConnections,  // Sum of all user connections
+			"active_token_connections": actualTokenConnections, // Sum of all token connections
+
+			// Tracker counts (number of unique IPs/users/tokens being tracked)
+			"tracked_ips":    ipConnTrackers,
+			"tracked_users":  userConnTrackers,
+			"tracked_tokens": tokenConnTrackers,
+
+			// Configuration limits (0 = disabled)
+			"limit_per_ip":    l.config.MaxConnectionsPerIP,
+			"limit_per_user":  l.config.MaxConnectionsPerUser,
+			"limit_per_token": l.config.MaxConnectionsPerToken,
+			"limit_total":     l.config.MaxConnectionsTotal,
 		},
 	}
 }
 
-// Performs the actual net limit check
-func (l *NetLimiter) checkLimit(ip string) bool {
+// Performs IP net limit check (req/sec)
+func (l *NetLimiter) checkIPLimit(ip string) bool {
 	// Validate IP format
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil || !isIPv4(parsedIP) {
@@ -588,53 +627,36 @@ func (l *NetLimiter) checkLimit(ip string) bool {
 	// Maybe run cleanup
 	l.maybeCleanup()
 
-	switch l.config.LimitBy {
-	case "global":
-		return l.globalLimiter.Allow()
-
-	case "ip", "":
-		// Default to per-IP limiting
-		l.ipMu.Lock()
-		lim, exists := l.ipLimiters[ip]
-		if !exists {
-			// Create new limiter for this IP
-			lim = &ipLimiter{
-				bucket: NewTokenBucket(
-					float64(l.config.BurstSize),
-					l.config.RequestsPerSecond,
-				),
-				lastSeen: time.Now(),
-			}
-			l.ipLimiters[ip] = lim
-			l.uniqueIPs.Add(1)
-
-			l.logger.Debug("msg", "Created new IP limiter",
-				"ip", ip,
-				"total_ips", l.uniqueIPs.Load())
-		} else {
-			lim.lastSeen = time.Now()
+	// IP limit
+	l.ipMu.Lock()
+	lim, exists := l.ipLimiters[ip]
+	if !exists {
+		// Create new limiter for this IP
+		lim = &ipLimiter{
+			bucket: NewTokenBucket(
+				float64(l.config.BurstSize),
+				l.config.RequestsPerSecond,
+			),
+			lastSeen: time.Now(),
 		}
-		l.ipMu.Unlock()
+		l.ipLimiters[ip] = lim
+		l.uniqueIPs.Add(1)
 
-		// Check connection limit if configured
-		if l.config.MaxConnectionsPerIP > 0 {
-			l.connMu.RLock()
-			tracker, exists := l.ipConnections[ip]
-			l.connMu.RUnlock()
-
-			if exists && tracker.connections.Load() >= l.config.MaxConnectionsPerIP {
-				return false
-			}
-		}
-
-		return lim.bucket.Allow()
-
-	default:
-		// Unknown limit_by value, allow by default
-		l.logger.Warn("msg", "Unknown limit_by value",
-			"limit_by", l.config.LimitBy)
-		return true
+		l.logger.Debug("msg", "Created new IP limiter",
+			"ip", ip,
+			"total_ips", l.uniqueIPs.Load())
+	} else {
+		lim.lastSeen = time.Now()
 	}
+	l.ipMu.Unlock()
+
+	// Rate limit check
+	allowed := lim.bucket.Allow()
+	if !allowed {
+		l.blockedByRateLimit.Add(1)
+	}
+
+	return allowed
 }
 
 // Runs cleanup if enough time has passed
@@ -691,25 +713,57 @@ func (l *NetLimiter) cleanup() {
 
 	// Clean up stale connection trackers
 	l.connMu.Lock()
-	connCleaned := 0
+
+	// Clean IP connections
+	ipCleaned := 0
 	for ip, tracker := range l.ipConnections {
 		tracker.mu.Lock()
 		lastSeen := tracker.lastSeen
 		tracker.mu.Unlock()
 
-		// Remove if no activity for 5 minutes AND no active connections
 		if now.Sub(lastSeen) > staleTimeout && tracker.connections.Load() <= 0 {
 			delete(l.ipConnections, ip)
-			connCleaned++
+			ipCleaned++
 		}
 	}
+
+	// Clean user connections
+	userCleaned := 0
+	for user, tracker := range l.userConnections {
+		tracker.mu.Lock()
+		lastSeen := tracker.lastSeen
+		tracker.mu.Unlock()
+
+		if now.Sub(lastSeen) > staleTimeout && tracker.connections.Load() <= 0 {
+			delete(l.userConnections, user)
+			userCleaned++
+		}
+	}
+
+	// Clean token connections
+	tokenCleaned := 0
+	for token, tracker := range l.tokenConnections {
+		tracker.mu.Lock()
+		lastSeen := tracker.lastSeen
+		tracker.mu.Unlock()
+
+		if now.Sub(lastSeen) > staleTimeout && tracker.connections.Load() <= 0 {
+			delete(l.tokenConnections, token)
+			tokenCleaned++
+		}
+	}
+
 	l.connMu.Unlock()
 
-	if connCleaned > 0 {
+	if ipCleaned > 0 || userCleaned > 0 || tokenCleaned > 0 {
 		l.logger.Debug("msg", "Cleaned up stale connection trackers",
 			"component", "netlimit",
-			"cleaned", connCleaned,
-			"remaining", len(l.ipConnections))
+			"ip_cleaned", ipCleaned,
+			"user_cleaned", userCleaned,
+			"token_cleaned", tokenCleaned,
+			"ip_remaining", len(l.ipConnections),
+			"user_remaining", len(l.userConnections),
+			"token_remaining", len(l.tokenConnections))
 	}
 }
 
@@ -728,6 +782,166 @@ func (l *NetLimiter) cleanupLoop() {
 			return
 		case <-ticker.C:
 			l.cleanup()
+		}
+	}
+}
+
+// Tracks a new connection with optional user/token info: Connection limits (IP/user/token/total) for TCP only
+func (l *NetLimiter) TrackConnection(ip string, user string, token string) bool {
+	if l == nil {
+		return true
+	}
+
+	l.connMu.Lock()
+	defer l.connMu.Unlock()
+
+	// Check total connections limit (0 = disabled)
+	if l.config.MaxConnectionsTotal > 0 {
+		currentTotal := l.totalConnections.Load()
+		if currentTotal >= l.config.MaxConnectionsTotal {
+			l.blockedByConnLimit.Add(1)
+			l.logger.Debug("msg", "TCP connection blocked by total limit",
+				"component", "netlimit",
+				"current_total", currentTotal,
+				"max_total", l.config.MaxConnectionsTotal)
+			return false
+		}
+	}
+
+	// Check per-IP connection limit (0 = disabled)
+	if l.config.MaxConnectionsPerIP > 0 && ip != "" {
+		tracker, exists := l.ipConnections[ip]
+		if !exists {
+			tracker = &connTracker{lastSeen: time.Now()}
+			l.ipConnections[ip] = tracker
+		}
+		if tracker.connections.Load() >= l.config.MaxConnectionsPerIP {
+			l.blockedByConnLimit.Add(1)
+			l.logger.Debug("msg", "TCP connection blocked by IP limit",
+				"component", "netlimit",
+				"ip", ip,
+				"current", tracker.connections.Load(),
+				"max", l.config.MaxConnectionsPerIP)
+			return false
+		}
+	}
+
+	// Check per-user connection limit (0 = disabled)
+	if l.config.MaxConnectionsPerUser > 0 && user != "" {
+		tracker, exists := l.userConnections[user]
+		if !exists {
+			tracker = &connTracker{lastSeen: time.Now()}
+			l.userConnections[user] = tracker
+		}
+		if tracker.connections.Load() >= l.config.MaxConnectionsPerUser {
+			l.blockedByConnLimit.Add(1)
+			l.logger.Debug("msg", "TCP connection blocked by user limit",
+				"component", "netlimit",
+				"user", user,
+				"current", tracker.connections.Load(),
+				"max", l.config.MaxConnectionsPerUser)
+			return false
+		}
+	}
+
+	// Check per-token connection limit (0 = disabled)
+	if l.config.MaxConnectionsPerToken > 0 && token != "" {
+		tracker, exists := l.tokenConnections[token]
+		if !exists {
+			tracker = &connTracker{lastSeen: time.Now()}
+			l.tokenConnections[token] = tracker
+		}
+		if tracker.connections.Load() >= l.config.MaxConnectionsPerToken {
+			l.blockedByConnLimit.Add(1)
+			l.logger.Debug("msg", "TCP connection blocked by token limit",
+				"component", "netlimit",
+				"token", token,
+				"current", tracker.connections.Load(),
+				"max", l.config.MaxConnectionsPerToken)
+			return false
+		}
+	}
+
+	// All checks passed, increment counters
+	l.totalConnections.Add(1)
+
+	if ip != "" && l.config.MaxConnectionsPerIP > 0 {
+		if tracker, exists := l.ipConnections[ip]; exists {
+			tracker.connections.Add(1)
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+
+	if user != "" && l.config.MaxConnectionsPerUser > 0 {
+		if tracker, exists := l.userConnections[user]; exists {
+			tracker.connections.Add(1)
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+
+	if token != "" && l.config.MaxConnectionsPerToken > 0 {
+		if tracker, exists := l.tokenConnections[token]; exists {
+			tracker.connections.Add(1)
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+
+	return true
+}
+
+// Releases a tracked connection
+func (l *NetLimiter) ReleaseConnection(ip string, user string, token string) {
+	if l == nil {
+		return
+	}
+
+	l.connMu.Lock()
+	defer l.connMu.Unlock()
+
+	// Decrement total
+	if l.totalConnections.Load() > 0 {
+		l.totalConnections.Add(-1)
+	}
+
+	// Decrement IP counter
+	if ip != "" {
+		if tracker, exists := l.ipConnections[ip]; exists {
+			if tracker.connections.Load() > 0 {
+				tracker.connections.Add(-1)
+			}
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+
+	// Decrement user counter
+	if user != "" {
+		if tracker, exists := l.userConnections[user]; exists {
+			if tracker.connections.Load() > 0 {
+				tracker.connections.Add(-1)
+			}
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+
+	// Decrement token counter
+	if token != "" {
+		if tracker, exists := l.tokenConnections[token]; exists {
+			if tracker.connections.Load() > 0 {
+				tracker.connections.Add(-1)
+			}
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
 		}
 	}
 }

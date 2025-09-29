@@ -29,7 +29,7 @@ type BasicAuthConfig struct {
 
 type BasicAuthUser struct {
 	Username string `toml:"username"`
-	// Password hash (bcrypt)
+	// Password hash (Argon2id)
 	PasswordHash string `toml:"password_hash"`
 }
 

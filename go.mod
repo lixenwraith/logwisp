@@ -5,9 +5,9 @@ go 1.25.1
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/lixenwraith/config v0.0.0-20250908085506-537a4d49d2c3
-	github.com/lixenwraith/log v0.0.0-20250908085352-2df52dfb9208
-	github.com/panjf2000/gnet/v2 v2.9.3
-	github.com/valyala/fasthttp v1.65.0
+	github.com/lixenwraith/log v0.0.0-20250929084748-210374d95b3e
+	github.com/panjf2000/gnet/v2 v2.9.4
+	github.com/valyala/fasthttp v1.66.0
 	golang.org/x/crypto v0.42.0
 	golang.org/x/term v0.35.0
 	golang.org/x/time v0.13.0

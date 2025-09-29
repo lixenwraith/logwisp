@@ -131,8 +131,8 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 		}
 
 		// Validate net_limit
-		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
-			if err := validateNetLimitOptions("HTTP source", pipelineName, sourceIndex, rl); err != nil {
+		if nl, ok := cfg.Options["net_limit"].(map[string]any); ok {
+			if err := validateNetLimitOptions("HTTP source", pipelineName, sourceIndex, nl); err != nil {
 				return err
 			}
 		}
@@ -161,15 +161,8 @@ func validateSource(pipelineName string, sourceIndex int, cfg *SourceConfig) err
 		}
 
 		// Validate net_limit
-		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
-			if err := validateNetLimitOptions("TCP source", pipelineName, sourceIndex, rl); err != nil {
-				return err
-			}
-		}
-
-		// Validate TLS
-		if tls, ok := cfg.Options["tls"].(map[string]any); ok {
-			if err := validateTLSOptions("TCP source", pipelineName, sourceIndex, tls); err != nil {
+		if nl, ok := cfg.Options["net_limit"].(map[string]any); ok {
+			if err := validateNetLimitOptions("TCP source", pipelineName, sourceIndex, nl); err != nil {
 				return err
 			}
 		}
@@ -196,7 +189,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 				pipelineName, sinkIndex)
 		}
 
-		// Validate host if provided
+		// Validate host
 		if host, ok := cfg.Options["host"].(string); ok && host != "" {
 			if net.ParseIP(host) == nil {
 				return fmt.Errorf("pipeline '%s' sink[%d]: invalid IP address: %s",
@@ -219,7 +212,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-		// Validate paths if provided
+		// Validate paths
 		if streamPath, ok := cfg.Options["stream_path"].(string); ok {
 			if !strings.HasPrefix(streamPath, "/") {
 				return fmt.Errorf("pipeline '%s' sink[%d]: stream path must start with /: %s",
@@ -234,7 +227,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-		// Validate heartbeat if present
+		// Validate heartbeat
 		if hb, ok := cfg.Options["heartbeat"].(map[string]any); ok {
 			if err := validateHeartbeatOptions("HTTP", pipelineName, sinkIndex, hb); err != nil {
 				return err
@@ -248,9 +241,9 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-		// Validate net limit if present
-		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
-			if err := validateNetLimitOptions("HTTP", pipelineName, sinkIndex, rl); err != nil {
+		// Validate net limit
+		if nl, ok := cfg.Options["net_limit"].(map[string]any); ok {
+			if err := validateNetLimitOptions("HTTP", pipelineName, sinkIndex, nl); err != nil {
 				return err
 			}
 		}
@@ -263,7 +256,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 				pipelineName, sinkIndex)
 		}
 
-		// Validate host if provided
+		// Validate host
 		if host, ok := cfg.Options["host"].(string); ok && host != "" {
 			if net.ParseIP(host) == nil {
 				return fmt.Errorf("pipeline '%s' sink[%d]: invalid IP address: %s",
@@ -286,23 +279,16 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-		// Validate heartbeat if present
+		// Validate heartbeat
 		if hb, ok := cfg.Options["heartbeat"].(map[string]any); ok {
 			if err := validateHeartbeatOptions("TCP", pipelineName, sinkIndex, hb); err != nil {
 				return err
 			}
 		}
 
-		// Validate TLS if present
-		if tls, ok := cfg.Options["tls"].(map[string]any); ok {
-			if err := validateTLSOptions("TCP", pipelineName, sinkIndex, tls); err != nil {
-				return err
-			}
-		}
-
-		// Validate net limit if present
-		if rl, ok := cfg.Options["net_limit"].(map[string]any); ok {
-			if err := validateNetLimitOptions("TCP", pipelineName, sinkIndex, rl); err != nil {
+		// Validate net limit
+		if nl, ok := cfg.Options["net_limit"].(map[string]any); ok {
+			if err := validateNetLimitOptions("TCP", pipelineName, sinkIndex, nl); err != nil {
 				return err
 			}
 		}

@@ -117,18 +117,6 @@ func (m *Manager) GetHTTPConfig() *tls.Config {
 	return cfg
 }
 
-// Returns TLS config for raw TCP connections
-func (m *Manager) GetTCPConfig() *tls.Config {
-	if m == nil {
-		return nil
-	}
-
-	cfg := m.tlsConfig.Clone()
-	// No ALPN for raw TCP
-	cfg.NextProtos = nil
-	return cfg
-}
-
 // Validates a client certificate for mTLS
 func (m *Manager) ValidateClientCert(rawCerts [][]byte) error {
 	if m == nil || !m.config.ClientAuth {
@@ -174,6 +162,21 @@ func (m *Manager) ValidateClientCert(rawCerts [][]byte) error {
 	return nil
 }
 
+// Returns TLS statistics
+func (m *Manager) GetStats() map[string]any {
+	if m == nil {
+		return map[string]any{"enabled": false}
+	}
+
+	return map[string]any{
+		"enabled":       true,
+		"min_version":   tlsVersionString(m.tlsConfig.MinVersion),
+		"max_version":   tlsVersionString(m.tlsConfig.MaxVersion),
+		"client_auth":   m.config.ClientAuth,
+		"cipher_suites": len(m.tlsConfig.CipherSuites),
+	}
+}
+
 func parseTLSVersion(version string, defaultVersion uint16) uint16 {
 	switch strings.ToUpper(version) {
 	case "TLS1.0", "TLS10":
@@ -215,21 +218,6 @@ func parseCipherSuites(suites string) []uint16 {
 	}
 
 	return result
-}
-
-// Returns TLS statistics
-func (m *Manager) GetStats() map[string]any {
-	if m == nil {
-		return map[string]any{"enabled": false}
-	}
-
-	return map[string]any{
-		"enabled":       true,
-		"min_version":   tlsVersionString(m.tlsConfig.MinVersion),
-		"max_version":   tlsVersionString(m.tlsConfig.MaxVersion),
-		"client_auth":   m.config.ClientAuth,
-		"cipher_suites": len(m.tlsConfig.CipherSuites),
-	}
 }
 
 func tlsVersionString(version uint16) string {

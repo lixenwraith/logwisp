@@ -6,7 +6,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
+	"logwisp/src/internal/auth"
+	"logwisp/src/internal/config"
 	"net/url"
 	"os"
 	"strings"
@@ -23,16 +26,17 @@ import (
 
 // Forwards log entries to a remote HTTP endpoint
 type HTTPClientSink struct {
-	input     chan core.LogEntry
-	config    HTTPClientConfig
-	client    *fasthttp.Client
-	batch     []core.LogEntry
-	batchMu   sync.Mutex
-	done      chan struct{}
-	wg        sync.WaitGroup
-	startTime time.Time
-	logger    *log.Logger
-	formatter format.Formatter
+	input         chan core.LogEntry
+	config        HTTPClientConfig
+	client        *fasthttp.Client
+	batch         []core.LogEntry
+	batchMu       sync.Mutex
+	done          chan struct{}
+	wg            sync.WaitGroup
+	startTime     time.Time
+	logger        *log.Logger
+	formatter     format.Formatter
+	authenticator *auth.Authenticator
 
 	// Statistics
 	totalProcessed    atomic.Uint64
@@ -44,7 +48,9 @@ type HTTPClientSink struct {
 }
 
 // Holds HTTP client sink configuration
+// TODO: missing toml tags
 type HTTPClientConfig struct {
+	// Config
 	URL        string
 	BufferSize int64
 	BatchSize  int64
@@ -56,6 +62,10 @@ type HTTPClientConfig struct {
 	MaxRetries   int64
 	RetryDelay   time.Duration
 	RetryBackoff float64 // Multiplier for exponential backoff
+
+	// Security
+	Username string
+	Password string
 
 	// TLS configuration
 	InsecureSkipVerify bool
@@ -117,6 +127,12 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 	}
 	if insecure, ok := options["insecure_skip_verify"].(bool); ok {
 		cfg.InsecureSkipVerify = insecure
+	}
+	if username, ok := options["username"].(string); ok {
+		cfg.Username = username
+	}
+	if password, ok := options["password"].(string); ok {
+		cfg.Password = password // TODO: change to Argon2 hashed password
 	}
 
 	// Extract headers
@@ -422,7 +438,15 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 
 		req.SetRequestURI(h.config.URL)
 		req.Header.SetMethod("POST")
+		req.Header.SetContentType("application/json")
 		req.SetBody(body)
+
+		// Add Basic Auth header if credentials configured
+		if h.config.Username != "" && h.config.Password != "" {
+			creds := h.config.Username + ":" + h.config.Password
+			encodedCreds := base64.StdEncoding.EncodeToString([]byte(creds))
+			req.Header.Set("Authorization", "Basic "+encodedCreds)
+		}
 
 		// Set headers
 		for k, v := range h.config.Headers {
@@ -494,4 +518,10 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 		"retries", h.config.MaxRetries,
 		"last_error", lastErr)
 	h.failedBatches.Add(1)
+}
+
+// Not applicable, Clients authenticate to remote servers using Username/Password in config
+func (h *HTTPClientSink) SetAuth(authCfg *config.AuthConfig) {
+	// No-op: client sinks don't validate incoming connections
+	// They authenticate to remote servers using Username/Password fields
 }

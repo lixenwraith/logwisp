@@ -4,6 +4,7 @@ package sink
 import (
 	"context"
 	"fmt"
+	"logwisp/src/internal/config"
 	"sync/atomic"
 	"time"
 
@@ -43,7 +44,7 @@ func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	writerConfig := log.DefaultConfig()
 	writerConfig.Directory = directory
 	writerConfig.Name = name
-	writerConfig.EnableStdout = false  // File only
+	writerConfig.EnableConsole = false // File only
 	writerConfig.ShowTimestamp = false // We already have timestamps in entries
 	writerConfig.ShowLevel = false     // We already have levels in entries
 
@@ -164,4 +165,8 @@ func (fs *FileSink) processLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (fs *FileSink) SetAuth(auth *config.AuthConfig) {
+	// Authentication does not apply to file sink
 }

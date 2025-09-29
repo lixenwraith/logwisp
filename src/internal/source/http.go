@@ -4,6 +4,7 @@ package source
 import (
 	"encoding/json"
 	"fmt"
+	"logwisp/src/internal/auth"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -20,21 +21,31 @@ import (
 
 // Receives log entries via HTTP POST requests
 type HTTPSource struct {
-	host        string
-	port        int64
-	path        string
-	bufferSize  int64
+	// Config
+	host               string
+	port               int64
+	path               string
+	bufferSize         int64
+	maxRequestBodySize int64
+
+	// Application
 	server      *fasthttp.Server
 	subscribers []chan core.LogEntry
-	mu          sync.RWMutex
-	done        chan struct{}
-	wg          sync.WaitGroup
 	netLimiter  *limit.NetLimiter
 	logger      *log.Logger
 
-	// Add TLS support
-	tlsManager *tls.Manager
-	tlsConfig  *config.TLSConfig
+	// Runtime
+	mu   sync.RWMutex
+	done chan struct{}
+	wg   sync.WaitGroup
+
+	// Security
+	authenticator *auth.Authenticator
+	authConfig    *config.AuthConfig
+	authFailures  atomic.Uint64
+	authSuccesses atomic.Uint64
+	tlsManager    *tls.Manager
+	tlsConfig     *config.TLSConfig
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -66,41 +77,53 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 		bufferSize = bufSize
 	}
 
+	maxRequestBodySize := int64(10 * 1024 * 1024) // fasthttp default 10MB
+	if maxBodySize, ok := options["max_body_size"].(int64); ok && maxBodySize > 0 && maxBodySize < maxRequestBodySize {
+		maxRequestBodySize = maxBodySize
+	}
+
 	h := &HTTPSource{
-		host:       host,
-		port:       port,
-		path:       ingestPath,
-		bufferSize: bufferSize,
-		done:       make(chan struct{}),
-		startTime:  time.Now(),
-		logger:     logger,
+		host:               host,
+		port:               port,
+		path:               ingestPath,
+		bufferSize:         bufferSize,
+		maxRequestBodySize: maxRequestBodySize,
+		done:               make(chan struct{}),
+		startTime:          time.Now(),
+		logger:             logger,
 	}
 	h.lastEntryTime.Store(time.Time{})
 
 	// Initialize net limiter if configured
-	if rl, ok := options["net_limit"].(map[string]any); ok {
-		if enabled, _ := rl["enabled"].(bool); enabled {
+	if nl, ok := options["net_limit"].(map[string]any); ok {
+		if enabled, _ := nl["enabled"].(bool); enabled {
 			cfg := config.NetLimitConfig{
 				Enabled: true,
 			}
 
-			if rps, ok := rl["requests_per_second"].(float64); ok {
+			if rps, ok := nl["requests_per_second"].(float64); ok {
 				cfg.RequestsPerSecond = rps
 			}
-			if burst, ok := rl["burst_size"].(int64); ok {
+			if burst, ok := nl["burst_size"].(int64); ok {
 				cfg.BurstSize = burst
 			}
-			if limitBy, ok := rl["limit_by"].(string); ok {
-				cfg.LimitBy = limitBy
-			}
-			if respCode, ok := rl["response_code"].(int64); ok {
+			if respCode, ok := nl["response_code"].(int64); ok {
 				cfg.ResponseCode = respCode
 			}
-			if msg, ok := rl["response_message"].(string); ok {
+			if msg, ok := nl["response_message"].(string); ok {
 				cfg.ResponseMessage = msg
 			}
-			if maxPerIP, ok := rl["max_connections_per_ip"].(int64); ok {
+			if maxPerIP, ok := nl["max_connections_per_ip"].(int64); ok {
 				cfg.MaxConnectionsPerIP = maxPerIP
+			}
+			if maxPerUser, ok := nl["max_connections_per_user"].(int64); ok {
+				cfg.MaxConnectionsPerUser = maxPerUser
+			}
+			if maxPerToken, ok := nl["max_connections_per_token"].(int64); ok {
+				cfg.MaxConnectionsPerToken = maxPerToken
+			}
+			if maxTotal, ok := nl["max_connections_total"].(int64); ok {
+				cfg.MaxConnectionsTotal = maxTotal
 			}
 
 			h.netLimiter = limit.NewNetLimiter(cfg, logger)
@@ -157,10 +180,11 @@ func (h *HTTPSource) Subscribe() <-chan core.LogEntry {
 
 func (h *HTTPSource) Start() error {
 	h.server = &fasthttp.Server{
-		Handler:           h.requestHandler,
-		DisableKeepalive:  false,
-		StreamRequestBody: true,
-		CloseOnShutdown:   true,
+		Handler:            h.requestHandler,
+		DisableKeepalive:   false,
+		StreamRequestBody:  true,
+		CloseOnShutdown:    true,
+		MaxRequestBodySize: int(h.maxRequestBodySize),
 	}
 
 	// Use configured host and port
@@ -259,19 +283,9 @@ func (h *HTTPSource) GetStats() SourceStats {
 }
 
 func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
-	// Only handle POST to the configured ingest path
-	if string(ctx.Method()) != "POST" || string(ctx.Path()) != h.path {
-		ctx.SetStatusCode(fasthttp.StatusNotFound)
-		ctx.SetContentType("application/json")
-		json.NewEncoder(ctx).Encode(map[string]string{
-			"error": "Not Found",
-			"hint":  fmt.Sprintf("POST logs to %s", h.path),
-		})
-		return
-	}
-
-	// Extract and validate IP
 	remoteAddr := ctx.RemoteAddr().String()
+
+	// 1. IPv6 check (early reject)
 	ipStr, _, err := net.SplitHostPort(remoteAddr)
 	if err == nil {
 		if ip := net.ParseIP(ipStr); ip != nil && ip.To4() == nil {
@@ -284,7 +298,7 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
-	// Check net limit
+	// 2. Net limit check (early reject)
 	if h.netLimiter != nil {
 		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
 			ctx.SetStatusCode(int(statusCode))
@@ -297,7 +311,65 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
-	// Process the request body
+	// 3. Path check (only process ingest path)
+	path := string(ctx.Path())
+	if path != h.path {
+		ctx.SetStatusCode(fasthttp.StatusNotFound)
+		ctx.SetContentType("application/json")
+		json.NewEncoder(ctx).Encode(map[string]string{
+			"error": "Not Found",
+			"hint":  fmt.Sprintf("POST logs to %s", h.path),
+		})
+		return
+	}
+
+	// 4. Method check (only accept POST)
+	if string(ctx.Method()) != "POST" {
+		ctx.SetStatusCode(fasthttp.StatusMethodNotAllowed)
+		ctx.SetContentType("application/json")
+		ctx.Response.Header.Set("Allow", "POST")
+		json.NewEncoder(ctx).Encode(map[string]string{
+			"error": "Method not allowed",
+			"hint":  "Use POST to submit logs",
+		})
+		return
+	}
+
+	// 5. Authentication check (if configured)
+	if h.authenticator != nil {
+		authHeader := string(ctx.Request.Header.Peek("Authorization"))
+		session, err := h.authenticator.AuthenticateHTTP(authHeader, remoteAddr)
+		if err != nil {
+			h.authFailures.Add(1)
+			h.logger.Warn("msg", "Authentication failed",
+				"component", "http_source",
+				"remote_addr", remoteAddr,
+				"error", err)
+
+			ctx.SetStatusCode(fasthttp.StatusUnauthorized)
+			if h.authConfig.Type == "basic" && h.authConfig.BasicAuth != nil {
+				realm := h.authConfig.BasicAuth.Realm
+				if realm == "" {
+					realm = "Restricted"
+				}
+				ctx.Response.Header.Set("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
+			} else if h.authConfig.Type == "bearer" {
+				ctx.Response.Header.Set("WWW-Authenticate", "Bearer")
+			}
+			ctx.SetContentType("application/json")
+			json.NewEncoder(ctx).Encode(map[string]string{
+				"error": "Unauthorized",
+			})
+			return
+		}
+		h.authSuccesses.Add(1)
+		h.logger.Debug("msg", "Request authenticated",
+			"component", "http_source",
+			"remote_addr", remoteAddr,
+			"username", session.Username)
+	}
+
+	// 6. Process request body
 	body := ctx.PostBody()
 	if len(body) == 0 {
 		ctx.SetStatusCode(fasthttp.StatusBadRequest)
@@ -308,7 +380,7 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Parse the log entries
+	// 7. Parse log entries
 	entries, err := h.parseEntries(body)
 	if err != nil {
 		h.invalidEntries.Add(1)
@@ -320,7 +392,7 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Publish entries
+	// 8. Publish entries to subscribers
 	accepted := 0
 	for _, entry := range entries {
 		if h.publish(entry) {
@@ -328,7 +400,7 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
-	// Return success response
+	// 9. Return success response
 	ctx.SetStatusCode(fasthttp.StatusAccepted)
 	ctx.SetContentType("application/json")
 	json.NewEncoder(ctx).Encode(map[string]any{
@@ -460,4 +532,25 @@ func splitLines(data []byte) [][]byte {
 	}
 
 	return lines
+}
+
+// Configure HTTP source auth
+func (h *HTTPSource) SetAuth(authCfg *config.AuthConfig) {
+	if authCfg == nil || authCfg.Type == "none" {
+		return
+	}
+
+	h.authConfig = authCfg
+	authenticator, err := auth.New(authCfg, h.logger)
+	if err != nil {
+		h.logger.Error("msg", "Failed to initialize authenticator for HTTP source",
+			"component", "http_source",
+			"error", err)
+		return
+	}
+	h.authenticator = authenticator
+
+	h.logger.Info("msg", "Authentication configured for HTTP source",
+		"component", "http_source",
+		"auth_type", authCfg.Type)
 }

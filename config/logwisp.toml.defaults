@@ -37,7 +37,6 @@ type = "directory"
 path = "./"                       # Directory to monitor
 pattern = "*.log"                 # Glob pattern
 check_interval_ms = 100           # Scan interval
-read_from_beginning = false       # Start position
 
 ### Console Sources
 # [[pipelines.sources]]
@@ -74,11 +73,10 @@ read_from_beginning = false       # Start position
 # ip_blacklist = []                # Blocked IPs/CIDRs
 # requests_per_second = 100.0      # Rate limit per client
 # burst_size = 100                 # Burst capacity
-# limit_by = "ip"                  # ip|user|token|global
 # response_code = 429              # HTTP status when limited
 # response_message = "Rate limit exceeded"
 # max_connections_per_ip = 10      # Max concurrent per IP
-# max_total_connections = 1000     # Max total connections
+# max_connections_total = 1000     # Max total connections
 
 ### TCP Sources
 # [[pipelines.sources]]
@@ -88,30 +86,18 @@ read_from_beginning = false       # Start position
 # host = "0.0.0.0"                 # Listen address
 # port = 9091                      # Listen port
 
-# [pipelines.sources.options.tls]
-# enabled = false                  # Enable TLS
-# cert_file = ""                   # TLS certificate
-# key_file = ""                    # TLS key
-# client_auth = false              # Require client certs
-# client_ca_file = ""              # Client CA cert
-# verify_client_cert = false       # Verify client certs
-# insecure_skip_verify = false    # Skip verification
-# ca_file = ""                     # Custom CA file
-# min_version = "TLS1.2"           # Min TLS version
-# max_version = "TLS1.3"           # Max TLS version
-# cipher_suites = ""               # Comma-separated list
-
 # [pipelines.sources.options.net_limit]
 # enabled = false                  # Enable rate limiting
 # ip_whitelist = []                # Allowed IPs/CIDRs
 # ip_blacklist = []                # Blocked IPs/CIDRs
 # requests_per_second = 100.0      # Rate limit per client
 # burst_size = 100                 # Burst capacity
-# limit_by = "ip"                  # ip|user|token|global
 # response_code = 429              # Response code when limited
 # response_message = "Rate limit exceeded"
 # max_connections_per_ip = 10      # Max concurrent per IP
-# max_total_connections = 1000     # Max total connections
+# max_connections_per_user = 10    # Max concurrent per user
+# max_connections_per_token = 10   # Max concurrent per token
+# max_connections_total = 1000     # Max total connections
 
 ### Rate limiting
 # [pipelines.rate_limit]
@@ -125,6 +111,21 @@ read_from_beginning = false       # Start position
 # type = "include"                 # include|exclude
 # logic = "or"                     # or|and
 # patterns = []                    # Regex patterns
+
+## Examples of filter patterns:
+## Include only error or fatal logs containing "database":
+## type = "include"
+## logic = "and"
+## patterns = ["(?i)(error|fatal)", "database"]
+##
+## Exclude debug logs from test environment:
+## type = "exclude"
+## logic = "or"
+## patterns = ["(?i)debug", "test-env"]
+##
+## Include only JSON formatted logs:
+## type = "include"
+## patterns = ["^\\{.*\\}$"]
 
 ### Format
 
@@ -174,7 +175,6 @@ format = "comment"                # comment|message
 # verify_client_cert = false       # Verify client certs
 # insecure_skip_verify = false     # Skip verification
 # ca_file = ""                     # Custom CA file
-# server_name = ""                 # Expected server name
 # min_version = "TLS1.2"           # Min TLS version
 # max_version = "TLS1.3"           # Max TLS version
 # cipher_suites = ""               # Comma-separated list
@@ -185,11 +185,10 @@ format = "comment"                # comment|message
 # ip_blacklist = []                # Blocked IPs/CIDRs
 # requests_per_second = 100.0      # Rate limit per client
 # burst_size = 100                 # Burst capacity
-# limit_by = "ip"                  # ip|user|token|global
 # response_code = 429              # HTTP status when limited
 # response_message = "Rate limit exceeded"
 # max_connections_per_ip = 10      # Max concurrent per IP
-# max_total_connections = 1000     # Max total connections
+# max_connections_total = 1000     # Max total connections
 
 ### TCP Sinks
 # [[pipelines.sinks]]
@@ -207,31 +206,18 @@ format = "comment"                # comment|message
 # include_stats = false            # Include statistics
 # format = "comment"               # comment|message
 
-# [pipelines.sinks.options.tls]
-# enabled = false                  # Enable TLS
-# cert_file = ""                   # TLS certificate
-# key_file = ""                    # TLS key
-# client_auth = false              # Require client certs
-# client_ca_file = ""              # Client CA cert
-# verify_client_cert = false       # Verify client certs
-# insecure_skip_verify = false     # Skip verification
-# ca_file = ""                     # Custom CA file
-# server_name = ""                 # Expected server name
-# min_version = "TLS1.2"           # Min TLS version
-# max_version = "TLS1.3"           # Max TLS version
-# cipher_suites = ""               # Comma-separated list
-
 # [pipelines.sinks.options.net_limit]
 # enabled = false                  # Enable rate limiting
 # ip_whitelist = []                # Allowed IPs/CIDRs
 # ip_blacklist = []                # Blocked IPs/CIDRs
 # requests_per_second = 100.0      # Rate limit per client
 # burst_size = 100                 # Burst capacity
-# limit_by = "ip"                  # ip|user|token|global
 # response_code = 429              # HTTP status when limited
 # response_message = "Rate limit exceeded"
 # max_connections_per_ip = 10      # Max concurrent per IP
-# max_total_connections = 1000     # Max total connections
+# max_connections_per_user = 10    # Max concurrent per user
+# max_connections_per_token = 10   # Max concurrent per token
+# max_connections_total = 1000     # Max total connections
 
 ### HTTP Client Sinks
 # [[pipelines.sinks]]
@@ -283,6 +269,7 @@ format = "comment"                # comment|message
 # [pipelines.sinks.options]
 # directory = ""                   # Output dir (required)
 # name = ""                        # Base name (required)
+# buffer_size = 1000               # Input channel buffer size
 # max_size_mb = 100                # Rotation size
 # max_total_size_mb = 0            # Total limit (0=unlimited)
 # retention_hours = 0.0            # Retention (0=disabled)

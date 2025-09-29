@@ -9,19 +9,22 @@ import (
 	"logwisp/src/internal/core"
 )
 
-// Represents an output destination for log entries
+// Represents an output data stream
 type Sink interface {
-	// Input returns the channel for sending log entries to this sink
+	// Returns the channel for sending log entries to this sink
 	Input() chan<- core.LogEntry
 
-	// Start begins processing log entries
+	// Begins processing log entries
 	Start(ctx context.Context) error
 
-	// Stop gracefully shuts down the sink
+	// Gracefully shuts down the sink
 	Stop()
 
-	// GetStats returns sink statistics
+	// Returns sink statistics
 	GetStats() SinkStats
+
+	// Configure authentication
+	SetAuth(auth *config.AuthConfig)
 }
 
 // Contains statistics about a sink
@@ -32,9 +35,4 @@ type SinkStats struct {
 	StartTime         time.Time
 	LastProcessed     time.Time
 	Details           map[string]any
-}
-
-// Interface for sinks that can accept an AuthConfig
-type AuthSetter interface {
-	SetAuthConfig(auth *config.AuthConfig)
 }

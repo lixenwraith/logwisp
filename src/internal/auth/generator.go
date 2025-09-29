@@ -10,17 +10,24 @@ import (
 	"os"
 	"syscall"
 
-	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/term"
 )
 
-// Handles auth credential generation
+// Argon2id parameters
+const (
+	argon2Time    = 3
+	argon2Memory  = 64 * 1024 // 64 MB
+	argon2Threads = 4
+	argon2SaltLen = 16
+	argon2KeyLen  = 32
+)
+
 type GeneratorCommand struct {
 	output io.Writer
 	errOut io.Writer
 }
 
-// Creates a new auth generator command handler
 func NewGeneratorCommand() *GeneratorCommand {
 	return &GeneratorCommand{
 		output: os.Stdout,
@@ -28,7 +35,6 @@ func NewGeneratorCommand() *GeneratorCommand {
 	}
 }
 
-// Runs the auth generation command with provided arguments
 func (g *GeneratorCommand) Execute(args []string) error {
 	cmd := flag.NewFlagSet("auth", flag.ContinueOnError)
 	cmd.SetOutput(g.errOut)
@@ -36,7 +42,6 @@ func (g *GeneratorCommand) Execute(args []string) error {
 	var (
 		username = cmd.String("u", "", "Username for basic auth")
 		password = cmd.String("p", "", "Password to hash (will prompt if not provided)")
-		cost     = cmd.Int("c", 10, "Bcrypt cost (10-31)")
 		genToken = cmd.Bool("t", false, "Generate random bearer token")
 		tokenLen = cmd.Int("l", 32, "Token length in bytes")
 	)
@@ -45,7 +50,7 @@ func (g *GeneratorCommand) Execute(args []string) error {
 		fmt.Fprintln(g.errOut, "Generate authentication credentials for LogWisp")
 		fmt.Fprintln(g.errOut, "\nUsage: logwisp auth [options]")
 		fmt.Fprintln(g.errOut, "\nExamples:")
-		fmt.Fprintln(g.errOut, "  # Generate bcrypt hash for user")
+		fmt.Fprintln(g.errOut, "  # Generate Argon2id hash for user")
 		fmt.Fprintln(g.errOut, "  logwisp auth -u admin")
 		fmt.Fprintln(g.errOut, "  ")
 		fmt.Fprintln(g.errOut, "  # Generate 64-byte bearer token")
@@ -58,26 +63,19 @@ func (g *GeneratorCommand) Execute(args []string) error {
 		return err
 	}
 
-	// Token generation mode
 	if *genToken {
 		return g.generateToken(*tokenLen)
 	}
 
-	// Password hash generation mode
 	if *username == "" {
 		cmd.Usage()
 		return fmt.Errorf("username required for password hash generation")
 	}
 
-	return g.generatePasswordHash(*username, *password, *cost)
+	return g.generatePasswordHash(*username, *password)
 }
 
-func (g *GeneratorCommand) generatePasswordHash(username, password string, cost int) error {
-	// Validate cost
-	if cost < 10 || cost > 31 {
-		return fmt.Errorf("bcrypt cost must be between 10 and 31")
-	}
-
+func (g *GeneratorCommand) generatePasswordHash(username, password string) error {
 	// Get password if not provided
 	if password == "" {
 		pass1 := g.promptPassword("Enter password: ")
@@ -88,20 +86,29 @@ func (g *GeneratorCommand) generatePasswordHash(username, password string, cost 
 		password = pass1
 	}
 
-	// Generate hash
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), cost)
-	if err != nil {
-		return fmt.Errorf("failed to generate hash: %w", err)
+	// Generate salt
+	salt := make([]byte, argon2SaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return fmt.Errorf("failed to generate salt: %w", err)
 	}
+
+	// Generate Argon2id hash
+	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+
+	// Encode in PHC format: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
+	saltB64 := base64.RawStdEncoding.EncodeToString(salt)
+	hashB64 := base64.RawStdEncoding.EncodeToString(hash)
+	phcHash := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
+		argon2.Version, argon2Memory, argon2Time, argon2Threads, saltB64, hashB64)
 
 	// Output configuration snippets
 	fmt.Fprintln(g.output, "\n# TOML Configuration (add to logwisp.toml):")
 	fmt.Fprintln(g.output, "[[pipelines.auth.basic_auth.users]]")
 	fmt.Fprintf(g.output, "username = %q\n", username)
-	fmt.Fprintf(g.output, "password_hash = %q\n\n", string(hash))
+	fmt.Fprintf(g.output, "password_hash = %q\n\n", phcHash)
 
 	fmt.Fprintln(g.output, "# Users File Format (for external auth file):")
-	fmt.Fprintf(g.output, "%s:%s\n", username, hash)
+	fmt.Fprintf(g.output, "%s:%s\n", username, phcHash)
 
 	return nil
 }
@@ -119,11 +126,9 @@ func (g *GeneratorCommand) generateToken(length int) error {
 		return fmt.Errorf("failed to generate random bytes: %w", err)
 	}
 
-	// Generate both encodings
 	b64 := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(token)
 	hex := fmt.Sprintf("%x", token)
 
-	// Output configuration
 	fmt.Fprintln(g.output, "\n# TOML Configuration (add to logwisp.toml):")
 	fmt.Fprintf(g.output, "tokens = [%q]\n\n", b64)
 
@@ -139,7 +144,6 @@ func (g *GeneratorCommand) promptPassword(prompt string) string {
 	password, err := term.ReadPassword(int(syscall.Stdin))
 	fmt.Fprintln(g.errOut)
 	if err != nil {
-		// Fatal error - can't continue without password
 		fmt.Fprintf(g.errOut, "Failed to read password: %v\n", err)
 		os.Exit(1)
 	}

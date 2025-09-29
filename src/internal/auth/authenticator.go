@@ -4,6 +4,7 @@ package auth
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -16,7 +17,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/lixenwraith/log"
-	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/time/rate"
 )
 
@@ -378,12 +379,14 @@ func (a *Authenticator) validateBasicAuth(username, password, remoteAddr string)
 	a.mu.RUnlock()
 
 	if !exists {
-		// Perform bcrypt anyway to prevent timing attacks
-		bcrypt.CompareHashAndPassword([]byte("$2a$10$dummy.hash.to.prevent.timing.attacks"), []byte(password))
+		// Perform argon2 anyway to prevent timing attacks
+		dummySalt := make([]byte, 16)
+		argon2.IDKey([]byte(password), dummySalt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
 		return nil, fmt.Errorf("invalid credentials")
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(expectedHash), []byte(password)); err != nil {
+	// Parse PHC format hash
+	if !verifyArgon2idHash(password, expectedHash) {
 		return nil, fmt.Errorf("invalid credentials")
 	}
 
@@ -398,6 +401,43 @@ func (a *Authenticator) validateBasicAuth(username, password, remoteAddr string)
 
 	a.storeSession(session)
 	return session, nil
+}
+
+// Verify Argon2id hashes
+func verifyArgon2idHash(password, hash string) bool {
+	// Parse PHC format: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
+	parts := strings.Split(hash, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" {
+		return false
+	}
+
+	// Parse version
+	var version int
+	fmt.Sscanf(parts[2], "v=%d", &version)
+	if version != argon2.Version {
+		return false
+	}
+
+	// Parse parameters
+	var memory, time, threads uint32
+	fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads)
+
+	// Decode salt and hash
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return false
+	}
+
+	expectedHash, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil {
+		return false
+	}
+
+	// Compute hash
+	computedHash := argon2.IDKey([]byte(password), salt, time, memory, uint8(threads), uint32(len(expectedHash)))
+
+	// Constant time comparison
+	return subtle.ConstantTimeCompare(computedHash, expectedHash) == 1
 }
 
 func (a *Authenticator) authenticateBearer(authHeader, remoteAddr string) (*Session, error) {

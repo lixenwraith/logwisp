@@ -12,9 +12,6 @@ type TCPConfig struct {
 	Port       int64 `toml:"port"`
 	BufferSize int64 `toml:"buffer_size"`
 
-	// TLS Configuration
-	TLS *TLSConfig `toml:"tls"`
-
 	// Net limiting
 	NetLimit *NetLimitConfig `toml:"net_limit"`
 
@@ -63,16 +60,15 @@ type NetLimitConfig struct {
 	// Burst size (token bucket)
 	BurstSize int64 `toml:"burst_size"`
 
-	// Net limit by: "ip", "user", "token", "global"
-	LimitBy string `toml:"limit_by"`
-
 	// Response when net limited
 	ResponseCode    int64  `toml:"response_code"`    // Default: 429
 	ResponseMessage string `toml:"response_message"` // Default: "Net limit exceeded"
 
 	// Connection limits
-	MaxConnectionsPerIP int64 `toml:"max_connections_per_ip"`
-	MaxTotalConnections int64 `toml:"max_total_connections"`
+	MaxConnectionsPerIP    int64 `toml:"max_connections_per_ip"`
+	MaxConnectionsPerUser  int64 `toml:"max_connections_per_user"`
+	MaxConnectionsPerToken int64 `toml:"max_connections_per_token"`
+	MaxConnectionsTotal    int64 `toml:"max_connections_total"`
 }
 
 func validateHeartbeatOptions(serverType, pipelineName string, sinkIndex int, hb map[string]any) error {
@@ -93,13 +89,13 @@ func validateHeartbeatOptions(serverType, pipelineName string, sinkIndex int, hb
 	return nil
 }
 
-func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl map[string]any) error {
-	if enabled, ok := rl["enabled"].(bool); !ok || !enabled {
+func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, nl map[string]any) error {
+	if enabled, ok := nl["enabled"].(bool); !ok || !enabled {
 		return nil
 	}
 
 	// Validate IP lists if present
-	if ipWhitelist, ok := rl["ip_whitelist"].([]any); ok {
+	if ipWhitelist, ok := nl["ip_whitelist"].([]any); ok {
 		for i, entry := range ipWhitelist {
 			entryStr, ok := entry.(string)
 			if !ok {
@@ -112,7 +108,7 @@ func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl 
 		}
 	}
 
-	if ipBlacklist, ok := rl["ip_blacklist"].([]any); ok {
+	if ipBlacklist, ok := nl["ip_blacklist"].([]any); ok {
 		for i, entry := range ipBlacklist {
 			entryStr, ok := entry.(string)
 			if !ok {
@@ -126,30 +122,21 @@ func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl 
 	}
 
 	// Validate requests per second
-	rps, ok := rl["requests_per_second"].(float64)
+	rps, ok := nl["requests_per_second"].(float64)
 	if !ok || rps <= 0 {
 		return fmt.Errorf("pipeline '%s' sink[%d] %s: requests_per_second must be positive",
 			pipelineName, sinkIndex, serverType)
 	}
 
 	// Validate burst size
-	burst, ok := rl["burst_size"].(int64)
+	burst, ok := nl["burst_size"].(int64)
 	if !ok || burst < 1 {
 		return fmt.Errorf("pipeline '%s' sink[%d] %s: burst_size must be at least 1",
 			pipelineName, sinkIndex, serverType)
 	}
 
-	// Validate limit_by
-	if limitBy, ok := rl["limit_by"].(string); ok && limitBy != "" {
-		validLimitBy := map[string]bool{"ip": true, "global": true}
-		if !validLimitBy[limitBy] {
-			return fmt.Errorf("pipeline '%s' sink[%d] %s: invalid limit_by value: %s (must be 'ip' or 'global')",
-				pipelineName, sinkIndex, serverType, limitBy)
-		}
-	}
-
 	// Validate response code
-	if respCode, ok := rl["response_code"].(int64); ok {
+	if respCode, ok := nl["response_code"].(int64); ok {
 		if respCode > 0 && (respCode < 400 || respCode >= 600) {
 			return fmt.Errorf("pipeline '%s' sink[%d] %s: response_code must be 4xx or 5xx: %d",
 				pipelineName, sinkIndex, serverType, respCode)
@@ -157,13 +144,24 @@ func validateNetLimitOptions(serverType, pipelineName string, sinkIndex int, rl 
 	}
 
 	// Validate connection limits
-	maxPerIP, perIPOk := rl["max_connections_per_ip"].(int64)
-	maxTotal, totalOk := rl["max_total_connections"].(int64)
+	maxPerIP, perIPOk := nl["max_connections_per_ip"].(int64)
+	maxPerUser, perUserOk := nl["max_connections_per_user"].(int64)
+	maxPerToken, perTokenOk := nl["max_connections_per_token"].(int64)
+	maxTotal, totalOk := nl["max_connections_total"].(int64)
 
-	if perIPOk && totalOk && maxPerIP > 0 && maxTotal > 0 {
+	if perIPOk && perUserOk && perTokenOk && totalOk &&
+		maxPerIP > 0 && maxPerUser > 0 && maxPerToken > 0 && maxTotal > 0 {
 		if maxPerIP > maxTotal {
-			return fmt.Errorf("pipeline '%s' sink[%d] %s: max_connections_per_ip (%d) cannot exceed max_total_connections (%d)",
+			return fmt.Errorf("pipeline '%s' sink[%d] %s: max_connections_per_ip (%d) cannot exceed max_connections_total (%d)",
 				pipelineName, sinkIndex, serverType, maxPerIP, maxTotal)
+		}
+		if maxPerUser > maxTotal {
+			return fmt.Errorf("pipeline '%s' sink[%d] %s: max_connections_per_user (%d) cannot exceed max_connections_total (%d)",
+				pipelineName, sinkIndex, serverType, maxPerUser, maxTotal)
+		}
+		if maxPerToken > maxTotal {
+			return fmt.Errorf("pipeline '%s' sink[%d] %s: max_connections_per_token (%d) cannot exceed max_connections_total (%d)",
+				pipelineName, sinkIndex, serverType, maxPerToken, maxTotal)
 		}
 	}
 

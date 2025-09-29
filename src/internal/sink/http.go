@@ -142,31 +142,28 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	}
 
 	// Extract net limit config
-	if rl, ok := options["net_limit"].(map[string]any); ok {
+	if nl, ok := options["net_limit"].(map[string]any); ok {
 		cfg.NetLimit = &config.NetLimitConfig{}
-		cfg.NetLimit.Enabled, _ = rl["enabled"].(bool)
-		if rps, ok := rl["requests_per_second"].(float64); ok {
+		cfg.NetLimit.Enabled, _ = nl["enabled"].(bool)
+		if rps, ok := nl["requests_per_second"].(float64); ok {
 			cfg.NetLimit.RequestsPerSecond = rps
 		}
-		if burst, ok := rl["burst_size"].(int64); ok {
+		if burst, ok := nl["burst_size"].(int64); ok {
 			cfg.NetLimit.BurstSize = burst
 		}
-		if limitBy, ok := rl["limit_by"].(string); ok {
-			cfg.NetLimit.LimitBy = limitBy
-		}
-		if respCode, ok := rl["response_code"].(int64); ok {
+		if respCode, ok := nl["response_code"].(int64); ok {
 			cfg.NetLimit.ResponseCode = respCode
 		}
-		if msg, ok := rl["response_message"].(string); ok {
+		if msg, ok := nl["response_message"].(string); ok {
 			cfg.NetLimit.ResponseMessage = msg
 		}
-		if maxPerIP, ok := rl["max_connections_per_ip"].(int64); ok {
+		if maxPerIP, ok := nl["max_connections_per_ip"].(int64); ok {
 			cfg.NetLimit.MaxConnectionsPerIP = maxPerIP
 		}
-		if maxTotal, ok := rl["max_total_connections"].(int64); ok {
-			cfg.NetLimit.MaxTotalConnections = maxTotal
+		if maxTotal, ok := nl["max_connections_total"].(int64); ok {
+			cfg.NetLimit.MaxConnectionsTotal = maxTotal
 		}
-		if ipWhitelist, ok := rl["ip_whitelist"].([]any); ok {
+		if ipWhitelist, ok := nl["ip_whitelist"].([]any); ok {
 			cfg.NetLimit.IPWhitelist = make([]string, 0, len(ipWhitelist))
 			for _, entry := range ipWhitelist {
 				if str, ok := entry.(string); ok {
@@ -174,7 +171,7 @@ func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Fo
 				}
 			}
 		}
-		if ipBlacklist, ok := rl["ip_blacklist"].([]any); ok {
+		if ipBlacklist, ok := nl["ip_blacklist"].([]any); ok {
 			cfg.NetLimit.IPBlacklist = make([]string, 0, len(ipBlacklist))
 			for _, entry := range ipBlacklist {
 				if str, ok := entry.(string); ok {
@@ -806,8 +803,8 @@ func (h *HTTPSink) GetHost() string {
 	return h.config.Host
 }
 
-// Configures http sink authentication
-func (h *HTTPSink) SetAuthConfig(authCfg *config.AuthConfig) {
+// Configures http sink auth
+func (h *HTTPSink) SetAuth(authCfg *config.AuthConfig) {
 	if authCfg == nil || authCfg.Type == "none" {
 		return
 	}

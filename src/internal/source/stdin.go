@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
@@ -118,4 +119,8 @@ func (s *StdinSource) publish(entry core.LogEntry) {
 				"component", "stdin_source")
 		}
 	}
+}
+
+func (s *StdinSource) SetAuth(auth *config.AuthConfig) {
+	// Authentication does not apply to stdin source
 }

@@ -5,13 +5,13 @@ import "fmt"
 
 // Represents logging configuration for LogWisp
 type LogConfig struct {
-	// Output mode: "file", "stdout", "stderr", "both", "none"
+	// Output mode: "file", "stdout", "stderr", "split", "all", "none"
 	Output string `toml:"output"`
 
 	// Log level: "debug", "info", "warn", "error"
 	Level string `toml:"level"`
 
-	// File output settings (when Output includes "file" or "both")
+	// File output settings (when Output includes "file" or "all")
 	File *LogFileConfig `toml:"file"`
 
 	// Console output settings
@@ -66,7 +66,7 @@ func DefaultLogConfig() *LogConfig {
 func validateLogConfig(cfg *LogConfig) error {
 	validOutputs := map[string]bool{
 		"file": true, "stdout": true, "stderr": true,
-		"both": true, "all": true, "none": true,
+		"split": true, "all": true, "none": true,
 	}
 	if !validOutputs[cfg.Output] {
 		return fmt.Errorf("invalid log output mode: %s", cfg.Output)

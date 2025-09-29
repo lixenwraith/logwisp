@@ -4,22 +4,26 @@ package source
 import (
 	"time"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 )
 
 // Represents an input data stream
 type Source interface {
-	// Subscribe returns a channel that receives log entries
+	// Returns a channel that receives log entries
 	Subscribe() <-chan core.LogEntry
 
-	// Start begins reading from the source
+	// Begins reading from the source
 	Start() error
 
-	// Stop gracefully shuts down the source
+	// Gracefully shuts down the source
 	Stop()
 
-	// GetStats returns source statistics
+	// Returns source statistics
 	GetStats() SourceStats
+
+	// Configure authentication
+	SetAuth(auth *config.AuthConfig)
 }
 
 // Contains statistics about a source

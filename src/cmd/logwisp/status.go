@@ -127,13 +127,13 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 					"listen", fmt.Sprintf("%s:%d", host, port))
 
 				// Display net limit info if configured
-				if rl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
-					if enabled, ok := rl["enabled"].(bool); ok && enabled {
+				if nl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
+					if enabled, ok := nl["enabled"].(bool); ok && enabled {
 						logger.Info("msg", "TCP net limiting enabled",
 							"pipeline", cfg.Name,
 							"sink_index", i,
-							"requests_per_second", rl["requests_per_second"],
-							"burst_size", rl["burst_size"])
+							"requests_per_second", nl["requests_per_second"],
+							"burst_size", nl["burst_size"])
 					}
 				}
 			}
@@ -162,14 +162,13 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 					"status_url", fmt.Sprintf("http://%s:%d%s", host, port, statusPath))
 
 				// Display net limit info if configured
-				if rl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
-					if enabled, ok := rl["enabled"].(bool); ok && enabled {
+				if nl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
+					if enabled, ok := nl["enabled"].(bool); ok && enabled {
 						logger.Info("msg", "HTTP net limiting enabled",
 							"pipeline", cfg.Name,
 							"sink_index", i,
-							"requests_per_second", rl["requests_per_second"],
-							"burst_size", rl["burst_size"],
-							"limit_by", rl["limit_by"])
+							"requests_per_second", nl["requests_per_second"],
+							"burst_size", nl["burst_size"])
 					}
 				}
 			}

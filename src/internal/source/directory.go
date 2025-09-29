@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
@@ -286,4 +287,8 @@ func globToRegex(glob string) string {
 	regex = strings.ReplaceAll(regex, `\*`, `.*`)
 	regex = strings.ReplaceAll(regex, `\?`, `.`)
 	return "^" + regex + "$"
+}
+
+func (ds *DirectorySource) SetAuth(auth *config.AuthConfig) {
+	// Authentication does not apply to directory source
 }

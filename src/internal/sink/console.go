@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
 
@@ -121,7 +122,9 @@ func (s *StdoutSink) processLoop(ctx context.Context) {
 			// Format and write
 			formatted, err := s.formatter.Format(entry)
 			if err != nil {
-				s.logger.Error("msg", "Failed to format log entry for stdout", "error", err)
+				s.logger.Error("msg", "Failed to format log entry for stdout",
+					"component", "stdout_sink",
+					"error", err)
 				continue
 			}
 			s.output.Write(formatted)
@@ -234,7 +237,9 @@ func (s *StderrSink) processLoop(ctx context.Context) {
 			// Format and write
 			formatted, err := s.formatter.Format(entry)
 			if err != nil {
-				s.logger.Error("msg", "Failed to format log entry for stderr", "error", err)
+				s.logger.Error("msg", "Failed to format log entry for stderr",
+					"component", "stderr_sink",
+					"error", err)
 				continue
 			}
 			s.output.Write(formatted)
@@ -245,4 +250,12 @@ func (s *StderrSink) processLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (s *StdoutSink) SetAuth(auth *config.AuthConfig) {
+	// Authentication does not apply to stdout sink
+}
+
+func (s *StderrSink) SetAuth(auth *config.AuthConfig) {
+	// Authentication does not apply to stderr sink
 }

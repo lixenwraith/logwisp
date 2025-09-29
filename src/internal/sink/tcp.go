@@ -17,7 +17,6 @@ import (
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
 	"logwisp/src/internal/limit"
-	"logwisp/src/internal/tls"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/compat"
@@ -26,23 +25,20 @@ import (
 
 // Streams log entries via TCP
 type TCPSink struct {
-	input       chan core.LogEntry
-	config      TCPConfig
-	server      *tcpServer
-	done        chan struct{}
-	activeConns atomic.Int64
-	startTime   time.Time
-	engine      *gnet.Engine
-	engineMu    sync.Mutex
-	wg          sync.WaitGroup
-	netLimiter  *limit.NetLimiter
-	logger      *log.Logger
-	formatter   format.Formatter
-
-	// Security components
+	// C
+	input         chan core.LogEntry
+	config        TCPConfig
+	server        *tcpServer
+	done          chan struct{}
+	activeConns   atomic.Int64
+	startTime     time.Time
+	engine        *gnet.Engine
+	engineMu      sync.Mutex
+	wg            sync.WaitGroup
+	netLimiter    *limit.NetLimiter
+	logger        *log.Logger
+	formatter     format.Formatter
 	authenticator *auth.Authenticator
-	tlsManager    *tls.Manager
-	authConfig    *config.AuthConfig
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -62,7 +58,6 @@ type TCPConfig struct {
 	Port       int64
 	BufferSize int64
 	Heartbeat  *config.HeartbeatConfig
-	TLS        *config.TLSConfig
 	NetLimit   *config.NetLimitConfig
 }
 
@@ -99,58 +94,35 @@ func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.For
 		}
 	}
 
-	// Extract TLS config
-	if tc, ok := options["tls"].(map[string]any); ok {
-		cfg.TLS = &config.TLSConfig{}
-		cfg.TLS.Enabled, _ = tc["enabled"].(bool)
-		if certFile, ok := tc["cert_file"].(string); ok {
-			cfg.TLS.CertFile = certFile
-		}
-		if keyFile, ok := tc["key_file"].(string); ok {
-			cfg.TLS.KeyFile = keyFile
-		}
-		cfg.TLS.ClientAuth, _ = tc["client_auth"].(bool)
-		if caFile, ok := tc["client_ca_file"].(string); ok {
-			cfg.TLS.ClientCAFile = caFile
-		}
-		cfg.TLS.VerifyClientCert, _ = tc["verify_client_cert"].(bool)
-		if minVer, ok := tc["min_version"].(string); ok {
-			cfg.TLS.MinVersion = minVer
-		}
-		if maxVer, ok := tc["max_version"].(string); ok {
-			cfg.TLS.MaxVersion = maxVer
-		}
-		if ciphers, ok := tc["cipher_suites"].(string); ok {
-			cfg.TLS.CipherSuites = ciphers
-		}
-	}
-
 	// Extract net limit config
-	if rl, ok := options["net_limit"].(map[string]any); ok {
+	if nl, ok := options["net_limit"].(map[string]any); ok {
 		cfg.NetLimit = &config.NetLimitConfig{}
-		cfg.NetLimit.Enabled, _ = rl["enabled"].(bool)
-		if rps, ok := rl["requests_per_second"].(float64); ok {
+		cfg.NetLimit.Enabled, _ = nl["enabled"].(bool)
+		if rps, ok := nl["requests_per_second"].(float64); ok {
 			cfg.NetLimit.RequestsPerSecond = rps
 		}
-		if burst, ok := rl["burst_size"].(int64); ok {
+		if burst, ok := nl["burst_size"].(int64); ok {
 			cfg.NetLimit.BurstSize = burst
 		}
-		if limitBy, ok := rl["limit_by"].(string); ok {
-			cfg.NetLimit.LimitBy = limitBy
-		}
-		if respCode, ok := rl["response_code"].(int64); ok {
+		if respCode, ok := nl["response_code"].(int64); ok {
 			cfg.NetLimit.ResponseCode = respCode
 		}
-		if msg, ok := rl["response_message"].(string); ok {
+		if msg, ok := nl["response_message"].(string); ok {
 			cfg.NetLimit.ResponseMessage = msg
 		}
-		if maxPerIP, ok := rl["max_connections_per_ip"].(int64); ok {
+		if maxPerIP, ok := nl["max_connections_per_ip"].(int64); ok {
 			cfg.NetLimit.MaxConnectionsPerIP = maxPerIP
 		}
-		if maxTotal, ok := rl["max_total_connections"].(int64); ok {
-			cfg.NetLimit.MaxTotalConnections = maxTotal
+		if maxPerUser, ok := nl["max_connections_per_user"].(int64); ok {
+			cfg.NetLimit.MaxConnectionsPerUser = maxPerUser
 		}
-		if ipWhitelist, ok := rl["ip_whitelist"].([]any); ok {
+		if maxPerToken, ok := nl["max_connections_per_token"].(int64); ok {
+			cfg.NetLimit.MaxConnectionsPerToken = maxPerToken
+		}
+		if maxTotal, ok := nl["max_connections_total"].(int64); ok {
+			cfg.NetLimit.MaxConnectionsTotal = maxTotal
+		}
+		if ipWhitelist, ok := nl["ip_whitelist"].([]any); ok {
 			cfg.NetLimit.IPWhitelist = make([]string, 0, len(ipWhitelist))
 			for _, entry := range ipWhitelist {
 				if str, ok := entry.(string); ok {
@@ -158,7 +130,7 @@ func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.For
 				}
 			}
 		}
-		if ipBlacklist, ok := rl["ip_blacklist"].([]any); ok {
+		if ipBlacklist, ok := nl["ip_blacklist"].([]any); ok {
 			cfg.NetLimit.IPBlacklist = make([]string, 0, len(ipBlacklist))
 			for _, entry := range ipBlacklist {
 				if str, ok := entry.(string); ok {
@@ -290,18 +262,6 @@ func (t *TCPSink) GetStats() SinkStats {
 		netLimitStats = t.netLimiter.GetStats()
 	}
 
-	var authStats map[string]any
-	if t.authenticator != nil {
-		authStats = t.authenticator.GetStats()
-		authStats["failures"] = t.authFailures.Load()
-		authStats["successes"] = t.authSuccesses.Load()
-	}
-
-	var tlsStats map[string]any
-	if t.tlsManager != nil {
-		tlsStats = t.tlsManager.GetStats()
-	}
-
 	return SinkStats{
 		Type:              "tcp",
 		TotalProcessed:    t.totalProcessed.Load(),
@@ -312,8 +272,7 @@ func (t *TCPSink) GetStats() SinkStats {
 			"port":        t.config.Port,
 			"buffer_size": t.config.BufferSize,
 			"net_limit":   netLimitStats,
-			"auth":        authStats,
-			"tls":         tlsStats,
+			"auth":        map[string]any{"enabled": false},
 		},
 	}
 }
@@ -347,37 +306,7 @@ func (t *TCPSink) broadcastLoop(ctx context.Context) {
 					"entry_source", entry.Source)
 				continue
 			}
-
-			// Broadcast only to authenticated clients
-			t.server.mu.RLock()
-			for conn, client := range t.server.clients {
-				if client.authenticated {
-					// Send through TLS bridge if present
-					if client.tlsBridge != nil {
-						if _, err := client.tlsBridge.Write(data); err != nil {
-							// TLS write failed, connection likely dead
-							t.logger.Debug("msg", "TLS write failed",
-								"component", "tcp_sink",
-								"error", err)
-							conn.Close()
-						}
-					} else {
-						conn.AsyncWrite(data, func(c gnet.Conn, err error) error {
-							if err != nil {
-								t.writeErrors.Add(1)
-								t.handleWriteError(c, err)
-							} else {
-								// Reset consecutive error count on success
-								t.errorMu.Lock()
-								delete(t.consecutiveWriteErrors, c)
-								t.errorMu.Unlock()
-							}
-							return nil
-						})
-					}
-				}
-			}
-			t.server.mu.RUnlock()
+			t.broadcastData(data)
 
 		case <-tickerChan:
 			heartbeatEntry := t.createHeartbeatEntry()
@@ -388,40 +317,32 @@ func (t *TCPSink) broadcastLoop(ctx context.Context) {
 					"error", err)
 				continue
 			}
-
-			t.server.mu.RLock()
-			for conn, client := range t.server.clients {
-				if client.authenticated {
-					// Validate session is still active
-					if t.authenticator != nil && client.session != nil {
-						if !t.authenticator.ValidateSession(client.session.ID) {
-							// Session expired, close connection
-							conn.Close()
-							continue
-						}
-					}
-					if client.tlsBridge != nil {
-						if _, err := client.tlsBridge.Write(data); err != nil {
-							t.logger.Debug("msg", "TLS heartbeat write failed",
-								"component", "tcp_sink",
-								"error", err)
-							conn.Close()
-						}
-					} else {
-						conn.AsyncWrite(data, func(c gnet.Conn, err error) error {
-							if err != nil {
-								t.writeErrors.Add(1)
-								t.handleWriteError(c, err)
-							}
-							return nil
-						})
-					}
-				}
-			}
-			t.server.mu.RUnlock()
+			t.broadcastData(data)
 
 		case <-t.done:
 			return
+		}
+	}
+}
+
+func (t *TCPSink) broadcastData(data []byte) {
+	t.server.mu.RLock()
+	defer t.server.mu.RUnlock()
+
+	for conn, client := range t.server.clients {
+		if client.authenticated {
+			conn.AsyncWrite(data, func(c gnet.Conn, err error) error {
+				if err != nil {
+					t.writeErrors.Add(1)
+					t.handleWriteError(c, err)
+				} else {
+					// Reset consecutive error count on success
+					t.errorMu.Lock()
+					delete(t.consecutiveWriteErrors, c)
+					t.errorMu.Unlock()
+				}
+				return nil
+			})
 		}
 	}
 }
@@ -487,13 +408,11 @@ func (t *TCPSink) GetActiveConnections() int64 {
 
 // Represents a connected TCP client with auth state
 type tcpClient struct {
-	conn           gnet.Conn
-	buffer         bytes.Buffer
-	authenticated  bool
-	session        *auth.Session
-	authTimeout    time.Time
-	tlsBridge      *tls.GNetTLSConn
-	authTimeoutSet bool
+	conn          gnet.Conn
+	buffer        bytes.Buffer
+	authenticated bool
+	authTimeout   time.Time
+	session       *auth.Session
 }
 
 // Handles gnet events with authentication
@@ -550,24 +469,12 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 
 	// Create client state without auth timeout initially
 	client := &tcpClient{
-		conn:           c,
-		authenticated:  s.sink.authenticator == nil, // No auth = auto authenticated
-		authTimeoutSet: false,                       // Auth timeout not started yet
+		conn:          c,
+		authenticated: s.sink.authenticator == nil,
 	}
 
-	// Initialize TLS bridge if enabled
-	if s.sink.tlsManager != nil {
-		tlsConfig := s.sink.tlsManager.GetTCPConfig()
-		client.tlsBridge = tls.NewServerConn(c, tlsConfig)
-		client.tlsBridge.Handshake() // Start async handshake
-
-		s.sink.logger.Debug("msg", "TLS handshake initiated",
-			"component", "tcp_sink",
-			"remote_addr", remoteAddr)
-	} else if s.sink.authenticator != nil {
-		// Only set auth timeout if no TLS (plain connection)
-		client.authTimeout = time.Now().Add(30 * time.Second) // TODO: configurable or non-hardcoded timer
-		client.authTimeoutSet = true
+	if s.sink.authenticator != nil {
+		client.authTimeout = time.Now().Add(30 * time.Second)
 	}
 
 	s.mu.Lock()
@@ -578,12 +485,11 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	s.sink.logger.Debug("msg", "TCP connection opened",
 		"remote_addr", remoteAddr,
 		"active_connections", newCount,
-		"requires_auth", s.sink.authenticator != nil)
+		"auth_enabled", s.sink.authenticator != nil)
 
 	// Send auth prompt if authentication is required
-	if s.sink.authenticator != nil && s.sink.tlsManager == nil {
-		authPrompt := []byte("AUTH REQUIRED\nFormat: AUTH <method> <credentials>\nMethods: basic, token\n")
-		return authPrompt, gnet.None
+	if s.sink.authenticator != nil {
+		return []byte("AUTH_REQUIRED\n"), gnet.None
 	}
 
 	return nil, gnet.None
@@ -594,16 +500,8 @@ func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 
 	// Remove client state
 	s.mu.Lock()
-	client := s.clients[c]
 	delete(s.clients, c)
 	s.mu.Unlock()
-
-	// Clean up TLS bridge if present
-	if client != nil && client.tlsBridge != nil {
-		client.tlsBridge.Close()
-		s.sink.logger.Debug("msg", "TLS connection closed",
-			"remote_addr", remoteAddr)
-	}
 
 	// Clean up write error tracking
 	s.sink.errorMu.Lock()
@@ -632,98 +530,34 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 
-	// Read all available data
-	data, err := c.Next(-1)
-	if err != nil {
-		s.sink.logger.Error("msg", "Error reading from connection",
-			"component", "tcp_sink",
-			"error", err)
-		return gnet.Close
-	}
-
-	// Process through TLS bridge if present
-	if client.tlsBridge != nil {
-		// Feed encrypted data into TLS engine
-		if err := client.tlsBridge.ProcessIncoming(data); err != nil {
-			s.sink.logger.Error("msg", "TLS processing error",
-				"component", "tcp_sink",
-				"remote_addr", c.RemoteAddr().String(),
-				"error", err)
-			return gnet.Close
-		}
-
-		// Check if handshake is complete
-		if !client.tlsBridge.IsHandshakeDone() {
-			// Still handshaking, wait for more data
-			return gnet.None
-		}
-
-		// Check handshake result
-		_, hsErr := client.tlsBridge.HandshakeComplete()
-		if hsErr != nil {
-			s.sink.logger.Error("msg", "TLS handshake failed",
-				"component", "tcp_sink",
-				"remote_addr", c.RemoteAddr().String(),
-				"error", hsErr)
-			return gnet.Close
-		}
-
-		// Set auth timeout only after TLS handshake completes
-		if !client.authTimeoutSet && s.sink.authenticator != nil && !client.authenticated {
-			client.authTimeout = time.Now().Add(30 * time.Second)
-			client.authTimeoutSet = true
-			s.sink.logger.Debug("msg", "Auth timeout started after TLS handshake",
+	// Authentication phase
+	if !client.authenticated {
+		// Check auth timeout
+		if time.Now().After(client.authTimeout) {
+			s.sink.logger.Warn("msg", "Authentication timeout",
 				"component", "tcp_sink",
 				"remote_addr", c.RemoteAddr().String())
+			return gnet.Close
 		}
 
-		// Read decrypted plaintext
-		data = client.tlsBridge.Read()
-		if data == nil || len(data) == 0 {
-			// No plaintext available yet
+		// Read auth data
+		data, _ := c.Next(-1)
+		if len(data) == 0 {
 			return gnet.None
 		}
 
-		// First data after TLS handshake - send auth prompt if needed
-		if s.sink.authenticator != nil && !client.authenticated &&
-			len(client.buffer.Bytes()) == 0 {
-			authPrompt := []byte("AUTH REQUIRED\n")
-			client.tlsBridge.Write(authPrompt)
-		}
-	}
-
-	// Only check auth timeout if it has been set
-	if !client.authenticated && client.authTimeoutSet && time.Now().After(client.authTimeout) {
-		s.sink.logger.Warn("msg", "Authentication timeout",
-			"component", "tcp_sink",
-			"remote_addr", c.RemoteAddr().String())
-		if client.tlsBridge != nil && client.tlsBridge.IsHandshakeDone() {
-			client.tlsBridge.Write([]byte("AUTH TIMEOUT\n"))
-		} else if client.tlsBridge == nil {
-			c.AsyncWrite([]byte("AUTH TIMEOUT\n"), nil)
-		}
-		return gnet.Close
-	}
-
-	// If not authenticated, expect auth command
-	if !client.authenticated {
 		client.buffer.Write(data)
 
 		// Look for complete auth line
-		if line, err := client.buffer.ReadBytes('\n'); err == nil {
-			line = bytes.TrimSpace(line)
+		if idx := bytes.IndexByte(client.buffer.Bytes(), '\n'); idx >= 0 {
+			line := client.buffer.Bytes()[:idx]
+			client.buffer.Next(idx + 1)
 
 			// Parse AUTH command: AUTH <method> <credentials>
 			parts := strings.SplitN(string(line), " ", 3)
 			if len(parts) != 3 || parts[0] != "AUTH" {
-				// Send error through TLS if enabled
-				errMsg := []byte("AUTH FAILED\n")
-				if client.tlsBridge != nil {
-					client.tlsBridge.Write(errMsg)
-				} else {
-					c.AsyncWrite(errMsg, nil)
-				}
-				return gnet.None
+				c.AsyncWrite([]byte("AUTH_FAIL\n"), nil)
+				return gnet.Close
 			}
 
 			// Authenticate
@@ -734,13 +568,7 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 					"remote_addr", c.RemoteAddr().String(),
 					"method", parts[1],
 					"error", err)
-				// Send error through TLS if enabled
-				errMsg := []byte("AUTH FAILED\n")
-				if client.tlsBridge != nil {
-					client.tlsBridge.Write(errMsg)
-				} else {
-					c.AsyncWrite(errMsg, nil)
-				}
+				c.AsyncWrite([]byte("AUTH_FAIL\n"), nil)
 				return gnet.Close
 			}
 
@@ -755,35 +583,25 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 				"component", "tcp_sink",
 				"remote_addr", c.RemoteAddr().String(),
 				"username", session.Username,
-				"method", session.Method,
-				"tls", client.tlsBridge != nil)
+				"method", session.Method)
 
-			// Send success through TLS if enabled
-			successMsg := []byte("AUTH OK\n")
-			if client.tlsBridge != nil {
-				client.tlsBridge.Write(successMsg)
-			} else {
-				c.AsyncWrite(successMsg, nil)
-			}
-
-			// Clear buffer after auth
+			c.AsyncWrite([]byte("AUTH_OK\n"), nil)
 			client.buffer.Reset()
 		}
 		return gnet.None
 	}
 
-	// Authenticated clients shouldn't send data, just discard
+	// Clients shouldn't send data, just discard
 	c.Discard(-1)
 	return gnet.None
 }
 
-// Configures tcp sink authentication
-func (t *TCPSink) SetAuthConfig(authCfg *config.AuthConfig) {
+// Configures tcp sink auth
+func (t *TCPSink) SetAuth(authCfg *config.AuthConfig) {
 	if authCfg == nil || authCfg.Type == "none" {
 		return
 	}
 
-	t.authConfig = authCfg
 	authenticator, err := auth.New(authCfg, t.logger)
 	if err != nil {
 		t.logger.Error("msg", "Failed to initialize authenticator for TCP sink",
@@ -793,22 +611,7 @@ func (t *TCPSink) SetAuthConfig(authCfg *config.AuthConfig) {
 	}
 	t.authenticator = authenticator
 
-	// Initialize TLS manager if TLS is configured
-	if t.config.TLS != nil && t.config.TLS.Enabled {
-		tlsManager, err := tls.NewManager(t.config.TLS, t.logger)
-		if err != nil {
-			t.logger.Error("msg", "Failed to create TLS manager",
-				"component", "tcp_sink",
-				"error", err)
-			// Continue without TLS
-			return
-		}
-		t.tlsManager = tlsManager
-	}
-
 	t.logger.Info("msg", "Authentication configured for TCP sink",
 		"component", "tcp_sink",
-		"auth_type", authCfg.Type,
-		"tls_enabled", t.tlsManager != nil,
-		"tls_bridge", t.tlsManager != nil)
+		"auth_type", authCfg.Type)
 }

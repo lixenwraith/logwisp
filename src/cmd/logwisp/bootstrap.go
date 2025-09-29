@@ -60,7 +60,7 @@ func initializeLogger(cfg *config.Config) error {
 		// In quiet mode, disable ALL logging output
 		logCfg.Level = 255 // A level that disables all output
 		logCfg.DisableFile = true
-		logCfg.EnableStdout = false
+		logCfg.EnableConsole = false
 		return logger.ApplyConfig(logCfg)
 	}
 
@@ -74,29 +74,24 @@ func initializeLogger(cfg *config.Config) error {
 	// Configure based on output mode
 	switch cfg.Logging.Output {
 	case "none":
-		logCfg.EnableStdout = false
+		logCfg.EnableConsole = false
 	case "stdout":
-		logCfg.EnableStdout = true
-		logCfg.StdoutTarget = "stdout"
+		logCfg.EnableConsole = true
+		logCfg.ConsoleTarget = "stdout"
 	case "stderr":
-		logCfg.EnableStdout = true
-		logCfg.StdoutTarget = "stderr"
+		logCfg.EnableConsole = true
+		logCfg.ConsoleTarget = "stderr"
 	case "split":
-		logCfg.EnableStdout = true
-		logCfg.StdoutTarget = "split"
+		logCfg.EnableConsole = true
+		logCfg.ConsoleTarget = "split"
 	case "file":
 		logCfg.DisableFile = false
-		logCfg.EnableStdout = false
-		configureFileLogging(logCfg, cfg)
-	case "both":
-		logCfg.DisableFile = false
-		logCfg.EnableStdout = true
-		logCfg.StdoutTarget = "stdout"
+		logCfg.EnableConsole = false
 		configureFileLogging(logCfg, cfg)
 	case "all":
 		logCfg.DisableFile = false
-		logCfg.EnableStdout = true
-		logCfg.StdoutTarget = "split"
+		logCfg.EnableConsole = true
+		logCfg.ConsoleTarget = "split"
 		configureFileLogging(logCfg, cfg)
 	default:
 		return fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)

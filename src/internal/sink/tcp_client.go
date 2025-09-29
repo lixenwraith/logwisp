@@ -2,41 +2,37 @@
 package sink
 
 import (
+	"bufio"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	tlspkg "logwisp/src/internal/tls"
 
 	"github.com/lixenwraith/log"
 )
 
 // Forwards log entries to a remote TCP endpoint
 type TCPClientSink struct {
-	input     chan core.LogEntry
-	config    TCPClientConfig
-	conn      net.Conn
-	connMu    sync.RWMutex
-	done      chan struct{}
-	wg        sync.WaitGroup
-	startTime time.Time
-	logger    *log.Logger
-	formatter format.Formatter
-
-	// TLS support
-	tlsManager *tlspkg.Manager
-	tlsConfig  *tls.Config
+	input         chan core.LogEntry
+	config        TCPClientConfig
+	conn          net.Conn
+	connMu        sync.RWMutex
+	done          chan struct{}
+	wg            sync.WaitGroup
+	startTime     time.Time
+	logger        *log.Logger
+	formatter     format.Formatter
+	authenticator *auth.Authenticator
 
 	// Reconnection state
 	reconnecting   atomic.Bool
@@ -59,6 +55,10 @@ type TCPClientConfig struct {
 	WriteTimeout time.Duration
 	ReadTimeout  time.Duration
 	KeepAlive    time.Duration
+
+	// Security
+	Username string
+	Password string
 
 	// Reconnection settings
 	ReconnectDelay    time.Duration
@@ -120,27 +120,11 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 	if backoff, ok := options["reconnect_backoff"].(float64); ok && backoff >= 1.0 {
 		cfg.ReconnectBackoff = backoff
 	}
-
-	// Extract TLS config
-	if tc, ok := options["tls"].(map[string]any); ok {
-		cfg.TLS = &config.TLSConfig{}
-		cfg.TLS.Enabled, _ = tc["enabled"].(bool)
-		if certFile, ok := tc["cert_file"].(string); ok {
-			cfg.TLS.CertFile = certFile
-		}
-		if keyFile, ok := tc["key_file"].(string); ok {
-			cfg.TLS.KeyFile = keyFile
-		}
-		cfg.TLS.ClientAuth, _ = tc["client_auth"].(bool)
-		if caFile, ok := tc["client_ca_file"].(string); ok {
-			cfg.TLS.ClientCAFile = caFile
-		}
-		if insecure, ok := tc["insecure_skip_verify"].(bool); ok {
-			cfg.TLS.InsecureSkipVerify = insecure
-		}
-		if caFile, ok := tc["ca_file"].(string); ok {
-			cfg.TLS.CAFile = caFile
-		}
+	if username, ok := options["username"].(string); ok {
+		cfg.Username = username
+	}
+	if password, ok := options["password"].(string); ok {
+		cfg.Password = password
 	}
 
 	t := &TCPClientSink{
@@ -154,62 +138,6 @@ func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter form
 	t.lastProcessed.Store(time.Time{})
 	t.connectionUptime.Store(time.Duration(0))
 
-	// Initialize TLS manager if TLS is configured
-	if cfg.TLS != nil && cfg.TLS.Enabled {
-		// Build custom TLS config for client
-		t.tlsConfig = &tls.Config{
-			InsecureSkipVerify: cfg.TLS.InsecureSkipVerify,
-		}
-
-		// Extract server name from address for SNI
-		host, _, err := net.SplitHostPort(cfg.Address)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse address for SNI: %w", err)
-		}
-		t.tlsConfig.ServerName = host
-
-		// Load custom CA for server verification
-		if cfg.TLS.CAFile != "" {
-			caCert, err := os.ReadFile(cfg.TLS.CAFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read CA file '%s': %w", cfg.TLS.CAFile, err)
-			}
-			caCertPool := x509.NewCertPool()
-			if !caCertPool.AppendCertsFromPEM(caCert) {
-				return nil, fmt.Errorf("failed to parse CA certificate from '%s'", cfg.TLS.CAFile)
-			}
-			t.tlsConfig.RootCAs = caCertPool
-			logger.Debug("msg", "Custom CA loaded for server verification",
-				"component", "tcp_client_sink",
-				"ca_file", cfg.TLS.CAFile)
-		}
-
-		// Load client certificate for mTLS
-		if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
-			cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load client certificate: %w", err)
-			}
-			t.tlsConfig.Certificates = []tls.Certificate{cert}
-			logger.Info("msg", "Client certificate loaded for mTLS",
-				"component", "tcp_client_sink",
-				"cert_file", cfg.TLS.CertFile)
-		}
-
-		// Set minimum TLS version if configured
-		if cfg.TLS.MinVersion != "" {
-			t.tlsConfig.MinVersion = parseTLSVersion(cfg.TLS.MinVersion, tls.VersionTLS12)
-		} else {
-			t.tlsConfig.MinVersion = tls.VersionTLS12 // Default minimum
-		}
-
-		logger.Info("msg", "TLS enabled for TCP client",
-			"component", "tcp_client_sink",
-			"address", cfg.Address,
-			"server_name", host,
-			"insecure", cfg.TLS.InsecureSkipVerify,
-			"mtls", cfg.TLS.CertFile != "")
-	}
 	return t, nil
 }
 
@@ -376,33 +304,44 @@ func (t *TCPClientSink) connect() (net.Conn, error) {
 		tcpConn.SetKeepAlivePeriod(t.config.KeepAlive)
 	}
 
-	// Wrap with TLS if configured
-	if t.tlsConfig != nil {
-		t.logger.Debug("msg", "Initiating TLS handshake",
-			"component", "tcp_client_sink",
-			"address", t.config.Address)
-
-		tlsConn := tls.Client(conn, t.tlsConfig)
-
-		// Perform handshake with timeout
-		handshakeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+	// Handle authentication if credentials configured
+	if t.config.Username != "" && t.config.Password != "" {
+		// Read auth challenge
+		reader := bufio.NewReader(conn)
+		challenge, err := reader.ReadString('\n')
+		if err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("TLS handshake failed: %w", err)
+			return nil, fmt.Errorf("failed to read auth challenge: %w", err)
 		}
 
-		// Log connection details
-		state := tlsConn.ConnectionState()
-		t.logger.Info("msg", "TLS connection established",
-			"component", "tcp_client_sink",
-			"address", t.config.Address,
-			"tls_version", tlsVersionString(state.Version),
-			"cipher_suite", tls.CipherSuiteName(state.CipherSuite),
-			"server_name", state.ServerName)
+		if strings.TrimSpace(challenge) == "AUTH_REQUIRED" {
+			// Send credentials
+			creds := t.config.Username + ":" + t.config.Password
+			encodedCreds := base64.StdEncoding.EncodeToString([]byte(creds))
+			authCmd := fmt.Sprintf("AUTH basic %s\n", encodedCreds)
 
-		return tlsConn, nil
+			if _, err := conn.Write([]byte(authCmd)); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("failed to send auth: %w", err)
+			}
+
+			// Read response
+			response, err := reader.ReadString('\n')
+			if err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("failed to read auth response: %w", err)
+			}
+
+			if strings.TrimSpace(response) != "AUTH_OK" {
+				conn.Close()
+				return nil, fmt.Errorf("authentication failed: %s", response)
+			}
+
+			t.logger.Debug("msg", "TCP authentication successful",
+				"component", "tcp_client_sink",
+				"address", t.config.Address,
+				"username", t.config.Username)
+		}
 	}
 
 	return conn, nil
@@ -504,34 +443,8 @@ func (t *TCPClientSink) sendEntry(entry core.LogEntry) error {
 	return nil
 }
 
-// Returns human-readable TLS version
-func tlsVersionString(version uint16) string {
-	switch version {
-	case tls.VersionTLS10:
-		return "TLS1.0"
-	case tls.VersionTLS11:
-		return "TLS1.1"
-	case tls.VersionTLS12:
-		return "TLS1.2"
-	case tls.VersionTLS13:
-		return "TLS1.3"
-	default:
-		return fmt.Sprintf("0x%04x", version)
-	}
-}
-
-// Converts string to TLS version constant
-func parseTLSVersion(version string, defaultVersion uint16) uint16 {
-	switch strings.ToUpper(version) {
-	case "TLS1.0", "TLS10":
-		return tls.VersionTLS10
-	case "TLS1.1", "TLS11":
-		return tls.VersionTLS11
-	case "TLS1.2", "TLS12":
-		return tls.VersionTLS12
-	case "TLS1.3", "TLS13":
-		return tls.VersionTLS13
-	default:
-		return defaultVersion
-	}
+// Not applicable, Clients authenticate to remote servers using Username/Password in config
+func (h *TCPClientSink) SetAuth(authCfg *config.AuthConfig) {
+	// No-op: client sinks don't validate incoming connections
+	// They authenticate to remote servers using Username/Password fields
 }

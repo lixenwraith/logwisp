@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,7 +16,6 @@ import (
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/limit"
-	"logwisp/src/internal/tls"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/compat"
@@ -24,28 +23,25 @@ import (
 )
 
 const (
-	maxClientBufferSize     = 10 * 1024 * 1024 // 10MB max per client
-	maxLineLength           = 1 * 1024 * 1024  // 1MB max per log line
-	maxEncryptedDataPerRead = 1 * 1024 * 1024  // 1MB max encrypted data per read
-	maxCumulativeEncrypted  = 20 * 1024 * 1024 // 20MB total encrypted before processing
+	maxClientBufferSize = 10 * 1024 * 1024 // 10MB max per client
+	maxLineLength       = 1 * 1024 * 1024  // 1MB max per log line
 )
 
 // Receives log entries via TCP connections
 type TCPSource struct {
-	host        string
-	port        int64
-	bufferSize  int64
-	server      *tcpSourceServer
-	subscribers []chan core.LogEntry
-	mu          sync.RWMutex
-	done        chan struct{}
-	engine      *gnet.Engine
-	engineMu    sync.Mutex
-	wg          sync.WaitGroup
-	netLimiter  *limit.NetLimiter
-	tlsManager  *tls.Manager
-	tlsConfig   *config.TLSConfig
-	logger      *log.Logger
+	host          string
+	port          int64
+	bufferSize    int64
+	server        *tcpSourceServer
+	subscribers   []chan core.LogEntry
+	mu            sync.RWMutex
+	done          chan struct{}
+	engine        *gnet.Engine
+	engineMu      sync.Mutex
+	wg            sync.WaitGroup
+	netLimiter    *limit.NetLimiter
+	logger        *log.Logger
+	authenticator *auth.Authenticator
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -54,6 +50,8 @@ type TCPSource struct {
 	activeConns    atomic.Int64
 	startTime      time.Time
 	lastEntryTime  atomic.Value // time.Time
+	authFailures   atomic.Uint64
+	authSuccesses  atomic.Uint64
 }
 
 // Creates a new TCP server source
@@ -84,55 +82,32 @@ func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error
 	t.lastEntryTime.Store(time.Time{})
 
 	// Initialize net limiter if configured
-	if rl, ok := options["net_limit"].(map[string]any); ok {
-		if enabled, _ := rl["enabled"].(bool); enabled {
+	if nl, ok := options["net_limit"].(map[string]any); ok {
+		if enabled, _ := nl["enabled"].(bool); enabled {
 			cfg := config.NetLimitConfig{
 				Enabled: true,
 			}
 
-			if rps, ok := rl["requests_per_second"].(float64); ok {
+			if rps, ok := nl["requests_per_second"].(float64); ok {
 				cfg.RequestsPerSecond = rps
 			}
-			if burst, ok := rl["burst_size"].(int64); ok {
+			if burst, ok := nl["burst_size"].(int64); ok {
 				cfg.BurstSize = burst
 			}
-			if limitBy, ok := rl["limit_by"].(string); ok {
-				cfg.LimitBy = limitBy
-			}
-			if maxPerIP, ok := rl["max_connections_per_ip"].(int64); ok {
+			if maxPerIP, ok := nl["max_connections_per_ip"].(int64); ok {
 				cfg.MaxConnectionsPerIP = maxPerIP
 			}
-			if maxTotal, ok := rl["max_total_connections"].(int64); ok {
-				cfg.MaxTotalConnections = maxTotal
+			if maxPerUser, ok := nl["max_connections_per_user"].(int64); ok {
+				cfg.MaxConnectionsPerUser = maxPerUser
+			}
+			if maxPerToken, ok := nl["max_connections_per_token"].(int64); ok {
+				cfg.MaxConnectionsPerToken = maxPerToken
+			}
+			if maxTotal, ok := nl["max_connections_total"].(int64); ok {
+				cfg.MaxConnectionsTotal = maxTotal
 			}
 
 			t.netLimiter = limit.NewNetLimiter(cfg, logger)
-		}
-	}
-
-	// Extract TLS config and initialize TLS manager
-	if tc, ok := options["tls"].(map[string]any); ok {
-		t.tlsConfig = &config.TLSConfig{}
-		t.tlsConfig.Enabled, _ = tc["enabled"].(bool)
-		if certFile, ok := tc["cert_file"].(string); ok {
-			t.tlsConfig.CertFile = certFile
-		}
-		if keyFile, ok := tc["key_file"].(string); ok {
-			t.tlsConfig.KeyFile = keyFile
-		}
-		t.tlsConfig.ClientAuth, _ = tc["client_auth"].(bool)
-		if caFile, ok := tc["client_ca_file"].(string); ok {
-			t.tlsConfig.ClientCAFile = caFile
-		}
-		t.tlsConfig.VerifyClientCert, _ = tc["verify_client_cert"].(bool)
-
-		// Create TLS manager if enabled
-		if t.tlsConfig.Enabled {
-			tlsManager, err := tls.NewManager(t.tlsConfig, logger)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create TLS manager: %w", err)
-			}
-			t.tlsManager = tlsManager
 		}
 	}
 
@@ -167,8 +142,7 @@ func (t *TCPSource) Start() error {
 		defer t.wg.Done()
 		t.logger.Info("msg", "TCP source server starting",
 			"component", "tcp_source",
-			"port", t.port,
-			"tls_enabled", t.tlsManager != nil)
+			"port", t.port)
 
 		err := gnet.Run(t.server, addr,
 			gnet.WithLogger(gnetLogger),
@@ -283,9 +257,8 @@ type tcpClient struct {
 	conn                gnet.Conn
 	buffer              bytes.Buffer
 	authenticated       bool
-	session             *auth.Session
 	authTimeout         time.Time
-	tlsBridge           *tls.GNetTLSConn
+	session             *auth.Session
 	maxBufferSeen       int
 	cumulativeEncrypted int64
 }
@@ -339,22 +312,17 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	}
 
 	// Create client state
-	client := &tcpClient{conn: c}
-
-	// Initialize TLS bridge if enabled
-	if s.source.tlsManager != nil {
-		tlsConfig := s.source.tlsManager.GetTCPConfig()
-		client.tlsBridge = tls.NewServerConn(c, tlsConfig)
-		client.tlsBridge.Handshake() // Start async handshake
-
-		s.source.logger.Debug("msg", "TLS handshake initiated",
-			"component", "tcp_source",
-			"remote_addr", remoteAddr)
+	client := &tcpClient{
+		conn:          c,
+		authenticated: s.source.authenticator == nil,
 	}
 
-	// Create client state
+	if s.source.authenticator != nil {
+		client.authTimeout = time.Now().Add(30 * time.Second)
+	}
+
 	s.mu.Lock()
-	s.clients[c] = &tcpClient{conn: c}
+	s.clients[c] = client
 	s.mu.Unlock()
 
 	newCount := s.source.activeConns.Add(1)
@@ -362,7 +330,12 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		"component", "tcp_source",
 		"remote_addr", remoteAddr,
 		"active_connections", newCount,
-		"tls_enabled", s.source.tlsManager != nil)
+		"requires_auth", s.source.authenticator != nil)
+
+	// Send auth challenge if required
+	if s.source.authenticator != nil {
+		return []byte("AUTH_REQUIRED\n"), gnet.None
+	}
 
 	return nil, gnet.None
 }
@@ -372,17 +345,8 @@ func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
 
 	// Remove client state
 	s.mu.Lock()
-	client := s.clients[c]
 	delete(s.clients, c)
 	s.mu.Unlock()
-
-	// Clean up TLS bridge if present
-	if client != nil && client.tlsBridge != nil {
-		client.tlsBridge.Close()
-		s.source.logger.Debug("msg", "TLS connection closed",
-			"component", "tcp_source",
-			"remote_addr", remoteAddr)
-	}
 
 	// Remove connection tracking
 	if s.source.netLimiter != nil {
@@ -416,79 +380,64 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 
-	// Check encrypted data size BEFORE processing through TLS
-	if len(data) > maxEncryptedDataPerRead {
-		s.source.logger.Warn("msg", "Encrypted data per read limit exceeded",
-			"component", "tcp_source",
-			"remote_addr", c.RemoteAddr().String(),
-			"data_size", len(data),
-			"limit", maxEncryptedDataPerRead)
-		s.source.invalidEntries.Add(1)
-		return gnet.Close
-	}
+	// Authentication phase
+	if !client.authenticated {
+		if time.Now().After(client.authTimeout) {
+			s.source.logger.Warn("msg", "Authentication timeout",
+				"component", "tcp_source",
+				"remote_addr", c.RemoteAddr().String())
+			return gnet.Close
+		}
 
-	// Track cumulative encrypted data to prevent slow accumulation
-	client.cumulativeEncrypted += int64(len(data))
-	if client.cumulativeEncrypted > maxCumulativeEncrypted {
-		s.source.logger.Warn("msg", "Cumulative encrypted data limit exceeded",
-			"component", "tcp_source",
-			"remote_addr", c.RemoteAddr().String(),
-			"total_encrypted", client.cumulativeEncrypted,
-			"limit", maxCumulativeEncrypted)
-		s.source.invalidEntries.Add(1)
-		return gnet.Close
-	}
+		client.buffer.Write(data)
 
-	// Process through TLS bridge if present
-	if client.tlsBridge != nil {
-		// Feed encrypted data into TLS engine
-		if err := client.tlsBridge.ProcessIncoming(data); err != nil {
-			if errors.Is(err, tls.ErrTLSBackpressure) {
-				s.source.logger.Warn("msg", "TLS backpressure, closing slow client",
-					"component", "tcp_source",
-					"remote_addr", c.RemoteAddr().String())
-			} else {
-				s.source.logger.Error("msg", "TLS processing error",
+		// Look for auth line
+		if idx := bytes.IndexByte(client.buffer.Bytes(), '\n'); idx >= 0 {
+			line := client.buffer.Bytes()[:idx]
+			client.buffer.Next(idx + 1)
+
+			parts := strings.SplitN(string(line), " ", 3)
+			if len(parts) != 3 || parts[0] != "AUTH" {
+				c.AsyncWrite([]byte("AUTH_FAIL\n"), nil)
+				return gnet.Close
+			}
+
+			session, err := s.source.authenticator.AuthenticateTCP(parts[1], parts[2], c.RemoteAddr().String())
+			if err != nil {
+				s.source.authFailures.Add(1)
+				s.source.logger.Warn("msg", "Authentication failed",
 					"component", "tcp_source",
 					"remote_addr", c.RemoteAddr().String(),
 					"error", err)
+				c.AsyncWrite([]byte("AUTH_FAIL\n"), nil)
+				return gnet.Close
 			}
-			return gnet.Close
-		}
 
-		// Check if handshake is complete
-		if !client.tlsBridge.IsHandshakeDone() {
-			// Still handshaking, wait for more data
-			return gnet.None
-		}
+			s.source.authSuccesses.Add(1)
+			s.mu.Lock()
+			client.authenticated = true
+			client.session = session
+			s.mu.Unlock()
 
-		// Check handshake result
-		_, hsErr := client.tlsBridge.HandshakeComplete()
-		if hsErr != nil {
-			s.source.logger.Error("msg", "TLS handshake failed",
+			s.source.logger.Info("msg", "TCP client authenticated",
 				"component", "tcp_source",
 				"remote_addr", c.RemoteAddr().String(),
-				"error", hsErr)
-			return gnet.Close
-		}
+				"username", session.Username)
 
-		// Read decrypted plaintext
-		data = client.tlsBridge.Read()
-		if data == nil || len(data) == 0 {
-			// No plaintext available yet
-			return gnet.None
+			c.AsyncWrite([]byte("AUTH_OK\n"), nil)
+			client.buffer.Reset()
 		}
-		// Reset cumulative counter after successful decryption and processing
-		client.cumulativeEncrypted = 0
+		return gnet.None
 	}
 
-	// Check buffer size before appending
+	// Check if appending the new data would exceed the client buffer limit.
 	if client.buffer.Len()+len(data) > maxClientBufferSize {
-		s.source.logger.Warn("msg", "Client buffer limit exceeded",
+		s.source.logger.Warn("msg", "Client buffer limit exceeded, closing connection.",
 			"component", "tcp_source",
 			"remote_addr", c.RemoteAddr().String(),
 			"buffer_size", client.buffer.Len(),
-			"incoming_size", len(data))
+			"incoming_size", len(data),
+			"limit", maxClientBufferSize)
 		s.source.invalidEntries.Add(1)
 		return gnet.Close
 	}
@@ -573,12 +522,22 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 	return gnet.None
 }
 
-// noopLogger implements gnet's Logger interface but discards everything
-// type noopLogger struct{}
-// func (n noopLogger) Debugf(format string, args ...any) {}
-// func (n noopLogger) Infof(format string, args ...any)  {}
-// func (n noopLogger) Warnf(format string, args ...any)  {}
-// func (n noopLogger) Errorf(format string, args ...any) {}
-// func (n noopLogger) Fatalf(format string, args ...any) {}
+// Configure TCP source auth
+func (t *TCPSource) SetAuth(authCfg *config.AuthConfig) {
+	if authCfg == nil || authCfg.Type == "none" {
+		return
+	}
 
-// Usage: gnet.Run(..., gnet.WithLogger(noopLogger{}), ...)
+	authenticator, err := auth.New(authCfg, t.logger)
+	if err != nil {
+		t.logger.Error("msg", "Failed to initialize authenticator for TCP source",
+			"component", "tcp_source",
+			"error", err)
+		return
+	}
+	t.authenticator = authenticator
+
+	t.logger.Info("msg", "Authentication configured for TCP source",
+		"component", "tcp_source",
+		"auth_type", authCfg.Type)
+}
