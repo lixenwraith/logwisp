@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FILE: test-logwisp-auth-debug.sh
+# FILE: test-basic-auth.sh
 
 # Creates test directories and starts network services
 set -e
@@ -32,7 +32,7 @@ fi
 cat > test-auth.toml << EOF
 # General LogWisp settings
 log_dir = "test-logs"
-log_level = "debug"  # CHANGED: Set to debug
+log_level = "debug"
 data_dir = "test-data"
 
 # Logging configuration for troubleshooting
@@ -41,7 +41,7 @@ target = "all"
 level = "debug"
 [logging.console]
 enabled = true
-target = "stdout"  # CHANGED: Log to stdout for visibility
+target = "stdout"
 format = "txt"
 
 [[pipelines]]
@@ -59,7 +59,9 @@ port = 5514
 host = "127.0.0.1"
 
 [[pipelines.sinks]]
-type = "stdout"
+type = "console"
+[pipelines.sinks.options]
+target = "stdout"
 
 # Second pipeline for HTTP
 [[pipelines]]
@@ -78,7 +80,10 @@ host = "127.0.0.1"
 path = "/ingest"
 
 [[pipelines.sinks]]
-type = "stdout"  # CHANGED: Simplify to stdout for debugging
+type = "console"
+[pipelines.sinks.options]
+target = "stdout"
+
 EOF
 
 # Start LogWisp with visible debug output

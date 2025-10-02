@@ -28,7 +28,7 @@ func NewFormatter(name string, options map[string]any, logger *log.Logger) (Form
 	switch name {
 	case "json":
 		return NewJSONFormatter(options, logger)
-	case "text":
+	case "txt":
 		return NewTextFormatter(options, logger)
 	case "raw":
 		return NewRawFormatter(options, logger)

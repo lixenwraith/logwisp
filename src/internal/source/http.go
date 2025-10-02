@@ -117,12 +117,6 @@ func NewHTTPSource(options map[string]any, logger *log.Logger) (*HTTPSource, err
 			if maxPerIP, ok := nl["max_connections_per_ip"].(int64); ok {
 				cfg.MaxConnectionsPerIP = maxPerIP
 			}
-			if maxPerUser, ok := nl["max_connections_per_user"].(int64); ok {
-				cfg.MaxConnectionsPerUser = maxPerUser
-			}
-			if maxPerToken, ok := nl["max_connections_per_token"].(int64); ok {
-				cfg.MaxConnectionsPerToken = maxPerToken
-			}
 			if maxTotal, ok := nl["max_connections_total"].(int64); ok {
 				cfg.MaxConnectionsTotal = maxTotal
 			}
@@ -308,6 +302,27 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 			json.NewEncoder(ctx).Encode(map[string]any{
 				"error":       message,
 				"retry_after": "60",
+			})
+			return
+		}
+	}
+
+	// 2.5. Check TLS requirement for auth (early reject)
+	if h.authenticator != nil && h.authConfig.Type != "none" {
+		// Check if connection is TLS
+		isTLS := ctx.IsTLS() || h.tlsManager != nil
+
+		if !isTLS {
+			h.logger.Error("msg", "Authentication configured but connection is not TLS",
+				"component", "http_source",
+				"remote_addr", remoteAddr,
+				"auth_type", h.authConfig.Type)
+
+			ctx.SetStatusCode(fasthttp.StatusForbidden)
+			ctx.SetContentType("application/json")
+			json.NewEncoder(ctx).Encode(map[string]string{
+				"error": "TLS required for authentication",
+				"hint":  "Use HTTPS to submit authenticated requests",
 			})
 			return
 		}
@@ -543,7 +558,7 @@ func (h *HTTPSource) SetAuth(authCfg *config.AuthConfig) {
 	}
 
 	h.authConfig = authCfg
-	authenticator, err := auth.New(authCfg, h.logger)
+	authenticator, err := auth.NewAuthenticator(authCfg, h.logger)
 	if err != nil {
 		h.logger.Error("msg", "Failed to initialize authenticator for HTTP source",
 			"component", "http_source",

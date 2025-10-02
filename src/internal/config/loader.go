@@ -180,10 +180,10 @@ func applyConsoleTargetOverrides(cfg *Config) error {
 		return fmt.Errorf("invalid LOGWISP_CONSOLE_TARGET value: %s", consoleTarget)
 	}
 
-	// Apply to all console sinks
+	// Apply to console sinks
 	for i, pipeline := range cfg.Pipelines {
 		for j, sink := range pipeline.Sinks {
-			if sink.Type == "stdout" || sink.Type == "stderr" {
+			if sink.Type == "console" {
 				if sink.Options == nil {
 					cfg.Pipelines[i].Sinks[j].Options = make(map[string]any)
 				}
@@ -191,11 +191,6 @@ func applyConsoleTargetOverrides(cfg *Config) error {
 				cfg.Pipelines[i].Sinks[j].Options["target"] = consoleTarget
 			}
 		}
-	}
-
-	// Also update logging console target if applicable
-	if cfg.Logging.Console != nil && consoleTarget == "split" {
-		cfg.Logging.Console.Target = "split"
 	}
 
 	return nil

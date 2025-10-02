@@ -2,22 +2,17 @@
 package auth
 
 import (
-	"bufio"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"logwisp/src/internal/config"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/lixenwraith/log"
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/time/rate"
 )
 
@@ -28,10 +23,7 @@ const maxAuthTrackedIPs = 10000
 type Authenticator struct {
 	config       *config.AuthConfig
 	logger       *log.Logger
-	basicUsers   map[string]string // username -> password hash
-	bearerTokens map[string]bool   // token -> valid
-	jwtParser    *jwt.Parser
-	jwtKeyFunc   jwt.Keyfunc
+	bearerTokens map[string]bool // token -> valid
 	mu           sync.RWMutex
 
 	// Session tracking
@@ -55,68 +47,31 @@ type ipAuthState struct {
 type Session struct {
 	ID           string
 	Username     string
-	Method       string // basic, bearer, jwt, mtls
+	Method       string // basic, bearer, mtls
 	RemoteAddr   string
 	CreatedAt    time.Time
 	LastActivity time.Time
-	Metadata     map[string]any
 }
 
 // Creates a new authenticator from config
-func New(cfg *config.AuthConfig, logger *log.Logger) (*Authenticator, error) {
-	if cfg == nil || cfg.Type == "none" {
+func NewAuthenticator(cfg *config.AuthConfig, logger *log.Logger) (*Authenticator, error) {
+	// SCRAM is handled by ScramManager in sources
+	if cfg == nil || cfg.Type == "none" || cfg.Type == "scram" {
 		return nil, nil
 	}
 
 	a := &Authenticator{
 		config:         cfg,
 		logger:         logger,
-		basicUsers:     make(map[string]string),
 		bearerTokens:   make(map[string]bool),
 		sessions:       make(map[string]*Session),
 		ipAuthAttempts: make(map[string]*ipAuthState),
-	}
-
-	// Initialize Basic Auth users
-	if cfg.Type == "basic" && cfg.BasicAuth != nil {
-		for _, user := range cfg.BasicAuth.Users {
-			a.basicUsers[user.Username] = user.PasswordHash
-		}
-
-		// Load users from file if specified
-		if cfg.BasicAuth.UsersFile != "" {
-			if err := a.loadUsersFile(cfg.BasicAuth.UsersFile); err != nil {
-				return nil, fmt.Errorf("failed to load users file: %w", err)
-			}
-		}
 	}
 
 	// Initialize Bearer tokens
 	if cfg.Type == "bearer" && cfg.BearerAuth != nil {
 		for _, token := range cfg.BearerAuth.Tokens {
 			a.bearerTokens[token] = true
-		}
-
-		// Setup JWT validation if configured
-		if cfg.BearerAuth.JWT != nil {
-			a.jwtParser = jwt.NewParser(
-				jwt.WithValidMethods([]string{"HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}),
-				jwt.WithLeeway(5*time.Second),
-				jwt.WithExpirationRequired(),
-			)
-
-			// Setup key function
-			if cfg.BearerAuth.JWT.SigningKey != "" {
-				// Static key
-				key := []byte(cfg.BearerAuth.JWT.SigningKey)
-				a.jwtKeyFunc = func(token *jwt.Token) (any, error) {
-					return key, nil
-				}
-			} else if cfg.BearerAuth.JWT.JWKSURL != "" {
-				// JWKS support would require additional implementation
-				// ☢ SECURITY: JWKS rotation not implemented - tokens won't refresh keys
-				return nil, fmt.Errorf("JWKS support not yet implemented")
-			}
 		}
 	}
 
@@ -276,8 +231,6 @@ func (a *Authenticator) AuthenticateHTTP(authHeader, remoteAddr string) (*Sessio
 	var err error
 
 	switch a.config.Type {
-	case "basic":
-		session, err = a.authenticateBasic(authHeader, remoteAddr)
 	case "bearer":
 		session, err = a.authenticateBearer(authHeader, remoteAddr)
 	default:
@@ -322,24 +275,6 @@ func (a *Authenticator) AuthenticateTCP(method, credentials, remoteAddr string) 
 			session, err = a.validateToken(credentials, remoteAddr)
 		}
 
-	case "basic":
-		if a.config.Type != "basic" {
-			err = fmt.Errorf("basic auth not configured")
-		} else {
-			// Expect base64(username:password)
-			decoded, decErr := base64.StdEncoding.DecodeString(credentials)
-			if decErr != nil {
-				err = fmt.Errorf("invalid credentials encoding")
-			} else {
-				parts := strings.SplitN(string(decoded), ":", 2)
-				if len(parts) != 2 {
-					err = fmt.Errorf("invalid credentials format")
-				} else {
-					session, err = a.validateBasicAuth(parts[0], parts[1], remoteAddr)
-				}
-			}
-		}
-
 	default:
 		err = fmt.Errorf("unsupported auth method: %s", method)
 	}
@@ -355,91 +290,6 @@ func (a *Authenticator) AuthenticateTCP(method, credentials, remoteAddr string) 
 	return session, nil
 }
 
-func (a *Authenticator) authenticateBasic(authHeader, remoteAddr string) (*Session, error) {
-	if !strings.HasPrefix(authHeader, "Basic ") {
-		return nil, fmt.Errorf("invalid basic auth header")
-	}
-
-	payload, err := base64.StdEncoding.DecodeString(authHeader[6:])
-	if err != nil {
-		return nil, fmt.Errorf("invalid base64 encoding")
-	}
-
-	parts := strings.SplitN(string(payload), ":", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid credentials format")
-	}
-
-	return a.validateBasicAuth(parts[0], parts[1], remoteAddr)
-}
-
-func (a *Authenticator) validateBasicAuth(username, password, remoteAddr string) (*Session, error) {
-	a.mu.RLock()
-	expectedHash, exists := a.basicUsers[username]
-	a.mu.RUnlock()
-
-	if !exists {
-		// Perform argon2 anyway to prevent timing attacks
-		dummySalt := make([]byte, 16)
-		argon2.IDKey([]byte(password), dummySalt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
-		return nil, fmt.Errorf("invalid credentials")
-	}
-
-	// Parse PHC format hash
-	if !verifyArgon2idHash(password, expectedHash) {
-		return nil, fmt.Errorf("invalid credentials")
-	}
-
-	session := &Session{
-		ID:           generateSessionID(),
-		Username:     username,
-		Method:       "basic",
-		RemoteAddr:   remoteAddr,
-		CreatedAt:    time.Now(),
-		LastActivity: time.Now(),
-	}
-
-	a.storeSession(session)
-	return session, nil
-}
-
-// Verify Argon2id hashes
-func verifyArgon2idHash(password, hash string) bool {
-	// Parse PHC format: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
-	parts := strings.Split(hash, "$")
-	if len(parts) != 6 || parts[1] != "argon2id" {
-		return false
-	}
-
-	// Parse version
-	var version int
-	fmt.Sscanf(parts[2], "v=%d", &version)
-	if version != argon2.Version {
-		return false
-	}
-
-	// Parse parameters
-	var memory, time, threads uint32
-	fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads)
-
-	// Decode salt and hash
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
-		return false
-	}
-
-	expectedHash, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil {
-		return false
-	}
-
-	// Compute hash
-	computedHash := argon2.IDKey([]byte(password), salt, time, memory, uint8(threads), uint32(len(expectedHash)))
-
-	// Constant time comparison
-	return subtle.ConstantTimeCompare(computedHash, expectedHash) == 1
-}
-
 func (a *Authenticator) authenticateBearer(authHeader, remoteAddr string) (*Session, error) {
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		return nil, fmt.Errorf("invalid bearer auth header")
@@ -452,97 +302,22 @@ func (a *Authenticator) authenticateBearer(authHeader, remoteAddr string) (*Sess
 func (a *Authenticator) validateToken(token, remoteAddr string) (*Session, error) {
 	// Check static tokens first
 	a.mu.RLock()
-	isStatic := a.bearerTokens[token]
+	isValid := a.bearerTokens[token]
 	a.mu.RUnlock()
 
-	if isStatic {
-		session := &Session{
-			ID:           generateSessionID(),
-			Method:       "bearer",
-			RemoteAddr:   remoteAddr,
-			CreatedAt:    time.Now(),
-			LastActivity: time.Now(),
-			Metadata:     map[string]any{"token_type": "static"},
-		}
-		a.storeSession(session)
-		return session, nil
+	if !isValid {
+		return nil, fmt.Errorf("invalid token")
 	}
 
-	// Try JWT validation if configured
-	if a.jwtParser != nil && a.jwtKeyFunc != nil {
-		claims := jwt.MapClaims{}
-		parsedToken, err := a.jwtParser.ParseWithClaims(token, claims, a.jwtKeyFunc)
-		if err != nil {
-			return nil, fmt.Errorf("JWT validation failed: %w", err)
-		}
-
-		if !parsedToken.Valid {
-			return nil, fmt.Errorf("invalid JWT token")
-		}
-
-		// Explicit expiration check
-		if exp, ok := claims["exp"].(float64); ok {
-			if time.Now().Unix() > int64(exp) {
-				return nil, fmt.Errorf("token expired")
-			}
-		} else {
-			// Reject tokens without expiration
-			return nil, fmt.Errorf("token missing expiration claim")
-		}
-
-		// Check not-before claim
-		if nbf, ok := claims["nbf"].(float64); ok {
-			if time.Now().Unix() < int64(nbf) {
-				return nil, fmt.Errorf("token not yet valid")
-			}
-		}
-
-		// Check issuer if configured
-		if a.config.BearerAuth.JWT.Issuer != "" {
-			if iss, ok := claims["iss"].(string); !ok || iss != a.config.BearerAuth.JWT.Issuer {
-				return nil, fmt.Errorf("invalid token issuer")
-			}
-		}
-
-		// Check audience if configured
-		if a.config.BearerAuth.JWT.Audience != "" {
-			// Handle both string and []string audience formats
-			audValid := false
-			switch aud := claims["aud"].(type) {
-			case string:
-				audValid = aud == a.config.BearerAuth.JWT.Audience
-			case []any:
-				for _, aa := range aud {
-					if audStr, ok := aa.(string); ok && audStr == a.config.BearerAuth.JWT.Audience {
-						audValid = true
-						break
-					}
-				}
-			}
-			if !audValid {
-				return nil, fmt.Errorf("invalid token audience")
-			}
-		}
-
-		username := ""
-		if sub, ok := claims["sub"].(string); ok {
-			username = sub
-		}
-
-		session := &Session{
-			ID:           generateSessionID(),
-			Username:     username,
-			Method:       "jwt",
-			RemoteAddr:   remoteAddr,
-			CreatedAt:    time.Now(),
-			LastActivity: time.Now(),
-			Metadata:     map[string]any{"claims": claims},
-		}
-		a.storeSession(session)
-		return session, nil
+	session := &Session{
+		ID:           generateSessionID(),
+		Method:       "bearer",
+		RemoteAddr:   remoteAddr,
+		CreatedAt:    time.Now(),
+		LastActivity: time.Now(),
 	}
-
-	return nil, fmt.Errorf("invalid token")
+	a.storeSession(session)
+	return session, nil
 }
 
 func (a *Authenticator) storeSession(session *Session) {
@@ -598,49 +373,6 @@ func (a *Authenticator) authAttemptCleanup() {
 	}
 }
 
-func (a *Authenticator) loadUsersFile(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("could not open users file: %w", err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue // Skip empty lines and comments
-		}
-
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			a.logger.Warn("msg", "Skipping malformed line in users file",
-				"component", "auth",
-				"path", path,
-				"line_number", lineNumber)
-			continue
-		}
-		username, hash := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-		if username != "" && hash != "" {
-			// File-based users can overwrite inline users if names conflict
-			a.basicUsers[username] = hash
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading users file: %w", err)
-	}
-
-	a.logger.Info("msg", "Loaded users from file",
-		"component", "auth",
-		"path", path,
-		"user_count", len(a.basicUsers))
-
-	return nil
-}
-
 func generateSessionID() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -686,7 +418,6 @@ func (a *Authenticator) GetStats() map[string]any {
 		"enabled":         true,
 		"type":            a.config.Type,
 		"active_sessions": sessionCount,
-		"basic_users":     len(a.basicUsers),
 		"static_tokens":   len(a.bearerTokens),
 	}
 }

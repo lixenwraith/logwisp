@@ -281,10 +281,8 @@ func (s *Service) createSink(cfg config.SinkConfig, formatter format.Formatter) 
 		return sink.NewTCPClientSink(cfg.Options, s.logger, formatter)
 	case "file":
 		return sink.NewFileSink(cfg.Options, s.logger, formatter)
-	case "stdout":
-		return sink.NewStdoutSink(cfg.Options, s.logger, formatter)
-	case "stderr":
-		return sink.NewStderrSink(cfg.Options, s.logger, formatter)
+	case "console":
+		return sink.NewConsoleSink(cfg.Options, s.logger, formatter)
 	default:
 		return nil, fmt.Errorf("unknown sink type: %s", cfg.Type)
 	}

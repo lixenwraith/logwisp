@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -16,14 +17,21 @@ import (
 	"time"
 )
 
-type CertGeneratorCommand struct{}
-
-func NewCertGeneratorCommand() *CertGeneratorCommand {
-	return &CertGeneratorCommand{}
+type CertGeneratorCommand struct {
+	output io.Writer
+	errOut io.Writer
 }
 
-func (c *CertGeneratorCommand) Execute(args []string) error {
+func NewCertGeneratorCommand() *CertGeneratorCommand {
+	return &CertGeneratorCommand{
+		output: os.Stdout,
+		errOut: os.Stderr,
+	}
+}
+
+func (cg *CertGeneratorCommand) Execute(args []string) error {
 	cmd := flag.NewFlagSet("tls", flag.ContinueOnError)
+	cmd.SetOutput(cg.errOut)
 
 	// Subcommands
 	var (
@@ -50,20 +58,21 @@ func (c *CertGeneratorCommand) Execute(args []string) error {
 	)
 
 	cmd.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Generate TLS certificates for LogWisp")
-		fmt.Fprintln(os.Stderr, "\nUsage: logwisp tls [options]")
-		fmt.Fprintln(os.Stderr, "\nExamples:")
-		fmt.Fprintln(os.Stderr, "  # Generate self-signed certificate")
-		fmt.Fprintln(os.Stderr, "  logwisp tls --self-signed --cn localhost --hosts localhost,127.0.0.1")
-		fmt.Fprintln(os.Stderr, "  ")
-		fmt.Fprintln(os.Stderr, "  # Generate CA certificate")
-		fmt.Fprintln(os.Stderr, "  logwisp tls --ca --cn \"LogWisp CA\" --cert-out ca.crt --key-out ca.key")
-		fmt.Fprintln(os.Stderr, "  ")
-		fmt.Fprintln(os.Stderr, "  # Generate server certificate signed by CA")
-		fmt.Fprintln(os.Stderr, "  logwisp tls --server --cn server.example.com --hosts server.example.com \\")
-		fmt.Fprintln(os.Stderr, "              --ca-cert ca.crt --ca-key ca.key")
-		fmt.Fprintln(os.Stderr, "\nOptions:")
+		fmt.Fprintln(cg.errOut, "Generate TLS certificates for LogWisp")
+		fmt.Fprintln(cg.errOut, "\nUsage: logwisp tls [options]")
+		fmt.Fprintln(cg.errOut, "\nExamples:")
+		fmt.Fprintln(cg.errOut, "  # Generate self-signed certificate")
+		fmt.Fprintln(cg.errOut, "  logwisp tls --self-signed --cn localhost --hosts localhost,127.0.0.1")
+		fmt.Fprintln(cg.errOut, "  ")
+		fmt.Fprintln(cg.errOut, "  # Generate CA certificate")
+		fmt.Fprintln(cg.errOut, "  logwisp tls --ca --cn \"LogWisp CA\" --cert-out ca.crt --key-out ca.key")
+		fmt.Fprintln(cg.errOut, "  ")
+		fmt.Fprintln(cg.errOut, "  # Generate server certificate signed by CA")
+		fmt.Fprintln(cg.errOut, "  logwisp tls --server --cn server.example.com --hosts server.example.com \\")
+		fmt.Fprintln(cg.errOut, "              --ca-cert ca.crt --ca-key ca.key")
+		fmt.Fprintln(cg.errOut, "\nOptions:")
 		cmd.PrintDefaults()
+		fmt.Fprintln(cg.errOut)
 	}
 
 	if err := cmd.Parse(args); err != nil {
@@ -79,13 +88,13 @@ func (c *CertGeneratorCommand) Execute(args []string) error {
 	// Route to appropriate generator
 	switch {
 	case *genCA:
-		return c.generateCA(*commonName, *org, *country, *validDays, *keySize, *certOut, *keyOut)
+		return cg.generateCA(*commonName, *org, *country, *validDays, *keySize, *certOut, *keyOut)
 	case *selfSign:
-		return c.generateSelfSigned(*commonName, *org, *country, *hosts, *validDays, *keySize, *certOut, *keyOut)
+		return cg.generateSelfSigned(*commonName, *org, *country, *hosts, *validDays, *keySize, *certOut, *keyOut)
 	case *genServer:
-		return c.generateServerCert(*commonName, *org, *country, *hosts, *caFile, *caKeyFile, *validDays, *keySize, *certOut, *keyOut)
+		return cg.generateServerCert(*commonName, *org, *country, *hosts, *caFile, *caKeyFile, *validDays, *keySize, *certOut, *keyOut)
 	case *genClient:
-		return c.generateClientCert(*commonName, *org, *country, *caFile, *caKeyFile, *validDays, *keySize, *certOut, *keyOut)
+		return cg.generateClientCert(*commonName, *org, *country, *caFile, *caKeyFile, *validDays, *keySize, *certOut, *keyOut)
 	default:
 		cmd.Usage()
 		return fmt.Errorf("specify certificate type: --ca, --self-signed, --server, or --client")
@@ -93,7 +102,7 @@ func (c *CertGeneratorCommand) Execute(args []string) error {
 }
 
 // Create and manage private CA
-func (c *CertGeneratorCommand) generateCA(cn, org, country string, days, bits int, certFile, keyFile string) error {
+func (cg *CertGeneratorCommand) generateCA(cn, org, country string, days, bits int, certFile, keyFile string) error {
 	// Generate RSA key
 	priv, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
@@ -169,7 +178,7 @@ func parseHosts(hostList string) ([]string, []net.IP) {
 }
 
 // Generate self-signed certificate
-func (c *CertGeneratorCommand) generateSelfSigned(cn, org, country, hosts string, days, bits int, certFile, keyFile string) error {
+func (cg *CertGeneratorCommand) generateSelfSigned(cn, org, country, hosts string, days, bits int, certFile, keyFile string) error {
 	// 1. Generate an RSA private key with the specified bit size
 	priv, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
@@ -236,7 +245,7 @@ func (c *CertGeneratorCommand) generateSelfSigned(cn, org, country, hosts string
 }
 
 // Generate server cert with CA
-func (c *CertGeneratorCommand) generateServerCert(cn, org, country, hosts, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
+func (cg *CertGeneratorCommand) generateServerCert(cn, org, country, hosts, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
 	caCert, caKey, err := loadCA(caFile, caKeyFile)
 	if err != nil {
 		return err
@@ -299,7 +308,7 @@ func (c *CertGeneratorCommand) generateServerCert(cn, org, country, hosts, caFil
 }
 
 // Generate client cert with CA
-func (c *CertGeneratorCommand) generateClientCert(cn, org, country, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
+func (cg *CertGeneratorCommand) generateClientCert(cn, org, country, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
 	caCert, caKey, err := loadCA(caFile, caKeyFile)
 	if err != nil {
 		return err
@@ -356,66 +365,105 @@ func (c *CertGeneratorCommand) generateClientCert(cn, org, country, caFile, caKe
 }
 
 // Load cert with CA
-func loadCA(caFile, caKeyFile string) (*x509.Certificate, *rsa.PrivateKey, error) {
-	if caFile == "" || caKeyFile == "" {
-		return nil, nil, fmt.Errorf("--ca-cert and --ca-key are required for signing")
-	}
-
-	caCertPEM, err := os.ReadFile(caFile)
+func loadCA(certFile, keyFile string) (*x509.Certificate, *rsa.PrivateKey, error) {
+	// Load CA certificate
+	certPEM, err := os.ReadFile(certFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read CA certificate: %w", err)
 	}
-	caCertBlock, _ := pem.Decode(caCertPEM)
-	if caCertBlock == nil {
-		return nil, nil, fmt.Errorf("failed to decode CA certificate PEM")
+
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil || certBlock.Type != "CERTIFICATE" {
+		return nil, nil, fmt.Errorf("invalid CA certificate format")
 	}
-	caCert, err := x509.ParseCertificate(caCertBlock.Bytes)
+
+	caCert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse CA certificate: %w", err)
 	}
 
-	if !caCert.IsCA {
-		return nil, nil, fmt.Errorf("provided certificate is not a valid CA")
-	}
-
-	caKeyPEM, err := os.ReadFile(caKeyFile)
+	// Load CA private key
+	keyPEM, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read CA key: %w", err)
 	}
-	caKeyBlock, _ := pem.Decode(caKeyPEM)
-	if caKeyBlock == nil {
-		return nil, nil, fmt.Errorf("failed to decode CA key PEM")
+
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, nil, fmt.Errorf("invalid CA key format")
 	}
-	caKey, err := x509.ParsePKCS1PrivateKey(caKeyBlock.Bytes)
+
+	var caKey *rsa.PrivateKey
+	switch keyBlock.Type {
+	case "RSA PRIVATE KEY":
+		caKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	case "PRIVATE KEY":
+		parsedKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to parse CA key: %w", err)
+		}
+		var ok bool
+		caKey, ok = parsedKey.(*rsa.PrivateKey)
+		if !ok {
+			return nil, nil, fmt.Errorf("CA key is not RSA")
+		}
+	default:
+		return nil, nil, fmt.Errorf("unsupported CA key type: %s", keyBlock.Type)
+	}
+
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse CA private key: %w", err)
 	}
 
-	// Verify key matches certificate
-	if caCert.PublicKey.(*rsa.PublicKey).N.Cmp(caKey.N) != 0 {
-		return nil, nil, fmt.Errorf("CA private key does not match CA certificate")
+	// Verify CA certificate is actually a CA
+	if !caCert.IsCA {
+		return nil, nil, fmt.Errorf("certificate is not a CA certificate")
 	}
 
 	return caCert, caKey, nil
 }
 
-func saveCert(filename string, derBytes []byte) error {
-	certOut, err := os.Create(filename)
+func saveCert(filename string, certDER []byte) error {
+	certFile, err := os.Create(filename)
 	if err != nil {
-		return fmt.Errorf("failed to create cert file %s: %w", filename, err)
+		return fmt.Errorf("failed to create certificate file: %w", err)
 	}
-	defer certOut.Close()
-	return pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	defer certFile.Close()
+
+	if err := pem.Encode(certFile, &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certDER,
+	}); err != nil {
+		return fmt.Errorf("failed to write certificate: %w", err)
+	}
+
+	// Set readable permissions
+	if err := os.Chmod(filename, 0644); err != nil {
+		return fmt.Errorf("failed to set certificate permissions: %w", err)
+	}
+
+	return nil
 }
 
 func saveKey(filename string, key *rsa.PrivateKey) error {
-	keyOut, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	keyFile, err := os.Create(filename)
 	if err != nil {
-		return fmt.Errorf("failed to create key file %s: %w", filename, err)
+		return fmt.Errorf("failed to create key file: %w", err)
 	}
-	defer keyOut.Close()
-	return pem.Encode(keyOut, &pem.Block{
+	defer keyFile.Close()
+
+	privKeyDER := x509.MarshalPKCS1PrivateKey(key)
+	if err := pem.Encode(keyFile, &pem.Block{
 		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
+		Bytes: privKeyDER,
+	}); err != nil {
+		return fmt.Errorf("failed to write private key: %w", err)
+	}
+
+	// Set restricted permissions for private key
+	if err := os.Chmod(filename, 0600); err != nil {
+		return fmt.Errorf("failed to set key permissions: %w", err)
+	}
+
+	return nil
 }

@@ -6,7 +6,7 @@
 
 ### Notes:
 
-- The tests create configuration files and log files. Debug tests do not clean up these files.
+- The tests create configuration files and log files. Most tests set logging at debug level and don't clean up their temp files that are created in the current execution directory.
 
-- Some tests may require to be run on different hosts (containers can be used).
+- Some tests may need to be run on different hosts (containers can be used).
 

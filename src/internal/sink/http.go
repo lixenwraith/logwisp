@@ -471,6 +471,21 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
+	// Enforce TLS for authentication
+	if h.authenticator != nil && h.authConfig.Type != "none" {
+		isTLS := ctx.IsTLS() || h.tlsManager != nil
+
+		if !isTLS {
+			ctx.SetStatusCode(fasthttp.StatusForbidden)
+			ctx.SetContentType("application/json")
+			json.NewEncoder(ctx).Encode(map[string]string{
+				"error": "TLS required for authentication",
+				"hint":  "Use HTTPS for authenticated connections",
+			})
+			return
+		}
+	}
+
 	path := string(ctx.Path())
 
 	// Status endpoint doesn't require auth
@@ -811,7 +826,7 @@ func (h *HTTPSink) SetAuth(authCfg *config.AuthConfig) {
 	}
 
 	h.authConfig = authCfg
-	authenticator, err := auth.New(authCfg, h.logger)
+	authenticator, err := auth.NewAuthenticator(authCfg, h.logger)
 	if err != nil {
 		h.logger.Error("msg", "Failed to initialize authenticator for HTTP sink",
 			"component", "http_sink",

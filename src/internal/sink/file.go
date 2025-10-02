@@ -2,6 +2,7 @@
 package sink
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"logwisp/src/internal/config"
@@ -32,12 +33,14 @@ type FileSink struct {
 func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*FileSink, error) {
 	directory, ok := options["directory"].(string)
 	if !ok || directory == "" {
-		return nil, fmt.Errorf("file sink requires 'directory' option")
+		directory = "./"
+		logger.Warn("No directory or invalid directory provided, current directory will be used")
 	}
 
 	name, ok := options["name"].(string)
 	if !ok || name == "" {
-		return nil, fmt.Errorf("file sink requires 'name' option")
+		name = "logwisp.output"
+		logger.Warn(fmt.Sprintf("No filename provided, %s will be used", name))
 	}
 
 	// Create configuration for the internal log writer
@@ -77,7 +80,7 @@ func NewFileSink(options map[string]any, logger *log.Logger, formatter format.Fo
 	}
 
 	// Buffer size for input channel
-	// TODO: Make this configurable
+	// TODO: Centralized constant file in core package
 	bufferSize := int64(1000)
 	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
 		bufferSize = bufSize
@@ -152,11 +155,9 @@ func (fs *FileSink) processLoop(ctx context.Context) {
 				continue
 			}
 
-			// Write formatted bytes (strip newline as writer adds it)
-			message := string(formatted)
-			if len(message) > 0 && message[len(message)-1] == '\n' {
-				message = message[:len(message)-1]
-			}
+			// Convert to string to prevent hex encoding of []byte by log package
+			// Strip new line, writer adds it
+			message := string(bytes.TrimSuffix(formatted, []byte{'\n'}))
 			fs.writer.Message(message)
 
 		case <-ctx.Done():

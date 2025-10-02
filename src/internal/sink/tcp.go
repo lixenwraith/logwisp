@@ -602,7 +602,7 @@ func (t *TCPSink) SetAuth(authCfg *config.AuthConfig) {
 		return
 	}
 
-	authenticator, err := auth.New(authCfg, t.logger)
+	authenticator, err := auth.NewAuthenticator(authCfg, t.logger)
 	if err != nil {
 		t.logger.Error("msg", "Failed to initialize authenticator for TCP sink",
 			"component", "tcp_sink",

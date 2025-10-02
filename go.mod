@@ -3,10 +3,10 @@ module logwisp
 go 1.25.1
 
 require (
-	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/lixenwraith/config v0.0.0-20250908085506-537a4d49d2c3
 	github.com/lixenwraith/log v0.0.0-20250929145347-45cc8a5099c2
 	github.com/panjf2000/gnet/v2 v2.9.4
+	github.com/stretchr/testify v1.10.0
 	github.com/valyala/fasthttp v1.66.0
 	golang.org/x/crypto v0.42.0
 	golang.org/x/term v0.35.0
@@ -20,6 +20,7 @@ require (
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/panjf2000/ants/v2 v2.11.3 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect

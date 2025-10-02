@@ -3,16 +3,16 @@
 ### Configuration Precedence: CLI flags > Environment > File > Defaults
 ### Default values shown - uncommented lines represent active configuration
 
-### Global settings
+### Global Settings
 background = false                # Run as daemon
 quiet = false                     # Suppress console output
-disable_status_reporter = false   # Status logging
-config_auto_reload = false        # File change detection
+disable_status_reporter = false   # Disable status logging
+config_auto_reload = false        # Reload config on file change
 config_save_on_exit = false       # Persist runtime changes
 
 ### Logging Configuration
 [logging]
-output = "stdout"                 # file|stdout|stderr|split|all|none
+output = "stdout"                 # file|stdout|stderr|both|none
 level = "info"                    # debug|info|warn|error
 
 [logging.file]
@@ -20,7 +20,7 @@ directory = "./log"               # Log directory path
 name = "logwisp"                  # Base filename
 max_size_mb = 100                 # Rotation threshold
 max_total_size_mb = 1000          # Total size limit
-retention_hours = 168.0           # Delete logs older than
+retention_hours = 168.0           # Delete logs older than (7 days)
 
 [logging.console]
 target = "stdout"                 # stdout|stderr|split
@@ -30,38 +30,56 @@ format = "txt"                    # txt|json
 [[pipelines]]
 name = "default"                  # Pipeline identifier
 
-### Directory Sources
+### Rate Limiting (Pipeline-level)
+# [pipelines.rate_limit]
+# rate = 0.0                       # Entries per second (0=disabled)
+# burst = 0.0                      # Burst capacity (defaults to rate)
+# policy = "pass"                  # pass|drop
+# max_entry_size_bytes = 0         # Max entry size (0=unlimited)
+
+### Filters
+# [[pipelines.filters]]
+# type = "include"                 # include|exclude
+# logic = "or"                     # or|and
+# patterns = [".*ERROR.*", ".*WARN.*"]  # Regex patterns
+
+### Sources
+
+### Directory Source
 [[pipelines.sources]]
 type = "directory"
+
 [pipelines.sources.options]
 path = "./"                       # Directory to monitor
 pattern = "*.log"                 # Glob pattern
-check_interval_ms = 100           # Scan interval
+check_interval_ms = 100           # Scan interval (min: 10ms)
 
-### Console Sources
+### Stdin Source
 # [[pipelines.sources]]
 # type = "stdin"
+
 # [pipelines.sources.options]
 # buffer_size = 1000               # Input buffer size
 
-### HTTP Sources
+### HTTP Source
 # [[pipelines.sources]]
 # type = "http"
 
 # [pipelines.sources.options]
 # host = "0.0.0.0"                 # Listen address
 # port = 8081                      # Listen port
-# path = "/ingest"                 # Ingest endpoint
-# max_body_size = 1048576          # Max request size
+# ingest_path = "/ingest"          # Ingest endpoint
+# buffer_size = 1000               # Input buffer size
+# max_body_size = 1048576          # Max request size bytes
 
 # [pipelines.sources.options.tls]
 # enabled = false                  # Enable TLS
-# cert_file = ""                   # TLS certificate
-# key_file = ""                    # TLS key
+# cert_file = ""                   # Server certificate
+# key_file = ""                    # Server key
 # client_auth = false              # Require client certs
 # client_ca_file = ""              # Client CA cert
 # verify_client_cert = false       # Verify client certs
-# insecure_skip_verify = false    # Skip verification
+# insecure_skip_verify = false     # Skip verification (server-side)
 # ca_file = ""                     # Custom CA file
 # min_version = "TLS1.2"           # Min TLS version
 # max_version = "TLS1.3"           # Max TLS version
@@ -69,8 +87,8 @@ check_interval_ms = 100           # Scan interval
 
 # [pipelines.sources.options.net_limit]
 # enabled = false                  # Enable rate limiting
-# ip_whitelist = []                # Allowed IPs/CIDRs
-# ip_blacklist = []                # Blocked IPs/CIDRs
+# ip_whitelist = []                # Allowed IPs/CIDRs (IPv4 only)
+# ip_blacklist = []                # Blocked IPs/CIDRs (IPv4 only)
 # requests_per_second = 100.0      # Rate limit per client
 # burst_size = 100                 # Burst capacity
 # response_code = 429              # HTTP status when limited
@@ -78,59 +96,32 @@ check_interval_ms = 100           # Scan interval
 # max_connections_per_ip = 10      # Max concurrent per IP
 # max_connections_total = 1000     # Max total connections
 
-### TCP Sources
+### TCP Source
 # [[pipelines.sources]]
 # type = "tcp"
 
 # [pipelines.sources.options]
 # host = "0.0.0.0"                 # Listen address
 # port = 9091                      # Listen port
+# buffer_size = 1000               # Input buffer size
 
 # [pipelines.sources.options.net_limit]
 # enabled = false                  # Enable rate limiting
-# ip_whitelist = []                # Allowed IPs/CIDRs
-# ip_blacklist = []                # Blocked IPs/CIDRs
+# ip_whitelist = []                # Allowed IPs/CIDRs (IPv4 only)
+# ip_blacklist = []                # Blocked IPs/CIDRs (IPv4 only)
 # requests_per_second = 100.0      # Rate limit per client
 # burst_size = 100                 # Burst capacity
-# response_code = 429              # Response code when limited
+# response_code = 429              # TCP rejection
 # response_message = "Rate limit exceeded"
 # max_connections_per_ip = 10      # Max concurrent per IP
 # max_connections_per_user = 10    # Max concurrent per user
 # max_connections_per_token = 10   # Max concurrent per token
 # max_connections_total = 1000     # Max total connections
 
-### Rate limiting
-# [pipelines.rate_limit]
-# rate = 0.0                       # Entries/second (0=unlimited)
-# burst = 0.0                      # Burst capacity
-# policy = "drop"                  # pass|drop
-# max_entry_size_bytes = 0         # Entry size limit
+### Format Configuration
 
-### Filters
-# [[pipelines.filters]]
-# type = "include"                 # include|exclude
-# logic = "or"                     # or|and
-# patterns = []                    # Regex patterns
-
-## Examples of filter patterns:
-## Include only error or fatal logs containing "database":
-## type = "include"
-## logic = "and"
-## patterns = ["(?i)(error|fatal)", "database"]
-##
-## Exclude debug logs from test environment:
-## type = "exclude"
-## logic = "or"
-## patterns = ["(?i)debug", "test-env"]
-##
-## Include only JSON formatted logs:
-## type = "include"
-## patterns = ["^\\{.*\\}$"]
-
-### Format
-
-### Raw formatter (default)
-# format = "raw"                   # raw|json|text
+### Raw formatter (default - passes through unchanged)
+# format = "raw"
 ### No options for raw formatter
 
 ### JSON formatter
@@ -143,12 +134,14 @@ check_interval_ms = 100           # Scan interval
 # source_field = "source"          # Source field name
 
 ### Text formatter
-# format = "text"
+# format = "txt"
 # [pipelines.format_options]
 # template = "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}{{ if .Fields }} {{.Fields}}{{ end }}"
 # timestamp_format = "2006-01-02T15:04:05Z07:00"  # Go time format
 
-### HTTP Sinks
+### Sinks
+
+### HTTP Sink (SSE Server)
 [[pipelines.sinks]]
 type = "http"
 
@@ -162,14 +155,14 @@ status_path = "/status"           # Status endpoint
 [pipelines.sinks.options.heartbeat]
 enabled = true                    # Send heartbeats
 interval_seconds = 30             # Heartbeat interval
-include_timestamp = true          # Include time
+include_timestamp = true          # Include timestamp
 include_stats = false             # Include statistics
 format = "comment"                # comment|message
 
 # [pipelines.sinks.options.tls]
 # enabled = false                  # Enable TLS
-# cert_file = ""                   # TLS certificate
-# key_file = ""                    # TLS key
+# cert_file = ""                   # Server certificate
+# key_file = ""                    # Server key
 # client_auth = false              # Require client certs
 # client_ca_file = ""              # Client CA cert
 # verify_client_cert = false       # Verify client certs
@@ -181,8 +174,8 @@ format = "comment"                # comment|message
 
 # [pipelines.sinks.options.net_limit]
 # enabled = false                  # Enable rate limiting
-# ip_whitelist = []                # Allowed IPs/CIDRs
-# ip_blacklist = []                # Blocked IPs/CIDRs
+# ip_whitelist = []                # Allowed IPs/CIDRs (IPv4 only)
+# ip_blacklist = []                # Blocked IPs/CIDRs (IPv4 only)
 # requests_per_second = 100.0      # Rate limit per client
 # burst_size = 100                 # Burst capacity
 # response_code = 429              # HTTP status when limited
@@ -190,7 +183,7 @@ format = "comment"                # comment|message
 # max_connections_per_ip = 10      # Max concurrent per IP
 # max_connections_total = 1000     # Max total connections
 
-### TCP Sinks
+### TCP Sink (TCP Server)
 # [[pipelines.sinks]]
 # type = "tcp"
 
@@ -198,28 +191,33 @@ format = "comment"                # comment|message
 # host = "0.0.0.0"                 # Listen address
 # port = 9090                      # Server port
 # buffer_size = 1000               # Buffer size
+# auth_type = "none"               # none|scram
 
 # [pipelines.sinks.options.heartbeat]
 # enabled = false                  # Send heartbeats
 # interval_seconds = 30            # Heartbeat interval
-# include_timestamp = false        # Include time
+# include_timestamp = false        # Include timestamp
 # include_stats = false            # Include statistics
 # format = "comment"               # comment|message
 
 # [pipelines.sinks.options.net_limit]
 # enabled = false                  # Enable rate limiting
-# ip_whitelist = []                # Allowed IPs/CIDRs
-# ip_blacklist = []                # Blocked IPs/CIDRs
+# ip_whitelist = []                # Allowed IPs/CIDRs (IPv4 only)
+# ip_blacklist = []                # Blocked IPs/CIDRs (IPv4 only)
 # requests_per_second = 100.0      # Rate limit per client
 # burst_size = 100                 # Burst capacity
-# response_code = 429              # HTTP status when limited
+# response_code = 429              # TCP rejection code
 # response_message = "Rate limit exceeded"
 # max_connections_per_ip = 10      # Max concurrent per IP
 # max_connections_per_user = 10    # Max concurrent per user
 # max_connections_per_token = 10   # Max concurrent per token
 # max_connections_total = 1000     # Max total connections
 
-### HTTP Client Sinks
+# [pipelines.sinks.options.scram]
+# username = ""                    # SCRAM auth username
+# password = ""                    # SCRAM auth password
+
+### HTTP Client Sink (Forward to remote HTTP endpoint)
 # [[pipelines.sinks]]
 # type = "http_client"
 
@@ -231,16 +229,31 @@ format = "comment"                # comment|message
 # timeout_seconds = 30             # Request timeout
 # max_retries = 3                  # Retry attempts
 # retry_delay_ms = 1000            # Initial retry delay
-# retry_backoff = 2.0              # Exponential backoff
+# retry_backoff = 2.0              # Exponential backoff multiplier
 # insecure_skip_verify = false     # Skip TLS verification
-# ca_file = ""                     # Custom CA certificate
-# headers = {}                     # Custom HTTP headers
+# auth_type = "none"               # none|basic|bearer|mtls
 
+
+# [pipelines.sinks.options.basic]
+# username = ""                    # Basic auth username
+# password_hash = ""               # Argon2 password hash
+
+# [pipelines.sinks.options.bearer]
+# token = ""                       # Bearer token
+
+====== not needed:
+## Custom HTTP headers
+# [pipelines.sinks.options.headers]
+# Content-Type = "application/json"
+# Authorization = "Bearer token"
+
+## Client certificate for mTLS
 # [pipelines.sinks.options.tls]
+# ca_file = ""                     # Custom CA certificate
 # cert_file = ""                   # Client certificate
 # key_file = ""                    # Client key
 
-### TCP Client Sinks
+### TCP Client Sink (Forward to remote TCP endpoint)
 # [[pipelines.sinks]]
 # type = "tcp_client"
 
@@ -253,23 +266,21 @@ format = "comment"                # comment|message
 # keep_alive_seconds = 30          # TCP keepalive
 # reconnect_delay_ms = 1000        # Initial reconnect delay
 # max_reconnect_delay_seconds = 30 # Max reconnect delay
-# reconnect_backoff = 1.5          # Exponential backoff
+# reconnect_backoff = 1.5          # Exponential backoff multiplier
 
-# [pipelines.sinks.options.tls]
-# enabled = false                  # Enable TLS
-# insecure_skip_verify = false     # Skip verification
-# ca_file = ""                     # Custom CA certificate
-# cert_file = ""                   # Client certificate
-# key_file = ""                    # Client key
 
-### File Sinks
+# [pipelines.sinks.options.scram]
+# username = ""                    # Auth username
+# password_hash = ""               # Argon2 password hash
+
+### File Sink
 # [[pipelines.sinks]]
 # type = "file"
 
 # [pipelines.sinks.options]
-# directory = ""                   # Output dir (required)
-# name = ""                        # Base name (required)
-# buffer_size = 1000               # Input channel buffer size
+# directory = "./"                 # Output dir
+# name = "logwisp.output"          # Base name
+# buffer_size = 1000               # Input channel buffer
 # max_size_mb = 100                # Rotation size
 # max_total_size_mb = 0            # Total limit (0=unlimited)
 # retention_hours = 0.0            # Retention (0=disabled)
@@ -277,39 +288,32 @@ format = "comment"                # comment|message
 
 ### Console Sinks
 # [[pipelines.sinks]]
-# type = "stdout"
+# type = "console"
 
 # [pipelines.sinks.options]
+# target = "stdout"                # stdout|stderr|split
 # buffer_size = 1000               # Buffer size
-# target = "stdout"                # Override for split mode
 
-# [[pipelines.sinks]]
-# type = "stderr"
-
-# [pipelines.sinks.options]
-# buffer_size = 1000               # Buffer size
-# target = "stderr"                # Override for split mode
-
-### Authentication
+### Authentication Configuration
 # [pipelines.auth]
 # type = "none"                    # none|basic|bearer|mtls
 
-### Basic authentication
+### Basic Authentication
 # [pipelines.auth.basic_auth]
 # realm = "LogWisp"                # WWW-Authenticate realm
-# users_file = ""                  # External users file
+# users_file = ""                  # External users file path
 
 # [[pipelines.auth.basic_auth.users]]
 # username = ""                    # Username
-# password_hash = ""               # bcrypt hash
+# password_hash = ""               # Argon2 password hash
 
-### Bearer authentication
+### Bearer Token Authentication
 # [pipelines.auth.bearer_auth]
 # tokens = []                      # Static bearer tokens
 
-### JWT validation
+### JWT Validation
 # [pipelines.auth.bearer_auth.jwt]
-# jwks_url = ""                    # JWKS endpoint
-# signing_key = ""                 # Static signing key
-# issuer = ""                      # Expected issuer
-# audience = ""                    # Expected audience
+# jwks_url = ""                    # JWKS endpoint for key discovery
+# signing_key = ""                 # Static signing key (if not using JWKS)
+# issuer = ""                      # Expected issuer claim
+# audience = ""                    # Expected audience claim

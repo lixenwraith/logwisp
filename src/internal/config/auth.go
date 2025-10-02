@@ -6,67 +6,71 @@ import (
 )
 
 type AuthConfig struct {
-	// Authentication type: "none", "basic", "bearer", "mtls"
+	// Authentication type: "none", "basic", "scram", "bearer", "mtls"
 	Type string `toml:"type"`
 
-	// Basic auth
-	BasicAuth *BasicAuthConfig `toml:"basic_auth"`
-
-	// Bearer token auth
+	BasicAuth  *BasicAuthConfig  `toml:"basic_auth"`
+	ScramAuth  *ScramAuthConfig  `toml:"scram_auth"`
 	BearerAuth *BearerAuthConfig `toml:"bearer_auth"`
 }
 
 type BasicAuthConfig struct {
-	// Static users (for simple deployments)
 	Users []BasicAuthUser `toml:"users"`
-
-	// External auth file
-	UsersFile string `toml:"users_file"`
-
-	// Realm for WWW-Authenticate header
-	Realm string `toml:"realm"`
+	Realm string          `toml:"realm"`
 }
 
 type BasicAuthUser struct {
-	Username string `toml:"username"`
-	// Password hash (Argon2id)
-	PasswordHash string `toml:"password_hash"`
+	Username     string `toml:"username"`
+	PasswordHash string `toml:"password_hash"` // Argon2
+}
+
+type ScramAuthConfig struct {
+	Users []ScramUser `toml:"users"`
+}
+
+type ScramUser struct {
+	Username     string `toml:"username"`
+	StoredKey    string `toml:"stored_key"` // base64
+	ServerKey    string `toml:"server_key"` // base64
+	Salt         string `toml:"salt"`       // base64
+	ArgonTime    uint32 `toml:"argon_time"`
+	ArgonMemory  uint32 `toml:"argon_memory"`
+	ArgonThreads uint8  `toml:"argon_threads"`
 }
 
 type BearerAuthConfig struct {
 	// Static tokens
 	Tokens []string `toml:"tokens"`
 
-	// JWT validation
-	JWT *JWTConfig `toml:"jwt"`
+	// TODO: Maybe future development
+	// // JWT validation
+	// JWT *JWTConfig `toml:"jwt"`
 }
 
-type JWTConfig struct {
-	// JWKS URL for key discovery
-	JWKSURL string `toml:"jwks_url"`
-
-	// Static signing key (if not using JWKS)
-	SigningKey string `toml:"signing_key"`
-
-	// Expected issuer
-	Issuer string `toml:"issuer"`
-
-	// Expected audience
-	Audience string `toml:"audience"`
-}
+// TODO: Maybe future development
+// type JWTConfig struct {
+// 	JWKSURL    string `toml:"jwks_url"`
+// 	SigningKey string `toml:"signing_key"`
+// 	Issuer     string `toml:"issuer"`
+// 	Audience   string `toml:"audience"`
+// }
 
 func validateAuth(pipelineName string, auth *AuthConfig) error {
 	if auth == nil {
 		return nil
 	}
 
-	validTypes := map[string]bool{"none": true, "basic": true, "bearer": true, "mtls": true}
+	validTypes := map[string]bool{"none": true, "basic": true, "scram": true, "bearer": true, "mtls": true}
 	if !validTypes[auth.Type] {
 		return fmt.Errorf("pipeline '%s': invalid auth type: %s", pipelineName, auth.Type)
 	}
 
 	if auth.Type == "basic" && auth.BasicAuth == nil {
 		return fmt.Errorf("pipeline '%s': basic auth type specified but config missing", pipelineName)
+	}
+
+	if auth.Type == "scram" && auth.ScramAuth == nil {
+		return fmt.Errorf("pipeline '%s': scram auth type specified but config missing", pipelineName)
 	}
 
 	if auth.Type == "bearer" && auth.BearerAuth == nil {

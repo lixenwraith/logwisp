@@ -36,7 +36,7 @@ type PipelineConfig struct {
 
 // Represents an input data source
 type SourceConfig struct {
-	// Source type: "directory", "stdin", "tcp", "http"
+	// Source type
 	Type string `toml:"type"`
 
 	// Type-specific configuration options
@@ -45,7 +45,7 @@ type SourceConfig struct {
 
 // Represents an output destination
 type SinkConfig struct {
-	// Sink type: "http", "tcp", "file", "stdout", "stderr"
+	// Sink type
 	Type string `toml:"type"`
 
 	// Type-specific configuration options
@@ -404,7 +404,7 @@ func validateSink(pipelineName string, sinkIndex int, cfg *SinkConfig, allPorts 
 			}
 		}
 
-	case "stdout", "stderr":
+	case "console":
 		// No specific validation needed for console sinks
 
 	default:

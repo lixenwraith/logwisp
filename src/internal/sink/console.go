@@ -2,9 +2,9 @@
 package sink
 
 import (
+	"bytes"
 	"context"
-	"io"
-	"os"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -16,20 +16,13 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Holds common configuration for console sinks
-type ConsoleConfig struct {
-	Target     string // "stdout", "stderr", or "split"
-	BufferSize int64
-}
-
-// Writes log entries to stdout
-type StdoutSink struct {
+// ConsoleSink writes log entries to the console (stdout/stderr) using an dedicated logger instance
+type ConsoleSink struct {
 	input     chan core.LogEntry
-	config    ConsoleConfig
-	output    io.Writer
+	writer    *log.Logger // Dedicated internal logger instance for console writing
 	done      chan struct{}
 	startTime time.Time
-	logger    *log.Logger
+	logger    *log.Logger // Application logger for app logs
 	formatter format.Formatter
 
 	// Statistics
@@ -37,29 +30,38 @@ type StdoutSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-// Creates a new stdout sink
-func NewStdoutSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*StdoutSink, error) {
-	config := ConsoleConfig{
-		Target:     "stdout",
-		BufferSize: 1000,
+// Creates a new console sink
+func NewConsoleSink(options map[string]any, appLogger *log.Logger, formatter format.Formatter) (*ConsoleSink, error) {
+	target := "stdout"
+	if t, ok := options["target"].(string); ok {
+		target = t
 	}
 
-	// Check for split mode configuration
-	if target, ok := options["target"].(string); ok {
-		config.Target = target
+	bufferSize := int64(1000)
+	if buf, ok := options["buffer_size"].(int64); ok && buf > 0 {
+		bufferSize = buf
 	}
 
-	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
-		config.BufferSize = bufSize
+	// Dedicated logger instance as console writer
+	writer, err := log.NewBuilder().
+		EnableFile(false).
+		EnableConsole(true).
+		ConsoleTarget(target).
+		Format("raw").        // Passthrough pre-formatted messages
+		ShowTimestamp(false). // Disable writer's own timestamp
+		ShowLevel(false).     // Disable writer's own level prefix
+		Build()
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create console writer: %w", err)
 	}
 
-	s := &StdoutSink{
-		input:     make(chan core.LogEntry, config.BufferSize),
-		config:    config,
-		output:    os.Stdout,
+	s := &ConsoleSink{
+		input:     make(chan core.LogEntry, bufferSize),
+		writer:    writer,
 		done:      make(chan struct{}),
 		startTime: time.Now(),
-		logger:    logger,
+		logger:    appLogger,
 		formatter: formatter,
 	}
 	s.lastProcessed.Store(time.Time{})
@@ -67,39 +69,52 @@ func NewStdoutSink(options map[string]any, logger *log.Logger, formatter format.
 	return s, nil
 }
 
-func (s *StdoutSink) Input() chan<- core.LogEntry {
+func (s *ConsoleSink) Input() chan<- core.LogEntry {
 	return s.input
 }
 
-func (s *StdoutSink) Start(ctx context.Context) error {
+func (s *ConsoleSink) Start(ctx context.Context) error {
+	// Start the internal writer's processing goroutine.
+	if err := s.writer.Start(); err != nil {
+		return fmt.Errorf("failed to start console writer: %w", err)
+	}
 	go s.processLoop(ctx)
-	s.logger.Info("msg", "Stdout sink started",
-		"component", "stdout_sink",
-		"target", s.config.Target)
+	s.logger.Info("msg", "Console sink started",
+		"component", "console_sink",
+		"target", s.writer.GetConfig().ConsoleTarget)
 	return nil
 }
 
-func (s *StdoutSink) Stop() {
-	s.logger.Info("msg", "Stopping stdout sink")
+func (s *ConsoleSink) Stop() {
+	target := s.writer.GetConfig().ConsoleTarget
+	s.logger.Info("msg", "Stopping console sink", "target", target)
 	close(s.done)
-	s.logger.Info("msg", "Stdout sink stopped")
+
+	// Shutdown the internal writer with a timeout.
+	if err := s.writer.Shutdown(2 * time.Second); err != nil {
+		s.logger.Error("msg", "Error shutting down console writer",
+			"component", "console_sink",
+			"error", err)
+	}
+	s.logger.Info("msg", "Console sink stopped", "target", target)
 }
 
-func (s *StdoutSink) GetStats() SinkStats {
+func (s *ConsoleSink) GetStats() SinkStats {
 	lastProc, _ := s.lastProcessed.Load().(time.Time)
 
 	return SinkStats{
-		Type:           "stdout",
+		Type:           "console",
 		TotalProcessed: s.totalProcessed.Load(),
 		StartTime:      s.startTime,
 		LastProcessed:  lastProc,
 		Details: map[string]any{
-			"target": s.config.Target,
+			"target": s.writer.GetConfig().ConsoleTarget,
 		},
 	}
 }
 
-func (s *StdoutSink) processLoop(ctx context.Context) {
+// processLoop reads entries, formats them, and passes them to the internal writer.
+func (s *ConsoleSink) processLoop(ctx context.Context) {
 	for {
 		select {
 		case entry, ok := <-s.input:
@@ -110,24 +125,30 @@ func (s *StdoutSink) processLoop(ctx context.Context) {
 			s.totalProcessed.Add(1)
 			s.lastProcessed.Store(time.Now())
 
-			// Handle split mode - only process INFO/DEBUG for stdout
-			if s.config.Target == "split" {
-				upperLevel := strings.ToUpper(entry.Level)
-				if upperLevel == "ERROR" || upperLevel == "WARN" || upperLevel == "WARNING" {
-					// Skip ERROR/WARN levels in stdout when in split mode
-					continue
-				}
-			}
-
-			// Format and write
+			// Format the entry using the pipeline's configured formatter.
 			formatted, err := s.formatter.Format(entry)
 			if err != nil {
-				s.logger.Error("msg", "Failed to format log entry for stdout",
-					"component", "stdout_sink",
+				s.logger.Error("msg", "Failed to format log entry for console",
+					"component", "console_sink",
 					"error", err)
 				continue
 			}
-			s.output.Write(formatted)
+
+			// Convert to string to prevent hex encoding of []byte by log package
+			// Strip new line, writer adds it
+			message := string(bytes.TrimSuffix(formatted, []byte{'\n'}))
+			switch strings.ToUpper(entry.Level) {
+			case "DEBUG":
+				s.writer.Debug(message)
+			case "INFO":
+				s.writer.Info(message)
+			case "WARN", "WARNING":
+				s.writer.Warn(message)
+			case "ERROR", "FATAL":
+				s.writer.Error(message)
+			default:
+				s.writer.Message(message)
+			}
 
 		case <-ctx.Done():
 			return
@@ -137,125 +158,6 @@ func (s *StdoutSink) processLoop(ctx context.Context) {
 	}
 }
 
-// Writes log entries to stderr
-type StderrSink struct {
-	input     chan core.LogEntry
-	config    ConsoleConfig
-	output    io.Writer
-	done      chan struct{}
-	startTime time.Time
-	logger    *log.Logger
-	formatter format.Formatter
-
-	// Statistics
-	totalProcessed atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
-}
-
-// Creates a new stderr sink
-func NewStderrSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*StderrSink, error) {
-	config := ConsoleConfig{
-		Target:     "stderr",
-		BufferSize: 1000,
-	}
-
-	// Check for split mode configuration
-	if target, ok := options["target"].(string); ok {
-		config.Target = target
-	}
-
-	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
-		config.BufferSize = bufSize
-	}
-
-	s := &StderrSink{
-		input:     make(chan core.LogEntry, config.BufferSize),
-		config:    config,
-		output:    os.Stderr,
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
-		formatter: formatter,
-	}
-	s.lastProcessed.Store(time.Time{})
-
-	return s, nil
-}
-
-func (s *StderrSink) Input() chan<- core.LogEntry {
-	return s.input
-}
-
-func (s *StderrSink) Start(ctx context.Context) error {
-	go s.processLoop(ctx)
-	s.logger.Info("msg", "Stderr sink started",
-		"component", "stderr_sink",
-		"target", s.config.Target)
-	return nil
-}
-
-func (s *StderrSink) Stop() {
-	s.logger.Info("msg", "Stopping stderr sink")
-	close(s.done)
-	s.logger.Info("msg", "Stderr sink stopped")
-}
-
-func (s *StderrSink) GetStats() SinkStats {
-	lastProc, _ := s.lastProcessed.Load().(time.Time)
-
-	return SinkStats{
-		Type:           "stderr",
-		TotalProcessed: s.totalProcessed.Load(),
-		StartTime:      s.startTime,
-		LastProcessed:  lastProc,
-		Details: map[string]any{
-			"target": s.config.Target,
-		},
-	}
-}
-
-func (s *StderrSink) processLoop(ctx context.Context) {
-	for {
-		select {
-		case entry, ok := <-s.input:
-			if !ok {
-				return
-			}
-
-			s.totalProcessed.Add(1)
-			s.lastProcessed.Store(time.Now())
-
-			// Handle split mode - only process ERROR/WARN for stderr
-			if s.config.Target == "split" {
-				upperLevel := strings.ToUpper(entry.Level)
-				if upperLevel != "ERROR" && upperLevel != "WARN" && upperLevel != "WARNING" {
-					// Skip non-ERROR/WARN levels in stderr when in split mode
-					continue
-				}
-			}
-
-			// Format and write
-			formatted, err := s.formatter.Format(entry)
-			if err != nil {
-				s.logger.Error("msg", "Failed to format log entry for stderr",
-					"component", "stderr_sink",
-					"error", err)
-				continue
-			}
-			s.output.Write(formatted)
-
-		case <-ctx.Done():
-			return
-		case <-s.done:
-			return
-		}
-	}
-}
-
-func (s *StdoutSink) SetAuth(auth *config.AuthConfig) {
-	// Authentication does not apply to stdout sink
-}
-
-func (s *StderrSink) SetAuth(auth *config.AuthConfig) {
-	// Authentication does not apply to stderr sink
+func (s *ConsoleSink) SetAuth(auth *config.AuthConfig) {
+	// Authentication does not apply to the console sink.
 }

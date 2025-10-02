@@ -66,6 +66,9 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 
 	// No patterns means pass everything
 	if len(f.patterns) == 0 {
+		f.logger.Debug("msg", "No patterns configured, passing entry",
+			"component", "filter",
+			"type", f.config.Type)
 		return true
 	}
 
@@ -78,10 +81,32 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 		text = entry.Source + " " + text
 	}
 
+	f.logger.Debug("msg", "Filter checking entry",
+		"component", "filter",
+		"type", f.config.Type,
+		"logic", f.config.Logic,
+		"entry_level", entry.Level,
+		"entry_source", entry.Source,
+		"entry_message", entry.Message[:min(100, len(entry.Message))], // First 100 chars
+		"text_to_match", text[:min(150, len(text))], // First 150 chars
+		"patterns", f.config.Patterns)
+
+	for i, pattern := range f.config.Patterns {
+		isMatch := f.patterns[i].MatchString(text)
+		f.logger.Debug("msg", "Pattern match result",
+			"component", "filter",
+			"pattern_index", i,
+			"pattern", pattern,
+			"matched", isMatch)
+	}
+
 	matched := f.matches(text)
 	if matched {
 		f.totalMatched.Add(1)
 	}
+	f.logger.Debug("msg", "Filter final match result",
+		"component", "filter",
+		"matched", matched)
 
 	// Determine if we should pass or drop
 	shouldPass := false
@@ -91,6 +116,12 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 	case config.FilterTypeExclude:
 		shouldPass = !matched
 	}
+
+	f.logger.Debug("msg", "Filter decision",
+		"component", "filter",
+		"type", f.config.Type,
+		"matched", matched,
+		"should_pass", shouldPass)
 
 	if !shouldPass {
 		f.totalDropped.Add(1)

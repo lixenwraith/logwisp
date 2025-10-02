@@ -4,6 +4,7 @@ package source
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/limit"
+	"logwisp/src/internal/scram"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/compat"
@@ -29,19 +31,19 @@ const (
 
 // Receives log entries via TCP connections
 type TCPSource struct {
-	host          string
-	port          int64
-	bufferSize    int64
-	server        *tcpSourceServer
-	subscribers   []chan core.LogEntry
-	mu            sync.RWMutex
-	done          chan struct{}
-	engine        *gnet.Engine
-	engineMu      sync.Mutex
-	wg            sync.WaitGroup
-	netLimiter    *limit.NetLimiter
-	logger        *log.Logger
-	authenticator *auth.Authenticator
+	host         string
+	port         int64
+	bufferSize   int64
+	server       *tcpSourceServer
+	subscribers  []chan core.LogEntry
+	mu           sync.RWMutex
+	done         chan struct{}
+	engine       *gnet.Engine
+	engineMu     sync.Mutex
+	wg           sync.WaitGroup
+	netLimiter   *limit.NetLimiter
+	logger       *log.Logger
+	scramManager *scram.ScramManager
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -255,12 +257,13 @@ func (t *TCPSource) publish(entry core.LogEntry) bool {
 // Represents a connected TCP client
 type tcpClient struct {
 	conn                gnet.Conn
-	buffer              bytes.Buffer
+	buffer              *bytes.Buffer
 	authenticated       bool
 	authTimeout         time.Time
 	session             *auth.Session
 	maxBufferSeen       int
 	cumulativeEncrypted int64
+	scramState          *scram.HandshakeState
 }
 
 // Handles gnet events
@@ -314,11 +317,9 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	// Create client state
 	client := &tcpClient{
 		conn:          c,
-		authenticated: s.source.authenticator == nil,
-	}
-
-	if s.source.authenticator != nil {
-		client.authTimeout = time.Now().Add(30 * time.Second)
+		buffer:        bytes.NewBuffer(nil),
+		authTimeout:   time.Now().Add(30 * time.Second),
+		authenticated: s.source.scramManager == nil,
 	}
 
 	s.mu.Lock()
@@ -330,12 +331,7 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		"component", "tcp_source",
 		"remote_addr", remoteAddr,
 		"active_connections", newCount,
-		"requires_auth", s.source.authenticator != nil)
-
-	// Send auth challenge if required
-	if s.source.authenticator != nil {
-		return []byte("AUTH_REQUIRED\n"), gnet.None
-	}
+		"requires_auth", s.source.scramManager != nil)
 
 	return nil, gnet.None
 }
@@ -380,52 +376,107 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 
-	// Authentication phase
-	if !client.authenticated {
-		if time.Now().After(client.authTimeout) {
+	// SCRAM Authentication phase
+	if !client.authenticated && s.source.scramManager != nil {
+		// Check auth timeout
+		if !client.authTimeout.IsZero() && time.Now().After(client.authTimeout) {
 			s.source.logger.Warn("msg", "Authentication timeout",
 				"component", "tcp_source",
 				"remote_addr", c.RemoteAddr().String())
 			return gnet.Close
 		}
 
+		if len(data) == 0 {
+			return gnet.None
+		}
+
 		client.buffer.Write(data)
 
-		// Look for auth line
-		if idx := bytes.IndexByte(client.buffer.Bytes(), '\n'); idx >= 0 {
+		// Look for complete line
+		for {
+			idx := bytes.IndexByte(client.buffer.Bytes(), '\n')
+			if idx < 0 {
+				break
+			}
+
 			line := client.buffer.Bytes()[:idx]
 			client.buffer.Next(idx + 1)
 
-			parts := strings.SplitN(string(line), " ", 3)
-			if len(parts) != 3 || parts[0] != "AUTH" {
-				c.AsyncWrite([]byte("AUTH_FAIL\n"), nil)
+			// Parse SCRAM messages
+			parts := strings.Fields(string(line))
+			if len(parts) < 2 {
+				c.AsyncWrite([]byte("SCRAM-FAIL Invalid message format\n"), nil)
 				return gnet.Close
 			}
 
-			session, err := s.source.authenticator.AuthenticateTCP(parts[1], parts[2], c.RemoteAddr().String())
-			if err != nil {
-				s.source.authFailures.Add(1)
-				s.source.logger.Warn("msg", "Authentication failed",
+			switch parts[0] {
+			case "SCRAM-FIRST":
+				// Parse ClientFirst JSON
+				var clientFirst scram.ClientFirst
+				if err := json.Unmarshal([]byte(parts[1]), &clientFirst); err != nil {
+					c.AsyncWrite([]byte("SCRAM-FAIL Invalid JSON\n"), nil)
+					return gnet.Close
+				}
+
+				// Process with SCRAM server
+				serverFirst, err := s.source.scramManager.HandleClientFirst(&clientFirst)
+				if err != nil {
+					// Still send challenge to prevent user enumeration
+					response, _ := json.Marshal(serverFirst)
+					c.AsyncWrite([]byte(fmt.Sprintf("SCRAM-CHALLENGE %s\n", response)), nil)
+					return gnet.Close
+				}
+
+				// Send ServerFirst challenge
+				response, _ := json.Marshal(serverFirst)
+				c.AsyncWrite([]byte(fmt.Sprintf("SCRAM-CHALLENGE %s\n", response)), nil)
+
+			case "SCRAM-PROOF":
+				// Parse ClientFinal JSON
+				var clientFinal scram.ClientFinal
+				if err := json.Unmarshal([]byte(parts[1]), &clientFinal); err != nil {
+					c.AsyncWrite([]byte("SCRAM-FAIL Invalid JSON\n"), nil)
+					return gnet.Close
+				}
+
+				// Verify proof
+				serverFinal, err := s.source.scramManager.HandleClientFinal(&clientFinal)
+				if err != nil {
+					s.source.logger.Warn("msg", "SCRAM authentication failed",
+						"component", "tcp_source",
+						"remote_addr", c.RemoteAddr().String(),
+						"error", err)
+					c.AsyncWrite([]byte("SCRAM-FAIL Authentication failed\n"), nil)
+					return gnet.Close
+				}
+
+				// Authentication successful
+				s.mu.Lock()
+				client.authenticated = true
+				client.session = &auth.Session{
+					ID:         serverFinal.SessionID,
+					Method:     "scram-sha-256",
+					RemoteAddr: c.RemoteAddr().String(),
+					CreatedAt:  time.Now(),
+				}
+				s.mu.Unlock()
+
+				// Send ServerFinal with signature
+				response, _ := json.Marshal(serverFinal)
+				c.AsyncWrite([]byte(fmt.Sprintf("SCRAM-OK %s\n", response)), nil)
+
+				s.source.logger.Info("msg", "Client authenticated via SCRAM",
 					"component", "tcp_source",
 					"remote_addr", c.RemoteAddr().String(),
-					"error", err)
-				c.AsyncWrite([]byte("AUTH_FAIL\n"), nil)
+					"session_id", serverFinal.SessionID)
+
+				// Clear auth buffer
+				client.buffer.Reset()
+
+			default:
+				c.AsyncWrite([]byte("SCRAM-FAIL Unknown command\n"), nil)
 				return gnet.Close
 			}
-
-			s.source.authSuccesses.Add(1)
-			s.mu.Lock()
-			client.authenticated = true
-			client.session = session
-			s.mu.Unlock()
-
-			s.source.logger.Info("msg", "TCP client authenticated",
-				"component", "tcp_source",
-				"remote_addr", c.RemoteAddr().String(),
-				"username", session.Username)
-
-			c.AsyncWrite([]byte("AUTH_OK\n"), nil)
-			client.buffer.Reset()
 		}
 		return gnet.None
 	}
@@ -522,22 +573,46 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 	return gnet.None
 }
 
+func (t *TCPSource) InitSCRAMManager(authCfg *config.AuthConfig) {
+	if authCfg == nil || authCfg.Type != "scram" || authCfg.ScramAuth == nil {
+		return
+	}
+
+	t.scramManager = scram.NewScramManager()
+
+	// Load users from SCRAM config
+	for _, user := range authCfg.ScramAuth.Users {
+		storedKey, _ := base64.StdEncoding.DecodeString(user.StoredKey)
+		serverKey, _ := base64.StdEncoding.DecodeString(user.ServerKey)
+		salt, _ := base64.StdEncoding.DecodeString(user.Salt)
+
+		cred := &scram.Credential{
+			Username:     user.Username,
+			StoredKey:    storedKey,
+			ServerKey:    serverKey,
+			Salt:         salt,
+			ArgonTime:    user.ArgonTime,
+			ArgonMemory:  user.ArgonMemory,
+			ArgonThreads: user.ArgonThreads,
+		}
+		t.scramManager.AddCredential(cred)
+	}
+
+	t.logger.Info("msg", "SCRAM authentication configured",
+		"component", "tcp_source",
+		"users", len(authCfg.ScramAuth.Users))
+}
+
 // Configure TCP source auth
 func (t *TCPSource) SetAuth(authCfg *config.AuthConfig) {
 	if authCfg == nil || authCfg.Type == "none" {
 		return
 	}
 
-	authenticator, err := auth.New(authCfg, t.logger)
-	if err != nil {
-		t.logger.Error("msg", "Failed to initialize authenticator for TCP source",
-			"component", "tcp_source",
-			"error", err)
-		return
+	// Initialize SCRAM manager
+	if authCfg.Type == "scram" {
+		t.InitSCRAMManager(authCfg)
+		t.logger.Info("msg", "SCRAM authentication configured for TCP source",
+			"component", "tcp_source")
 	}
-	t.authenticator = authenticator
-
-	t.logger.Info("msg", "Authentication configured for TCP source",
-		"component", "tcp_source",
-		"auth_type", authCfg.Type)
 }

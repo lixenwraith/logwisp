@@ -183,11 +183,13 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 					"name", name)
 			}
 
-		case "stdout", "stderr":
-			logger.Info("msg", "Console sink configured",
-				"pipeline", cfg.Name,
-				"sink_index", i,
-				"type", sinkCfg.Type)
+		case "console":
+			if target, ok := sinkCfg.Options["target"].(string); ok {
+				logger.Info("msg", "Console sink configured",
+					"pipeline", cfg.Name,
+					"sink_index", i,
+					"target", target)
+			}
 		}
 	}
 

@@ -52,27 +52,29 @@ type HTTPClientSink struct {
 // TODO: missing toml tags
 type HTTPClientConfig struct {
 	// Config
-	URL        string
-	BufferSize int64
-	BatchSize  int64
-	BatchDelay time.Duration
-	Timeout    time.Duration
-	Headers    map[string]string
+	URL        string            `toml:"url"`
+	BufferSize int64             `toml:"buffer_size"`
+	BatchSize  int64             `toml:"batch_size"`
+	BatchDelay time.Duration     `toml:"batch_delay_ms"`
+	Timeout    time.Duration     `toml:"timeout_seconds"`
+	Headers    map[string]string `toml:"headers"`
 
 	// Retry configuration
-	MaxRetries   int64
-	RetryDelay   time.Duration
-	RetryBackoff float64 // Multiplier for exponential backoff
+	MaxRetries   int64         `toml:"max_retries"`
+	RetryDelay   time.Duration `toml:"retry_delay"`
+	RetryBackoff float64       `toml:"retry_backoff"` // Multiplier for exponential backoff
 
 	// Security
-	Username string
-	Password string
+	AuthType    string `toml:"auth_type"`    // "none", "basic", "bearer", "mtls"
+	Username    string `toml:"username"`     // For basic auth
+	Password    string `toml:"password"`     // For basic auth
+	BearerToken string `toml:"bearer_token"` // For bearer auth
 
 	// TLS configuration
-	InsecureSkipVerify bool
-	CAFile             string
-	CertFile           string
-	KeyFile            string
+	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+	CAFile             string `toml:"ca_file"`
+	CertFile           string `toml:"cert_file"`
+	KeyFile            string `toml:"key_file"`
 }
 
 // Creates a new HTTP client sink
@@ -129,11 +131,63 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 	if insecure, ok := options["insecure_skip_verify"].(bool); ok {
 		cfg.InsecureSkipVerify = insecure
 	}
+	if authType, ok := options["auth_type"].(string); ok {
+		switch authType {
+		case "none", "basic", "bearer", "mtls":
+			cfg.AuthType = authType
+		default:
+			return nil, fmt.Errorf("http_client sink: invalid auth_type '%s'", authType)
+		}
+	} else {
+		cfg.AuthType = "none"
+	}
 	if username, ok := options["username"].(string); ok {
 		cfg.Username = username
 	}
 	if password, ok := options["password"].(string); ok {
 		cfg.Password = password // TODO: change to Argon2 hashed password
+	}
+	if token, ok := options["bearer_token"].(string); ok {
+		cfg.BearerToken = token
+	}
+
+	// Validate auth configuration and TLS enforcement
+	isHTTPS := strings.HasPrefix(cfg.URL, "https://")
+
+	switch cfg.AuthType {
+	case "basic":
+		if cfg.Username == "" || cfg.Password == "" {
+			return nil, fmt.Errorf("http_client sink: username and password required for basic auth")
+		}
+		if !isHTTPS {
+			return nil, fmt.Errorf("http_client sink: basic auth requires HTTPS (security: credentials would be sent in plaintext)")
+		}
+
+	case "bearer":
+		if cfg.BearerToken == "" {
+			return nil, fmt.Errorf("http_client sink: bearer_token required for bearer auth")
+		}
+		if !isHTTPS {
+			return nil, fmt.Errorf("http_client sink: bearer auth requires HTTPS (security: token would be sent in plaintext)")
+		}
+
+	case "mtls":
+		if !isHTTPS {
+			return nil, fmt.Errorf("http_client sink: mTLS requires HTTPS")
+		}
+		if cfg.CertFile == "" || cfg.KeyFile == "" {
+			return nil, fmt.Errorf("http_client sink: cert_file and key_file required for mTLS")
+		}
+
+	case "none":
+		// Clear any credentials if auth is "none"
+		if cfg.Username != "" || cfg.Password != "" || cfg.BearerToken != "" {
+			logger.Warn("msg", "Credentials provided but auth_type is 'none', ignoring",
+				"component", "http_client_sink")
+			cfg.Username = ""
+			cfg.Password = ""
+			cfg.BearerToken = ""
+		}
 	}
 
 	// Extract headers
@@ -416,6 +470,7 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 	var lastErr error
 	retryDelay := h.config.RetryDelay
 
+	// TODO: verify retry loop placement is correct or should it be after acquiring resources (req :=....)
 	for attempt := int64(0); attempt <= h.config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			// Wait before retry
@@ -444,11 +499,22 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 
 		req.Header.Set("User-Agent", fmt.Sprintf("LogWisp/%s", version.Short()))
 
-		// Add Basic Auth header if credentials configured
-		if h.config.Username != "" && h.config.Password != "" {
+		// Add authentication based on auth type
+		switch h.config.AuthType {
+		case "basic":
 			creds := h.config.Username + ":" + h.config.Password
 			encodedCreds := base64.StdEncoding.EncodeToString([]byte(creds))
 			req.Header.Set("Authorization", "Basic "+encodedCreds)
+
+		case "bearer":
+			req.Header.Set("Authorization", "Bearer "+h.config.BearerToken)
+
+		case "mtls":
+			// mTLS auth is handled at TLS layer via client certificates
+			// No Authorization header needed
+
+		case "none":
+			// No authentication
 		}
 
 		// Set headers

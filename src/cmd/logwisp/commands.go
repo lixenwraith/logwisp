@@ -105,7 +105,7 @@ func (c *helpCommand) Description() string {
 type authCommand struct{}
 
 func (c *authCommand) Execute(args []string) error {
-	gen := auth.NewGeneratorCommand()
+	gen := auth.NewAuthGeneratorCommand()
 	return gen.Execute(args)
 }
 

@@ -104,5 +104,5 @@ func (f *TextFormatter) Format(entry core.LogEntry) ([]byte, error) {
 
 // Returns the formatter name
 func (f *TextFormatter) Name() string {
-	return "text"
+	return "txt"
 }
