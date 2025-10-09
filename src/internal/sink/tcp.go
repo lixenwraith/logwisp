@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,26 +24,22 @@ import (
 
 // Streams log entries via TCP
 type TCPSink struct {
-	// C
-	input         chan core.LogEntry
-	config        TCPConfig
-	server        *tcpServer
-	done          chan struct{}
-	activeConns   atomic.Int64
-	startTime     time.Time
-	engine        *gnet.Engine
-	engineMu      sync.Mutex
-	wg            sync.WaitGroup
-	netLimiter    *limit.NetLimiter
-	logger        *log.Logger
-	formatter     format.Formatter
-	authenticator *auth.Authenticator
+	input       chan core.LogEntry
+	config      *config.TCPSinkOptions
+	server      *tcpServer
+	done        chan struct{}
+	activeConns atomic.Int64
+	startTime   time.Time
+	engine      *gnet.Engine
+	engineMu    sync.Mutex
+	wg          sync.WaitGroup
+	netLimiter  *limit.NetLimiter
+	logger      *log.Logger
+	formatter   format.Formatter
 
 	// Statistics
 	totalProcessed atomic.Uint64
 	lastProcessed  atomic.Value // time.Time
-	authFailures   atomic.Uint64
-	authSuccesses  atomic.Uint64
 
 	// Write error tracking
 	writeErrors            atomic.Uint64
@@ -62,87 +57,14 @@ type TCPConfig struct {
 }
 
 // Creates a new TCP streaming sink
-func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPSink, error) {
-	cfg := TCPConfig{
-		Host:       "0.0.0.0",
-		Port:       int64(9090),
-		BufferSize: int64(1000),
-	}
-
-	// Extract configuration from options
-	if host, ok := options["host"].(string); ok && host != "" {
-		cfg.Host = host
-	}
-	if port, ok := options["port"].(int64); ok {
-		cfg.Port = port
-	}
-	if bufSize, ok := options["buffer_size"].(int64); ok {
-		cfg.BufferSize = bufSize
-	}
-
-	// Extract heartbeat config
-	if hb, ok := options["heartbeat"].(map[string]any); ok {
-		cfg.Heartbeat = &config.HeartbeatConfig{}
-		cfg.Heartbeat.Enabled, _ = hb["enabled"].(bool)
-		if interval, ok := hb["interval_seconds"].(int64); ok {
-			cfg.Heartbeat.IntervalSeconds = interval
-		}
-		cfg.Heartbeat.IncludeTimestamp, _ = hb["include_timestamp"].(bool)
-		cfg.Heartbeat.IncludeStats, _ = hb["include_stats"].(bool)
-		if hbFormat, ok := hb["format"].(string); ok {
-			cfg.Heartbeat.Format = hbFormat
-		}
-	}
-
-	// Extract net limit config
-	if nl, ok := options["net_limit"].(map[string]any); ok {
-		cfg.NetLimit = &config.NetLimitConfig{}
-		cfg.NetLimit.Enabled, _ = nl["enabled"].(bool)
-		if rps, ok := nl["requests_per_second"].(float64); ok {
-			cfg.NetLimit.RequestsPerSecond = rps
-		}
-		if burst, ok := nl["burst_size"].(int64); ok {
-			cfg.NetLimit.BurstSize = burst
-		}
-		if respCode, ok := nl["response_code"].(int64); ok {
-			cfg.NetLimit.ResponseCode = respCode
-		}
-		if msg, ok := nl["response_message"].(string); ok {
-			cfg.NetLimit.ResponseMessage = msg
-		}
-		if maxPerIP, ok := nl["max_connections_per_ip"].(int64); ok {
-			cfg.NetLimit.MaxConnectionsPerIP = maxPerIP
-		}
-		if maxPerUser, ok := nl["max_connections_per_user"].(int64); ok {
-			cfg.NetLimit.MaxConnectionsPerUser = maxPerUser
-		}
-		if maxPerToken, ok := nl["max_connections_per_token"].(int64); ok {
-			cfg.NetLimit.MaxConnectionsPerToken = maxPerToken
-		}
-		if maxTotal, ok := nl["max_connections_total"].(int64); ok {
-			cfg.NetLimit.MaxConnectionsTotal = maxTotal
-		}
-		if ipWhitelist, ok := nl["ip_whitelist"].([]any); ok {
-			cfg.NetLimit.IPWhitelist = make([]string, 0, len(ipWhitelist))
-			for _, entry := range ipWhitelist {
-				if str, ok := entry.(string); ok {
-					cfg.NetLimit.IPWhitelist = append(cfg.NetLimit.IPWhitelist, str)
-				}
-			}
-		}
-		if ipBlacklist, ok := nl["ip_blacklist"].([]any); ok {
-			cfg.NetLimit.IPBlacklist = make([]string, 0, len(ipBlacklist))
-			for _, entry := range ipBlacklist {
-				if str, ok := entry.(string); ok {
-					cfg.NetLimit.IPBlacklist = append(cfg.NetLimit.IPBlacklist, str)
-				}
-			}
-		}
+func NewTCPSink(opts *config.TCPSinkOptions, logger *log.Logger, formatter format.Formatter) (*TCPSink, error) {
+	if opts == nil {
+		return nil, fmt.Errorf("TCP sink options cannot be nil")
 	}
 
 	t := &TCPSink{
-		input:     make(chan core.LogEntry, cfg.BufferSize),
-		config:    cfg,
+		config:    opts, // Direct reference to config
+		input:     make(chan core.LogEntry, opts.BufferSize),
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
@@ -150,9 +72,11 @@ func NewTCPSink(options map[string]any, logger *log.Logger, formatter format.For
 	}
 	t.lastProcessed.Store(time.Time{})
 
-	// Initialize net limiter
-	if cfg.NetLimit != nil && cfg.NetLimit.Enabled {
-		t.netLimiter = limit.NewNetLimiter(*cfg.NetLimit, logger)
+	// Initialize net limiter with pointer
+	if opts.NetLimit != nil && (opts.NetLimit.Enabled ||
+		len(opts.NetLimit.IPWhitelist) > 0 ||
+		len(opts.NetLimit.IPBlacklist) > 0) {
+		t.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
 	}
 
 	return t, nil
@@ -193,8 +117,7 @@ func (t *TCPSink) Start(ctx context.Context) error {
 	go func() {
 		t.logger.Info("msg", "Starting TCP server",
 			"component", "tcp_sink",
-			"port", t.config.Port,
-			"auth", t.authenticator != nil)
+			"port", t.config.Port)
 
 		err := gnet.Run(t.server, addr, opts...)
 		if err != nil {
@@ -282,7 +205,7 @@ func (t *TCPSink) broadcastLoop(ctx context.Context) {
 	var tickerChan <-chan time.Time
 
 	if t.config.Heartbeat != nil && t.config.Heartbeat.Enabled {
-		ticker = time.NewTicker(time.Duration(t.config.Heartbeat.IntervalSeconds) * time.Second)
+		ticker = time.NewTicker(time.Duration(t.config.Heartbeat.Interval) * time.Second)
 		tickerChan = ticker.C
 		defer ticker.Stop()
 	}
@@ -329,21 +252,19 @@ func (t *TCPSink) broadcastData(data []byte) {
 	t.server.mu.RLock()
 	defer t.server.mu.RUnlock()
 
-	for conn, client := range t.server.clients {
-		if client.authenticated {
-			conn.AsyncWrite(data, func(c gnet.Conn, err error) error {
-				if err != nil {
-					t.writeErrors.Add(1)
-					t.handleWriteError(c, err)
-				} else {
-					// Reset consecutive error count on success
-					t.errorMu.Lock()
-					delete(t.consecutiveWriteErrors, c)
-					t.errorMu.Unlock()
-				}
-				return nil
-			})
-		}
+	for conn, _ := range t.server.clients {
+		conn.AsyncWrite(data, func(c gnet.Conn, err error) error {
+			if err != nil {
+				t.writeErrors.Add(1)
+				t.handleWriteError(c, err)
+			} else {
+				// Reset consecutive error count on success
+				t.errorMu.Lock()
+				delete(t.consecutiveWriteErrors, c)
+				t.errorMu.Unlock()
+			}
+			return nil
+		})
 	}
 }
 
@@ -408,11 +329,10 @@ func (t *TCPSink) GetActiveConnections() int64 {
 
 // Represents a connected TCP client with auth state
 type tcpClient struct {
-	conn          gnet.Conn
-	buffer        bytes.Buffer
-	authenticated bool
-	authTimeout   time.Time
-	session       *auth.Session
+	conn        gnet.Conn
+	buffer      bytes.Buffer
+	authTimeout time.Time
+	session     *auth.Session
 }
 
 // Handles gnet events with authentication
@@ -439,7 +359,7 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	remoteAddr := c.RemoteAddr()
 	s.sink.logger.Debug("msg", "TCP connection attempt", "remote_addr", remoteAddr)
 
-	// Reject IPv6 connections immediately
+	// Reject IPv6 connections
 	if tcpAddr, ok := remoteAddr.(*net.TCPAddr); ok {
 		if tcpAddr.IP.To4() == nil {
 			return []byte("IPv4-only (IPv6 not supported)\n"), gnet.Close
@@ -467,14 +387,10 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		s.sink.netLimiter.AddConnection(remoteStr)
 	}
 
-	// Create client state without auth timeout initially
+	// TCP Sink accepts all connections without authentication
 	client := &tcpClient{
-		conn:          c,
-		authenticated: s.sink.authenticator == nil,
-	}
-
-	if s.sink.authenticator != nil {
-		client.authTimeout = time.Now().Add(30 * time.Second)
+		conn:   c,
+		buffer: bytes.Buffer{},
 	}
 
 	s.mu.Lock()
@@ -484,13 +400,7 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	newCount := s.sink.activeConns.Add(1)
 	s.sink.logger.Debug("msg", "TCP connection opened",
 		"remote_addr", remoteAddr,
-		"active_connections", newCount,
-		"auth_enabled", s.sink.authenticator != nil)
-
-	// Send auth prompt if authentication is required
-	if s.sink.authenticator != nil {
-		return []byte("AUTH_REQUIRED\n"), gnet.None
-	}
+		"active_connections", newCount)
 
 	return nil, gnet.None
 }
@@ -522,96 +432,7 @@ func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 }
 
 func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
-	s.mu.RLock()
-	client, exists := s.clients[c]
-	s.mu.RUnlock()
-
-	if !exists {
-		return gnet.Close
-	}
-
-	// Authentication phase
-	if !client.authenticated {
-		// Check auth timeout
-		if time.Now().After(client.authTimeout) {
-			s.sink.logger.Warn("msg", "Authentication timeout",
-				"component", "tcp_sink",
-				"remote_addr", c.RemoteAddr().String())
-			return gnet.Close
-		}
-
-		// Read auth data
-		data, _ := c.Next(-1)
-		if len(data) == 0 {
-			return gnet.None
-		}
-
-		client.buffer.Write(data)
-
-		// Look for complete auth line
-		if idx := bytes.IndexByte(client.buffer.Bytes(), '\n'); idx >= 0 {
-			line := client.buffer.Bytes()[:idx]
-			client.buffer.Next(idx + 1)
-
-			// Parse AUTH command: AUTH <method> <credentials>
-			parts := strings.SplitN(string(line), " ", 3)
-			if len(parts) != 3 || parts[0] != "AUTH" {
-				c.AsyncWrite([]byte("AUTH_FAIL\n"), nil)
-				return gnet.Close
-			}
-
-			// Authenticate
-			session, err := s.sink.authenticator.AuthenticateTCP(parts[1], parts[2], c.RemoteAddr().String())
-			if err != nil {
-				s.sink.authFailures.Add(1)
-				s.sink.logger.Warn("msg", "TCP authentication failed",
-					"remote_addr", c.RemoteAddr().String(),
-					"method", parts[1],
-					"error", err)
-				c.AsyncWrite([]byte("AUTH_FAIL\n"), nil)
-				return gnet.Close
-			}
-
-			// Authentication successful
-			s.sink.authSuccesses.Add(1)
-			s.mu.Lock()
-			client.authenticated = true
-			client.session = session
-			s.mu.Unlock()
-
-			s.sink.logger.Info("msg", "TCP client authenticated",
-				"component", "tcp_sink",
-				"remote_addr", c.RemoteAddr().String(),
-				"username", session.Username,
-				"method", session.Method)
-
-			c.AsyncWrite([]byte("AUTH_OK\n"), nil)
-			client.buffer.Reset()
-		}
-		return gnet.None
-	}
-
-	// Clients shouldn't send data, just discard
+	// TCP Sink doesn't expect any data from clients, discard all
 	c.Discard(-1)
 	return gnet.None
-}
-
-// Configures tcp sink auth
-func (t *TCPSink) SetAuth(authCfg *config.AuthConfig) {
-	if authCfg == nil || authCfg.Type == "none" {
-		return
-	}
-
-	authenticator, err := auth.NewAuthenticator(authCfg, t.logger)
-	if err != nil {
-		t.logger.Error("msg", "Failed to initialize authenticator for TCP sink",
-			"component", "tcp_sink",
-			"error", err)
-		return
-	}
-	t.authenticator = authenticator
-
-	t.logger.Info("msg", "Authentication configured for TCP sink",
-		"component", "tcp_sink",
-		"auth_type", authCfg.Type)
 }

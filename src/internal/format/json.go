@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
@@ -13,39 +14,15 @@ import (
 
 // Produces structured JSON logs
 type JSONFormatter struct {
-	pretty         bool
-	timestampField string
-	levelField     string
-	messageField   string
-	sourceField    string
-	logger         *log.Logger
+	config *config.JSONFormatterOptions
+	logger *log.Logger
 }
 
 // Creates a new JSON formatter
-func NewJSONFormatter(options map[string]any, logger *log.Logger) (*JSONFormatter, error) {
+func NewJSONFormatter(opts *config.JSONFormatterOptions, logger *log.Logger) (*JSONFormatter, error) {
 	f := &JSONFormatter{
-		timestampField: "timestamp",
-		levelField:     "level",
-		messageField:   "message",
-		sourceField:    "source",
-		logger:         logger,
-	}
-
-	// Extract options
-	if pretty, ok := options["pretty"].(bool); ok {
-		f.pretty = pretty
-	}
-	if field, ok := options["timestamp_field"].(string); ok && field != "" {
-		f.timestampField = field
-	}
-	if field, ok := options["level_field"].(string); ok && field != "" {
-		f.levelField = field
-	}
-	if field, ok := options["message_field"].(string); ok && field != "" {
-		f.messageField = field
-	}
-	if field, ok := options["source_field"].(string); ok && field != "" {
-		f.sourceField = field
+		config: opts,
+		logger: logger,
 	}
 
 	return f, nil
@@ -57,9 +34,9 @@ func (f *JSONFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	output := make(map[string]any)
 
 	// First, populate with LogWisp metadata
-	output[f.timestampField] = entry.Time.Format(time.RFC3339Nano)
-	output[f.levelField] = entry.Level
-	output[f.sourceField] = entry.Source
+	output[f.config.TimestampField] = entry.Time.Format(time.RFC3339Nano)
+	output[f.config.LevelField] = entry.Level
+	output[f.config.SourceField] = entry.Source
 
 	// Try to parse the message as JSON
 	var msgData map[string]any
@@ -68,21 +45,21 @@ func (f *JSONFormatter) Format(entry core.LogEntry) ([]byte, error) {
 		// LogWisp metadata takes precedence
 		for k, v := range msgData {
 			// Don't overwrite our standard fields
-			if k != f.timestampField && k != f.levelField && k != f.sourceField {
+			if k != f.config.TimestampField && k != f.config.LevelField && k != f.config.SourceField {
 				output[k] = v
 			}
 		}
 
 		// If the original JSON had these fields, log that we're overriding
-		if _, hasTime := msgData[f.timestampField]; hasTime {
+		if _, hasTime := msgData[f.config.TimestampField]; hasTime {
 			f.logger.Debug("msg", "Overriding timestamp from JSON message",
 				"component", "json_formatter",
-				"original", msgData[f.timestampField],
-				"logwisp", output[f.timestampField])
+				"original", msgData[f.config.TimestampField],
+				"logwisp", output[f.config.TimestampField])
 		}
 	} else {
 		// Message is not valid JSON - add as message field
-		output[f.messageField] = entry.Message
+		output[f.config.MessageField] = entry.Message
 	}
 
 	// Add any additional fields from LogEntry.Fields
@@ -101,7 +78,7 @@ func (f *JSONFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Marshal to JSON
 	var result []byte
 	var err error
-	if f.pretty {
+	if f.config.Pretty {
 		result, err = json.MarshalIndent(output, "", "  ")
 	} else {
 		result, err = json.Marshal(output)
@@ -147,7 +124,7 @@ func (f *JSONFormatter) FormatBatch(entries []core.LogEntry) ([]byte, error) {
 	// Marshal the entire batch as an array
 	var result []byte
 	var err error
-	if f.pretty {
+	if f.config.Pretty {
 		result, err = json.MarshalIndent(batch, "", "  ")
 	} else {
 		result, err = json.Marshal(batch)

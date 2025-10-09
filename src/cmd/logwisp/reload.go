@@ -338,14 +338,6 @@ func (rm *ReloadManager) stopStatusReporter() {
 	}
 }
 
-// Wrapper to save the config
-func (rm *ReloadManager) SaveConfig(path string) error {
-	if rm.lcfg == nil {
-		return fmt.Errorf("no lconfig instance available")
-	}
-	return rm.lcfg.Save(path)
-}
-
 // Stops the reload manager
 func (rm *ReloadManager) Shutdown() {
 	rm.logger.Info("msg", "Shutting down reload manager")

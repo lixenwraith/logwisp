@@ -1,5 +1,5 @@
-// FILE: src/internal/scram/server.go
-package scram
+// FILE: src/internal/auth/scram_server.go
+package auth
 
 import (
 	"crypto/rand"
@@ -9,14 +9,17 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"logwisp/src/internal/core"
 )
 
 // Server handles SCRAM authentication
-type Server struct {
+type ScramServer struct {
 	credentials map[string]*Credential
 	handshakes  map[string]*HandshakeState
 	mu          sync.RWMutex
 
+	// TODO: configurability useful? to be included in config or refactor to use core.const directly for simplicity
 	// Default Argon2 params for new registrations
 	DefaultTime    uint32
 	DefaultMemory  uint32
@@ -29,32 +32,30 @@ type HandshakeState struct {
 	ClientNonce string
 	ServerNonce string
 	FullNonce   string
-	AuthMessage string
 	Credential  *Credential
 	CreatedAt   time.Time
-	ClientProof []byte
 }
 
-// NewServer creates SCRAM server
-func NewServer() *Server {
-	return &Server{
+// NewScramServer creates SCRAM server
+func NewScramServer() *ScramServer {
+	return &ScramServer{
 		credentials:    make(map[string]*Credential),
 		handshakes:     make(map[string]*HandshakeState),
-		DefaultTime:    3,
-		DefaultMemory:  64 * 1024,
-		DefaultThreads: 4,
+		DefaultTime:    core.Argon2Time,
+		DefaultMemory:  core.Argon2Memory,
+		DefaultThreads: core.Argon2Threads,
 	}
 }
 
 // AddCredential registers user credential
-func (s *Server) AddCredential(cred *Credential) {
+func (s *ScramServer) AddCredential(cred *Credential) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.credentials[cred.Username] = cred
 }
 
 // HandleClientFirst processes initial auth request
-func (s *Server) HandleClientFirst(msg *ClientFirst) (*ServerFirst, error) {
+func (s *ScramServer) HandleClientFirst(msg *ClientFirst) (*ServerFirst, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -103,7 +104,7 @@ func (s *Server) HandleClientFirst(msg *ClientFirst) (*ServerFirst, error) {
 }
 
 // HandleClientFinal verifies client proof
-func (s *Server) HandleClientFinal(msg *ClientFinal) (*ServerFinal, error) {
+func (s *ScramServer) HandleClientFinal(msg *ClientFinal) (*ServerFinal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -157,7 +158,7 @@ func (s *Server) HandleClientFinal(msg *ClientFinal) (*ServerFinal, error) {
 	}, nil
 }
 
-func (s *Server) cleanupHandshakes() {
+func (s *ScramServer) cleanupHandshakes() {
 	cutoff := time.Now().Add(-60 * time.Second)
 	for nonce, state := range s.handshakes {
 		if state.CreatedAt.Before(cutoff) {
@@ -170,10 +171,4 @@ func generateNonce() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	return base64.StdEncoding.EncodeToString(b)
-}
-
-func generateSessionID() string {
-	b := make([]byte, 24)
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
 }

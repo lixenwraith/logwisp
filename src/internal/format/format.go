@@ -3,6 +3,7 @@ package format
 
 import (
 	"fmt"
+	"logwisp/src/internal/config"
 
 	"logwisp/src/internal/core"
 
@@ -19,20 +20,15 @@ type Formatter interface {
 }
 
 // Creates a new Formatter based on the provided configuration.
-func NewFormatter(name string, options map[string]any, logger *log.Logger) (Formatter, error) {
-	// Default to raw if no format specified
-	if name == "" {
-		name = "raw"
-	}
-
-	switch name {
+func NewFormatter(cfg *config.FormatConfig, logger *log.Logger) (Formatter, error) {
+	switch cfg.Type {
 	case "json":
-		return NewJSONFormatter(options, logger)
+		return NewJSONFormatter(cfg.JSONFormatOptions, logger)
 	case "txt":
-		return NewTextFormatter(options, logger)
-	case "raw":
-		return NewRawFormatter(options, logger)
+		return NewTextFormatter(cfg.TextFormatOptions, logger)
+	case "raw", "":
+		return NewRawFormatter(cfg.RawFormatOptions, logger)
 	default:
-		return nil, fmt.Errorf("unknown formatter type: %s", name)
+		return nil, fmt.Errorf("unknown formatter type: %s", cfg.Type)
 	}
 }

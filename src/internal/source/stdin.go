@@ -15,24 +15,25 @@ import (
 
 // Reads log entries from standard input
 type StdinSource struct {
+	config         *config.StdinSourceOptions
 	subscribers    []chan core.LogEntry
 	done           chan struct{}
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
-	bufferSize     int64
 	startTime      time.Time
 	lastEntryTime  atomic.Value // time.Time
 	logger         *log.Logger
 }
 
-func NewStdinSource(options map[string]any, logger *log.Logger) (*StdinSource, error) {
-	bufferSize := int64(1000) // default
-	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
-		bufferSize = bufSize
+func NewStdinSource(opts *config.StdinSourceOptions, logger *log.Logger) (*StdinSource, error) {
+	if opts == nil {
+		opts = &config.StdinSourceOptions{
+			BufferSize: 1000, // Default
+		}
 	}
 
 	source := &StdinSource{
-		bufferSize:  bufferSize,
+		config:      opts,
 		subscribers: make([]chan core.LogEntry, 0),
 		done:        make(chan struct{}),
 		logger:      logger,
@@ -43,7 +44,7 @@ func NewStdinSource(options map[string]any, logger *log.Logger) (*StdinSource, e
 }
 
 func (s *StdinSource) Subscribe() <-chan core.LogEntry {
-	ch := make(chan core.LogEntry, s.bufferSize)
+	ch := make(chan core.LogEntry, s.config.BufferSize)
 	s.subscribers = append(s.subscribers, ch)
 	return ch
 }
@@ -119,8 +120,4 @@ func (s *StdinSource) publish(entry core.LogEntry) {
 				"component", "stdin_source")
 		}
 	}
-}
-
-func (s *StdinSource) SetAuth(auth *config.AuthConfig) {
-	// Authentication does not apply to stdin source
 }

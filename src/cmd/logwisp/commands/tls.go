@@ -1,5 +1,5 @@
-// FILE: src/internal/tls/generator.go
-package tls
+// FILE: src/cmd/logwisp/commands/tls.go
+package commands
 
 import (
 	"crypto/rand"
@@ -17,40 +17,50 @@ import (
 	"time"
 )
 
-type CertGeneratorCommand struct {
+type TLSCommand struct {
 	output io.Writer
 	errOut io.Writer
 }
 
-func NewCertGeneratorCommand() *CertGeneratorCommand {
-	return &CertGeneratorCommand{
+func NewTLSCommand() *TLSCommand {
+	return &TLSCommand{
 		output: os.Stdout,
 		errOut: os.Stderr,
 	}
 }
 
-func (cg *CertGeneratorCommand) Execute(args []string) error {
+func (tc *TLSCommand) Execute(args []string) error {
 	cmd := flag.NewFlagSet("tls", flag.ContinueOnError)
-	cmd.SetOutput(cg.errOut)
+	cmd.SetOutput(tc.errOut)
 
-	// Subcommands
+	// Certificate type flags
 	var (
 		genCA     = cmd.Bool("ca", false, "Generate CA certificate")
 		genServer = cmd.Bool("server", false, "Generate server certificate")
 		genClient = cmd.Bool("client", false, "Generate client certificate")
 		selfSign  = cmd.Bool("self-signed", false, "Generate self-signed certificate")
 
-		// Common options
+		// Common options - short forms
 		commonName = cmd.String("cn", "", "Common name (required)")
-		org        = cmd.String("org", "LogWisp", "Organization")
-		country    = cmd.String("country", "US", "Country code")
-		validDays  = cmd.Int("days", 365, "Validity period in days")
-		keySize    = cmd.Int("bits", 2048, "RSA key size")
+		org        = cmd.String("o", "LogWisp", "Organization")
+		country    = cmd.String("c", "US", "Country code")
+		validDays  = cmd.Int("d", 365, "Validity period in days")
+		keySize    = cmd.Int("b", 2048, "RSA key size")
 
-		// Server/Client specific
-		hosts     = cmd.String("hosts", "", "Comma-separated hostnames/IPs (server cert)")
-		caFile    = cmd.String("ca-cert", "", "CA certificate file (for signing)")
-		caKeyFile = cmd.String("ca-key", "", "CA key file (for signing)")
+		// Common options - long forms
+		commonNameLong = cmd.String("common-name", "", "Common name (required)")
+		orgLong        = cmd.String("org", "LogWisp", "Organization")
+		countryLong    = cmd.String("country", "US", "Country code")
+		validDaysLong  = cmd.Int("days", 365, "Validity period in days")
+		keySizeLong    = cmd.Int("bits", 2048, "RSA key size")
+
+		// Server/Client specific - short forms
+		hosts  = cmd.String("h", "", "Comma-separated hostnames/IPs")
+		caFile = cmd.String("ca-cert", "", "CA certificate file")
+		caKey  = cmd.String("ca-key", "", "CA key file")
+
+		// Server/Client specific - long forms
+		hostsLong = cmd.String("hosts", "", "Comma-separated hostnames/IPs")
 
 		// Output files
 		certOut = cmd.String("cert-out", "", "Output certificate file")
@@ -58,51 +68,135 @@ func (cg *CertGeneratorCommand) Execute(args []string) error {
 	)
 
 	cmd.Usage = func() {
-		fmt.Fprintln(cg.errOut, "Generate TLS certificates for LogWisp")
-		fmt.Fprintln(cg.errOut, "\nUsage: logwisp tls [options]")
-		fmt.Fprintln(cg.errOut, "\nExamples:")
-		fmt.Fprintln(cg.errOut, "  # Generate self-signed certificate")
-		fmt.Fprintln(cg.errOut, "  logwisp tls --self-signed --cn localhost --hosts localhost,127.0.0.1")
-		fmt.Fprintln(cg.errOut, "  ")
-		fmt.Fprintln(cg.errOut, "  # Generate CA certificate")
-		fmt.Fprintln(cg.errOut, "  logwisp tls --ca --cn \"LogWisp CA\" --cert-out ca.crt --key-out ca.key")
-		fmt.Fprintln(cg.errOut, "  ")
-		fmt.Fprintln(cg.errOut, "  # Generate server certificate signed by CA")
-		fmt.Fprintln(cg.errOut, "  logwisp tls --server --cn server.example.com --hosts server.example.com \\")
-		fmt.Fprintln(cg.errOut, "              --ca-cert ca.crt --ca-key ca.key")
-		fmt.Fprintln(cg.errOut, "\nOptions:")
+		fmt.Fprintln(tc.errOut, "Generate TLS certificates for LogWisp")
+		fmt.Fprintln(tc.errOut, "\nUsage: logwisp tls [options]")
+		fmt.Fprintln(tc.errOut, "\nExamples:")
+		fmt.Fprintln(tc.errOut, "  # Generate self-signed certificate")
+		fmt.Fprintln(tc.errOut, "  logwisp tls --self-signed --cn localhost --hosts localhost,127.0.0.1")
+		fmt.Fprintln(tc.errOut, "  ")
+		fmt.Fprintln(tc.errOut, "  # Generate CA certificate")
+		fmt.Fprintln(tc.errOut, "  logwisp tls --ca --cn \"LogWisp CA\" --cert-out ca.crt --key-out ca.key")
+		fmt.Fprintln(tc.errOut, "  ")
+		fmt.Fprintln(tc.errOut, "  # Generate server certificate signed by CA")
+		fmt.Fprintln(tc.errOut, "  logwisp tls --server --cn server.example.com --hosts server.example.com \\")
+		fmt.Fprintln(tc.errOut, "              --ca-cert ca.crt --ca-key ca.key")
+		fmt.Fprintln(tc.errOut, "\nOptions:")
 		cmd.PrintDefaults()
-		fmt.Fprintln(cg.errOut)
+		fmt.Fprintln(tc.errOut)
 	}
 
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
 
+	// Check for unparsed arguments
+	if cmd.NArg() > 0 {
+		return fmt.Errorf("unexpected argument(s): %s", strings.Join(cmd.Args(), " "))
+	}
+
+	// Merge short and long options
+	finalCN := coalesceString(*commonName, *commonNameLong)
+	finalOrg := coalesceString(*org, *orgLong, "LogWisp")
+	finalCountry := coalesceString(*country, *countryLong, "US")
+	finalDays := coalesceInt(*validDays, *validDaysLong, 365)
+	finalKeySize := coalesceInt(*keySize, *keySizeLong, 2048)
+	finalHosts := coalesceString(*hosts, *hostsLong)
+	finalCAFile := *caFile   // no short form
+	finalCAKey := *caKey     // no short form
+	finalCertOut := *certOut // no short form
+	finalKeyOut := *keyOut   // no short form
+
 	// Validate common name
-	if *commonName == "" {
+	if finalCN == "" {
 		cmd.Usage()
 		return fmt.Errorf("common name (--cn) is required")
+	}
+
+	// Validate RSA key size
+	if finalKeySize != 2048 && finalKeySize != 3072 && finalKeySize != 4096 {
+		return fmt.Errorf("invalid key size: %d (valid: 2048, 3072, 4096)", finalKeySize)
 	}
 
 	// Route to appropriate generator
 	switch {
 	case *genCA:
-		return cg.generateCA(*commonName, *org, *country, *validDays, *keySize, *certOut, *keyOut)
+		return tc.generateCA(finalCN, finalOrg, finalCountry, finalDays, finalKeySize, finalCertOut, finalKeyOut)
 	case *selfSign:
-		return cg.generateSelfSigned(*commonName, *org, *country, *hosts, *validDays, *keySize, *certOut, *keyOut)
+		return tc.generateSelfSigned(finalCN, finalOrg, finalCountry, finalHosts, finalDays, finalKeySize, finalCertOut, finalKeyOut)
 	case *genServer:
-		return cg.generateServerCert(*commonName, *org, *country, *hosts, *caFile, *caKeyFile, *validDays, *keySize, *certOut, *keyOut)
+		return tc.generateServerCert(finalCN, finalOrg, finalCountry, finalHosts, finalCAFile, finalCAKey, finalDays, finalKeySize, finalCertOut, finalKeyOut)
 	case *genClient:
-		return cg.generateClientCert(*commonName, *org, *country, *caFile, *caKeyFile, *validDays, *keySize, *certOut, *keyOut)
+		return tc.generateClientCert(finalCN, finalOrg, finalCountry, finalCAFile, finalCAKey, finalDays, finalKeySize, finalCertOut, finalKeyOut)
 	default:
 		cmd.Usage()
 		return fmt.Errorf("specify certificate type: --ca, --self-signed, --server, or --client")
 	}
 }
 
+func (tc *TLSCommand) Description() string {
+	return "Generate TLS certificates (CA, server, client, self-signed)"
+}
+
+func (tc *TLSCommand) Help() string {
+	return `TLS Command - Generate TLS certificates for LogWisp
+
+Usage: 
+  logwisp tls [options]
+
+Certificate Types:
+  --ca           Generate Certificate Authority (CA) certificate
+  --server       Generate server certificate (requires CA or self-signed)
+  --client       Generate client certificate (for mTLS)
+  --self-signed  Generate self-signed certificate (single cert for testing)
+
+Common Options:
+  --cn, --common-name <name>     Common Name (required)
+  -o, --org <organization>       Organization name (default: "LogWisp")
+  -c, --country <code>           Country code (default: "US")
+  -d, --days <number>            Validity period in days (default: 365)
+  -b, --bits <size>              RSA key size (default: 2048)
+
+Server Certificate Options:
+  -h, --hosts <list>             Comma-separated hostnames/IPs
+                                 Example: "localhost,10.0.0.1,example.com"
+  --ca-cert <file>       CA certificate file (for signing)
+  --ca-key <file>        CA key file (for signing)
+
+Output Options:
+  --cert-out <file>      Output certificate file (default: stdout)
+  --key-out <file>       Output private key file (default: stdout)
+
+Examples:
+  # Generate self-signed certificate for testing
+  logwisp tls --self-signed --cn localhost --hosts "localhost,127.0.0.1" \
+    --cert-out server.crt --key-out server.key
+  
+  # Generate CA certificate
+  logwisp tls --ca --cn "LogWisp CA" --days 3650 \
+    --cert-out ca.crt --key-out ca.key
+  
+  # Generate server certificate signed by CA
+  logwisp tls --server --cn "logwisp.example.com" \
+    --hosts "logwisp.example.com,10.0.0.100" \
+    --ca-cert ca.crt --ca-key ca.key \
+    --cert-out server.crt --key-out server.key
+  
+  # Generate client certificate for mTLS
+  logwisp tls --client --cn "client1" \
+    --ca-cert ca.crt --ca-key ca.key \
+    --cert-out client.crt --key-out client.key
+
+Security Notes:
+  - Keep private keys secure and never share them
+  - Use 2048-bit RSA minimum, 3072 or 4096 for higher security
+  - For production, use certificates from a trusted CA
+  - Self-signed certificates are only for development/testing
+  - Rotate certificates before expiration
+`
+}
+
 // Create and manage private CA
-func (cg *CertGeneratorCommand) generateCA(cn, org, country string, days, bits int, certFile, keyFile string) error {
+func (tc *TLSCommand) generateCA(cn, org, country string, days, bits int, certFile, keyFile string) error {
 	// Generate RSA key
 	priv, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
@@ -178,7 +272,7 @@ func parseHosts(hostList string) ([]string, []net.IP) {
 }
 
 // Generate self-signed certificate
-func (cg *CertGeneratorCommand) generateSelfSigned(cn, org, country, hosts string, days, bits int, certFile, keyFile string) error {
+func (tc *TLSCommand) generateSelfSigned(cn, org, country, hosts string, days, bits int, certFile, keyFile string) error {
 	// 1. Generate an RSA private key with the specified bit size
 	priv, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
@@ -245,7 +339,7 @@ func (cg *CertGeneratorCommand) generateSelfSigned(cn, org, country, hosts strin
 }
 
 // Generate server cert with CA
-func (cg *CertGeneratorCommand) generateServerCert(cn, org, country, hosts, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
+func (tc *TLSCommand) generateServerCert(cn, org, country, hosts, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
 	caCert, caKey, err := loadCA(caFile, caKeyFile)
 	if err != nil {
 		return err
@@ -308,7 +402,7 @@ func (cg *CertGeneratorCommand) generateServerCert(cn, org, country, hosts, caFi
 }
 
 // Generate client cert with CA
-func (cg *CertGeneratorCommand) generateClientCert(cn, org, country, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
+func (tc *TLSCommand) generateClientCert(cn, org, country, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
 	caCert, caKey, err := loadCA(caFile, caKeyFile)
 	if err != nil {
 		return err

@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"logwisp/src/internal/auth"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,7 +18,6 @@ import (
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/scram"
 
 	"github.com/lixenwraith/log"
 )
@@ -24,7 +25,8 @@ import (
 // Forwards log entries to a remote TCP endpoint
 type TCPClientSink struct {
 	input     chan core.LogEntry
-	config    TCPClientConfig
+	config    *config.TCPClientSinkOptions
+	address   string
 	conn      net.Conn
 	connMu    sync.RWMutex
 	done      chan struct{}
@@ -46,101 +48,17 @@ type TCPClientSink struct {
 	connectionUptime atomic.Value // time.Duration
 }
 
-// Holds TCP client sink configuration
-type TCPClientConfig struct {
-	Address      string        `toml:"address"`
-	BufferSize   int64         `toml:"buffer_size"`
-	DialTimeout  time.Duration `toml:"dial_timeout_seconds"`
-	WriteTimeout time.Duration `toml:"write_timeout_seconds"`
-	ReadTimeout  time.Duration `toml:"read_timeout_seconds"`
-	KeepAlive    time.Duration `toml:"keep_alive_seconds"`
-
-	// Security
-	AuthType string `toml:"auth_type"`
-	Username string `toml:"username"`
-	Password string `toml:"password"`
-
-	// Reconnection settings
-	ReconnectDelay    time.Duration `toml:"reconnect_delay_ms"`
-	MaxReconnectDelay time.Duration `toml:"max_reconnect_delay_seconds"`
-	ReconnectBackoff  float64       `toml:"reconnect_backoff"`
-}
-
 // Creates a new TCP client sink
-func NewTCPClientSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*TCPClientSink, error) {
-	cfg := TCPClientConfig{
-		BufferSize:        int64(1000),
-		DialTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		KeepAlive:         30 * time.Second,
-		ReconnectDelay:    time.Second,
-		MaxReconnectDelay: 30 * time.Second,
-		ReconnectBackoff:  float64(1.5),
-	}
-
-	// Extract address
-	address, ok := options["address"].(string)
-	if !ok || address == "" {
-		return nil, fmt.Errorf("tcp_client sink requires 'address' option")
-	}
-
-	// Validate address format
-	_, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("invalid address format (expected host:port): %w", err)
-	}
-	cfg.Address = address
-
-	// Extract other options
-	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
-		cfg.BufferSize = bufSize
-	}
-	if dialTimeout, ok := options["dial_timeout_seconds"].(int64); ok && dialTimeout > 0 {
-		cfg.DialTimeout = time.Duration(dialTimeout) * time.Second
-	}
-	if writeTimeout, ok := options["write_timeout_seconds"].(int64); ok && writeTimeout > 0 {
-		cfg.WriteTimeout = time.Duration(writeTimeout) * time.Second
-	}
-	if readTimeout, ok := options["read_timeout_seconds"].(int64); ok && readTimeout > 0 {
-		cfg.ReadTimeout = time.Duration(readTimeout) * time.Second
-	}
-	if keepAlive, ok := options["keep_alive_seconds"].(int64); ok && keepAlive > 0 {
-		cfg.KeepAlive = time.Duration(keepAlive) * time.Second
-	}
-	if reconnectDelay, ok := options["reconnect_delay_ms"].(int64); ok && reconnectDelay > 0 {
-		cfg.ReconnectDelay = time.Duration(reconnectDelay) * time.Millisecond
-	}
-	if maxReconnectDelay, ok := options["max_reconnect_delay_seconds"].(int64); ok && maxReconnectDelay > 0 {
-		cfg.MaxReconnectDelay = time.Duration(maxReconnectDelay) * time.Second
-	}
-	if backoff, ok := options["reconnect_backoff"].(float64); ok && backoff >= 1.0 {
-		cfg.ReconnectBackoff = backoff
-	}
-	if authType, ok := options["auth_type"].(string); ok {
-		switch authType {
-		case "none":
-			cfg.AuthType = authType
-		case "scram":
-			cfg.AuthType = authType
-			if username, ok := options["username"].(string); ok && username != "" {
-				cfg.Username = username
-			} else {
-				return nil, fmt.Errorf("invalid scram username")
-			}
-			if password, ok := options["password"].(string); ok && password != "" {
-				cfg.Password = password
-			} else {
-				return nil, fmt.Errorf("invalid scram password")
-			}
-		default:
-			return nil, fmt.Errorf("tcp_client sink: invalid auth_type '%s' (must be 'none' or 'scram')", authType)
-		}
+func NewTCPClientSink(opts *config.TCPClientSinkOptions, logger *log.Logger, formatter format.Formatter) (*TCPClientSink, error) {
+	// Validation and defaults are handled in config package
+	if opts == nil {
+		return nil, fmt.Errorf("TCP client sink options cannot be nil")
 	}
 
 	t := &TCPClientSink{
-		input:     make(chan core.LogEntry, cfg.BufferSize),
-		config:    cfg,
+		config:    opts,
+		address:   opts.Host + ":" + strconv.Itoa(int(opts.Port)),
+		input:     make(chan core.LogEntry, opts.BufferSize),
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
@@ -167,7 +85,8 @@ func (t *TCPClientSink) Start(ctx context.Context) error {
 
 	t.logger.Info("msg", "TCP client sink started",
 		"component", "tcp_client_sink",
-		"address", t.config.Address)
+		"host", t.config.Host,
+		"port", t.config.Port)
 	return nil
 }
 
@@ -209,7 +128,7 @@ func (t *TCPClientSink) GetStats() SinkStats {
 		StartTime:         t.startTime,
 		LastProcessed:     lastProc,
 		Details: map[string]any{
-			"address":           t.config.Address,
+			"address":           t.address,
 			"connected":         connected,
 			"reconnecting":      t.reconnecting.Load(),
 			"total_failed":      t.totalFailed.Load(),
@@ -223,7 +142,7 @@ func (t *TCPClientSink) GetStats() SinkStats {
 func (t *TCPClientSink) connectionManager(ctx context.Context) {
 	defer t.wg.Done()
 
-	reconnectDelay := t.config.ReconnectDelay
+	reconnectDelay := time.Duration(t.config.ReconnectDelayMS) * time.Millisecond
 
 	for {
 		select {
@@ -243,9 +162,9 @@ func (t *TCPClientSink) connectionManager(ctx context.Context) {
 			t.lastConnectErr = err
 			t.logger.Warn("msg", "Failed to connect to TCP server",
 				"component", "tcp_client_sink",
-				"address", t.config.Address,
+				"address", t.address,
 				"error", err,
-				"retry_delay", reconnectDelay)
+				"retry_delay_ms", reconnectDelay)
 
 			// Wait before retry
 			select {
@@ -258,15 +177,15 @@ func (t *TCPClientSink) connectionManager(ctx context.Context) {
 
 			// Exponential backoff
 			reconnectDelay = time.Duration(float64(reconnectDelay) * t.config.ReconnectBackoff)
-			if reconnectDelay > t.config.MaxReconnectDelay {
-				reconnectDelay = t.config.MaxReconnectDelay
+			if reconnectDelay > time.Duration(t.config.MaxReconnectDelayMS)*time.Millisecond {
+				reconnectDelay = time.Duration(t.config.MaxReconnectDelayMS)
 			}
 			continue
 		}
 
 		// Connection successful
 		t.lastConnectErr = nil
-		reconnectDelay = t.config.ReconnectDelay // Reset backoff
+		reconnectDelay = time.Duration(t.config.ReconnectDelayMS) * time.Millisecond // Reset backoff
 		t.connectTime = time.Now()
 		t.totalReconnects.Add(1)
 
@@ -276,7 +195,7 @@ func (t *TCPClientSink) connectionManager(ctx context.Context) {
 
 		t.logger.Info("msg", "Connected to TCP server",
 			"component", "tcp_client_sink",
-			"address", t.config.Address,
+			"address", t.address,
 			"local_addr", conn.LocalAddr())
 
 		// Monitor connection
@@ -293,18 +212,18 @@ func (t *TCPClientSink) connectionManager(ctx context.Context) {
 
 		t.logger.Warn("msg", "Lost connection to TCP server",
 			"component", "tcp_client_sink",
-			"address", t.config.Address,
+			"address", t.address,
 			"uptime", uptime)
 	}
 }
 
 func (t *TCPClientSink) connect() (net.Conn, error) {
 	dialer := &net.Dialer{
-		Timeout:   t.config.DialTimeout,
-		KeepAlive: t.config.KeepAlive,
+		Timeout:   time.Duration(t.config.DialTimeout) * time.Second,
+		KeepAlive: time.Duration(t.config.KeepAlive) * time.Second,
 	}
 
-	conn, err := dialer.Dial("tcp", t.config.Address)
+	conn, err := dialer.Dial("tcp", t.address)
 	if err != nil {
 		return nil, err
 	}
@@ -312,18 +231,18 @@ func (t *TCPClientSink) connect() (net.Conn, error) {
 	// Set TCP keep-alive
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		tcpConn.SetKeepAlive(true)
-		tcpConn.SetKeepAlivePeriod(t.config.KeepAlive)
+		tcpConn.SetKeepAlivePeriod(time.Duration(t.config.KeepAlive) * time.Second)
 	}
 
 	// SCRAM authentication if credentials configured
-	if t.config.AuthType == "scram" {
+	if t.config.Auth != nil && t.config.Auth.Type == "scram" {
 		if err := t.performSCRAMAuth(conn); err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("SCRAM authentication failed: %w", err)
 		}
 		t.logger.Debug("msg", "SCRAM authentication completed",
 			"component", "tcp_client_sink",
-			"address", t.config.Address)
+			"address", t.address)
 	}
 
 	return conn, nil
@@ -333,7 +252,17 @@ func (t *TCPClientSink) performSCRAMAuth(conn net.Conn) error {
 	reader := bufio.NewReader(conn)
 
 	// Create SCRAM client
-	scramClient := scram.NewClient(t.config.Username, t.config.Password)
+	scramClient := auth.NewScramClient(t.config.Auth.Username, t.config.Auth.Password)
+
+	// Wait for AUTH_REQUIRED from server
+	authPrompt, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read auth prompt: %w", err)
+	}
+
+	if strings.TrimSpace(authPrompt) != "AUTH_REQUIRED" {
+		return fmt.Errorf("unexpected server greeting: %s", authPrompt)
+	}
 
 	// Step 1: Send ClientFirst
 	clientFirst, err := scramClient.StartAuthentication()
@@ -341,8 +270,10 @@ func (t *TCPClientSink) performSCRAMAuth(conn net.Conn) error {
 		return fmt.Errorf("failed to start SCRAM: %w", err)
 	}
 
-	clientFirstJSON, _ := json.Marshal(clientFirst)
-	msg := fmt.Sprintf("SCRAM-FIRST %s\n", clientFirstJSON)
+	msg, err := auth.FormatSCRAMRequest("SCRAM-FIRST", clientFirst)
+	if err != nil {
+		return err
+	}
 
 	if _, err := conn.Write([]byte(msg)); err != nil {
 		return fmt.Errorf("failed to send SCRAM-FIRST: %w", err)
@@ -354,13 +285,17 @@ func (t *TCPClientSink) performSCRAMAuth(conn net.Conn) error {
 		return fmt.Errorf("failed to read SCRAM challenge: %w", err)
 	}
 
-	parts := strings.Fields(strings.TrimSpace(response))
-	if len(parts) != 2 || parts[0] != "SCRAM-CHALLENGE" {
-		return fmt.Errorf("unexpected server response: %s", response)
+	command, data, err := auth.ParseSCRAMResponse(response)
+	if err != nil {
+		return err
 	}
 
-	var serverFirst scram.ServerFirst
-	if err := json.Unmarshal([]byte(parts[1]), &serverFirst); err != nil {
+	if command != "SCRAM-CHALLENGE" {
+		return fmt.Errorf("unexpected server response: %s", command)
+	}
+
+	var serverFirst auth.ServerFirst
+	if err := json.Unmarshal([]byte(data), &serverFirst); err != nil {
 		return fmt.Errorf("failed to parse server challenge: %w", err)
 	}
 
@@ -370,8 +305,10 @@ func (t *TCPClientSink) performSCRAMAuth(conn net.Conn) error {
 		return fmt.Errorf("failed to process challenge: %w", err)
 	}
 
-	clientFinalJSON, _ := json.Marshal(clientFinal)
-	msg = fmt.Sprintf("SCRAM-PROOF %s\n", clientFinalJSON)
+	msg, err = auth.FormatSCRAMRequest("SCRAM-PROOF", clientFinal)
+	if err != nil {
+		return err
+	}
 
 	if _, err := conn.Write([]byte(msg)); err != nil {
 		return fmt.Errorf("failed to send SCRAM-PROOF: %w", err)
@@ -383,19 +320,15 @@ func (t *TCPClientSink) performSCRAMAuth(conn net.Conn) error {
 		return fmt.Errorf("failed to read SCRAM result: %w", err)
 	}
 
-	parts = strings.Fields(strings.TrimSpace(response))
-	if len(parts) < 1 {
-		return fmt.Errorf("empty server response")
+	command, data, err = auth.ParseSCRAMResponse(response)
+	if err != nil {
+		return err
 	}
 
-	switch parts[0] {
+	switch command {
 	case "SCRAM-OK":
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid SCRAM-OK response")
-		}
-
-		var serverFinal scram.ServerFinal
-		if err := json.Unmarshal([]byte(parts[1]), &serverFinal); err != nil {
+		var serverFinal auth.ServerFinal
+		if err := json.Unmarshal([]byte(data), &serverFinal); err != nil {
 			return fmt.Errorf("failed to parse server signature: %w", err)
 		}
 
@@ -406,21 +339,21 @@ func (t *TCPClientSink) performSCRAMAuth(conn net.Conn) error {
 
 		t.logger.Info("msg", "SCRAM authentication successful",
 			"component", "tcp_client_sink",
-			"address", t.config.Address,
-			"username", t.config.Username,
+			"address", t.address,
+			"username", t.config.Auth.Username,
 			"session_id", serverFinal.SessionID)
 
 		return nil
 
 	case "SCRAM-FAIL":
-		reason := "unknown"
-		if len(parts) > 1 {
-			reason = strings.Join(parts[1:], " ")
+		reason := data
+		if reason == "" {
+			reason = "unknown"
 		}
 		return fmt.Errorf("authentication failed: %s", reason)
 
 	default:
-		return fmt.Errorf("unexpected response: %s", response)
+		return fmt.Errorf("unexpected response: %s", command)
 	}
 }
 
@@ -436,7 +369,7 @@ func (t *TCPClientSink) monitorConnection(conn net.Conn) {
 			return
 		case <-ticker.C:
 			// Set read deadline
-			if err := conn.SetReadDeadline(time.Now().Add(t.config.ReadTimeout)); err != nil {
+			if err := conn.SetReadDeadline(time.Now().Add(time.Duration(t.config.ReadTimeout) * time.Second)); err != nil {
 				t.logger.Debug("msg", "Failed to set read deadline", "error", err)
 				return
 			}
@@ -502,7 +435,7 @@ func (t *TCPClientSink) sendEntry(entry core.LogEntry) error {
 	}
 
 	// Set write deadline
-	if err := conn.SetWriteDeadline(time.Now().Add(t.config.WriteTimeout)); err != nil {
+	if err := conn.SetWriteDeadline(time.Now().Add(time.Duration(t.config.WriteTimeout) * time.Second)); err != nil {
 		return fmt.Errorf("failed to set write deadline: %w", err)
 	}
 
@@ -518,10 +451,4 @@ func (t *TCPClientSink) sendEntry(entry core.LogEntry) error {
 	}
 
 	return nil
-}
-
-// Not applicable, Clients authenticate to remote servers using Username/Password in config
-func (h *TCPClientSink) SetAuth(authCfg *config.AuthConfig) {
-	// No-op: client sinks don't validate incoming connections
-	// They authenticate to remote servers using Username/Password fields
 }

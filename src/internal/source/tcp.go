@@ -4,7 +4,6 @@ package source
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -17,7 +16,6 @@ import (
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/limit"
-	"logwisp/src/internal/scram"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/compat"
@@ -31,19 +29,19 @@ const (
 
 // Receives log entries via TCP connections
 type TCPSource struct {
-	host         string
-	port         int64
-	bufferSize   int64
-	server       *tcpSourceServer
-	subscribers  []chan core.LogEntry
-	mu           sync.RWMutex
-	done         chan struct{}
-	engine       *gnet.Engine
-	engineMu     sync.Mutex
-	wg           sync.WaitGroup
-	netLimiter   *limit.NetLimiter
-	logger       *log.Logger
-	scramManager *scram.ScramManager
+	config               *config.TCPSourceOptions
+	server               *tcpSourceServer
+	subscribers          []chan core.LogEntry
+	mu                   sync.RWMutex
+	done                 chan struct{}
+	engine               *gnet.Engine
+	engineMu             sync.Mutex
+	wg                   sync.WaitGroup
+	authenticator        *auth.Authenticator
+	netLimiter           *limit.NetLimiter
+	logger               *log.Logger
+	scramManager         *auth.ScramManager
+	scramProtocolHandler *auth.ScramProtocolHandler
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -57,60 +55,36 @@ type TCPSource struct {
 }
 
 // Creates a new TCP server source
-func NewTCPSource(options map[string]any, logger *log.Logger) (*TCPSource, error) {
-	host := "0.0.0.0"
-	if h, ok := options["host"].(string); ok && h != "" {
-		host = h
-	}
-
-	port, ok := options["port"].(int64)
-	if !ok || port < 1 || port > 65535 {
-		return nil, fmt.Errorf("tcp source requires valid 'port' option")
-	}
-
-	bufferSize := int64(1000)
-	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
-		bufferSize = bufSize
+func NewTCPSource(opts *config.TCPSourceOptions, logger *log.Logger) (*TCPSource, error) {
+	// Accept typed config - validation done in config package
+	if opts == nil {
+		return nil, fmt.Errorf("TCP source options cannot be nil")
 	}
 
 	t := &TCPSource{
-		host:       host,
-		port:       port,
-		bufferSize: bufferSize,
-		done:       make(chan struct{}),
-		startTime:  time.Now(),
-		logger:     logger,
+		config:    opts,
+		done:      make(chan struct{}),
+		startTime: time.Now(),
+		logger:    logger,
 	}
 	t.lastEntryTime.Store(time.Time{})
 
 	// Initialize net limiter if configured
-	if nl, ok := options["net_limit"].(map[string]any); ok {
-		if enabled, _ := nl["enabled"].(bool); enabled {
-			cfg := config.NetLimitConfig{
-				Enabled: true,
-			}
+	if opts.NetLimit != nil && (opts.NetLimit.Enabled ||
+		len(opts.NetLimit.IPWhitelist) > 0 ||
+		len(opts.NetLimit.IPBlacklist) > 0) {
+		t.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
+	}
 
-			if rps, ok := nl["requests_per_second"].(float64); ok {
-				cfg.RequestsPerSecond = rps
-			}
-			if burst, ok := nl["burst_size"].(int64); ok {
-				cfg.BurstSize = burst
-			}
-			if maxPerIP, ok := nl["max_connections_per_ip"].(int64); ok {
-				cfg.MaxConnectionsPerIP = maxPerIP
-			}
-			if maxPerUser, ok := nl["max_connections_per_user"].(int64); ok {
-				cfg.MaxConnectionsPerUser = maxPerUser
-			}
-			if maxPerToken, ok := nl["max_connections_per_token"].(int64); ok {
-				cfg.MaxConnectionsPerToken = maxPerToken
-			}
-			if maxTotal, ok := nl["max_connections_total"].(int64); ok {
-				cfg.MaxConnectionsTotal = maxTotal
-			}
-
-			t.netLimiter = limit.NewNetLimiter(cfg, logger)
-		}
+	// Initialize SCRAM
+	if opts.Auth != nil && opts.Auth.Type == "scram" && opts.Auth.Scram != nil {
+		t.scramManager = auth.NewScramManager(opts.Auth.Scram)
+		t.scramProtocolHandler = auth.NewScramProtocolHandler(t.scramManager, logger)
+		logger.Info("msg", "SCRAM authentication configured for TCP source",
+			"component", "tcp_source",
+			"users", len(opts.Auth.Scram.Users))
+	} else if opts.Auth != nil && opts.Auth.Type != "none" && opts.Auth.Type != "" {
+		return nil, fmt.Errorf("TCP source only supports 'none' or 'scram' auth")
 	}
 
 	return t, nil
@@ -120,7 +94,7 @@ func (t *TCPSource) Subscribe() <-chan core.LogEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	ch := make(chan core.LogEntry, t.bufferSize)
+	ch := make(chan core.LogEntry, t.config.BufferSize)
 	t.subscribers = append(t.subscribers, ch)
 	return ch
 }
@@ -132,7 +106,7 @@ func (t *TCPSource) Start() error {
 	}
 
 	// Use configured host and port
-	addr := fmt.Sprintf("tcp://%s:%d", t.host, t.port)
+	addr := fmt.Sprintf("tcp://%s:%d", t.config.Host, t.config.Port)
 
 	// Create a gnet adapter using the existing logger instance
 	gnetLogger := compat.NewGnetAdapter(t.logger)
@@ -144,17 +118,19 @@ func (t *TCPSource) Start() error {
 		defer t.wg.Done()
 		t.logger.Info("msg", "TCP source server starting",
 			"component", "tcp_source",
-			"port", t.port)
+			"port", t.config.Port,
+			"auth_enabled", t.authenticator != nil)
 
 		err := gnet.Run(t.server, addr,
 			gnet.WithLogger(gnetLogger),
 			gnet.WithMulticore(true),
 			gnet.WithReusePort(true),
+			gnet.WithTCPKeepAlive(time.Duration(t.config.KeepAlivePeriod)*time.Millisecond),
 		)
 		if err != nil {
 			t.logger.Error("msg", "TCP source server failed",
 				"component", "tcp_source",
-				"port", t.port,
+				"port", t.config.Port,
 				"error", err)
 		}
 		errChan <- err
@@ -169,7 +145,7 @@ func (t *TCPSource) Start() error {
 		return err
 	case <-time.After(100 * time.Millisecond):
 		// Server started successfully
-		t.logger.Info("msg", "TCP server started", "port", t.port)
+		t.logger.Info("msg", "TCP server started", "port", t.config.Port)
 		return nil
 	}
 }
@@ -214,6 +190,16 @@ func (t *TCPSource) GetStats() SourceStats {
 		netLimitStats = t.netLimiter.GetStats()
 	}
 
+	var authStats map[string]any
+	if t.authenticator != nil {
+		authStats = map[string]any{
+			"enabled":   true,
+			"type":      t.config.Auth.Type,
+			"failures":  t.authFailures.Load(),
+			"successes": t.authSuccesses.Load(),
+		}
+	}
+
 	return SourceStats{
 		Type:           "tcp",
 		TotalEntries:   t.totalEntries.Load(),
@@ -221,49 +207,41 @@ func (t *TCPSource) GetStats() SourceStats {
 		StartTime:      t.startTime,
 		LastEntryTime:  lastEntry,
 		Details: map[string]any{
-			"port":               t.port,
+			"port":               t.config.Port,
 			"active_connections": t.activeConns.Load(),
 			"invalid_entries":    t.invalidEntries.Load(),
 			"net_limit":          netLimitStats,
+			"auth":               authStats,
 		},
 	}
 }
 
-func (t *TCPSource) publish(entry core.LogEntry) bool {
+func (t *TCPSource) publish(entry core.LogEntry) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	t.totalEntries.Add(1)
 	t.lastEntryTime.Store(entry.Time)
 
-	dropped := false
 	for _, ch := range t.subscribers {
 		select {
 		case ch <- entry:
 		default:
-			dropped = true
 			t.droppedEntries.Add(1)
+			t.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
+				"component", "tcp_source")
 		}
 	}
-
-	if dropped {
-		t.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
-			"component", "tcp_source")
-	}
-
-	return true
 }
 
 // Represents a connected TCP client
 type tcpClient struct {
-	conn                gnet.Conn
-	buffer              *bytes.Buffer
-	authenticated       bool
-	authTimeout         time.Time
-	session             *auth.Session
-	maxBufferSeen       int
-	cumulativeEncrypted int64
-	scramState          *scram.HandshakeState
+	conn          gnet.Conn
+	buffer        *bytes.Buffer
+	authenticated bool
+	authTimeout   time.Time
+	session       *auth.Session
+	maxBufferSeen int
 }
 
 // Handles gnet events
@@ -282,7 +260,7 @@ func (s *tcpSourceServer) OnBoot(eng gnet.Engine) gnet.Action {
 
 	s.source.logger.Debug("msg", "TCP source server booted",
 		"component", "tcp_source",
-		"port", s.source.port)
+		"port", s.source.config.Port)
 	return gnet.None
 }
 
@@ -303,6 +281,16 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 			return nil, gnet.Close
 		}
 
+		// Check if connection is allowed
+		ip := tcpAddr.IP
+		if ip.To4() == nil {
+			// Reject IPv6
+			s.source.logger.Warn("msg", "IPv6 connection rejected",
+				"component", "tcp_source",
+				"remote_addr", remoteAddr)
+			return []byte("IPv4-only (IPv6 not supported)\n"), gnet.Close
+		}
+
 		if !s.source.netLimiter.CheckTCP(tcpAddr) {
 			s.source.logger.Warn("msg", "TCP connection net limited",
 				"component", "tcp_source",
@@ -311,49 +299,66 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		}
 
 		// Track connection
-		s.source.netLimiter.AddConnection(remoteAddr)
+		// s.source.netLimiter.AddConnection(remoteAddr)
+		if !s.source.netLimiter.TrackConnection(ip.String(), "", "") {
+			s.source.logger.Warn("msg", "TCP connection limit exceeded",
+				"component", "tcp_source",
+				"remote_addr", remoteAddr)
+			return nil, gnet.Close
+		}
 	}
 
 	// Create client state
 	client := &tcpClient{
 		conn:          c,
 		buffer:        bytes.NewBuffer(nil),
-		authTimeout:   time.Now().Add(30 * time.Second),
-		authenticated: s.source.scramManager == nil,
+		authenticated: s.source.authenticator == nil, // No auth = auto authenticated
+	}
+
+	if s.source.authenticator != nil {
+		// Set auth timeout
+		client.authTimeout = time.Now().Add(10 * time.Second)
+
+		// Send auth challenge for SCRAM
+		if s.source.config.Auth.Type == "scram" {
+			out = []byte("AUTH_REQUIRED\n")
+		}
 	}
 
 	s.mu.Lock()
 	s.clients[c] = client
 	s.mu.Unlock()
 
-	newCount := s.source.activeConns.Add(1)
+	s.source.activeConns.Add(1)
 	s.source.logger.Debug("msg", "TCP connection opened",
 		"component", "tcp_source",
 		"remote_addr", remoteAddr,
-		"active_connections", newCount,
-		"requires_auth", s.source.scramManager != nil)
+		"auth_enabled", s.source.authenticator != nil)
 
-	return nil, gnet.None
+	return out, gnet.None
 }
 
 func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	remoteAddr := c.RemoteAddr().String()
+
+	// Untrack connection
+	if s.source.netLimiter != nil {
+		if tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddr); err == nil {
+			s.source.netLimiter.ReleaseConnection(tcpAddr.IP.String(), "", "")
+			// s.source.netLimiter.RemoveConnection(remoteAddr)
+		}
+	}
 
 	// Remove client state
 	s.mu.Lock()
 	delete(s.clients, c)
 	s.mu.Unlock()
 
-	// Remove connection tracking
-	if s.source.netLimiter != nil {
-		s.source.netLimiter.RemoveConnection(remoteAddr)
-	}
-
-	newCount := s.source.activeConns.Add(-1)
+	newConnectionCount := s.source.activeConns.Add(-1)
 	s.source.logger.Debug("msg", "TCP connection closed",
 		"component", "tcp_source",
 		"remote_addr", remoteAddr,
-		"active_connections", newCount,
+		"active_connections", newConnectionCount,
 		"error", err)
 	return gnet.None
 }
@@ -383,6 +388,8 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 			s.source.logger.Warn("msg", "Authentication timeout",
 				"component", "tcp_source",
 				"remote_addr", c.RemoteAddr().String())
+			s.source.authFailures.Add(1)
+			c.AsyncWrite([]byte("AUTH_TIMEOUT\n"), nil)
 			return gnet.Close
 		}
 
@@ -392,7 +399,12 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 
 		client.buffer.Write(data)
 
-		// Look for complete line
+		// Use centralized SCRAM protocol handler
+		if s.source.scramProtocolHandler == nil {
+			s.source.scramProtocolHandler = auth.NewScramProtocolHandler(s.source.scramManager, s.source.logger)
+		}
+
+		// Look for complete auth line
 		for {
 			idx := bytes.IndexByte(client.buffer.Bytes(), '\n')
 			if idx < 0 {
@@ -402,85 +414,44 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 			line := client.buffer.Bytes()[:idx]
 			client.buffer.Next(idx + 1)
 
-			// Parse SCRAM messages
-			parts := strings.Fields(string(line))
-			if len(parts) < 2 {
-				c.AsyncWrite([]byte("SCRAM-FAIL Invalid message format\n"), nil)
-				return gnet.Close
+			// Process auth message through handler
+			authenticated, session, err := s.source.scramProtocolHandler.HandleAuthMessage(line, c)
+			if err != nil {
+				s.source.logger.Warn("msg", "SCRAM authentication failed",
+					"component", "tcp_source",
+					"remote_addr", c.RemoteAddr().String(),
+					"error", err)
+
+				if strings.Contains(err.Error(), "unknown command") {
+					return gnet.Close
+				}
+				// Continue for other errors (might be multi-step auth)
 			}
 
-			switch parts[0] {
-			case "SCRAM-FIRST":
-				// Parse ClientFirst JSON
-				var clientFirst scram.ClientFirst
-				if err := json.Unmarshal([]byte(parts[1]), &clientFirst); err != nil {
-					c.AsyncWrite([]byte("SCRAM-FAIL Invalid JSON\n"), nil)
-					return gnet.Close
-				}
-
-				// Process with SCRAM server
-				serverFirst, err := s.source.scramManager.HandleClientFirst(&clientFirst)
-				if err != nil {
-					// Still send challenge to prevent user enumeration
-					response, _ := json.Marshal(serverFirst)
-					c.AsyncWrite([]byte(fmt.Sprintf("SCRAM-CHALLENGE %s\n", response)), nil)
-					return gnet.Close
-				}
-
-				// Send ServerFirst challenge
-				response, _ := json.Marshal(serverFirst)
-				c.AsyncWrite([]byte(fmt.Sprintf("SCRAM-CHALLENGE %s\n", response)), nil)
-
-			case "SCRAM-PROOF":
-				// Parse ClientFinal JSON
-				var clientFinal scram.ClientFinal
-				if err := json.Unmarshal([]byte(parts[1]), &clientFinal); err != nil {
-					c.AsyncWrite([]byte("SCRAM-FAIL Invalid JSON\n"), nil)
-					return gnet.Close
-				}
-
-				// Verify proof
-				serverFinal, err := s.source.scramManager.HandleClientFinal(&clientFinal)
-				if err != nil {
-					s.source.logger.Warn("msg", "SCRAM authentication failed",
-						"component", "tcp_source",
-						"remote_addr", c.RemoteAddr().String(),
-						"error", err)
-					c.AsyncWrite([]byte("SCRAM-FAIL Authentication failed\n"), nil)
-					return gnet.Close
-				}
-
+			if authenticated && session != nil {
 				// Authentication successful
 				s.mu.Lock()
 				client.authenticated = true
-				client.session = &auth.Session{
-					ID:         serverFinal.SessionID,
-					Method:     "scram-sha-256",
-					RemoteAddr: c.RemoteAddr().String(),
-					CreatedAt:  time.Now(),
-				}
+				client.session = session
 				s.mu.Unlock()
-
-				// Send ServerFinal with signature
-				response, _ := json.Marshal(serverFinal)
-				c.AsyncWrite([]byte(fmt.Sprintf("SCRAM-OK %s\n", response)), nil)
 
 				s.source.logger.Info("msg", "Client authenticated via SCRAM",
 					"component", "tcp_source",
 					"remote_addr", c.RemoteAddr().String(),
-					"session_id", serverFinal.SessionID)
+					"session_id", session.ID)
 
 				// Clear auth buffer
 				client.buffer.Reset()
-
-			default:
-				c.AsyncWrite([]byte("SCRAM-FAIL Unknown command\n"), nil)
-				return gnet.Close
+				break
 			}
 		}
 		return gnet.None
 	}
 
+	return s.processLogData(c, client, data)
+}
+
+func (s *tcpSourceServer) processLogData(c gnet.Conn, client *tcpClient, data []byte) gnet.Action {
 	// Check if appending the new data would exceed the client buffer limit.
 	if client.buffer.Len()+len(data) > maxClientBufferSize {
 		s.source.logger.Warn("msg", "Client buffer limit exceeded, closing connection.",
@@ -571,48 +542,4 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 	}
 
 	return gnet.None
-}
-
-func (t *TCPSource) InitSCRAMManager(authCfg *config.AuthConfig) {
-	if authCfg == nil || authCfg.Type != "scram" || authCfg.ScramAuth == nil {
-		return
-	}
-
-	t.scramManager = scram.NewScramManager()
-
-	// Load users from SCRAM config
-	for _, user := range authCfg.ScramAuth.Users {
-		storedKey, _ := base64.StdEncoding.DecodeString(user.StoredKey)
-		serverKey, _ := base64.StdEncoding.DecodeString(user.ServerKey)
-		salt, _ := base64.StdEncoding.DecodeString(user.Salt)
-
-		cred := &scram.Credential{
-			Username:     user.Username,
-			StoredKey:    storedKey,
-			ServerKey:    serverKey,
-			Salt:         salt,
-			ArgonTime:    user.ArgonTime,
-			ArgonMemory:  user.ArgonMemory,
-			ArgonThreads: user.ArgonThreads,
-		}
-		t.scramManager.AddCredential(cred)
-	}
-
-	t.logger.Info("msg", "SCRAM authentication configured",
-		"component", "tcp_source",
-		"users", len(authCfg.ScramAuth.Users))
-}
-
-// Configure TCP source auth
-func (t *TCPSource) SetAuth(authCfg *config.AuthConfig) {
-	if authCfg == nil || authCfg.Type == "none" {
-		return
-	}
-
-	// Initialize SCRAM manager
-	if authCfg.Type == "scram" {
-		t.InitSCRAMManager(authCfg)
-		t.logger.Info("msg", "SCRAM authentication configured for TCP source",
-			"component", "tcp_source")
-	}
 }

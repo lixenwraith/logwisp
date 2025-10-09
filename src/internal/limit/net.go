@@ -34,7 +34,7 @@ const (
 
 // NetLimiter manages net limiting for a transport
 type NetLimiter struct {
-	config config.NetLimitConfig
+	config *config.NetLimitConfig
 	logger *log.Logger
 
 	// IP Access Control Lists
@@ -89,7 +89,11 @@ type connTracker struct {
 }
 
 // Creates a new net limiter
-func NewNetLimiter(cfg config.NetLimitConfig, logger *log.Logger) *NetLimiter {
+func NewNetLimiter(cfg *config.NetLimitConfig, logger *log.Logger) *NetLimiter {
+	if cfg == nil {
+		return nil
+	}
+
 	// Return nil only if nothing is configured
 	hasACL := len(cfg.IPWhitelist) > 0 || len(cfg.IPBlacklist) > 0
 	hasRateLimit := cfg.Enabled
@@ -120,7 +124,7 @@ func NewNetLimiter(cfg config.NetLimitConfig, logger *log.Logger) *NetLimiter {
 	}
 
 	// Parse IP lists
-	l.parseIPLists(cfg)
+	l.parseIPLists()
 
 	// Start cleanup goroutine only if rate limiting is enabled
 	if cfg.Enabled {
@@ -144,16 +148,16 @@ func NewNetLimiter(cfg config.NetLimitConfig, logger *log.Logger) *NetLimiter {
 }
 
 // parseIPLists parses and validates IP whitelist/blacklist
-func (l *NetLimiter) parseIPLists(cfg config.NetLimitConfig) {
+func (l *NetLimiter) parseIPLists() {
 	// Parse whitelist
-	for _, entry := range cfg.IPWhitelist {
+	for _, entry := range l.config.IPWhitelist {
 		if ipNet := l.parseIPEntry(entry, "whitelist"); ipNet != nil {
 			l.ipWhitelist = append(l.ipWhitelist, ipNet)
 		}
 	}
 
 	// Parse blacklist
-	for _, entry := range cfg.IPBlacklist {
+	for _, entry := range l.config.IPBlacklist {
 		if ipNet := l.parseIPEntry(entry, "blacklist"); ipNet != nil {
 			l.ipBlacklist = append(l.ipBlacklist, ipNet)
 		}

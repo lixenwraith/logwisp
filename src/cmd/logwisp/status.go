@@ -114,81 +114,76 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	for i, sinkCfg := range cfg.Sinks {
 		switch sinkCfg.Type {
 		case "tcp":
-			if port, ok := sinkCfg.Options["port"].(int64); ok {
-				host := "0.0.0.0" // Get host or default to 0.0.0.0
-				if h, ok := sinkCfg.Options["host"].(string); ok && h != "" {
-					host = h
+			if sinkCfg.TCP != nil {
+				host := "0.0.0.0"
+				if sinkCfg.TCP.Host != "" {
+					host = sinkCfg.TCP.Host
 				}
 
 				logger.Info("msg", "TCP endpoint configured",
 					"component", "main",
 					"pipeline", cfg.Name,
 					"sink_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, port))
+					"listen", fmt.Sprintf("%s:%d", host, sinkCfg.TCP.Port))
 
 				// Display net limit info if configured
-				if nl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
-					if enabled, ok := nl["enabled"].(bool); ok && enabled {
-						logger.Info("msg", "TCP net limiting enabled",
-							"pipeline", cfg.Name,
-							"sink_index", i,
-							"requests_per_second", nl["requests_per_second"],
-							"burst_size", nl["burst_size"])
-					}
+				if sinkCfg.TCP.NetLimit != nil && sinkCfg.TCP.NetLimit.Enabled {
+					logger.Info("msg", "TCP net limiting enabled",
+						"pipeline", cfg.Name,
+						"sink_index", i,
+						"requests_per_second", sinkCfg.TCP.NetLimit.RequestsPerSecond,
+						"burst_size", sinkCfg.TCP.NetLimit.BurstSize)
 				}
 			}
 
 		case "http":
-			if port, ok := sinkCfg.Options["port"].(int64); ok {
+			if sinkCfg.HTTP != nil {
 				host := "0.0.0.0"
-				if h, ok := sinkCfg.Options["host"].(string); ok && h != "" {
-					host = h
+				if sinkCfg.HTTP.Host != "" {
+					host = sinkCfg.HTTP.Host
 				}
 
 				streamPath := "/stream"
 				statusPath := "/status"
-				if path, ok := sinkCfg.Options["stream_path"].(string); ok {
-					streamPath = path
+				if sinkCfg.HTTP.StreamPath != "" {
+					streamPath = sinkCfg.HTTP.StreamPath
 				}
-				if path, ok := sinkCfg.Options["status_path"].(string); ok {
-					statusPath = path
+				if sinkCfg.HTTP.StatusPath != "" {
+					statusPath = sinkCfg.HTTP.StatusPath
 				}
 
 				logger.Info("msg", "HTTP endpoints configured",
 					"pipeline", cfg.Name,
 					"sink_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, port),
-					"stream_url", fmt.Sprintf("http://%s:%d%s", host, port, streamPath),
-					"status_url", fmt.Sprintf("http://%s:%d%s", host, port, statusPath))
+					"listen", fmt.Sprintf("%s:%d", host, sinkCfg.HTTP.Port),
+					"stream_url", fmt.Sprintf("http://%s:%d%s", host, sinkCfg.HTTP.Port, streamPath),
+					"status_url", fmt.Sprintf("http://%s:%d%s", host, sinkCfg.HTTP.Port, statusPath))
 
 				// Display net limit info if configured
-				if nl, ok := sinkCfg.Options["net_limit"].(map[string]any); ok {
-					if enabled, ok := nl["enabled"].(bool); ok && enabled {
-						logger.Info("msg", "HTTP net limiting enabled",
-							"pipeline", cfg.Name,
-							"sink_index", i,
-							"requests_per_second", nl["requests_per_second"],
-							"burst_size", nl["burst_size"])
-					}
+				if sinkCfg.HTTP.NetLimit != nil && sinkCfg.HTTP.NetLimit.Enabled {
+					logger.Info("msg", "HTTP net limiting enabled",
+						"pipeline", cfg.Name,
+						"sink_index", i,
+						"requests_per_second", sinkCfg.HTTP.NetLimit.RequestsPerSecond,
+						"burst_size", sinkCfg.HTTP.NetLimit.BurstSize)
 				}
 			}
 
 		case "file":
-			if dir, ok := sinkCfg.Options["directory"].(string); ok {
-				name, _ := sinkCfg.Options["name"].(string)
+			if sinkCfg.File != nil {
 				logger.Info("msg", "File sink configured",
 					"pipeline", cfg.Name,
 					"sink_index", i,
-					"directory", dir,
-					"name", name)
+					"directory", sinkCfg.File.Directory,
+					"name", sinkCfg.File.Name)
 			}
 
 		case "console":
-			if target, ok := sinkCfg.Options["target"].(string); ok {
+			if sinkCfg.Console != nil {
 				logger.Info("msg", "Console sink configured",
 					"pipeline", cfg.Name,
 					"sink_index", i,
-					"target", target)
+					"target", sinkCfg.Console.Target)
 			}
 		}
 	}
@@ -197,10 +192,10 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	for i, sourceCfg := range cfg.Sources {
 		switch sourceCfg.Type {
 		case "http":
-			if port, ok := sourceCfg.Options["port"].(int64); ok {
+			if sourceCfg.HTTP != nil {
 				host := "0.0.0.0"
-				if h, ok := sourceCfg.Options["host"].(string); ok && h != "" {
-					host = h
+				if sourceCfg.HTTP.Host != "" {
+					host = sourceCfg.HTTP.Host
 				}
 
 				displayHost := host
@@ -209,22 +204,22 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 				}
 
 				ingestPath := "/ingest"
-				if path, ok := sourceCfg.Options["ingest_path"].(string); ok {
-					ingestPath = path
+				if sourceCfg.HTTP.IngestPath != "" {
+					ingestPath = sourceCfg.HTTP.IngestPath
 				}
 
 				logger.Info("msg", "HTTP source configured",
 					"pipeline", cfg.Name,
 					"source_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, port),
-					"ingest_url", fmt.Sprintf("http://%s:%d%s", displayHost, port, ingestPath))
+					"listen", fmt.Sprintf("%s:%d", host, sourceCfg.HTTP.Port),
+					"ingest_url", fmt.Sprintf("http://%s:%d%s", displayHost, sourceCfg.HTTP.Port, ingestPath))
 			}
 
 		case "tcp":
-			if port, ok := sourceCfg.Options["port"].(int64); ok {
+			if sourceCfg.TCP != nil {
 				host := "0.0.0.0"
-				if h, ok := sourceCfg.Options["host"].(string); ok && h != "" {
-					host = h
+				if sourceCfg.TCP.Host != "" {
+					host = sourceCfg.TCP.Host
 				}
 
 				displayHost := host
@@ -235,19 +230,24 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 				logger.Info("msg", "TCP source configured",
 					"pipeline", cfg.Name,
 					"source_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, port),
-					"endpoint", fmt.Sprintf("%s:%d", displayHost, port))
+					"listen", fmt.Sprintf("%s:%d", host, sourceCfg.TCP.Port),
+					"endpoint", fmt.Sprintf("%s:%d", displayHost, sourceCfg.TCP.Port))
 			}
 
-			// TODO: missing other types of source, to be added
-		}
-	}
+		case "directory":
+			if sourceCfg.Directory != nil {
+				logger.Info("msg", "Directory source configured",
+					"pipeline", cfg.Name,
+					"source_index", i,
+					"path", sourceCfg.Directory.Path,
+					"pattern", sourceCfg.Directory.Pattern)
+			}
 
-	// Display authentication information
-	if cfg.Auth != nil && cfg.Auth.Type != "none" {
-		logger.Info("msg", "Authentication enabled",
-			"pipeline", cfg.Name,
-			"auth_type", cfg.Auth.Type)
+		case "stdin":
+			logger.Info("msg", "Stdin source configured",
+				"pipeline", cfg.Name,
+				"source_index", i)
+		}
 	}
 
 	// Display filter information

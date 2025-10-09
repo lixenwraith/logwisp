@@ -1,5 +1,5 @@
-// FILE: src/internal/scram/credential.go
-package scram
+// FILE: src/internal/auth/scram_credential.go
+package auth
 
 import (
 	"crypto/hmac"
@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+
+	"logwisp/src/internal/core"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -31,7 +33,13 @@ func DeriveCredential(username, password string, salt []byte, time, memory uint3
 	}
 
 	// Derive salted password using Argon2id
-	saltedPassword := argon2.IDKey([]byte(password), salt, time, memory, threads, 32)
+	saltedPassword := argon2.IDKey([]byte(password), salt, time, memory, threads, core.Argon2KeyLen)
+
+	// Construct PHC format for basic auth compatibility
+	saltB64 := base64.RawStdEncoding.EncodeToString(salt)
+	hashB64 := base64.RawStdEncoding.EncodeToString(saltedPassword)
+	phcHash := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
+		argon2.Version, memory, time, threads, saltB64, hashB64)
 
 	// Derive keys
 	clientKey := computeHMAC(saltedPassword, []byte("Client Key"))
@@ -46,6 +54,7 @@ func DeriveCredential(username, password string, salt []byte, time, memory uint3
 		ArgonThreads: threads,
 		StoredKey:    storedKey[:],
 		ServerKey:    serverKey,
+		PHCHash:      phcHash,
 	}, nil
 }
 

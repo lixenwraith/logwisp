@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -28,7 +27,7 @@ import (
 // Forwards log entries to a remote HTTP endpoint
 type HTTPClientSink struct {
 	input         chan core.LogEntry
-	config        HTTPClientConfig
+	config        *config.HTTPClientSinkOptions
 	client        *fasthttp.Client
 	batch         []core.LogEntry
 	batchMu       sync.Mutex
@@ -48,195 +47,16 @@ type HTTPClientSink struct {
 	activeConnections atomic.Int64
 }
 
-// Holds HTTP client sink configuration
-// TODO: missing toml tags
-type HTTPClientConfig struct {
-	// Config
-	URL        string            `toml:"url"`
-	BufferSize int64             `toml:"buffer_size"`
-	BatchSize  int64             `toml:"batch_size"`
-	BatchDelay time.Duration     `toml:"batch_delay_ms"`
-	Timeout    time.Duration     `toml:"timeout_seconds"`
-	Headers    map[string]string `toml:"headers"`
-
-	// Retry configuration
-	MaxRetries   int64         `toml:"max_retries"`
-	RetryDelay   time.Duration `toml:"retry_delay"`
-	RetryBackoff float64       `toml:"retry_backoff"` // Multiplier for exponential backoff
-
-	// Security
-	AuthType    string `toml:"auth_type"`    // "none", "basic", "bearer", "mtls"
-	Username    string `toml:"username"`     // For basic auth
-	Password    string `toml:"password"`     // For basic auth
-	BearerToken string `toml:"bearer_token"` // For bearer auth
-
-	// TLS configuration
-	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
-	CAFile             string `toml:"ca_file"`
-	CertFile           string `toml:"cert_file"`
-	KeyFile            string `toml:"key_file"`
-}
-
 // Creates a new HTTP client sink
-func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*HTTPClientSink, error) {
-	cfg := HTTPClientConfig{
-		BufferSize:   int64(1000),
-		BatchSize:    int64(100),
-		BatchDelay:   time.Second,
-		Timeout:      30 * time.Second,
-		MaxRetries:   int64(3),
-		RetryDelay:   time.Second,
-		RetryBackoff: float64(2.0),
-		Headers:      make(map[string]string),
-	}
-
-	// Extract URL
-	urlStr, ok := options["url"].(string)
-	if !ok || urlStr == "" {
-		return nil, fmt.Errorf("http_client sink requires 'url' option")
-	}
-
-	// Validate URL
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %w", err)
-	}
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return nil, fmt.Errorf("URL must use http or https scheme")
-	}
-	cfg.URL = urlStr
-
-	// Extract other options
-	if bufSize, ok := options["buffer_size"].(int64); ok && bufSize > 0 {
-		cfg.BufferSize = bufSize
-	}
-	if batchSize, ok := options["batch_size"].(int64); ok && batchSize > 0 {
-		cfg.BatchSize = batchSize
-	}
-	if delayMs, ok := options["batch_delay_ms"].(int64); ok && delayMs > 0 {
-		cfg.BatchDelay = time.Duration(delayMs) * time.Millisecond
-	}
-	if timeoutSec, ok := options["timeout_seconds"].(int64); ok && timeoutSec > 0 {
-		cfg.Timeout = time.Duration(timeoutSec) * time.Second
-	}
-	if maxRetries, ok := options["max_retries"].(int64); ok && maxRetries >= 0 {
-		cfg.MaxRetries = maxRetries
-	}
-	if retryDelayMs, ok := options["retry_delay_ms"].(int64); ok && retryDelayMs > 0 {
-		cfg.RetryDelay = time.Duration(retryDelayMs) * time.Millisecond
-	}
-	if backoff, ok := options["retry_backoff"].(float64); ok && backoff >= 1.0 {
-		cfg.RetryBackoff = backoff
-	}
-	if insecure, ok := options["insecure_skip_verify"].(bool); ok {
-		cfg.InsecureSkipVerify = insecure
-	}
-	if authType, ok := options["auth_type"].(string); ok {
-		switch authType {
-		case "none", "basic", "bearer", "mtls":
-			cfg.AuthType = authType
-		default:
-			return nil, fmt.Errorf("http_client sink: invalid auth_type '%s'", authType)
-		}
-	} else {
-		cfg.AuthType = "none"
-	}
-	if username, ok := options["username"].(string); ok {
-		cfg.Username = username
-	}
-	if password, ok := options["password"].(string); ok {
-		cfg.Password = password // TODO: change to Argon2 hashed password
-	}
-	if token, ok := options["bearer_token"].(string); ok {
-		cfg.BearerToken = token
-	}
-
-	// Validate auth configuration and TLS enforcement
-	isHTTPS := strings.HasPrefix(cfg.URL, "https://")
-
-	switch cfg.AuthType {
-	case "basic":
-		if cfg.Username == "" || cfg.Password == "" {
-			return nil, fmt.Errorf("http_client sink: username and password required for basic auth")
-		}
-		if !isHTTPS {
-			return nil, fmt.Errorf("http_client sink: basic auth requires HTTPS (security: credentials would be sent in plaintext)")
-		}
-
-	case "bearer":
-		if cfg.BearerToken == "" {
-			return nil, fmt.Errorf("http_client sink: bearer_token required for bearer auth")
-		}
-		if !isHTTPS {
-			return nil, fmt.Errorf("http_client sink: bearer auth requires HTTPS (security: token would be sent in plaintext)")
-		}
-
-	case "mtls":
-		if !isHTTPS {
-			return nil, fmt.Errorf("http_client sink: mTLS requires HTTPS")
-		}
-		if cfg.CertFile == "" || cfg.KeyFile == "" {
-			return nil, fmt.Errorf("http_client sink: cert_file and key_file required for mTLS")
-		}
-
-	case "none":
-		// Clear any credentials if auth is "none"
-		if cfg.Username != "" || cfg.Password != "" || cfg.BearerToken != "" {
-			logger.Warn("msg", "Credentials provided but auth_type is 'none', ignoring",
-				"component", "http_client_sink")
-			cfg.Username = ""
-			cfg.Password = ""
-			cfg.BearerToken = ""
-		}
-	}
-
-	// Extract headers
-	if headers, ok := options["headers"].(map[string]any); ok {
-		for k, v := range headers {
-			if strVal, ok := v.(string); ok {
-				cfg.Headers[k] = strVal
-			}
-		}
-	}
-
-	// Set default Content-Type if not specified
-	if _, exists := cfg.Headers["Content-Type"]; !exists {
-		cfg.Headers["Content-Type"] = "application/json"
-	}
-
-	// Extract TLS options
-	if caFile, ok := options["ca_file"].(string); ok && caFile != "" {
-		cfg.CAFile = caFile
-	}
-
-	// Extract client certificate options from TLS config
-	if tc, ok := options["tls"].(map[string]any); ok {
-		if enabled, _ := tc["enabled"].(bool); enabled {
-			// Extract client certificate files for mTLS
-			if certFile, ok := tc["cert_file"].(string); ok && certFile != "" {
-				if keyFile, ok := tc["key_file"].(string); ok && keyFile != "" {
-					// These will be used below when configuring TLS
-					cfg.CertFile = certFile // Need to add these fields to HTTPClientConfig
-					cfg.KeyFile = keyFile
-				}
-			}
-			// Extract CA file from TLS config if not already set
-			if cfg.CAFile == "" {
-				if caFile, ok := tc["ca_file"].(string); ok {
-					cfg.CAFile = caFile
-				}
-			}
-			// Extract insecure skip verify from TLS config
-			if insecure, ok := tc["insecure_skip_verify"].(bool); ok {
-				cfg.InsecureSkipVerify = insecure
-			}
-		}
+func NewHTTPClientSink(opts *config.HTTPClientSinkOptions, logger *log.Logger, formatter format.Formatter) (*HTTPClientSink, error) {
+	if opts == nil {
+		return nil, fmt.Errorf("HTTP client sink options cannot be nil")
 	}
 
 	h := &HTTPClientSink{
-		input:     make(chan core.LogEntry, cfg.BufferSize),
-		config:    cfg,
-		batch:     make([]core.LogEntry, 0, cfg.BatchSize),
+		config:    opts,
+		input:     make(chan core.LogEntry, opts.BufferSize),
+		batch:     make([]core.LogEntry, 0, opts.BatchSize),
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		logger:    logger,
@@ -249,46 +69,48 @@ func NewHTTPClientSink(options map[string]any, logger *log.Logger, formatter for
 	h.client = &fasthttp.Client{
 		MaxConnsPerHost:               10,
 		MaxIdleConnDuration:           10 * time.Second,
-		ReadTimeout:                   cfg.Timeout,
-		WriteTimeout:                  cfg.Timeout,
+		ReadTimeout:                   time.Duration(opts.Timeout) * time.Second,
+		WriteTimeout:                  time.Duration(opts.Timeout) * time.Second,
 		DisableHeaderNamesNormalizing: true,
 	}
 
 	// Configure TLS if using HTTPS
-	if strings.HasPrefix(cfg.URL, "https://") {
+	if strings.HasPrefix(opts.URL, "https://") {
 		tlsConfig := &tls.Config{
-			InsecureSkipVerify: cfg.InsecureSkipVerify,
+			InsecureSkipVerify: opts.InsecureSkipVerify,
 		}
 
-		// Load custom CA for server verification if provided
-		if cfg.CAFile != "" {
-			caCert, err := os.ReadFile(cfg.CAFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read CA file '%s': %w", cfg.CAFile, err)
+		// Use TLS config if provided
+		if opts.TLS != nil {
+			// Load custom CA for server verification
+			if opts.TLS.CAFile != "" {
+				caCert, err := os.ReadFile(opts.TLS.CAFile)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read CA file '%s': %w", opts.TLS.CAFile, err)
+				}
+				caCertPool := x509.NewCertPool()
+				if !caCertPool.AppendCertsFromPEM(caCert) {
+					return nil, fmt.Errorf("failed to parse CA certificate from '%s'", opts.TLS.CAFile)
+				}
+				tlsConfig.RootCAs = caCertPool
+				logger.Debug("msg", "Custom CA loaded for server verification",
+					"component", "http_client_sink",
+					"ca_file", opts.TLS.CAFile)
 			}
-			caCertPool := x509.NewCertPool()
-			if !caCertPool.AppendCertsFromPEM(caCert) {
-				return nil, fmt.Errorf("failed to parse CA certificate from '%s'", cfg.CAFile)
+
+			// Load client certificate for mTLS if provided
+			if opts.TLS.CertFile != "" && opts.TLS.KeyFile != "" {
+				cert, err := tls.LoadX509KeyPair(opts.TLS.CertFile, opts.TLS.KeyFile)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load client certificate: %w", err)
+				}
+				tlsConfig.Certificates = []tls.Certificate{cert}
+				logger.Info("msg", "Client certificate loaded for mTLS",
+					"component", "http_client_sink",
+					"cert_file", opts.TLS.CertFile)
 			}
-			tlsConfig.RootCAs = caCertPool
-			logger.Debug("msg", "Custom CA loaded for server verification",
-				"component", "http_client_sink",
-				"ca_file", cfg.CAFile)
 		}
 
-		// Load client certificate for mTLS if provided
-		if cfg.CertFile != "" && cfg.KeyFile != "" {
-			cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load client certificate: %w", err)
-			}
-			tlsConfig.Certificates = []tls.Certificate{cert}
-			logger.Info("msg", "Client certificate loaded for mTLS",
-				"component", "http_client_sink",
-				"cert_file", cfg.CertFile)
-		}
-
-		// Set TLS config directly on the client
 		h.client.TLSConfig = tlsConfig
 	}
 
@@ -308,7 +130,7 @@ func (h *HTTPClientSink) Start(ctx context.Context) error {
 		"component", "http_client_sink",
 		"url", h.config.URL,
 		"batch_size", h.config.BatchSize,
-		"batch_delay", h.config.BatchDelay)
+		"batch_delay_ms", h.config.BatchDelayMS)
 	return nil
 }
 
@@ -399,7 +221,7 @@ func (h *HTTPClientSink) processLoop(ctx context.Context) {
 func (h *HTTPClientSink) batchTimer(ctx context.Context) {
 	defer h.wg.Done()
 
-	ticker := time.NewTicker(h.config.BatchDelay)
+	ticker := time.NewTicker(time.Duration(h.config.BatchDelayMS) * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -468,7 +290,7 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 
 	// Retry logic
 	var lastErr error
-	retryDelay := h.config.RetryDelay
+	retryDelay := time.Duration(h.config.RetryDelayMS) * time.Millisecond
 
 	// TODO: verify retry loop placement is correct or should it be after acquiring resources (req :=....)
 	for attempt := int64(0); attempt <= h.config.MaxRetries; attempt++ {
@@ -480,9 +302,10 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 			newDelay := time.Duration(float64(retryDelay) * h.config.RetryBackoff)
 
 			// Cap at maximum to prevent integer overflow
-			if newDelay > h.config.Timeout || newDelay < retryDelay {
+			timeout := time.Duration(h.config.Timeout) * time.Second
+			if newDelay > timeout || newDelay < retryDelay {
 				// Either exceeded max or overflowed (negative/wrapped)
-				retryDelay = h.config.Timeout
+				retryDelay = timeout
 			} else {
 				retryDelay = newDelay
 			}
@@ -500,14 +323,14 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 		req.Header.Set("User-Agent", fmt.Sprintf("LogWisp/%s", version.Short()))
 
 		// Add authentication based on auth type
-		switch h.config.AuthType {
+		switch h.config.Auth.Type {
 		case "basic":
-			creds := h.config.Username + ":" + h.config.Password
+			creds := h.config.Auth.Username + ":" + h.config.Auth.Password
 			encodedCreds := base64.StdEncoding.EncodeToString([]byte(creds))
 			req.Header.Set("Authorization", "Basic "+encodedCreds)
 
-		case "bearer":
-			req.Header.Set("Authorization", "Bearer "+h.config.BearerToken)
+		case "token":
+			req.Header.Set("Authorization", "Token "+h.config.Auth.Token)
 
 		case "mtls":
 			// mTLS auth is handled at TLS layer via client certificates
@@ -523,7 +346,7 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 		}
 
 		// Send request
-		err := h.client.DoTimeout(req, resp, h.config.Timeout)
+		err := h.client.DoTimeout(req, resp, time.Duration(h.config.Timeout)*time.Second)
 
 		// Capture response before releasing
 		statusCode := resp.StatusCode()
@@ -587,10 +410,4 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 		"retries", h.config.MaxRetries,
 		"last_error", lastErr)
 	h.failedBatches.Add(1)
-}
-
-// Not applicable, Clients authenticate to remote servers using Username/Password in config
-func (h *HTTPClientSink) SetAuth(authCfg *config.AuthConfig) {
-	// No-op: client sinks don't validate incoming connections
-	// They authenticate to remote servers using Username/Password fields
 }

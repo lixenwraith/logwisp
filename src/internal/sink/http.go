@@ -26,8 +26,11 @@ import (
 
 // Streams log entries via Server-Sent Events
 type HTTPSink struct {
+	// Configuration reference (NOT a copy)
+	config *config.HTTPSinkOptions
+
+	// Runtime
 	input         chan core.LogEntry
-	config        HTTPConfig
 	server        *fasthttp.Server
 	activeClients atomic.Int64
 	mu            sync.RWMutex
@@ -46,11 +49,7 @@ type HTTPSink struct {
 	// Security components
 	authenticator *auth.Authenticator
 	tlsManager    *tls.Manager
-	authConfig    *config.AuthConfig
-
-	// Path configuration
-	streamPath string
-	statusPath string
+	authConfig    *config.ServerAuthConfig
 
 	// Net limiting
 	netLimiter *limit.NetLimiter
@@ -62,151 +61,58 @@ type HTTPSink struct {
 	authSuccesses  atomic.Uint64
 }
 
-// Holds HTTP sink configuration
-type HTTPConfig struct {
-	Host       string
-	Port       int64
-	BufferSize int64
-	StreamPath string
-	StatusPath string
-	Heartbeat  *config.HeartbeatConfig
-	TLS        *config.TLSConfig
-	NetLimit   *config.NetLimitConfig
-}
-
 // Creates a new HTTP streaming sink
-func NewHTTPSink(options map[string]any, logger *log.Logger, formatter format.Formatter) (*HTTPSink, error) {
-	cfg := HTTPConfig{
-		Host:       "0.0.0.0",
-		Port:       8080,
-		BufferSize: 1000,
-		StreamPath: "/stream",
-		StatusPath: "/status",
-	}
-
-	// Extract configuration from options
-	if host, ok := options["host"].(string); ok && host != "" {
-		cfg.Host = host
-	}
-	if port, ok := options["port"].(int64); ok {
-		cfg.Port = port
-	}
-	if bufSize, ok := options["buffer_size"].(int64); ok {
-		cfg.BufferSize = bufSize
-	}
-	if path, ok := options["stream_path"].(string); ok {
-		cfg.StreamPath = path
-	}
-	if path, ok := options["status_path"].(string); ok {
-		cfg.StatusPath = path
-	}
-
-	// Extract heartbeat config
-	if hb, ok := options["heartbeat"].(map[string]any); ok {
-		cfg.Heartbeat = &config.HeartbeatConfig{}
-		cfg.Heartbeat.Enabled, _ = hb["enabled"].(bool)
-		if interval, ok := hb["interval_seconds"].(int64); ok {
-			cfg.Heartbeat.IntervalSeconds = interval
-		}
-		cfg.Heartbeat.IncludeTimestamp, _ = hb["include_timestamp"].(bool)
-		cfg.Heartbeat.IncludeStats, _ = hb["include_stats"].(bool)
-		if hbFormat, ok := hb["format"].(string); ok {
-			cfg.Heartbeat.Format = hbFormat
-		}
-	}
-
-	// Extract TLS config
-	if tc, ok := options["tls"].(map[string]any); ok {
-		cfg.TLS = &config.TLSConfig{}
-		cfg.TLS.Enabled, _ = tc["enabled"].(bool)
-		if certFile, ok := tc["cert_file"].(string); ok {
-			cfg.TLS.CertFile = certFile
-		}
-		if keyFile, ok := tc["key_file"].(string); ok {
-			cfg.TLS.KeyFile = keyFile
-		}
-		cfg.TLS.ClientAuth, _ = tc["client_auth"].(bool)
-		if caFile, ok := tc["client_ca_file"].(string); ok {
-			cfg.TLS.ClientCAFile = caFile
-		}
-		cfg.TLS.VerifyClientCert, _ = tc["verify_client_cert"].(bool)
-		if minVer, ok := tc["min_version"].(string); ok {
-			cfg.TLS.MinVersion = minVer
-		}
-		if maxVer, ok := tc["max_version"].(string); ok {
-			cfg.TLS.MaxVersion = maxVer
-		}
-		if ciphers, ok := tc["cipher_suites"].(string); ok {
-			cfg.TLS.CipherSuites = ciphers
-		}
-	}
-
-	// Extract net limit config
-	if nl, ok := options["net_limit"].(map[string]any); ok {
-		cfg.NetLimit = &config.NetLimitConfig{}
-		cfg.NetLimit.Enabled, _ = nl["enabled"].(bool)
-		if rps, ok := nl["requests_per_second"].(float64); ok {
-			cfg.NetLimit.RequestsPerSecond = rps
-		}
-		if burst, ok := nl["burst_size"].(int64); ok {
-			cfg.NetLimit.BurstSize = burst
-		}
-		if respCode, ok := nl["response_code"].(int64); ok {
-			cfg.NetLimit.ResponseCode = respCode
-		}
-		if msg, ok := nl["response_message"].(string); ok {
-			cfg.NetLimit.ResponseMessage = msg
-		}
-		if maxPerIP, ok := nl["max_connections_per_ip"].(int64); ok {
-			cfg.NetLimit.MaxConnectionsPerIP = maxPerIP
-		}
-		if maxTotal, ok := nl["max_connections_total"].(int64); ok {
-			cfg.NetLimit.MaxConnectionsTotal = maxTotal
-		}
-		if ipWhitelist, ok := nl["ip_whitelist"].([]any); ok {
-			cfg.NetLimit.IPWhitelist = make([]string, 0, len(ipWhitelist))
-			for _, entry := range ipWhitelist {
-				if str, ok := entry.(string); ok {
-					cfg.NetLimit.IPWhitelist = append(cfg.NetLimit.IPWhitelist, str)
-				}
-			}
-		}
-		if ipBlacklist, ok := nl["ip_blacklist"].([]any); ok {
-			cfg.NetLimit.IPBlacklist = make([]string, 0, len(ipBlacklist))
-			for _, entry := range ipBlacklist {
-				if str, ok := entry.(string); ok {
-					cfg.NetLimit.IPBlacklist = append(cfg.NetLimit.IPBlacklist, str)
-				}
-			}
-		}
+func NewHTTPSink(opts *config.HTTPSinkOptions, logger *log.Logger, formatter format.Formatter) (*HTTPSink, error) {
+	if opts == nil {
+		return nil, fmt.Errorf("HTTP sink options cannot be nil")
 	}
 
 	h := &HTTPSink{
-		input:      make(chan core.LogEntry, cfg.BufferSize),
-		config:     cfg,
-		startTime:  time.Now(),
-		done:       make(chan struct{}),
-		streamPath: cfg.StreamPath,
-		statusPath: cfg.StatusPath,
-		logger:     logger,
-		formatter:  formatter,
-		clients:    make(map[uint64]chan core.LogEntry),
-		unregister: make(chan uint64, 10), // Buffered for non-blocking
+		config:    opts, // Direct reference to config struct
+		input:     make(chan core.LogEntry, opts.BufferSize),
+		startTime: time.Now(),
+		done:      make(chan struct{}),
+		logger:    logger,
+		formatter: formatter,
+		clients:   make(map[uint64]chan core.LogEntry),
 	}
+
 	h.lastProcessed.Store(time.Time{})
 
-	// Initialize TLS manager
-	if cfg.TLS != nil && cfg.TLS.Enabled {
-		tlsManager, err := tls.NewManager(cfg.TLS, logger)
+	// Initialize TLS manager if configured
+	if opts.TLS != nil && opts.TLS.Enabled {
+		tlsManager, err := tls.NewManager(opts.TLS, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TLS manager: %w", err)
 		}
 		h.tlsManager = tlsManager
+		logger.Info("msg", "TLS enabled",
+			"component", "http_sink")
 	}
 
 	// Initialize net limiter if configured
-	if cfg.NetLimit != nil && cfg.NetLimit.Enabled {
-		h.netLimiter = limit.NewNetLimiter(*cfg.NetLimit, logger)
+	if opts.NetLimit != nil && (opts.NetLimit.Enabled ||
+		len(opts.NetLimit.IPWhitelist) > 0 ||
+		len(opts.NetLimit.IPBlacklist) > 0) {
+		h.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
+	}
+
+	// Initialize authenticator if auth is not "none"
+	if opts.Auth != nil && opts.Auth.Type != "none" {
+		// Only "basic" and "token" are valid for HTTP sink
+		if opts.Auth.Type != "basic" && opts.Auth.Type != "token" {
+			return nil, fmt.Errorf("invalid auth type '%s' for HTTP sink (valid: none, basic, token)", opts.Auth.Type)
+		}
+
+		authenticator, err := auth.NewAuthenticator(opts.Auth, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create authenticator: %w", err)
+		}
+		h.authenticator = authenticator
+		h.authConfig = opts.Auth
+		logger.Info("msg", "Authentication enabled",
+			"component", "http_sink",
+			"type", opts.Auth.Type)
 	}
 
 	return h, nil
@@ -230,6 +136,9 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 		DisableKeepalive:  false,
 		StreamRequestBody: true,
 		Logger:            fasthttpLogger,
+		//		ReadTimeout:       time.Duration(h.config.ReadTimeout) * time.Millisecond,
+		WriteTimeout: time.Duration(h.config.WriteTimeout) * time.Millisecond,
+		//		MaxRequestBodySize: int(h.config.MaxBodySize),
 	}
 
 	// Configure TLS if enabled
@@ -250,8 +159,8 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 			"component", "http_sink",
 			"host", h.config.Host,
 			"port", h.config.Port,
-			"stream_path", h.streamPath,
-			"status_path", h.statusPath,
+			"stream_path", h.config.StreamPath,
+			"status_path", h.config.StatusPath,
 			"tls_enabled", h.tlsManager != nil)
 
 		var err error
@@ -296,7 +205,7 @@ func (h *HTTPSink) brokerLoop(ctx context.Context) {
 	var tickerChan <-chan time.Time
 
 	if h.config.Heartbeat != nil && h.config.Heartbeat.Enabled {
-		ticker = time.NewTicker(time.Duration(h.config.Heartbeat.IntervalSeconds) * time.Second)
+		ticker = time.NewTicker(time.Duration(h.config.Heartbeat.Interval) * time.Second)
 		tickerChan = ticker.C
 		defer ticker.Stop()
 	}
@@ -441,8 +350,8 @@ func (h *HTTPSink) GetStats() SinkStats {
 			"port":        h.config.Port,
 			"buffer_size": h.config.BufferSize,
 			"endpoints": map[string]string{
-				"stream": h.streamPath,
-				"status": h.statusPath,
+				"stream": h.config.StreamPath,
+				"status": h.config.StatusPath,
 			},
 			"net_limit": netLimitStats,
 			"auth":      authStats,
@@ -489,7 +398,7 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	path := string(ctx.Path())
 
 	// Status endpoint doesn't require auth
-	if path == h.statusPath {
+	if path == h.config.StatusPath {
 		h.handleStatus(ctx)
 		return
 	}
@@ -509,14 +418,14 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 
 			// Return 401 with WWW-Authenticate header
 			ctx.SetStatusCode(fasthttp.StatusUnauthorized)
-			if h.authConfig.Type == "basic" && h.authConfig.BasicAuth != nil {
-				realm := h.authConfig.BasicAuth.Realm
+			if h.authConfig.Type == "basic" && h.authConfig.Basic != nil {
+				realm := h.authConfig.Basic.Realm
 				if realm == "" {
 					realm = "Restricted"
 				}
 				ctx.Response.Header.Set("WWW-Authenticate", fmt.Sprintf("Basic realm=\"%s\"", realm))
-			} else if h.authConfig.Type == "bearer" {
-				ctx.Response.Header.Set("WWW-Authenticate", "Bearer")
+			} else if h.authConfig.Type == "token" {
+				ctx.Response.Header.Set("WWW-Authenticate", "Token")
 			}
 
 			ctx.SetContentType("application/json")
@@ -538,7 +447,7 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	}
 
 	switch path {
-	case h.streamPath:
+	case h.config.StreamPath:
 		h.handleStream(ctx, session)
 	default:
 		ctx.SetStatusCode(fasthttp.StatusNotFound)
@@ -547,6 +456,15 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 			"error": "Not Found",
 		})
 	}
+	// Handle stream endpoint
+	// if path == h.config.StreamPath {
+	// 	h.handleStream(ctx, session)
+	// 	return
+	// }
+	//
+	// // Unknown path
+	// ctx.SetStatusCode(fasthttp.StatusNotFound)
+	// ctx.SetBody([]byte("Not Found"))
 }
 
 func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session) {
@@ -611,8 +529,8 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 			"client_id":   fmt.Sprintf("%d", clientID),
 			"username":    session.Username,
 			"auth_method": session.Method,
-			"stream_path": h.streamPath,
-			"status_path": h.statusPath,
+			"stream_path": h.config.StreamPath,
+			"status_path": h.config.StatusPath,
 			"buffer_size": h.config.BufferSize,
 			"tls":         h.tlsManager != nil,
 		}
@@ -627,7 +545,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 		var tickerChan <-chan time.Time
 
 		if h.config.Heartbeat != nil && h.config.Heartbeat.Enabled {
-			ticker = time.NewTicker(time.Duration(h.config.Heartbeat.IntervalSeconds) * time.Second)
+			ticker = time.NewTicker(time.Duration(h.config.Heartbeat.Interval) * time.Second)
 			tickerChan = ticker.C
 			defer ticker.Stop()
 		}
@@ -716,7 +634,7 @@ func (h *HTTPSink) createHeartbeatEntry() core.LogEntry {
 	fields := make(map[string]any)
 	fields["type"] = "heartbeat"
 
-	if h.config.Heartbeat.IncludeStats {
+	if h.config.Heartbeat.Enabled {
 		fields["active_clients"] = h.activeClients.Load()
 		fields["uptime_seconds"] = int(time.Since(h.startTime).Seconds())
 	}
@@ -775,13 +693,13 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 			"uptime_seconds": int(time.Since(h.startTime).Seconds()),
 		},
 		"endpoints": map[string]string{
-			"transport": h.streamPath,
-			"status":    h.statusPath,
+			"transport": h.config.StreamPath,
+			"status":    h.config.StatusPath,
 		},
 		"features": map[string]any{
 			"heartbeat": map[string]any{
 				"enabled":  h.config.Heartbeat.Enabled,
-				"interval": h.config.Heartbeat.IntervalSeconds,
+				"interval": h.config.Heartbeat.Interval,
 				"format":   h.config.Heartbeat.Format,
 			},
 			"tls":       tlsStats,
@@ -806,37 +724,15 @@ func (h *HTTPSink) GetActiveConnections() int64 {
 
 // Returns the configured transport endpoint path
 func (h *HTTPSink) GetStreamPath() string {
-	return h.streamPath
+	return h.config.StreamPath
 }
 
 // Returns the configured status endpoint path
 func (h *HTTPSink) GetStatusPath() string {
-	return h.statusPath
+	return h.config.StatusPath
 }
 
 // Returns the configured host
 func (h *HTTPSink) GetHost() string {
 	return h.config.Host
-}
-
-// Configures http sink auth
-func (h *HTTPSink) SetAuth(authCfg *config.AuthConfig) {
-	if authCfg == nil || authCfg.Type == "none" {
-		return
-	}
-
-	h.authConfig = authCfg
-	authenticator, err := auth.NewAuthenticator(authCfg, h.logger)
-	if err != nil {
-		h.logger.Error("msg", "Failed to initialize authenticator for HTTP sink",
-			"component", "http_sink",
-			"error", err)
-		// Continue without auth
-		return
-	}
-	h.authenticator = authenticator
-
-	h.logger.Info("msg", "Authentication configured for HTTP sink",
-		"component", "http_sink",
-		"auth_type", authCfg.Type)
 }

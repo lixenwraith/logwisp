@@ -21,9 +21,7 @@ import (
 
 // Monitors a directory for log files
 type DirectorySource struct {
-	path           string
-	pattern        string
-	checkInterval  time.Duration
+	config         *config.DirectorySourceOptions
 	subscribers    []chan core.LogEntry
 	watchers       map[string]*fileWatcher
 	mu             sync.RWMutex
@@ -38,34 +36,16 @@ type DirectorySource struct {
 }
 
 // Creates a new directory monitoring source
-func NewDirectorySource(options map[string]any, logger *log.Logger) (*DirectorySource, error) {
-	path, ok := options["path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("directory source requires 'path' option")
-	}
-
-	pattern, _ := options["pattern"].(string)
-	if pattern == "" {
-		pattern = "*"
-	}
-
-	checkInterval := 100 * time.Millisecond
-	if ms, ok := options["check_interval_ms"].(int64); ok && ms > 0 {
-		checkInterval = time.Duration(ms) * time.Millisecond
-	}
-
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("invalid path %s: %w", path, err)
+func NewDirectorySource(opts *config.DirectorySourceOptions, logger *log.Logger) (*DirectorySource, error) {
+	if opts == nil {
+		return nil, fmt.Errorf("directory source options cannot be nil")
 	}
 
 	ds := &DirectorySource{
-		path:          absPath,
-		pattern:       pattern,
-		checkInterval: checkInterval,
-		watchers:      make(map[string]*fileWatcher),
-		startTime:     time.Now(),
-		logger:        logger,
+		config:    opts,
+		watchers:  make(map[string]*fileWatcher),
+		startTime: time.Now(),
+		logger:    logger,
 	}
 	ds.lastEntryTime.Store(time.Time{})
 
@@ -88,9 +68,9 @@ func (ds *DirectorySource) Start() error {
 
 	ds.logger.Info("msg", "Directory source started",
 		"component", "directory_source",
-		"path", ds.path,
-		"pattern", ds.pattern,
-		"check_interval_ms", ds.checkInterval.Milliseconds())
+		"path", ds.config.Path,
+		"pattern", ds.config.Pattern,
+		"check_interval_ms", ds.config.CheckIntervalMS)
 	return nil
 }
 
@@ -111,7 +91,7 @@ func (ds *DirectorySource) Stop() {
 
 	ds.logger.Info("msg", "Directory source stopped",
 		"component", "directory_source",
-		"path", ds.path)
+		"path", ds.config.Path)
 }
 
 func (ds *DirectorySource) GetStats() SourceStats {
@@ -171,7 +151,7 @@ func (ds *DirectorySource) monitorLoop() {
 
 	ds.checkTargets()
 
-	ticker := time.NewTicker(ds.checkInterval)
+	ticker := time.NewTicker(time.Duration(ds.config.CheckIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -189,8 +169,8 @@ func (ds *DirectorySource) checkTargets() {
 	if err != nil {
 		ds.logger.Warn("msg", "Failed to scan directory",
 			"component", "directory_source",
-			"path", ds.path,
-			"pattern", ds.pattern,
+			"path", ds.config.Path,
+			"pattern", ds.config.Pattern,
 			"error", err)
 		return
 	}
@@ -203,13 +183,13 @@ func (ds *DirectorySource) checkTargets() {
 }
 
 func (ds *DirectorySource) scanDirectory() ([]string, error) {
-	entries, err := os.ReadDir(ds.path)
+	entries, err := os.ReadDir(ds.config.Path)
 	if err != nil {
 		return nil, err
 	}
 
 	// Convert glob pattern to regex
-	regexPattern := globToRegex(ds.pattern)
+	regexPattern := globToRegex(ds.config.Pattern)
 	re, err := regexp.Compile(regexPattern)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pattern regex: %w", err)
@@ -223,7 +203,7 @@ func (ds *DirectorySource) scanDirectory() ([]string, error) {
 
 		name := entry.Name()
 		if re.MatchString(name) {
-			files = append(files, filepath.Join(ds.path, name))
+			files = append(files, filepath.Join(ds.config.Path, name))
 		}
 	}
 
@@ -287,8 +267,4 @@ func globToRegex(glob string) string {
 	regex = strings.ReplaceAll(regex, `\*`, `.*`)
 	regex = strings.ReplaceAll(regex, `\?`, `.`)
 	return "^" + regex + "$"
-}
-
-func (ds *DirectorySource) SetAuth(auth *config.AuthConfig) {
-	// Authentication does not apply to directory source
 }

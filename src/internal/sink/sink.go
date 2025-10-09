@@ -5,7 +5,6 @@ import (
 	"context"
 	"time"
 
-	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 )
 
@@ -22,9 +21,6 @@ type Sink interface {
 
 	// Returns sink statistics
 	GetStats() SinkStats
-
-	// Configure authentication
-	SetAuth(auth *config.AuthConfig)
 }
 
 // Contains statistics about a sink

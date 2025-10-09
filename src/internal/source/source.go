@@ -4,7 +4,6 @@ package source
 import (
 	"time"
 
-	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 )
 
@@ -21,9 +20,6 @@ type Source interface {
 
 	// Returns source statistics
 	GetStats() SourceStats
-
-	// Configure authentication
-	SetAuth(auth *config.AuthConfig)
 }
 
 // Contains statistics about a source

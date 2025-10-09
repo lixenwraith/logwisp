@@ -18,6 +18,7 @@ import (
 
 // ConsoleSink writes log entries to the console (stdout/stderr) using an dedicated logger instance
 type ConsoleSink struct {
+	config    *config.ConsoleSinkOptions
 	input     chan core.LogEntry
 	writer    *log.Logger // Dedicated internal logger instance for console writing
 	done      chan struct{}
@@ -31,22 +32,24 @@ type ConsoleSink struct {
 }
 
 // Creates a new console sink
-func NewConsoleSink(options map[string]any, appLogger *log.Logger, formatter format.Formatter) (*ConsoleSink, error) {
-	target := "stdout"
-	if t, ok := options["target"].(string); ok {
-		target = t
+func NewConsoleSink(opts *config.ConsoleSinkOptions, appLogger *log.Logger, formatter format.Formatter) (*ConsoleSink, error) {
+	if opts == nil {
+		return nil, fmt.Errorf("console sink options cannot be nil")
 	}
 
-	bufferSize := int64(1000)
-	if buf, ok := options["buffer_size"].(int64); ok && buf > 0 {
-		bufferSize = buf
+	// Set defaults if not configured
+	if opts.Target == "" {
+		opts.Target = "stdout"
+	}
+	if opts.BufferSize <= 0 {
+		opts.BufferSize = 1000
 	}
 
 	// Dedicated logger instance as console writer
 	writer, err := log.NewBuilder().
 		EnableFile(false).
 		EnableConsole(true).
-		ConsoleTarget(target).
+		ConsoleTarget(opts.Target).
 		Format("raw").        // Passthrough pre-formatted messages
 		ShowTimestamp(false). // Disable writer's own timestamp
 		ShowLevel(false).     // Disable writer's own level prefix
@@ -57,7 +60,8 @@ func NewConsoleSink(options map[string]any, appLogger *log.Logger, formatter for
 	}
 
 	s := &ConsoleSink{
-		input:     make(chan core.LogEntry, bufferSize),
+		config:    opts,
+		input:     make(chan core.LogEntry, opts.BufferSize),
 		writer:    writer,
 		done:      make(chan struct{}),
 		startTime: time.Now(),
@@ -156,8 +160,4 @@ func (s *ConsoleSink) processLoop(ctx context.Context) {
 			return
 		}
 	}
-}
-
-func (s *ConsoleSink) SetAuth(auth *config.AuthConfig) {
-	// Authentication does not apply to the console sink.
 }

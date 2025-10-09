@@ -5,13 +5,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
-	"logwisp/src/internal/filter"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/limit"
 	"logwisp/src/internal/sink"
 	"logwisp/src/internal/source"
 
@@ -39,127 +36,6 @@ func NewService(ctx context.Context, logger *log.Logger) *Service {
 	}
 }
 
-// Creates and starts a new pipeline
-func (s *Service) NewPipeline(cfg config.PipelineConfig) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.pipelines[cfg.Name]; exists {
-		err := fmt.Errorf("pipeline '%s' already exists", cfg.Name)
-		s.logger.Error("msg", "Failed to create pipeline - duplicate name",
-			"component", "service",
-			"pipeline", cfg.Name,
-			"error", err)
-		return err
-	}
-
-	s.logger.Debug("msg", "Creating pipeline", "pipeline", cfg.Name)
-
-	// Create pipeline context
-	pipelineCtx, pipelineCancel := context.WithCancel(s.ctx)
-
-	// Create pipeline instance
-	pipeline := &Pipeline{
-		Name:   cfg.Name,
-		Config: cfg,
-		Stats: &PipelineStats{
-			StartTime: time.Now(),
-		},
-		ctx:    pipelineCtx,
-		cancel: pipelineCancel,
-		logger: s.logger,
-	}
-
-	// Create sources
-	for i, srcCfg := range cfg.Sources {
-		src, err := s.createSource(srcCfg)
-		if err != nil {
-			pipelineCancel()
-			return fmt.Errorf("failed to create source[%d]: %w", i, err)
-		}
-		pipeline.Sources = append(pipeline.Sources, src)
-	}
-
-	// Create pipeline rate limiter
-	if cfg.RateLimit != nil {
-		limiter, err := limit.NewRateLimiter(*cfg.RateLimit, s.logger)
-		if err != nil {
-			pipelineCancel()
-			return fmt.Errorf("failed to create pipeline rate limiter: %w", err)
-		}
-		pipeline.RateLimiter = limiter
-	}
-
-	// Create filter chain
-	if len(cfg.Filters) > 0 {
-		chain, err := filter.NewChain(cfg.Filters, s.logger)
-		if err != nil {
-			pipelineCancel()
-			return fmt.Errorf("failed to create filter chain: %w", err)
-		}
-		pipeline.FilterChain = chain
-	}
-
-	// Create formatter for the pipeline
-	var formatter format.Formatter
-	var err error
-	if cfg.Format != "" || len(cfg.FormatOptions) > 0 {
-		formatter, err = format.NewFormatter(cfg.Format, cfg.FormatOptions, s.logger)
-		if err != nil {
-			pipelineCancel()
-			return fmt.Errorf("failed to create formatter: %w", err)
-		}
-	}
-
-	// Create sinks
-	for i, sinkCfg := range cfg.Sinks {
-		sinkInst, err := s.createSink(sinkCfg, formatter)
-		if err != nil {
-			pipelineCancel()
-			return fmt.Errorf("failed to create sink[%d]: %w", i, err)
-		}
-		pipeline.Sinks = append(pipeline.Sinks, sinkInst)
-	}
-
-	// Configure authentication for sources that support it before starting them
-	for _, sourceInst := range pipeline.Sources {
-		sourceInst.SetAuth(cfg.Auth)
-	}
-
-	// Start all sources
-	for i, src := range pipeline.Sources {
-		if err := src.Start(); err != nil {
-			pipeline.Shutdown()
-			return fmt.Errorf("failed to start source[%d]: %w", i, err)
-		}
-	}
-
-	// Configure authentication for sinks that support it before starting them
-	for _, sinkInst := range pipeline.Sinks {
-		sinkInst.SetAuth(cfg.Auth)
-	}
-
-	// Start all sinks
-	for i, sinkInst := range pipeline.Sinks {
-		if err := sinkInst.Start(pipelineCtx); err != nil {
-			pipeline.Shutdown()
-			return fmt.Errorf("failed to start sink[%d]: %w", i, err)
-		}
-	}
-
-	// Wire sources to sinks through filters
-	s.wirePipeline(pipeline)
-
-	// Start stats updater
-	pipeline.startStatsUpdater(pipelineCtx)
-
-	s.pipelines[cfg.Name] = pipeline
-	s.logger.Info("msg", "Pipeline created successfully",
-		"pipeline", cfg.Name,
-		"auth_enabled", cfg.Auth != nil && cfg.Auth.Type != "none")
-	return nil
-}
-
 // Connects sources to sinks through filters
 func (s *Service) wirePipeline(p *Pipeline) {
 	// For each source, subscribe and process entries
@@ -175,17 +51,17 @@ func (s *Service) wirePipeline(p *Pipeline) {
 			defer func() {
 				if r := recover(); r != nil {
 					s.logger.Error("msg", "Panic in pipeline processing",
-						"pipeline", p.Name,
+						"pipeline", p.Config.Name,
 						"source", source.GetStats().Type,
 						"panic", r)
 
 					// Ensure failed pipelines don't leave resources hanging
 					go func() {
 						s.logger.Warn("msg", "Shutting down pipeline due to panic",
-							"pipeline", p.Name)
-						if err := s.RemovePipeline(p.Name); err != nil {
+							"pipeline", p.Config.Name)
+						if err := s.RemovePipeline(p.Config.Name); err != nil {
 							s.logger.Error("msg", "Failed to remove panicked pipeline",
-								"pipeline", p.Name,
+								"pipeline", p.Config.Name,
 								"error", err)
 						}
 					}()
@@ -228,7 +104,7 @@ func (s *Service) wirePipeline(p *Pipeline) {
 						default:
 							// Drop if sink buffer is full, may flood logging for slow client
 							s.logger.Debug("msg", "Dropped log entry - sink buffer full",
-								"pipeline", p.Name)
+								"pipeline", p.Config.Name)
 						}
 					}
 				}
@@ -238,16 +114,16 @@ func (s *Service) wirePipeline(p *Pipeline) {
 }
 
 // Creates a source instance based on configuration
-func (s *Service) createSource(cfg config.SourceConfig) (source.Source, error) {
+func (s *Service) createSource(cfg *config.SourceConfig) (source.Source, error) {
 	switch cfg.Type {
 	case "directory":
-		return source.NewDirectorySource(cfg.Options, s.logger)
+		return source.NewDirectorySource(cfg.Directory, s.logger)
 	case "stdin":
-		return source.NewStdinSource(cfg.Options, s.logger)
+		return source.NewStdinSource(cfg.Stdin, s.logger)
 	case "http":
-		return source.NewHTTPSource(cfg.Options, s.logger)
+		return source.NewHTTPSource(cfg.HTTP, s.logger)
 	case "tcp":
-		return source.NewTCPSource(cfg.Options, s.logger)
+		return source.NewTCPSource(cfg.TCP, s.logger)
 	default:
 		return nil, fmt.Errorf("unknown source type: %s", cfg.Type)
 	}
@@ -255,34 +131,28 @@ func (s *Service) createSource(cfg config.SourceConfig) (source.Source, error) {
 
 // Creates a sink instance based on configuration
 func (s *Service) createSink(cfg config.SinkConfig, formatter format.Formatter) (sink.Sink, error) {
-	if formatter == nil {
-		// Default formatters for different sink types
-		defaultFormat := "raw"
-		switch cfg.Type {
-		case "http", "tcp", "http_client", "tcp_client":
-			defaultFormat = "json"
-		}
-
-		var err error
-		formatter, err = format.NewFormatter(defaultFormat, nil, s.logger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create default formatter: %w", err)
-		}
-	}
 
 	switch cfg.Type {
 	case "http":
-		return sink.NewHTTPSink(cfg.Options, s.logger, formatter)
+		if cfg.HTTP == nil {
+			return nil, fmt.Errorf("HTTP sink configuration missing")
+		}
+		return sink.NewHTTPSink(cfg.HTTP, s.logger, formatter)
+
 	case "tcp":
-		return sink.NewTCPSink(cfg.Options, s.logger, formatter)
+		if cfg.TCP == nil {
+			return nil, fmt.Errorf("TCP sink configuration missing")
+		}
+		return sink.NewTCPSink(cfg.TCP, s.logger, formatter)
+
 	case "http_client":
-		return sink.NewHTTPClientSink(cfg.Options, s.logger, formatter)
+		return sink.NewHTTPClientSink(cfg.HTTPClient, s.logger, formatter)
 	case "tcp_client":
-		return sink.NewTCPClientSink(cfg.Options, s.logger, formatter)
+		return sink.NewTCPClientSink(cfg.TCPClient, s.logger, formatter)
 	case "file":
-		return sink.NewFileSink(cfg.Options, s.logger, formatter)
+		return sink.NewFileSink(cfg.File, s.logger, formatter)
 	case "console":
-		return sink.NewConsoleSink(cfg.Options, s.logger, formatter)
+		return sink.NewConsoleSink(cfg.Console, s.logger, formatter)
 	default:
 		return nil, fmt.Errorf("unknown sink type: %s", cfg.Type)
 	}

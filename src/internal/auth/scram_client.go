@@ -1,5 +1,5 @@
-// FILE: src/internal/scram/client.go
-package scram
+// FILE: src/internal/auth/scram_client.go
+package auth
 
 import (
 	"crypto/rand"
@@ -12,7 +12,7 @@ import (
 )
 
 // Client handles SCRAM client-side authentication
-type Client struct {
+type ScramClient struct {
 	Username string
 	Password string
 
@@ -23,16 +23,16 @@ type Client struct {
 	serverKey   []byte
 }
 
-// NewClient creates SCRAM client
-func NewClient(username, password string) *Client {
-	return &Client{
+// NewScramClient creates SCRAM client
+func NewScramClient(username, password string) *ScramClient {
+	return &ScramClient{
 		Username: username,
 		Password: password,
 	}
 }
 
 // StartAuthentication generates ClientFirst message
-func (c *Client) StartAuthentication() (*ClientFirst, error) {
+func (c *ScramClient) StartAuthentication() (*ClientFirst, error) {
 	// Generate client nonce
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
@@ -47,7 +47,7 @@ func (c *Client) StartAuthentication() (*ClientFirst, error) {
 }
 
 // ProcessServerFirst handles server challenge
-func (c *Client) ProcessServerFirst(msg *ServerFirst) (*ClientFinal, error) {
+func (c *ScramClient) ProcessServerFirst(msg *ServerFirst) (*ClientFinal, error) {
 	c.serverFirst = msg
 
 	// Decode salt
@@ -83,7 +83,7 @@ func (c *Client) ProcessServerFirst(msg *ServerFirst) (*ClientFinal, error) {
 }
 
 // VerifyServerFinal validates server signature
-func (c *Client) VerifyServerFinal(msg *ServerFinal) error {
+func (c *ScramClient) VerifyServerFinal(msg *ServerFinal) error {
 	if c.authMessage == "" || c.serverKey == nil {
 		return fmt.Errorf("invalid handshake state")
 	}

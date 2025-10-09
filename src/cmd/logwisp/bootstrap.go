@@ -24,7 +24,7 @@ func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service
 		logger.Info("msg", "Initializing pipeline", "pipeline", pipelineCfg.Name)
 
 		// Create the pipeline
-		if err := svc.NewPipeline(pipelineCfg); err != nil {
+		if err := svc.NewPipeline(&pipelineCfg); err != nil {
 			logger.Error("msg", "Failed to create pipeline",
 				"pipeline", pipelineCfg.Name,
 				"error", err)

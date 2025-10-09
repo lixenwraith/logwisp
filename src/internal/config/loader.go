@@ -11,6 +11,8 @@ import (
 	lconfig "github.com/lixenwraith/config"
 )
 
+var configManager *lconfig.Config
+
 func defaults() *Config {
 	return &Config{
 		// Top-level flag defaults
@@ -21,41 +23,46 @@ func defaults() *Config {
 		// Runtime behavior defaults
 		DisableStatusReporter: false,
 		ConfigAutoReload:      false,
-		ConfigSaveOnExit:      false,
 
 		// Child process indicator
 		BackgroundDaemon: false,
 
 		// Existing defaults
-		Logging: DefaultLogConfig(),
+		Logging: &LogConfig{
+			Output: "stdout",
+			Level:  "info",
+			File: &LogFileConfig{
+				Directory:      "./log",
+				Name:           "logwisp",
+				MaxSizeMB:      100,
+				MaxTotalSizeMB: 1000,
+				RetentionHours: 168, // 7 days
+			},
+			Console: &LogConsoleConfig{
+				Target: "stdout",
+				Format: "txt",
+			},
+		},
 		Pipelines: []PipelineConfig{
 			{
 				Name: "default",
 				Sources: []SourceConfig{
 					{
 						Type: "directory",
-						Options: map[string]any{
-							"path":              "./",
-							"pattern":           "*.log",
-							"check_interval_ms": int64(100),
+						Directory: &DirectorySourceOptions{
+							Path:            "./",
+							Pattern:         "*.log",
+							CheckIntervalMS: int64(100),
 						},
 					},
 				},
 				Sinks: []SinkConfig{
 					{
-						Type: "http",
-						Options: map[string]any{
-							"port":        int64(8080),
-							"buffer_size": int64(1000),
-							"stream_path": "/stream",
-							"status_path": "/status",
-							"heartbeat": map[string]any{
-								"enabled":           true,
-								"interval_seconds":  int64(30),
-								"include_timestamp": true,
-								"include_stats":     false,
-								"format":            "comment",
-							},
+						Type: "console",
+						Console: &ConsoleSinkOptions{
+							Target:     "stdout",
+							Colorize:   false,
+							BufferSize: 100,
 						},
 					},
 				},
@@ -68,18 +75,30 @@ func defaults() *Config {
 func Load(args []string) (*Config, error) {
 	configPath, isExplicit := resolveConfigPath(args)
 	// Build configuration with all sources
+
+	// Create target config instance that will be populated
+	finalConfig := &Config{}
+
+	// The builder now handles loading, populating the target struct, and validation
 	cfg, err := lconfig.NewBuilder().
-		WithDefaults(defaults()).
-		WithEnvPrefix("LOGWISP_").
-		WithEnvTransform(customEnvTransform).
-		WithArgs(args).
-		WithFile(configPath).
+		WithTarget(finalConfig).  // Typed target struct
+		WithDefaults(defaults()). // Default values
 		WithSources(
 			lconfig.SourceCLI,
 			lconfig.SourceEnv,
 			lconfig.SourceFile,
 			lconfig.SourceDefault,
 		).
+		WithEnvTransform(customEnvTransform). // Convert '.' to '_' in env separation
+		WithEnvPrefix("LOGWISP_").            // Environment variable prefix
+		WithArgs(args).                       // Command-line arguments
+		WithFile(configPath).                 // TOML config file
+		WithFileFormat("toml").               // Explicit format
+		WithTypedValidator(validateConfig).   // Centralized validation
+		WithSecurityOptions(lconfig.SecurityOptions{
+			PreventPathTraversal: true,
+			MaxFileSize:          10 * 1024 * 1024, // 10MB max config
+		}).
 		Build()
 
 	if err != nil {
@@ -88,42 +107,28 @@ func Load(args []string) (*Config, error) {
 			if isExplicit {
 				return nil, fmt.Errorf("config file not found: %s", configPath)
 			}
-			// If the default config file is not found, it's not an error
+			// If the default config file is not found, it's not an error, default/cli/env will be used
 		} else {
-			return nil, fmt.Errorf("failed to load config: %w", err)
+			return nil, fmt.Errorf("failed to load or validate config: %w", err)
 		}
 	}
 
-	// Scan into final config struct - using new interface
-	finalConfig := &Config{}
-	if err := cfg.Scan(finalConfig); err != nil {
-		return nil, fmt.Errorf("failed to scan config: %w", err)
+	// Store the config file path for hot reload
+	finalConfig.ConfigFile = configPath
+
+	// Store the manager for hot reload
+	if cfg != nil {
+		configManager = cfg
 	}
 
-	// Set config file path if it exists
-	if _, err := os.Stat(configPath); err == nil {
-		finalConfig.ConfigFile = configPath
-	}
-
-	// Ensure critical fields are not nil
-	if finalConfig.Logging == nil {
-		finalConfig.Logging = DefaultLogConfig()
-	}
-
-	// Apply console target overrides if needed
-	if err := applyConsoleTargetOverrides(finalConfig); err != nil {
-		return nil, fmt.Errorf("failed to apply console target overrides: %w", err)
-	}
-
-	// Validate configuration
-	return finalConfig, finalConfig.validate()
+	return finalConfig, nil
 }
 
 // Returns the configuration file path
 func resolveConfigPath(args []string) (path string, isExplicit bool) {
 	// 1. Check for --config flag in command-line arguments (highest precedence)
 	for i, arg := range args {
-		if (arg == "--config" || arg == "-c") && i+1 < len(args) {
+		if arg == "-c" {
 			return args[i+1], true
 		}
 		if strings.HasPrefix(arg, "--config=") {
@@ -160,38 +165,4 @@ func customEnvTransform(path string) string {
 	env = strings.ToUpper(env)
 	// env = "LOGWISP_" + env // already added by WithEnvPrefix
 	return env
-}
-
-// Centralizes console target configuration
-func applyConsoleTargetOverrides(cfg *Config) error {
-	// Check environment variable for console target override
-	consoleTarget := os.Getenv("LOGWISP_CONSOLE_TARGET")
-	if consoleTarget == "" {
-		return nil
-	}
-
-	// Validate console target value
-	validTargets := map[string]bool{
-		"stdout": true,
-		"stderr": true,
-		"split":  true,
-	}
-	if !validTargets[consoleTarget] {
-		return fmt.Errorf("invalid LOGWISP_CONSOLE_TARGET value: %s", consoleTarget)
-	}
-
-	// Apply to console sinks
-	for i, pipeline := range cfg.Pipelines {
-		for j, sink := range pipeline.Sinks {
-			if sink.Type == "console" {
-				if sink.Options == nil {
-					cfg.Pipelines[i].Sinks[j].Options = make(map[string]any)
-				}
-				// Set target for split mode handling
-				cfg.Pipelines[i].Sinks[j].Options["target"] = consoleTarget
-			}
-		}
-	}
-
-	return nil
 }

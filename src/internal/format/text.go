@@ -4,6 +4,7 @@ package format
 import (
 	"bytes"
 	"fmt"
+	"logwisp/src/internal/config"
 	"strings"
 	"text/template"
 	"time"
@@ -15,41 +16,29 @@ import (
 
 // Produces human-readable text logs using templates
 type TextFormatter struct {
-	template        *template.Template
-	timestampFormat string
-	logger          *log.Logger
+	config   *config.TextFormatterOptions
+	template *template.Template
+	logger   *log.Logger
 }
 
 // Creates a new text formatter
-func NewTextFormatter(options map[string]any, logger *log.Logger) (*TextFormatter, error) {
-	// Default template
-	templateStr := "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}{{ if .Fields }} {{.Fields}}{{ end }}"
-	if tmpl, ok := options["template"].(string); ok && tmpl != "" {
-		templateStr = tmpl
-	}
-
-	// Default timestamp format
-	timestampFormat := time.RFC3339
-	if tsFormat, ok := options["timestamp_format"].(string); ok && tsFormat != "" {
-		timestampFormat = tsFormat
-	}
-
+func NewTextFormatter(opts *config.TextFormatterOptions, logger *log.Logger) (*TextFormatter, error) {
 	f := &TextFormatter{
-		timestampFormat: timestampFormat,
-		logger:          logger,
+		config: opts,
+		logger: logger,
 	}
 
 	// Create template with helper functions
 	funcMap := template.FuncMap{
 		"FmtTime": func(t time.Time) string {
-			return t.Format(f.timestampFormat)
+			return t.Format(f.config.TimestampFormat)
 		},
 		"ToUpper":   strings.ToUpper,
 		"ToLower":   strings.ToLower,
 		"TrimSpace": strings.TrimSpace,
 	}
 
-	tmpl, err := template.New("log").Funcs(funcMap).Parse(templateStr)
+	tmpl, err := template.New("log").Funcs(funcMap).Parse(f.config.Template)
 	if err != nil {
 		return nil, fmt.Errorf("invalid template: %w", err)
 	}
@@ -86,7 +75,7 @@ func (f *TextFormatter) Format(entry core.LogEntry) ([]byte, error) {
 			"error", err)
 
 		fallback := fmt.Sprintf("[%s] [%s] %s - %s\n",
-			entry.Time.Format(f.timestampFormat),
+			entry.Time.Format(f.config.TimestampFormat),
 			strings.ToUpper(entry.Level),
 			entry.Source,
 			entry.Message)
