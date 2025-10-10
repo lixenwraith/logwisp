@@ -21,45 +21,45 @@ A high-performance, pipeline-based log transport and processing system built in 
 ## Features
 
 ### Core Capabilities
-- **Pipeline Architecture**: Independent processing pipelines with source → filter → format → sink flow.
-- **Multiple Input Sources**: Directory monitoring, stdin, HTTP, TCP.
-- **Flexible Output Sinks**: Console, file, HTTP SSE, TCP streaming, HTTP/TCP forwarding.
-- **Real-time Processing**: Sub-millisecond latency with configurable buffering.
-- **Hot Configuration Reload**: Update pipelines without service restart.
+- **Pipeline Architecture**: Independent processing pipelines with source(s) → filter → format → sink(s) flow
+- **Multiple Input Sources**: Directory monitoring, stdin, HTTP, TCP
+- **Flexible Output Sinks**: Console, file, HTTP SSE, TCP streaming, HTTP/TCP forwarding
+- **Real-time Processing**: Sub-millisecond latency with configurable buffering
+- **Hot Configuration Reload**: Update pipelines without service restart
 
 ### Data Processing
-- **Pattern-based Filtering**: Chainable include/exclude filters with regex support.
-- **Multiple Formatters**: Raw, JSON, and template-based text formatting.
-- **Rate Limiting**: Pipeline rate control.
+- **Pattern-based Filtering**: Chainable include/exclude filters with regex support
+- **Multiple Formatters**: Raw, JSON, and template-based text formatting
+- **Rate Limiting**: Pipeline rate control
 
 ### Security & Reliability
-- **Authentication**: Basic, token, and mTLS support for HTTPS, and SCRAM for TCP.
-- **TLS Encryption**: TLS 1.2/1.3 support for HTTP connections.
-- **Access Control**: IP whitelisting/blacklisting, connection limits.
-- **Automatic Reconnection**: Resilient client connections with exponential backoff.
-- **File Rotation**: Size-based rotation with retention policies.
+- **Authentication**: Basic, token, and mTLS support for HTTPS, and SCRAM for TCP
+- **TLS Encryption**: TLS 1.2/1.3 support for HTTP connections
+- **Access Control**: IP whitelisting/blacklisting, connection limits
+- **Automatic Reconnection**: Resilient client connections with exponential backoff
+- **File Rotation**: Size-based rotation with retention policies
 
 ### Operational Features
-- **Status Monitoring**: Real-time statistics and health endpoints.
-- **Signal Handling**: Graceful shutdown and configuration reload via signals.
-- **Background Mode**: Daemon operation with proper signal handling.
-- **Quiet Mode**: Silent operation for automated deployments.
+- **Status Monitoring**: Real-time statistics and health endpoints
+- **Signal Handling**: Graceful shutdown and configuration reload via signals
+- **Background Mode**: Daemon operation with proper signal handling
+- **Quiet Mode**: Silent operation for automated deployments
 
 ## Documentation
 
 Available in `doc/` directory.
 
-- [Installation Guide](installation.md) - Platform setup and service configuration
-- [Architecture Overview](architecture.md) - System design and component interaction
-- [Configuration Reference](configuration.md) - TOML structure and configuration methods
-- [Input Sources](sources.md) - Available source types and configurations
-- [Output Sinks](sinks.md) - Sink types and output options
-- [Filters](filters.md) - Pattern-based log filtering
-- [Formatters](formatters.md) - Log formatting and transformation
-- [Authentication](authentication.md) - Security configurations and auth methods
-- [Networking](networking.md) - TLS, rate limiting, and network features
-- [Command Line Interface](cli.md) - CLI flags and subcommands
-- [Operations Guide](operations.md) - Running and maintaining LogWisp
+- [Installation Guide](doc/installation.md) - Platform setup and service configuration
+- [Architecture Overview](doc/architecture.md) - System design and component interaction
+- [Configuration Reference](doc/configuration.md) - TOML structure and configuration methods
+- [Input Sources](doc/sources.md) - Available source types and configurations
+- [Output Sinks](doc/sinks.md) - Sink types and output options
+- [Filters](doc/filters.md) - Pattern-based log filtering
+- [Formatters](doc/formatters.md) - Log formatting and transformation
+- [Authentication](doc/authentication.md) - Security configurations and auth methods
+- [Networking](doc/networking.md) - TLS, rate limiting, and network features
+- [Command Line Interface](doc/cli.md) - CLI flags and subcommands
+- [Operations Guide](doc/operations.md) - Running and maintaining LogWisp
 
 ## Quick Start
 

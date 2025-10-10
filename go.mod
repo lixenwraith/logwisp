@@ -6,7 +6,7 @@ require (
 	github.com/lixenwraith/config v0.0.0-20251003140149-580459b815f6
 	github.com/lixenwraith/log v0.0.0-20251010094026-6a161eb2b686
 	github.com/panjf2000/gnet/v2 v2.9.4
-	github.com/valyala/fasthttp v1.67.0
+	github.com/valyala/fasthttp v1.68.0
 	golang.org/x/crypto v0.43.0
 	golang.org/x/term v0.36.0
 )
@@ -15,7 +15,7 @@ require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/panjf2000/ants/v2 v2.11.3 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
