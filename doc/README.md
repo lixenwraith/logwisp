@@ -1,21 +1,20 @@
 # LogWisp
 
-A high-performance, pipeline-based log transport and processing system built in Go. LogWisp provides flexible log collection, filtering, formatting, and distribution with enterprise-grade security and reliability features.
+A high-performance, pipeline-based log transport and processing system built in Go. LogWisp provides flexible log collection, filtering, formatting, and distribution with security and reliability features.
 
 ## Features
 
 ### Core Capabilities
-- **Pipeline Architecture**: Independent processing pipelines with source → filter → format → sink flow
+- **Pipeline Architecture**: Independent processing pipelines with source(s) → filter → format → sink(s) flow
 - **Multiple Input Sources**: Directory monitoring, stdin, HTTP, TCP
 - **Flexible Output Sinks**: Console, file, HTTP SSE, TCP streaming, HTTP/TCP forwarding
 - **Real-time Processing**: Sub-millisecond latency with configurable buffering
 - **Hot Configuration Reload**: Update pipelines without service restart
 
 ### Data Processing
-- **Pattern-based Filtering**: Include/exclude filters with regex support
+- **Pattern-based Filtering**: Chainable include/exclude filters with regex support
 - **Multiple Formatters**: Raw, JSON, and template-based text formatting
-- **Rate Limiting**: Pipeline and per-connection rate controls
-- **Batch Processing**: Configurable batching for HTTP/TCP clients
+- **Rate Limiting**: Pipeline rate controls
 
 ### Security & Reliability  
 - **Authentication**: Basic, token, SCRAM, and mTLS support
@@ -68,9 +67,9 @@ Run with: `logwisp -c config.toml`
 
 ## System Requirements
 
-- **Operating Systems**: Linux (kernel 3.10+), FreeBSD (12.0+)
+- **Operating Systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
 - **Architecture**: amd64
-- **Go Version**: 1.24+ (for building from source)
+- **Go Version**: 1.25+ (for building from source)
 
 ## License
 
