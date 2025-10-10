@@ -13,6 +13,11 @@ import (
 
 var configManager *lconfig.Config
 
+// Hot reload access
+func GetConfigManager() *lconfig.Config {
+	return configManager
+}
+
 func defaults() *Config {
 	return &Config{
 		// Top-level flag defaults
@@ -79,7 +84,7 @@ func Load(args []string) (*Config, error) {
 	// Create target config instance that will be populated
 	finalConfig := &Config{}
 
-	// The builder now handles loading, populating the target struct, and validation
+	// Builder handles loading, populating the target struct, and validation
 	cfg, err := lconfig.NewBuilder().
 		WithTarget(finalConfig).  // Typed target struct
 		WithDefaults(defaults()). // Default values
@@ -94,7 +99,7 @@ func Load(args []string) (*Config, error) {
 		WithArgs(args).                       // Command-line arguments
 		WithFile(configPath).                 // TOML config file
 		WithFileFormat("toml").               // Explicit format
-		WithTypedValidator(validateConfig).   // Centralized validation
+		WithTypedValidator(ValidateConfig).   // Centralized validation
 		WithSecurityOptions(lconfig.SecurityOptions{
 			PreventPathTraversal: true,
 			MaxFileSize:          10 * 1024 * 1024, // 10MB max config
@@ -117,9 +122,7 @@ func Load(args []string) (*Config, error) {
 	finalConfig.ConfigFile = configPath
 
 	// Store the manager for hot reload
-	if cfg != nil {
-		configManager = cfg
-	}
+	configManager = cfg
 
 	return finalConfig, nil
 }

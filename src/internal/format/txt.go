@@ -1,29 +1,29 @@
-// FILE: logwisp/src/internal/format/text.go
+// FILE: logwisp/src/internal/format/txt.go
 package format
 
 import (
 	"bytes"
 	"fmt"
-	"logwisp/src/internal/config"
 	"strings"
 	"text/template"
 	"time"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
 )
 
 // Produces human-readable text logs using templates
-type TextFormatter struct {
-	config   *config.TextFormatterOptions
+type TxtFormatter struct {
+	config   *config.TxtFormatterOptions
 	template *template.Template
 	logger   *log.Logger
 }
 
 // Creates a new text formatter
-func NewTextFormatter(opts *config.TextFormatterOptions, logger *log.Logger) (*TextFormatter, error) {
-	f := &TextFormatter{
+func NewTxtFormatter(opts *config.TxtFormatterOptions, logger *log.Logger) (*TxtFormatter, error) {
+	f := &TxtFormatter{
 		config: opts,
 		logger: logger,
 	}
@@ -48,7 +48,7 @@ func NewTextFormatter(opts *config.TextFormatterOptions, logger *log.Logger) (*T
 }
 
 // Formats the log entry using the template
-func (f *TextFormatter) Format(entry core.LogEntry) ([]byte, error) {
+func (f *TxtFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Prepare data for template
 	data := map[string]any{
 		"Timestamp": entry.Time,
@@ -71,7 +71,7 @@ func (f *TextFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	if err := f.template.Execute(&buf, data); err != nil {
 		// Fallback: return a basic formatted message
 		f.logger.Debug("msg", "Template execution failed, using fallback",
-			"component", "text_formatter",
+			"component", "txt_formatter",
 			"error", err)
 
 		fallback := fmt.Sprintf("[%s] [%s] %s - %s\n",
@@ -92,6 +92,6 @@ func (f *TextFormatter) Format(entry core.LogEntry) ([]byte, error) {
 }
 
 // Returns the formatter name
-func (f *TextFormatter) Name() string {
+func (f *TxtFormatter) Name() string {
 	return "txt"
 }

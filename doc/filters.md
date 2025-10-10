@@ -1,268 +1,185 @@
-# Filter Guide
+# Filters
 
-LogWisp filters control which log entries pass through pipelines using regular expressions.
+LogWisp filters control which log entries pass through the pipeline using pattern matching.
 
-## How Filters Work
+## Filter Types
 
-- **Include**: Only matching logs pass (whitelist)
-- **Exclude**: Matching logs are dropped (blacklist)
-- Multiple filters apply sequentially - all must pass
+### Include Filter
 
-## Configuration
+Only entries matching patterns pass through.
 
-```toml
-[[pipelines.filters]]
-type = "include"    # or "exclude"
-logic = "or"        # or "and"
-patterns = [
-    "pattern1",
-    "pattern2"
-]
-```
-
-### Filter Types
-
-#### Include Filter
 ```toml
 [[pipelines.filters]]
 type = "include"
-logic = "or"
-patterns = ["ERROR", "WARN", "CRITICAL"]
-# Only ERROR, WARN, or CRITICAL logs pass
+logic = "or"  # or|and
+patterns = [
+    "ERROR",
+    "WARN",
+    "CRITICAL"
+]
 ```
 
-#### Exclude Filter
+### Exclude Filter
+
+Entries matching patterns are dropped.
+
 ```toml
 [[pipelines.filters]]
 type = "exclude"
-patterns = ["DEBUG", "TRACE", "/health"]
-# DEBUG, TRACE, and health checks are dropped
+patterns = [
+    "DEBUG",
+    "TRACE",
+    "health-check"
+]
 ```
 
-### Logic Operators
+## Configuration Options
 
-- **OR**: Match ANY pattern (default)
-- **AND**: Match ALL patterns
-
-```toml
-# OR Logic
-logic = "or"
-patterns = ["ERROR", "FAIL"]
-# Matches: "ERROR: disk full" OR "FAIL: timeout"
-
-# AND Logic
-logic = "and"
-patterns = ["database", "timeout", "ERROR"]
-# Matches: "ERROR: database connection timeout"
-# Not: "ERROR: file not found"
-```
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `type` | string | Required | Filter type (include/exclude) |
+| `logic` | string | "or" | Pattern matching logic (or/and) |
+| `patterns` | []string | Required | Pattern list |
 
 ## Pattern Syntax
 
-Go regular expressions (RE2):
+Patterns support regular expression syntax:
 
+### Basic Patterns
+- **Literal match**: `"ERROR"` - matches "ERROR" anywhere
+- **Case-insensitive**: `"(?i)error"` - matches "error", "ERROR", "Error"
+- **Word boundary**: `"\\berror\\b"` - matches whole word only
+
+### Advanced Patterns
+- **Alternation**: `"ERROR|WARN|FATAL"`
+- **Character classes**: `"[0-9]{3}"`
+- **Wildcards**: `".*exception.*"`
+- **Line anchors**: `"^ERROR"` (start), `"ERROR$"` (end)
+
+### Special Characters
+Escape special regex characters with backslash:
+- `.` → `\\.`
+- `*` → `\\*`
+- `[` → `\\[`
+- `(` → `\\(`
+
+## Filter Logic
+
+### OR Logic (default)
+Entry passes if ANY pattern matches:
 ```toml
-"ERROR"              # Substring match
-"(?i)error"          # Case-insensitive
-"\\berror\\b"        # Word boundaries
-"^ERROR"             # Start of line
-"ERROR$"             # End of line
-"error|fail|warn"    # Alternatives
+logic = "or"
+patterns = ["ERROR", "WARN"]
+# Passes: "ERROR in module", "WARN: low memory"
+# Blocks: "INFO: started"
 ```
 
-## Common Patterns
-
-### Log Levels
+### AND Logic
+Entry passes only if ALL patterns match:
 ```toml
-patterns = [
-    "\\[(ERROR|WARN|INFO)\\]",      # [ERROR] format
-    "(?i)\\b(error|warning)\\b",    # Word boundaries
-    "level=(error|warn)",           # key=value format
-]
+logic = "and"  
+patterns = ["database", "ERROR"]
+# Passes: "ERROR: database connection failed"
+# Blocks: "ERROR: file not found"
 ```
 
-### Application Errors
+## Filter Chain
+
+Multiple filters execute sequentially:
+
 ```toml
-# Java
-patterns = [
-    "Exception",
-    "at .+\\.java:[0-9]+",
-    "NullPointerException"
-]
-
-# Python
-patterns = [
-    "Traceback",
-    "File \".+\\.py\", line [0-9]+",
-    "ValueError|TypeError"
-]
-
-# Go
-patterns = [
-    "panic:",
-    "goroutine [0-9]+",
-    "runtime error:"
-]
-```
-
-### Performance Issues
-```toml
-patterns = [
-    "took [0-9]{4,}ms",           # >999ms operations
-    "timeout|timed out",
-    "slow query",
-    "high cpu|cpu usage: [8-9][0-9]%"
-]
-```
-
-### HTTP Patterns
-```toml
-patterns = [
-    "status[=:][4-5][0-9]{2}",    # 4xx/5xx codes
-    "HTTP/[0-9.]+ [4-5][0-9]{2}",
-    "\"/api/v[0-9]+/",            # API paths
-]
-```
-
-## Filter Chains
-
-### Error Monitoring
-```toml
-# Include errors
+# First filter: Include errors and warnings
 [[pipelines.filters]]
 type = "include"
-patterns = ["(?i)\\b(error|fail|critical)\\b"]
+patterns = ["ERROR", "WARN"]
 
-# Exclude known non-issues
+# Second filter: Exclude test environments
 [[pipelines.filters]]
 type = "exclude"
-patterns = ["Error: Expected", "/health"]
+patterns = ["test-env", "staging"]
 ```
 
-### API Monitoring
+Processing order:
+1. Entry arrives from source
+2. Include filter evaluates
+3. If passed, exclude filter evaluates
+4. If passed all filters, entry continues to sink
+
+## Performance Considerations
+
+### Pattern Compilation
+- Patterns compile once at startup
+- Invalid patterns cause startup failure
+- Complex patterns may impact performance
+
+### Optimization Tips
+- Place most selective filters first
+- Use simple patterns when possible
+- Combine related patterns with alternation
+- Avoid excessive wildcards (`.*`)
+
+## Filter Statistics
+
+Filters track:
+- Total entries evaluated
+- Entries passed
+- Entries blocked
+- Processing time per pattern
+
+## Common Use Cases
+
+### Log Level Filtering
 ```toml
-# Include API calls
 [[pipelines.filters]]
 type = "include"
-patterns = ["/api/", "/v[0-9]+/"]
+patterns = ["ERROR", "WARN", "FATAL", "CRITICAL"]
+```
 
-# Exclude successful
+### Application Filtering
+```toml
+[[pipelines.filters]]
+type = "include"
+patterns = ["app1", "app2", "app3"]
+```
+
+### Noise Reduction
+```toml
 [[pipelines.filters]]
 type = "exclude"
-patterns = ["\" 2[0-9]{2} "]
+patterns = [
+    "health-check",
+    "ping",
+    "/metrics",
+    "heartbeat"
+]
 ```
 
-## Performance Tips
-
-1. **Use anchors**: `^ERROR` faster than `ERROR`
-2. **Avoid nested quantifiers**: `((a+)+)+`
-3. **Non-capturing groups**: `(?:error|warn)`
-4. **Order by frequency**: Most common first
-5. **Simple patterns**: Faster than complex regex
-
-## Testing Filters
-
-```bash
-# Test configuration
-echo "[ERROR] Test" >> test.log
-echo "[INFO] Test" >> test.log
-
-# Run with debug
-logwisp --log-level debug
-
-# Check output
-curl -N http://localhost:8080/stream
+### Security Filtering
+```toml
+[[pipelines.filters]]
+type = "exclude"
+patterns = [
+    "password",
+    "token",
+    "api[_-]key",
+    "secret"
+]
 ```
 
-## Regex Pattern Guide
+### Multi-stage Filtering
+```toml
+# Include production logs
+[[pipelines.filters]]
+type = "include"
+patterns = ["prod-", "production"]
 
-LogWisp uses Go's standard regex engine (RE2). It includes most common features but omits backtracking-heavy syntax.
+# Include only errors
+[[pipelines.filters]]
+type = "include"
+patterns = ["ERROR", "EXCEPTION", "FATAL"]
 
-For complex logic, chain multiple filters (e.g., an `include` followed by an `exclude`) rather than writing one complex regex.
-
-### Basic Matching
-
-| Pattern | Description | Example |
-| :--- | :--- | :--- |
-| `literal` | Matches the exact text. | `"ERROR"` matches any log with "ERROR". |
-| `.` | Matches any single character (except newline). | `"user."` matches "userA", "userB", etc. |
-| `a\|b` | Matches expression `a` OR expression `b`. | `"error\|fail"` matches lines with "error" or "fail". |
-
-### Anchors and Boundaries
-
-Anchors tie your pattern to a specific position in the line.
-
-| Pattern | Description | Example |
-| :--- | :--- | :--- |
-| `^` | Matches the beginning of the line. | `"^ERROR"` matches lines *starting* with "ERROR". |
-| `$` | Matches the end of the line. | `"crashed$"` matches lines *ending* with "crashed". |
-| `\b` | Matches a word boundary. | `"\berror\b"` matches "error" but not "terrorist". |
-
-### Character Classes
-
-| Pattern | Description | Example |
-| :--- | :--- | :--- |
-| `[abc]` | Matches `a`, `b`, or `c`. | `"[aeiou]"` matches any vowel. |
-| `[^abc]` | Matches any character *except* `a`, `b`, or `c`. | `"[^0-9]"` matches any non-digit. |
-| `[a-z]` | Matches any character in the range `a` to `z`. | `"[a-zA-Z]"` matches any letter. |
-| `\d` | Matches any digit (`[0-9]`). | `\d{3}` matches three digits, like "123". |
-| `\w` | Matches any word character (`[a-zA-Z0-9_]`). | `\w+` matches one or more word characters. |
-| `\s` | Matches any whitespace character. | `\s+` matches one or more spaces or tabs. |
-
-### Quantifiers
-
-Quantifiers specify how many times a character or group must appear.
-
-| Pattern | Description | Example |
-| :--- | :--- | :--- |
-| `*` | Zero or more times. | `"a*"` matches "", "a", "aa". |
-| `+` | One or more times. | `"a+"` matches "a", "aa", but not "". |
-| `?` | Zero or one time. | `"colou?r"` matches "color" and "colour". |
-| `{n}` | Exactly `n` times. | `\d{4}` matches a 4-digit number. |
-| `{n,}` | `n` or more times. | `\d{2,}` matches numbers with 2 or more digits. |
-| `{n,m}` | Between `n` and `m` times. | `\d{1,3}` matches numbers with 1 to 3 digits. |
-
-### Grouping
-
-| Pattern | Description | Example |
-| :--- | :--- | :--- |
-| `(...)` | Groups an expression and captures the match. | `(ERROR|WARN)` captures "ERROR" or "WARN". |
-| `(?:...)`| Groups an expression *without* capturing. Faster. | `(?:ERROR|WARN)` is more efficient if you just need to group. |
-
-### Flags and Modifiers
-
-Flags are placed at the beginning of a pattern to change its behavior.
-
-| Pattern | Description |
-| :--- | :--- |
-| `(?i)` | Case-insensitive matching. |
-| `(?m)` | Multi-line mode (`^` and `$` match start/end of lines). |
-
-**Example:** `"(?i)error"` matches "error", "ERROR", and "Error".
-
-### Practical Examples for Logging
-
-*   **Match an IP Address:**
-    ```
-    \b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b
-    ```
-
-*   **Match HTTP 4xx or 5xx Status Codes:**
-    ```
-    "status[= ](4|5)\d{2}"
-    ```
-
-*   **Match a slow database query (>100ms):**
-    ```
-    "Query took [1-9]\d{2,}ms"
-    ```
-
-*   **Match key-value pairs:**
-    ```
-    "user=(admin|guest)"
-    ```
-
-*   **Match Java exceptions:**
-    ```
-    "Exception:|at .+\.java:\d+"
-    ```
+# Exclude known issues
+[[pipelines.filters]]
+type = "exclude"
+patterns = ["ECONNRESET", "broken pipe"]
+```

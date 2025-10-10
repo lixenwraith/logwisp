@@ -24,6 +24,7 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
+// TODO: implement heartbeat for HTTP Client Sink, similar to HTTP Sink
 // Forwards log entries to a remote HTTP endpoint
 type HTTPClientSink struct {
 	input         chan core.LogEntry
@@ -338,11 +339,6 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 
 		case "none":
 			// No authentication
-		}
-
-		// Set headers
-		for k, v := range h.config.Headers {
-			req.Header.Set(k, v)
 		}
 
 		// Send request

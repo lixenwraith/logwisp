@@ -1,343 +1,168 @@
 # Architecture Overview
 
-LogWisp implements a flexible pipeline architecture for real-time log processing and streaming.
+LogWisp implements a pipeline-based architecture for flexible log processing and distribution.
 
-## Core Architecture
+## Core Concepts
+
+### Pipeline Model
+
+Each pipeline operates independently with a source → filter → format → sink flow. Multiple pipelines can run concurrently within a single LogWisp instance, each processing different log streams with unique configurations.
+
+### Component Hierarchy
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              LogWisp Service                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌─────────────────────────── Pipeline 1 ───────────────────────────┐   │
-│  │                                                                  │   │
-│  │  Sources           Filters              Sinks                    │   │
-│  │  ┌──────┐        ┌────────┐          ┌──────┐                    │   │
-│  │  │ Dir  │──┐     │Include │     ┌────│ HTTP │←── Client 1        │   │
-│  │  └──────┘  ├────▶│ ERROR  │     │    └──────┘                    │   │
-│  │            │     │  WARN  │────▶├────┌──────┐                    │   │
-│  │  ┌──────┐  │     └────┬───┘     │    │ File │                    │   │
-│  │  │ HTTP │──┤          ▼         │    └──────┘                    │   │
-│  │  └──────┘  │     ┌────────┐     │    ┌──────┐                    │   │
-│  │  ┌──────┐  │     │Exclude │     └────│ TCP  │←── Client 2        │   │
-│  │  │ TCP  │──┘     │ DEBUG  │          └──────┘                    │   │
-│  │  └──────┘        └────────┘                                      │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────── Pipeline 2 ───────────────────────────┐   │
-│  │                                                                  │   │
-│  │  ┌──────┐                            ┌───────────┐               │   │
-│  │  │Stdin │───────────────────────┬───▶│HTTP Client│──► Remote     │   │
-│  │  └──────┘         (No Filters)  │    └───────────┘               │   │
-│  │                                 │    ┌───────────┐               │   │
-│  │                                 └────│TCP Client │──► Remote     │   │
-│  │                                      └───────────┘               │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│  ┌─────────────────────────── Pipeline N ───────────────────────────┐   │
-│  │  Multiple Sources → Filter Chain → Multiple Sinks                │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+Service (Main Process)
+├── Pipeline 1
+│   ├── Sources (1 or more)
+│   ├── Rate Limiter (optional)
+│   ├── Filter Chain (optional)
+│   ├── Formatter (optional)
+│   └── Sinks (1 or more)
+├── Pipeline 2
+│   └── [Same structure]
+└── Status Reporter (optional)
 ```
 
 ## Data Flow
 
-```
-Log Entry Flow:
+### Processing Stages
 
-┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐
-│  Source │     │  Parse  │     │ Filter  │     │  Sink   │
-│ Monitor │────▶│  Entry  │────▶│  Chain  │────▶│ Deliver │
-└─────────┘     └─────────┘     └─────────┘     └─────────┘
-     │               │               │               │
-     ▼               ▼               ▼               ▼
-  Detect         Extract         Include/        Send to
-  Input          & Format        Exclude         Clients
+1. **Source Stage**: Sources monitor inputs and generate log entries
+2. **Rate Limiting**: Optional pipeline-level rate control
+3. **Filtering**: Pattern-based inclusion/exclusion
+4. **Formatting**: Transform entries to desired output format
+5. **Distribution**: Fan-out to multiple sinks
 
+### Entry Lifecycle
 
-Entry Processing:
+Log entries flow through the pipeline as `core.LogEntry` structures containing:
+- **Time**: Entry timestamp
+- **Level**: Log level (DEBUG, INFO, WARN, ERROR)
+- **Source**: Origin identifier
+- **Message**: Log content
+- **Fields**: Additional metadata (JSON)
+- **RawSize**: Original entry size
 
-1. Source Detection     2. Entry Creation      3. Filter Application
-   ┌──────────┐           ┌────────────┐         ┌─────────────┐
-   │New Entry │           │ Timestamp  │         │  Filter 1   │
-   │Detected  │──────────▶│   Level    │────────▶│ Include?    │
-   └──────────┘           │  Message   │         └──────┬──────┘
-                          └────────────┘                │
-                                                        ▼
-4. Sink Distribution                             ┌─────────────┐
-   ┌──────────┐                                  │  Filter 2   │
-   │   HTTP   │◀───┐                             │ Exclude?    │
-   └──────────┘    │                             └──────┬──────┘
-   ┌──────────┐    │                                    │
-   │   TCP    │◀───┼────────── Entry ◀──────────────────┘
-   └──────────┘    │           (if passed)
-   ┌──────────┐    │
-   │   File   │◀───┤
-   └──────────┘    │
-   ┌──────────┐    │
-   │ HTTP/TCP │◀───┘
-   │  Client  │
-   └──────────┘
-```
+### Buffering Strategy
 
-## Component Details
+Each component maintains internal buffers to handle burst traffic:
+- Sources: Configurable buffer size (default 1000 entries)
+- Sinks: Independent buffers per sink
+- Network components: Additional TCP/HTTP buffers
 
-### Sources
+## Component Types
 
-Sources monitor inputs and generate log entries:
+### Sources (Input)
 
-```
-Directory Source:
-┌─────────────────────────────────┐
-│        Directory Monitor        │
-├─────────────────────────────────┤
-│ • Pattern Matching (*.log)      │
-│ • File Rotation Detection       │
-│ • Position Tracking             │
-│ • Concurrent File Watching      │
-└─────────────────────────────────┘
-           │
-           ▼
-    ┌──────────────┐
-    │ File Watcher │ (per file)
-    ├──────────────┤
-    │ • Read New   │
-    │ • Track Pos  │
-    │ • Detect Rot │
-    └──────────────┘
+- **Directory Source**: File system monitoring with rotation detection
+- **Stdin Source**: Standard input processing
+- **HTTP Source**: REST endpoint for log ingestion
+- **TCP Source**: Raw TCP socket listener
 
-HTTP/TCP Sources:
-┌─────────────────────────────────┐
-│      Network Listener           │
-├─────────────────────────────────┤
-│ • JSON Parsing                  │
-│ • Rate Limiting                 │
-│ • Connection Management         │
-│ • Input Validation              │
-└─────────────────────────────────┘
-```
+### Sinks (Output)
 
-### Filters
+- **Console Sink**: stdout/stderr output
+- **File Sink**: Rotating file writer
+- **HTTP Sink**: Server-Sent Events (SSE) streaming
+- **TCP Sink**: TCP server for client connections
+- **HTTP Client Sink**: Forward to remote HTTP endpoints
+- **TCP Client Sink**: Forward to remote TCP servers
 
-Filters process entries through pattern matching:
+### Processing Components
 
-```
-Filter Chain:
-                 ┌─────────────┐
-Entry ──────────▶│  Filter 1   │
-                 │  (Include)  │
-                 └──────┬──────┘
-                        │ Pass?
-                        ▼
-                 ┌─────────────┐
-                 │  Filter 2   │
-                 │  (Exclude)  │
-                 └──────┬──────┘
-                        │ Pass?
-                        ▼
-                 ┌─────────────┐
-                 │  Filter N   │
-                 └──────┬──────┘
-                        │
-                        ▼
-                    To Sinks
-```
-
-### Sinks
-
-Sinks deliver processed entries to destinations:
-
-```
-HTTP Sink (SSE):
-┌───────────────────────────────────┐
-│            HTTP Server            │
-├───────────────────────────────────┤
-│    ┌─────────┐    ┌─────────┐     │
-│    │ Stream  │    │ Status  │     │
-│    │Endpoint │    │Endpoint │     │
-│    └────┬────┘    └────┬────┘     │
-│         │              │          │
-│    ┌────▼──────────────▼────┐     │
-│    │   Connection Manager   │     │
-│    ├────────────────────────┤     │
-│    │ • Rate Limiting        │     │
-│    │ • Heartbeat            │     │
-│    │ • Buffer Management    │     │
-│    └────────────────────────┘     │
-└───────────────────────────────────┘
-
-TCP Sink:
-┌───────────────────────────────────┐
-│            TCP Server             │
-├───────────────────────────────────┤
-│    ┌────────────────────────┐     │
-│    │    gnet Event Loop     │     │
-│    ├────────────────────────┤     │
-│    │ • Async I/O            │     │
-│    │ • Connection Pool      │     │
-│    │ • Rate Limiting        │     │
-│    └────────────────────────┘     │
-└───────────────────────────────────┘
-
-Client Sinks:
-┌───────────────────────────────────┐
-│       HTTP/TCP Client             │
-├───────────────────────────────────┤
-│    ┌────────────────────────┐     │
-│    │    Output Manager      │     │
-│    ├────────────────────────┤     │
-│    │ • Batching             │     │
-│    │ • Retry Logic          │     │
-│    │ • Connection Pooling   │     │
-│    │ • Failover             │     │
-│    └────────────────────────┘     │
-└───────────────────────────────────┘
-```
-
-## Router Mode
-
-In router mode, multiple pipelines share HTTP ports:
-
-```
-Router Architecture:
-                    ┌─────────────────┐
-                    │   HTTP Router   │
-                    │    Port 8080    │
-                    └────────┬────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-   /app/stream          /db/stream         /sys/stream
-        │                    │                    │
-   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
-   │Pipeline │          │Pipeline │          │Pipeline │
-   │  "app"  │          │  "db"   │          │  "sys"  │
-   └─────────┘          └─────────┘          └─────────┘
-
-Path Routing:
-Client Request ──▶ Router ──▶ Parse Path ──▶ Find Pipeline ──▶ Route
-                                  │
-                                  ▼
-                           Extract Pipeline Name
-                           from /pipeline/endpoint
-```
-
-## Memory Management
-
-```
-Buffer Flow:
-┌──────────┐     ┌──────────┐     ┌──────────┐
-│  Source  │     │ Pipeline │     │   Sink   │
-│  Buffer  │────▶│  Buffer  │────▶│  Buffer  │
-│ (1000)   │     │  (chan)  │     │ (1000)   │
-└──────────┘     └──────────┘     └──────────┘
-     │                │                 │
-     ▼                ▼                 ▼
- Drop if full    Backpressure      Drop if full
- (counted)        (blocking)        (counted)
-
-Client Sinks:
-┌──────────┐     ┌──────────┐     ┌──────────┐
-│  Entry   │     │  Batch   │     │  Send    │
-│  Buffer  │────▶│  Buffer  │────▶│  Queue   │
-│ (1000)   │     │ (100)    │     │  (retry) │
-└──────────┘     └──────────┘     └──────────┘
-```
-
-## Rate Limiting
-
-```
-Token Bucket Algorithm:
-┌─────────────────────────────┐
-│        Token Bucket         │
-├─────────────────────────────┤
-│ Capacity: burst_size        │
-│ Refill: requests_per_second │
-│                             │
-│   ┌─────────────────────┐   │
-│   │ ● ● ● ● ● ● ○ ○ ○ ○ │   │
-│   └─────────────────────┘   │
-│    6/10 tokens available    │
-└─────────────────────────────┘
-         │
-         ▼
-   Request arrives
-         │
-         ▼
-   Token available? ──No──▶ Reject (429)
-         │
-        Yes
-         ▼
-   Consume token ──▶ Allow request
-```
+- **Rate Limiter**: Token bucket algorithm for flow control
+- **Filter Chain**: Sequential pattern matching
+- **Formatters**: Raw, JSON, or template-based text transformation
 
 ## Concurrency Model
 
-```
-Goroutine Structure:
+### Goroutine Architecture
 
-Main ────┬──── Pipeline 1 ────┬──── Source Reader 1
-         │                    ├──── Source Reader 2
-         │                    ├──── HTTP Server
-         │                    ├──── TCP Server
-         │                    ├──── Filter Processor
-         │                    ├──── HTTP Client Writer
-         │                    └──── TCP Client Writer
-         │
-         ├──── Pipeline 2 ────┬──── Source Reader
-         │                    └──── Sink Writers
-         │
-         └──── HTTP Router (if enabled)
+- Each source runs in dedicated goroutines for monitoring
+- Sinks operate independently with their own processing loops
+- Network listeners use optimized event loops (gnet for TCP)
+- Pipeline processing uses channel-based communication
 
-Channel Communication:
-Source ──chan──▶ Filter ──chan──▶ Sink
-  │                                 │
-  └── Non-blocking send ────────────┘
-      (drop & count if full)
-```
+### Synchronization
 
-## Configuration Loading
+- Atomic counters for statistics
+- Read-write mutexes for configuration access
+- Context-based cancellation for graceful shutdown
+- Wait groups for coordinated startup/shutdown
 
-```
-Priority Order:
-1. CLI Flags ─────────┐
-2. Environment Vars ──┼──▶ Merge ──▶ Final Config
-3. Config File ───────┤
-4. Defaults ──────────┘
+## Network Architecture
 
-Example:
-CLI:     --logging.level debug
-Env:     LOGWISP_PIPELINES_0_NAME=app
-File:    pipelines.toml
-Default: buffer_size = 1000
-```
+### Connection Patterns
 
-## Security Architecture
+**Chaining Design**:
+- TCP Client Sink → TCP Source: Direct TCP forwarding
+- HTTP Client Sink → HTTP Source: HTTP-based forwarding
 
-```
-Security Layers:
+**Monitoring Design**:
+- TCP Sink: Debugging interface
+- HTTP Sink: Browser-based live monitoring
 
-┌─────────────────────────────────────┐
-│         Network Layer               │
-├─────────────────────────────────────┤
-│ • Rate Limiting (per IP/global)     │
-│ • Connection Limits                 │
-│ • TLS/SSL (planned)                 │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│      Authentication Layer           │
-├─────────────────────────────────────┤
-│ • Basic Auth (planned)              │
-│ • Bearer Tokens (planned)           │
-│ • IP Whitelisting (planned)         │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│      Application Layer              │
-├─────────────────────────────────────┤
-│ • Input Validation                  │
-│ • Path Traversal Prevention         │
-│ • Resource Limits                   │
-└─────────────────────────────────────┘
-```
+### Protocol Support
+
+- HTTP/1.1 and HTTP/2 for HTTP connections
+- Raw TCP with optional SCRAM authentication
+- TLS 1.2/1.3 for HTTPS connections (HTTP only)
+- Server-Sent Events for real-time streaming
+
+## Resource Management
+
+### Memory Management
+
+- Bounded buffers prevent unbounded growth
+- Automatic garbage collection via Go runtime
+- Connection limits prevent resource exhaustion
+
+### File Management
+
+- Automatic rotation based on size thresholds
+- Retention policies for old log files
+- Minimum disk space checks before writing
+
+### Connection Management
+
+- Per-IP connection limits
+- Global connection caps
+- Automatic reconnection with exponential backoff
+- Keep-alive for persistent connections
+
+## Reliability Features
+
+### Fault Tolerance
+
+- Panic recovery in pipeline processing
+- Independent pipeline operation
+- Automatic source restart on failure
+- Sink failure isolation
+
+### Data Integrity
+
+- Entry validation at ingestion
+- Size limits for entries and batches
+- Duplicate detection in file monitoring
+- Position tracking for file reads
+
+## Performance Characteristics
+
+### Throughput
+
+- Pipeline rate limiting: Configurable (default 1000 entries/second)
+- Network throughput: Limited by network and sink capacity
+- File monitoring: Sub-second detection (default 100ms interval)
+
+### Latency
+
+- Entry processing: Sub-millisecond in-memory
+- Network forwarding: Depends on batch configuration
+- File detection: Configurable check interval
+
+### Scalability
+
+- Horizontal: Multiple LogWisp instances with different configurations
+- Vertical: Multiple pipelines per instance
+- Fan-out: Multiple sinks per pipeline
+- Fan-in: Multiple sources per pipeline

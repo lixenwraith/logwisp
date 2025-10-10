@@ -1,319 +1,408 @@
+###############################################################################
 ### LogWisp Configuration
 ### Default location: ~/.config/logwisp/logwisp.toml
 ### Configuration Precedence: CLI flags > Environment > File > Defaults
 ### Default values shown - uncommented lines represent active configuration
+###############################################################################
 
+###############################################################################
 ### Global Settings
-background = false                # Run as daemon
-quiet = false                     # Suppress console output
-disable_status_reporter = false   # Disable status logging
-config_auto_reload = false        # Reload config on file change
-config_save_on_exit = false       # Persist runtime changes
+###############################################################################
 
+background = false                    # Run as daemon
+quiet = false                         # Suppress console output
+disable_status_reporter = false       # Disable periodic status logging
+config_auto_reload = false            # Reload config on file change
+
+###############################################################################
 ### Logging Configuration
-[logging]
-output = "stdout"                 # file|stdout|stderr|both|none
-level = "info"                    # debug|info|warn|error
+###############################################################################
 
-[logging.file]
-directory = "./log"               # Log directory path
-name = "logwisp"                  # Base filename
-max_size_mb = 100                 # Rotation threshold
-max_total_size_mb = 1000          # Total size limit
-retention_hours = 168.0           # Delete logs older than (7 days)
+[logging]
+output = "stdout"                     # file|stdout|stderr|split|all|none
+level = "info"                        # debug|info|warn|error
+
+# [logging.file]
+# directory = "./log"                 # Log directory path
+# name = "logwisp"                    # Base filename
+# max_size_mb = 100                   # Rotation threshold
+# max_total_size_mb = 1000            # Total size limit
+# retention_hours = 168.0             # Delete logs older than (7 days)
 
 [logging.console]
-target = "stdout"                 # stdout|stderr|split
-format = "txt"                    # txt|json
+target = "stdout"                     # stdout|stderr|split
+format = "txt"                        # txt|json
 
+###############################################################################
 ### Pipeline Configuration
+###############################################################################
+
 [[pipelines]]
-name = "default"                  # Pipeline identifier
+name = "default"                      # Pipeline identifier
 
+###============================================================================
 ### Rate Limiting (Pipeline-level)
+###============================================================================
+
 # [pipelines.rate_limit]
-# rate = 0.0                       # Entries per second (0=disabled)
-# burst = 0.0                      # Burst capacity (defaults to rate)
-# policy = "pass"                  # pass|drop
-# max_entry_size_bytes = 0         # Max entry size (0=unlimited)
+# rate = 1000.0                        # Entries per second (0=disabled)
+# burst = 2000.0                       # Burst capacity (defaults to rate)
+# policy = "drop"                      # pass|drop
+# max_entry_size_bytes = 0             # Max entry size (0=unlimited)
 
+###============================================================================
 ### Filters
-# [[pipelines.filters]]
-# type = "include"                 # include|exclude
-# logic = "or"                     # or|and
-# patterns = [".*ERROR.*", ".*WARN.*"]  # Regex patterns
+###============================================================================
 
-### Sources
+### ⚠️ Example: Include only ERROR and WARN logs
+## [[pipelines.filters]]
+## type = "include"                     # include|exclude
+## logic = "or"                         # or|and
+## patterns = [".*ERROR.*", ".*WARN.*"]
 
-### Directory Source
+### ⚠️ Example: Exclude debug logs
+## [[pipelines.filters]]
+## type = "exclude"
+## patterns = [".*DEBUG.*"]
+
+###============================================================================
+### Format Configuration
+###============================================================================
+
+# [pipelines.format]
+# type = "raw"                         # json|txt|raw
+
+### Raw formatter options (default)
+# [pipelines.format.raw]
+# add_new_line = true                  # Add newline to messages
+
+### JSON formatter options
+# [pipelines.format.json]
+# pretty = false                       # Pretty print JSON
+# timestamp_field = "timestamp"        # Field name for timestamp
+# level_field = "level"                # Field name for log level
+# message_field = "message"            # Field name for message
+# source_field = "source"              # Field name for source
+
+### Text formatter options
+# [pipelines.format.txt]
+# template = "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}"
+# timestamp_format = "2006-01-02T15:04:05.000Z07:00"   # Go time format string
+
+###============================================================================
+### Sources (Input Sources)
+###============================================================================
+
+###----------------------------------------------------------------------------
+### Directory Source (Active Default)
 [[pipelines.sources]]
 type = "directory"
 
-[pipelines.sources.options]
-path = "./"                       # Directory to monitor
-pattern = "*.log"                 # Glob pattern
-check_interval_ms = 100           # Scan interval (min: 10ms)
+[pipelines.sources.directory]
+path = "./"                           # Watch directory
+pattern = "*.log"                     # File pattern (glob)
+check_interval_ms = 100               # Poll interval
+recursive = false                     # Scan subdirectories
 
+###----------------------------------------------------------------------------
 ### Stdin Source
 # [[pipelines.sources]]
 # type = "stdin"
 
-# [pipelines.sources.options]
-# buffer_size = 1000               # Input buffer size
+# [pipelines.sources.stdin]
+# buffer_size = 1000                  # Internal buffer size
 
-### HTTP Source
+###----------------------------------------------------------------------------
+### HTTP Source (Receives via POST)
 # [[pipelines.sources]]
 # type = "http"
 
-# [pipelines.sources.options]
-# host = "0.0.0.0"                 # Listen address
-# port = 8081                      # Listen port
-# ingest_path = "/ingest"          # Ingest endpoint
-# buffer_size = 1000               # Input buffer size
-# max_body_size = 1048576          # Max request size bytes
+# [pipelines.sources.http]
+# host = "0.0.0.0"                    # Listen address
+# port = 8081                         # Listen port
+# ingest_path = "/ingest"             # Ingest endpoint
+# buffer_size = 1000                  # Internal buffer size
+# max_body_size = 1048576             # Max request body (1MB)
+# read_timeout_ms = 10000             # Read timeout
+# write_timeout_ms = 10000            # Write timeout
 
-# [pipelines.sources.options.tls]
-# enabled = false                  # Enable TLS
-# cert_file = ""                   # Server certificate
-# key_file = ""                    # Server key
-# client_auth = false              # Require client certs
-# client_ca_file = ""              # Client CA cert
-# verify_client_cert = false       # Verify client certs
-# insecure_skip_verify = false     # Skip verification (server-side)
-# ca_file = ""                     # Custom CA file
-# min_version = "TLS1.2"           # Min TLS version
-# max_version = "TLS1.3"           # Max TLS version
-# cipher_suites = ""               # Comma-separated list
+### TLS configuration
+# [pipelines.sources.http.tls]
+# enabled = false
+# cert_file = "/path/to/cert.pem"
+# key_file = "/path/to/key.pem"
+# ca_file = "/path/to/ca.pem"
+# min_version = "TLS1.2"              # TLS1.2|TLS1.3
+# client_auth = false                 # Require client certs
+# client_ca_file = "/path/to/ca.pem"  # CA to validate client certs
+# verify_client_cert = true           # Require valid client cert
 
-# [pipelines.sources.options.net_limit]
-# enabled = false                  # Enable rate limiting
-# ip_whitelist = []                # Allowed IPs/CIDRs (IPv4 only)
-# ip_blacklist = []                # Blocked IPs/CIDRs (IPv4 only)
-# requests_per_second = 100.0      # Rate limit per client
-# burst_size = 100                 # Burst capacity
-# response_code = 429              # HTTP status when limited
+### ⚠️ Example: TLS configuration to enable auth)
+## [pipelines.sources.http.tls]
+## enabled = true                      # MUST be true for auth
+## cert_file = "/path/to/server.pem"
+## key_file = "/path/to/server.key"
+
+### Network limiting (access control)
+# [pipelines.sources.http.net_limit]
+# enabled = false
+# max_connections_per_ip = 10
+# max_connections_total = 100
+# requests_per_second = 100.0         # Rate limit per client
+# burst_size = 200                    # Token bucket burst
+# response_code = 429                 # HTTP rate limit response code
 # response_message = "Rate limit exceeded"
-# max_connections_per_ip = 10      # Max concurrent per IP
-# max_connections_total = 1000     # Max total connections
+# ip_whitelist = []
+# ip_blacklist = []
 
-### TCP Source
+### Authentication (validates clients)
+### ☢ SECURITY: HTTP auth REQUIRES TLS to be enabled
+# [pipelines.sources.http.auth]
+# type = "none"                       # none|basic|token|mtls (NO scram)
+# realm = "LogWisp"                   # For basic auth
+
+### Basic auth users
+# [[pipelines.sources.http.auth.basic.users]]
+# username = "admin"
+# password_hash = "$argon2..."        # Argon2 hash
+
+### Token auth tokens
+# [pipelines.sources.http.auth.token]
+# tokens = ["token1", "token2"]
+
+###----------------------------------------------------------------------------
+### TCP Source (Receives logs via TCP Client Sink)
 # [[pipelines.sources]]
 # type = "tcp"
 
-# [pipelines.sources.options]
-# host = "0.0.0.0"                 # Listen address
-# port = 9091                      # Listen port
-# buffer_size = 1000               # Input buffer size
+# [pipelines.sources.tcp]
+# host = "0.0.0.0"                    # Listen address
+# port = 9091                         # Listen port
+# buffer_size = 1000                  # Internal buffer size
+# read_timeout_ms = 10000             # Read timeout
+# keep_alive = true                   # Enable TCP keep-alive
+# keep_alive_period_ms = 30000        # Keep-alive interval
 
-# [pipelines.sources.options.net_limit]
-# enabled = false                  # Enable rate limiting
-# ip_whitelist = []                # Allowed IPs/CIDRs (IPv4 only)
-# ip_blacklist = []                # Blocked IPs/CIDRs (IPv4 only)
-# requests_per_second = 100.0      # Rate limit per client
-# burst_size = 100                 # Burst capacity
-# response_code = 429              # TCP rejection
-# response_message = "Rate limit exceeded"
-# max_connections_per_ip = 10      # Max concurrent per IP
-# max_connections_per_user = 10    # Max concurrent per user
-# max_connections_per_token = 10   # Max concurrent per token
-# max_connections_total = 1000     # Max total connections
+### ☣ WARNING: TCP has NO TLS support (gnet limitation)
+### Use HTTP with TLS for encrypted transport
 
-### Format Configuration
+### Network limiting (access control)
+# [pipelines.sources.tcp.net_limit]
+# enabled = false
+# max_connections_per_ip = 10
+# max_connections_total = 100
+# requests_per_second = 100.0
+# burst_size = 200
+# ip_whitelist = []
+# ip_blacklist = []
 
-### Raw formatter (default - passes through unchanged)
-# format = "raw"
-### No options for raw formatter
+### Authentication
+# [pipelines.sources.tcp.auth]
+# type = "none"                       # none|scram ONLY (no basic/token/mtls)
 
-### JSON formatter
-# format = "json"
-# [pipelines.format_options]
-# pretty = false                   # Pretty-print JSON
-# timestamp_field = "timestamp"    # Timestamp field name
-# level_field = "level"            # Level field name
-# message_field = "message"        # Message field name
-# source_field = "source"          # Source field name
+### SCRAM auth users for TCP Source
+# [[pipelines.sources.tcp.auth.scram.users]]
+# username = "user1"
+# stored_key = "base64..."            # Pre-computed SCRAM keys
+# server_key = "base64..."
+# salt = "base64..."
+# argon_time = 3
+# argon_memory = 65536
+# argon_threads = 4
 
-### Text formatter
-# format = "txt"
-# [pipelines.format_options]
-# template = "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}{{ if .Fields }} {{.Fields}}{{ end }}"
-# timestamp_format = "2006-01-02T15:04:05Z07:00"  # Go time format
+###============================================================================
+### Sinks (Output Destinations)
+###============================================================================
 
-### Sinks
-
-### HTTP Sink (SSE Server)
+###----------------------------------------------------------------------------
+### Console Sink (Active Default)
 [[pipelines.sinks]]
-type = "http"
+type = "console"
 
-[pipelines.sinks.options]
-host = "0.0.0.0"                  # Listen address
-port = 8080                       # Server port
-buffer_size = 1000                # Buffer size
-stream_path = "/stream"           # SSE endpoint
-status_path = "/status"           # Status endpoint
+[pipelines.sinks.console]
+target = "stdout"                     # stdout|stderr|split
+colorize = false                      # Enable colored output
+buffer_size = 100                     # Internal buffer size
 
-[pipelines.sinks.options.heartbeat]
-enabled = true                    # Send heartbeats
-interval_seconds = 30             # Heartbeat interval
-include_timestamp = true          # Include timestamp
-include_stats = false             # Include statistics
-format = "comment"                # comment|message
-
-# [pipelines.sinks.options.tls]
-# enabled = false                  # Enable TLS
-# cert_file = ""                   # Server certificate
-# key_file = ""                    # Server key
-# client_auth = false              # Require client certs
-# client_ca_file = ""              # Client CA cert
-# verify_client_cert = false       # Verify client certs
-# insecure_skip_verify = false     # Skip verification
-# ca_file = ""                     # Custom CA file
-# min_version = "TLS1.2"           # Min TLS version
-# max_version = "TLS1.3"           # Max TLS version
-# cipher_suites = ""               # Comma-separated list
-
-# [pipelines.sinks.options.net_limit]
-# enabled = false                  # Enable rate limiting
-# ip_whitelist = []                # Allowed IPs/CIDRs (IPv4 only)
-# ip_blacklist = []                # Blocked IPs/CIDRs (IPv4 only)
-# requests_per_second = 100.0      # Rate limit per client
-# burst_size = 100                 # Burst capacity
-# response_code = 429              # HTTP status when limited
-# response_message = "Rate limit exceeded"
-# max_connections_per_ip = 10      # Max concurrent per IP
-# max_connections_total = 1000     # Max total connections
-
-### TCP Sink (TCP Server)
-# [[pipelines.sinks]]
-# type = "tcp"
-
-# [pipelines.sinks.options]
-# host = "0.0.0.0"                 # Listen address
-# port = 9090                      # Server port
-# buffer_size = 1000               # Buffer size
-# auth_type = "none"               # none|scram
-
-# [pipelines.sinks.options.heartbeat]
-# enabled = false                  # Send heartbeats
-# interval_seconds = 30            # Heartbeat interval
-# include_timestamp = false        # Include timestamp
-# include_stats = false            # Include statistics
-# format = "comment"               # comment|message
-
-# [pipelines.sinks.options.net_limit]
-# enabled = false                  # Enable rate limiting
-# ip_whitelist = []                # Allowed IPs/CIDRs (IPv4 only)
-# ip_blacklist = []                # Blocked IPs/CIDRs (IPv4 only)
-# requests_per_second = 100.0      # Rate limit per client
-# burst_size = 100                 # Burst capacity
-# response_code = 429              # TCP rejection code
-# response_message = "Rate limit exceeded"
-# max_connections_per_ip = 10      # Max concurrent per IP
-# max_connections_per_user = 10    # Max concurrent per user
-# max_connections_per_token = 10   # Max concurrent per token
-# max_connections_total = 1000     # Max total connections
-
-# [pipelines.sinks.options.scram]
-# username = ""                    # SCRAM auth username
-# password = ""                    # SCRAM auth password
-
-### HTTP Client Sink (Forward to remote HTTP endpoint)
-# [[pipelines.sinks]]
-# type = "http_client"
-
-# [pipelines.sinks.options]
-# url = ""                         # Target URL (required)
-# buffer_size = 1000               # Buffer size
-# batch_size = 100                 # Entries per batch
-# batch_delay_ms = 1000            # Batch timeout
-# timeout_seconds = 30             # Request timeout
-# max_retries = 3                  # Retry attempts
-# retry_delay_ms = 1000            # Initial retry delay
-# retry_backoff = 2.0              # Exponential backoff multiplier
-# insecure_skip_verify = false     # Skip TLS verification
-# auth_type = "none"               # none|basic|bearer|mtls
-
-
-# [pipelines.sinks.options.basic]
-# username = ""                    # Basic auth username
-# password_hash = ""               # Argon2 password hash
-
-# [pipelines.sinks.options.bearer]
-# token = ""                       # Bearer token
-
-====== not needed:
-## Custom HTTP headers
-# [pipelines.sinks.options.headers]
-# Content-Type = "application/json"
-# Authorization = "Bearer token"
-
-## Client certificate for mTLS
-# [pipelines.sinks.options.tls]
-# ca_file = ""                     # Custom CA certificate
-# cert_file = ""                   # Client certificate
-# key_file = ""                    # Client key
-
-### TCP Client Sink (Forward to remote TCP endpoint)
-# [[pipelines.sinks]]
-# type = "tcp_client"
-
-# [pipelines.sinks.options]
-# address = ""                     # host:port (required)
-# buffer_size = 1000               # Buffer size
-# dial_timeout_seconds = 10        # Connection timeout
-# write_timeout_seconds = 30       # Write timeout
-# read_timeout_seconds = 10        # Read timeout
-# keep_alive_seconds = 30          # TCP keepalive
-# reconnect_delay_ms = 1000        # Initial reconnect delay
-# max_reconnect_delay_seconds = 30 # Max reconnect delay
-# reconnect_backoff = 1.5          # Exponential backoff multiplier
-
-
-# [pipelines.sinks.options.scram]
-# username = ""                    # Auth username
-# password_hash = ""               # Argon2 password hash
-
+###----------------------------------------------------------------------------
 ### File Sink
 # [[pipelines.sinks]]
 # type = "file"
 
-# [pipelines.sinks.options]
-# directory = "./"                 # Output dir
-# name = "logwisp.output"          # Base name
-# buffer_size = 1000               # Input channel buffer
-# max_size_mb = 100                # Rotation size
-# max_total_size_mb = 0            # Total limit (0=unlimited)
-# retention_hours = 0.0            # Retention (0=disabled)
-# min_disk_free_mb = 1000          # Disk space guard
+# [pipelines.sinks.file]
+# directory = "./logs"                # Output directory
+# name = "output"                     # Base filename
+# max_size_mb = 100                   # Rotation threshold
+# max_total_size_mb = 1000            # Total size limit
+# min_disk_free_mb = 500              # Minimum free disk space
+# retention_hours = 168.0             # Delete logs older than (7 days)
+# buffer_size = 1000                  # Internal buffer size
+# flush_interval_ms = 1000            # Force flush interval
 
-### Console Sinks
+###----------------------------------------------------------------------------
+### HTTP Sink (SSE streaming to browser/HTTP client)
 # [[pipelines.sinks]]
-# type = "console"
+# type = "http"
 
-# [pipelines.sinks.options]
-# target = "stdout"                # stdout|stderr|split
-# buffer_size = 1000               # Buffer size
+# [pipelines.sinks.http]
+# host = "0.0.0.0"                    # Listen address
+# port = 8080                         # Listen port
+# stream_path = "/stream"             # SSE stream endpoint
+# status_path = "/status"             # Status endpoint
+# buffer_size = 1000                  # Internal buffer size
+# max_connections = 100               # Max concurrent clients
+# read_timeout_ms = 10000             # Read timeout
+# write_timeout_ms = 10000            # Write timeout
 
-### Authentication Configuration
-# [pipelines.auth]
-# type = "none"                    # none|basic|bearer|mtls
+### Heartbeat configuration (keeps SSE alive)
+# [pipelines.sinks.http.heartbeat]
+# enabled = true
+# interval_ms = 30000                 # 30 seconds
+# include_timestamp = true
+# include_stats = false
+# format = "comment"                  # comment|event|json
 
-### Basic Authentication
-# [pipelines.auth.basic_auth]
-# realm = "LogWisp"                # WWW-Authenticate realm
-# users_file = ""                  # External users file path
+### TLS configuration
+# [pipelines.sinks.http.tls]
+# enabled = false
+# cert_file = "/path/to/cert.pem"
+# key_file = "/path/to/key.pem"
+# ca_file = "/path/to/ca.pem"
+# min_version = "TLS1.2"              # TLS1.2|TLS1.3
+# client_auth = false                 # Require client certs
 
-# [[pipelines.auth.basic_auth.users]]
-# username = ""                    # Username
-# password_hash = ""               # Argon2 password hash
+### ⚠️ Example: HTTP Client Sink → HTTP Source with mTLS
+## HTTP Source with mTLS:
+## [pipelines.sources.http.tls]
+## enabled = true
+## cert_file = "/path/to/server.pem"
+## key_file = "/path/to/server.key"
+## client_auth = true                  # Enable client cert verification
+## client_ca_file = "/path/to/ca.pem"
 
-### Bearer Token Authentication
-# [pipelines.auth.bearer_auth]
-# tokens = []                      # Static bearer tokens
+## HTTP Client with client cert:
+## [pipelines.sinks.http_client.tls]
+## enabled = true
+## cert_file = "/path/to/client.pem"  # Client certificate
+## key_file = "/path/to/client.key"
 
-### JWT Validation
-# [pipelines.auth.bearer_auth.jwt]
-# jwks_url = ""                    # JWKS endpoint for key discovery
-# signing_key = ""                 # Static signing key (if not using JWKS)
-# issuer = ""                      # Expected issuer claim
-# audience = ""                    # Expected audience claim
+### Network limiting (access control)
+# [pipelines.sinks.http.net_limit]
+# enabled = false
+# max_connections_per_ip = 10
+# max_connections_total = 100
+# ip_whitelist = ["192.168.1.0/24"]
+# ip_blacklist = []
+
+### Authentication (for clients)
+### ☢ SECURITY: HTTP auth REQUIRES TLS to be enabled
+# [pipelines.sinks.http.auth]
+# type = "none"                       # none|basic|bearer|mtls
+
+###----------------------------------------------------------------------------
+### TCP Sink (Server - accepts connections from TCP clients)
+# [[pipelines.sinks]]
+# type = "tcp"
+
+# [pipelines.sinks.tcp]
+# host = "0.0.0.0"                    # Listen address
+# port = 9090                         # Listen port
+# buffer_size = 1000                  # Internal buffer size
+# max_connections = 100               # Max concurrent clients
+# keep_alive = true                   # Enable TCP keep-alive
+# keep_alive_period_ms = 30000        # Keep-alive interval
+
+### Heartbeat configuration
+# [pipelines.sinks.tcp.heartbeat]
+# enabled = false
+# interval_ms = 30000
+# include_timestamp = true
+# include_stats = false
+# format = "json"                     # json|txt
+
+### ☣ WARNING: TCP has NO TLS support (gnet limitation)
+### Use HTTP with TLS for encrypted transport
+
+### Network limiting
+# [pipelines.sinks.tcp.net_limit]
+# enabled = false
+# max_connections_per_ip = 10
+# max_connections_total = 100
+# ip_whitelist = []
+# ip_blacklist = []
+
+### ☣ WARNING: TCP Sink has NO AUTH support (aimed for debugging)
+### Use HTTP with TLS for encrypted transport
+
+###----------------------------------------------------------------------------
+### HTTP Client Sink (POST to HTTP Source endpoint)
+# [[pipelines.sinks]]
+# type = "http_client"
+
+# [pipelines.sinks.http_client]
+# url = "https://logs.example.com/ingest"
+# buffer_size = 1000
+# batch_size = 100                    # Logs per request
+# batch_delay_ms = 1000               # Max wait before sending
+# timeout_seconds = 30                # Request timeout
+# max_retries = 3                     # Retry attempts
+# retry_delay_ms = 1000               # Initial retry delay
+# retry_backoff = 2.0                 # Exponential backoff
+# insecure_skip_verify = false        # Skip TLS verification
+
+### TLS configuration
+# [pipelines.sinks.http_client.tls]
+# enabled = false
+# server_name = "logs.example.com"    # For verification
+# skip_verify = false                 # Skip verification
+# cert_file = "/path/to/client.pem"   # Client cert for mTLS
+# key_file = "/path/to/client.key"    # Client key for mTLS
+
+### ⚠️ Example: HTTP Client Sink → HTTP Source with mTLS
+## HTTP Source with mTLS:
+## [pipelines.sources.http.tls]
+## enabled = true
+## cert_file = "/path/to/server.pem"
+## key_file = "/path/to/server.key"
+## client_auth = true                  # Enable client cert verification
+## client_ca_file = "/path/to/ca.pem"
+
+## HTTP Client with client cert:
+## [pipelines.sinks.http_client.tls]
+## enabled = true
+## cert_file = "/path/to/client.pem"  # Client certificate
+## key_file = "/path/to/client.key"
+
+### Client authentication
+### ☢ SECURITY: HTTP auth REQUIRES TLS to be enabled
+# [pipelines.sinks.http_client.auth]
+# type = "none"                       # none|basic|token|mtls (NO scram)
+# # token = "your-token"              # For token auth
+# # username = "user"                 # For basic auth
+# # password = "pass"                 # For basic auth
+
+###----------------------------------------------------------------------------
+### TCP Client Sink (Connect to TCP Source server)
+# [[pipelines.sinks]]
+# type = "tcp_client"
+
+## [pipelines.sinks.tcp_client]
+# host = "logs.example.com"           # Target host
+# port = 9090                         # Target port
+# buffer_size = 1000                  # Internal buffer size
+# dial_timeout = 10                   # Connection timeout (seconds)
+# write_timeout = 30                  # Write timeout (seconds)
+# read_timeout = 10                   # Read timeout (seconds)
+# keep_alive = 30                     # TCP keep-alive (seconds)
+# reconnect_delay_ms = 1000           # Initial reconnect delay
+# max_reconnect_delay_ms = 30000      # Max reconnect delay
+# reconnect_backoff = 1.5             # Exponential backoff
+
+### ☣ WARNING: TCP has NO TLS support (gnet limitation)
+### Use HTTP with TLS for encrypted transport
+
+### Client authentication
+# [pipelines.sinks.tcp_client.auth]
+# type = "none"                       # none|scram ONLY (no basic/token/mtls)
+# # username = "user"                 # For SCRAM auth
+# # password = "pass"                 # For SCRAM auth

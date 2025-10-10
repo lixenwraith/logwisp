@@ -205,7 +205,7 @@ func (t *TCPSink) broadcastLoop(ctx context.Context) {
 	var tickerChan <-chan time.Time
 
 	if t.config.Heartbeat != nil && t.config.Heartbeat.Enabled {
-		ticker = time.NewTicker(time.Duration(t.config.Heartbeat.Interval) * time.Second)
+		ticker = time.NewTicker(time.Duration(t.config.Heartbeat.IntervalMS) * time.Millisecond)
 		tickerChan = ticker.C
 		defer ticker.Stop()
 	}

@@ -140,8 +140,6 @@ func NewNetLimiter(cfg *config.NetLimitConfig, logger *log.Logger) *NetLimiter {
 		"requests_per_second", cfg.RequestsPerSecond,
 		"burst_size", cfg.BurstSize,
 		"max_connections_per_ip", cfg.MaxConnectionsPerIP,
-		"max_connections_per_user", cfg.MaxConnectionsPerUser,
-		"max_connections_per_token", cfg.MaxConnectionsPerToken,
 		"max_connections_total", cfg.MaxConnectionsTotal)
 
 	return l
@@ -609,10 +607,8 @@ func (l *NetLimiter) GetStats() map[string]any {
 			"tracked_tokens": tokenConnTrackers,
 
 			// Configuration limits (0 = disabled)
-			"limit_per_ip":    l.config.MaxConnectionsPerIP,
-			"limit_per_user":  l.config.MaxConnectionsPerUser,
-			"limit_per_token": l.config.MaxConnectionsPerToken,
-			"limit_total":     l.config.MaxConnectionsTotal,
+			"limit_per_ip": l.config.MaxConnectionsPerIP,
+			"limit_total":  l.config.MaxConnectionsTotal,
 		},
 	}
 }
@@ -807,7 +803,7 @@ func (l *NetLimiter) TrackConnection(ip string, user string, token string) bool 
 			l.logger.Debug("msg", "TCP connection blocked by total limit",
 				"component", "netlimit",
 				"current_total", currentTotal,
-				"max_total", l.config.MaxConnectionsTotal)
+				"max_connections_total", l.config.MaxConnectionsTotal)
 			return false
 		}
 	}
@@ -830,65 +826,11 @@ func (l *NetLimiter) TrackConnection(ip string, user string, token string) bool 
 		}
 	}
 
-	// Check per-user connection limit (0 = disabled)
-	if l.config.MaxConnectionsPerUser > 0 && user != "" {
-		tracker, exists := l.userConnections[user]
-		if !exists {
-			tracker = &connTracker{lastSeen: time.Now()}
-			l.userConnections[user] = tracker
-		}
-		if tracker.connections.Load() >= l.config.MaxConnectionsPerUser {
-			l.blockedByConnLimit.Add(1)
-			l.logger.Debug("msg", "TCP connection blocked by user limit",
-				"component", "netlimit",
-				"user", user,
-				"current", tracker.connections.Load(),
-				"max", l.config.MaxConnectionsPerUser)
-			return false
-		}
-	}
-
-	// Check per-token connection limit (0 = disabled)
-	if l.config.MaxConnectionsPerToken > 0 && token != "" {
-		tracker, exists := l.tokenConnections[token]
-		if !exists {
-			tracker = &connTracker{lastSeen: time.Now()}
-			l.tokenConnections[token] = tracker
-		}
-		if tracker.connections.Load() >= l.config.MaxConnectionsPerToken {
-			l.blockedByConnLimit.Add(1)
-			l.logger.Debug("msg", "TCP connection blocked by token limit",
-				"component", "netlimit",
-				"token", token,
-				"current", tracker.connections.Load(),
-				"max", l.config.MaxConnectionsPerToken)
-			return false
-		}
-	}
-
 	// All checks passed, increment counters
 	l.totalConnections.Add(1)
 
 	if ip != "" && l.config.MaxConnectionsPerIP > 0 {
 		if tracker, exists := l.ipConnections[ip]; exists {
-			tracker.connections.Add(1)
-			tracker.mu.Lock()
-			tracker.lastSeen = time.Now()
-			tracker.mu.Unlock()
-		}
-	}
-
-	if user != "" && l.config.MaxConnectionsPerUser > 0 {
-		if tracker, exists := l.userConnections[user]; exists {
-			tracker.connections.Add(1)
-			tracker.mu.Lock()
-			tracker.lastSeen = time.Now()
-			tracker.mu.Unlock()
-		}
-	}
-
-	if token != "" && l.config.MaxConnectionsPerToken > 0 {
-		if tracker, exists := l.tokenConnections[token]; exists {
 			tracker.connections.Add(1)
 			tracker.mu.Lock()
 			tracker.lastSeen = time.Now()

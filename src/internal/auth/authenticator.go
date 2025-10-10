@@ -29,6 +29,8 @@ type Authenticator struct {
 	sessionMu sync.RWMutex
 }
 
+// TODO: only one connection per user, token, mtls
+// TODO: implement tracker logic
 // Represents an authenticated connection
 type Session struct {
 	ID           string

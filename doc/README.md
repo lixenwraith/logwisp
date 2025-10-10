@@ -1,27 +1,77 @@
-# LogWisp Documentation
+# LogWisp
 
-Documentation covers installation, configuration, and usage of LogWisp's pipeline-based log monitoring system.
+A high-performance, pipeline-based log transport and processing system built in Go. LogWisp provides flexible log collection, filtering, formatting, and distribution with enterprise-grade security and reliability features.
 
-## 📚 Documentation Index
+## Features
 
-### Getting Started
-- **[Installation Guide](installation.md)** - Platform-specific installation
-- **[Quick Start](quickstart.md)** - Get running in 5 minutes
-- **[Architecture Overview](architecture.md)** - Pipeline design
+### Core Capabilities
+- **Pipeline Architecture**: Independent processing pipelines with source → filter → format → sink flow
+- **Multiple Input Sources**: Directory monitoring, stdin, HTTP, TCP
+- **Flexible Output Sinks**: Console, file, HTTP SSE, TCP streaming, HTTP/TCP forwarding
+- **Real-time Processing**: Sub-millisecond latency with configurable buffering
+- **Hot Configuration Reload**: Update pipelines without service restart
 
-### Configuration
-- **[Configuration Guide](configuration.md)** - Complete reference
-- **[Environment Variables](environment.md)** - Container configuration
-- **[Command Line Options](cli.md)** - CLI reference
-- **[Sample Configurations](../config/)** - Default & Minimal Config
+### Data Processing
+- **Pattern-based Filtering**: Include/exclude filters with regex support
+- **Multiple Formatters**: Raw, JSON, and template-based text formatting
+- **Rate Limiting**: Pipeline and per-connection rate controls
+- **Batch Processing**: Configurable batching for HTTP/TCP clients
 
-### Features
-- **[Status Monitoring](status.md)** - Health checks
-- **[Filters Guide](filters.md)** - Pattern-based filtering
-- **[Rate Limiting](ratelimiting.md)** - Connection protection
-- **[Router Mode](router.md)** - Multi-pipeline routing
-- **[Authentication](authentication.md)** - Access control *(planned)*
+### Security & Reliability  
+- **Authentication**: Basic, token, SCRAM, and mTLS support
+- **TLS Encryption**: Full TLS 1.2/1.3 support for HTTP connections
+- **Access Control**: IP whitelisting/blacklisting, connection limits
+- **Automatic Reconnection**: Resilient client connections with exponential backoff
+- **File Rotation**: Size-based rotation with retention policies
 
-## 📝 License
+### Operational Features
+- **Status Monitoring**: Real-time statistics and health endpoints
+- **Signal Handling**: Graceful shutdown and configuration reload via signals
+- **Background Mode**: Daemon operation with proper signal handling
+- **Quiet Mode**: Silent operation for automated deployments
 
-BSD-3-Clause
+## Documentation
+
+- [Installation Guide](installation.md) - Platform setup and service configuration
+- [Architecture Overview](architecture.md) - System design and component interaction  
+- [Configuration Reference](configuration.md) - TOML structure and configuration methods
+- [Input Sources](sources.md) - Available source types and configurations
+- [Output Sinks](sinks.md) - Sink types and output options
+- [Filters](filters.md) - Pattern-based log filtering
+- [Formatters](formatters.md) - Log formatting and transformation
+- [Authentication](authentication.md) - Security configurations and auth methods
+- [Networking](networking.md) - TLS, rate limiting, and network features
+- [Command Line Interface](cli.md) - CLI flags and subcommands
+- [Operations Guide](operations.md) - Running and maintaining LogWisp
+
+## Quick Start
+
+Install LogWisp and create a basic configuration:
+
+```toml
+[[pipelines]]
+name = "default"
+
+[[pipelines.sources]]
+type = "directory"
+[pipelines.sources.directory]
+path = "./"
+pattern = "*.log"
+
+[[pipelines.sinks]]
+type = "console"
+[pipelines.sinks.console]
+target = "stdout"
+```
+
+Run with: `logwisp -c config.toml`
+
+## System Requirements
+
+- **Operating Systems**: Linux (kernel 3.10+), FreeBSD (12.0+)
+- **Architecture**: amd64
+- **Go Version**: 1.24+ (for building from source)
+
+## License
+
+BSD 3-Clause License

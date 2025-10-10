@@ -205,7 +205,7 @@ func (h *HTTPSink) brokerLoop(ctx context.Context) {
 	var tickerChan <-chan time.Time
 
 	if h.config.Heartbeat != nil && h.config.Heartbeat.Enabled {
-		ticker = time.NewTicker(time.Duration(h.config.Heartbeat.Interval) * time.Second)
+		ticker = time.NewTicker(time.Duration(h.config.Heartbeat.IntervalMS) * time.Millisecond)
 		tickerChan = ticker.C
 		defer ticker.Stop()
 	}
@@ -545,7 +545,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 		var tickerChan <-chan time.Time
 
 		if h.config.Heartbeat != nil && h.config.Heartbeat.Enabled {
-			ticker = time.NewTicker(time.Duration(h.config.Heartbeat.Interval) * time.Second)
+			ticker = time.NewTicker(time.Duration(h.config.Heartbeat.IntervalMS) * time.Millisecond)
 			tickerChan = ticker.C
 			defer ticker.Stop()
 		}
@@ -698,9 +698,9 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 		},
 		"features": map[string]any{
 			"heartbeat": map[string]any{
-				"enabled":  h.config.Heartbeat.Enabled,
-				"interval": h.config.Heartbeat.Interval,
-				"format":   h.config.Heartbeat.Format,
+				"enabled":     h.config.Heartbeat.Enabled,
+				"interval_ms": h.config.Heartbeat.IntervalMS,
+				"format":      h.config.Heartbeat.Format,
 			},
 			"tls":       tlsStats,
 			"auth":      authStats,

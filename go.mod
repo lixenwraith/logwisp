@@ -4,7 +4,7 @@ go 1.25.1
 
 require (
 	github.com/lixenwraith/config v0.0.0-20251003140149-580459b815f6
-	github.com/lixenwraith/log v0.0.0-20250929145347-45cc8a5099c2
+	github.com/lixenwraith/log v0.0.0-20251010094026-6a161eb2b686
 	github.com/panjf2000/gnet/v2 v2.9.4
 	github.com/valyala/fasthttp v1.67.0
 	golang.org/x/crypto v0.43.0

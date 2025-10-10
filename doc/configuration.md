@@ -1,512 +1,198 @@
-# Configuration Guide
+# Configuration Reference
 
-LogWisp uses TOML format with a flexible **source → filter → sink** pipeline architecture.
+LogWisp configuration uses TOML format with flexible override mechanisms.
 
-## Configuration Methods
+## Configuration Precedence
 
-LogWisp supports three configuration methods with the following precedence:
-
+Configuration sources are evaluated in order:
 1. **Command-line flags** (highest priority)
 2. **Environment variables**
-3. **Configuration file** (lowest priority)
+3. **Configuration file**
+4. **Built-in defaults** (lowest priority)
 
-### Complete Configuration Reference
+## File Location
 
-| Category | CLI Flag | Environment Variable | TOML File |
-|----------|----------|---------------------|-----------|
-| **Top-level** |
-| Router mode | `--router` | `LOGWISP_ROUTER` | `router = true` |
-| Background mode | `--background` | `LOGWISP_BACKGROUND` | `background = true` |
-| Show version | `--version` | `LOGWISP_VERSION` | `version = true` |
-| Quiet mode | `--quiet` | `LOGWISP_QUIET` | `quiet = true` |
-| Disable status reporter | `--disable-status-reporter` | `LOGWISP_DISABLE_STATUS_REPORTER` | `disable_status_reporter = true` |
-| Config auto-reload | `--config-auto-reload` | `LOGWISP_CONFIG_AUTO_RELOAD` | `config_auto_reload = true` |
-| Config save on exit | `--config-save-on-exit` | `LOGWISP_CONFIG_SAVE_ON_EXIT` | `config_save_on_exit = true` |
-| Config file | `--config <path>` | `LOGWISP_CONFIG_FILE` | N/A |
-| Config directory | N/A | `LOGWISP_CONFIG_DIR` | N/A |
-| **Logging** |
-| Output mode | `--logging.output <mode>` | `LOGWISP_LOGGING_OUTPUT` | `[logging]`<br>`output = "stderr"` |
-| Log level | `--logging.level <level>` | `LOGWISP_LOGGING_LEVEL` | `[logging]`<br>`level = "info"` |
-| File directory | `--logging.file.directory <path>` | `LOGWISP_LOGGING_FILE_DIRECTORY` | `[logging.file]`<br>`directory = "./logs"` |
-| File name | `--logging.file.name <name>` | `LOGWISP_LOGGING_FILE_NAME` | `[logging.file]`<br>`name = "logwisp"` |
-| Max file size | `--logging.file.max_size_mb <size>` | `LOGWISP_LOGGING_FILE_MAX_SIZE_MB` | `[logging.file]`<br>`max_size_mb = 100` |
-| Max total size | `--logging.file.max_total_size_mb <size>` | `LOGWISP_LOGGING_FILE_MAX_TOTAL_SIZE_MB` | `[logging.file]`<br>`max_total_size_mb = 1000` |
-| Retention hours | `--logging.file.retention_hours <hours>` | `LOGWISP_LOGGING_FILE_RETENTION_HOURS` | `[logging.file]`<br>`retention_hours = 168` |
-| Console target | `--logging.console.target <target>` | `LOGWISP_LOGGING_CONSOLE_TARGET` | `[logging.console]`<br>`target = "stderr"` |
-| Console format | `--logging.console.format <format>` | `LOGWISP_LOGGING_CONSOLE_FORMAT` | `[logging.console]`<br>`format = "txt"` |
-| **Pipelines** |
-| Pipeline name | `--pipelines.N.name <name>` | `LOGWISP_PIPELINES_N_NAME` | `[[pipelines]]`<br>`name = "default"` |
-| Source type | `--pipelines.N.sources.N.type <type>` | `LOGWISP_PIPELINES_N_SOURCES_N_TYPE` | `[[pipelines.sources]]`<br>`type = "directory"` |
-| Source options | `--pipelines.N.sources.N.options.<key> <value>` | `LOGWISP_PIPELINES_N_SOURCES_N_OPTIONS_<KEY>` | `[[pipelines.sources]]`<br>`options = { ... }` |
-| Filter type | `--pipelines.N.filters.N.type <type>` | `LOGWISP_PIPELINES_N_FILTERS_N_TYPE` | `[[pipelines.filters]]`<br>`type = "include"` |
-| Filter logic | `--pipelines.N.filters.N.logic <logic>` | `LOGWISP_PIPELINES_N_FILTERS_N_LOGIC` | `[[pipelines.filters]]`<br>`logic = "or"` |
-| Filter patterns | `--pipelines.N.filters.N.patterns <json>` | `LOGWISP_PIPELINES_N_FILTERS_N_PATTERNS` | `[[pipelines.filters]]`<br>`patterns = [...]` |
-| Sink type | `--pipelines.N.sinks.N.type <type>` | `LOGWISP_PIPELINES_N_SINKS_N_TYPE` | `[[pipelines.sinks]]`<br>`type = "http"` |
-| Sink options | `--pipelines.N.sinks.N.options.<key> <value>` | `LOGWISP_PIPELINES_N_SINKS_N_OPTIONS_<KEY>` | `[[pipelines.sinks]]`<br>`options = { ... }` |
-| Auth type | `--pipelines.N.auth.type <type>` | `LOGWISP_PIPELINES_N_AUTH_TYPE` | `[pipelines.auth]`<br>`type = "none"` |
+LogWisp searches for configuration in order:
+1. Path specified via `--config` flag
+2. Path from `LOGWISP_CONFIG_FILE` environment variable
+3. `~/.config/logwisp/logwisp.toml`
+4. `./logwisp.toml` in current directory
 
-Note: `N` represents array indices (0-based).
+## Global Settings
 
-## Configuration File Location
+Top-level configuration options:
 
-1. Command line: `--config /path/to/config.toml`
-2. Environment: `$LOGWISP_CONFIG_FILE` and `$LOGWISP_CONFIG_DIR`
-3. User config: `~/.config/logwisp/logwisp.toml`
-4. Current directory: `./logwisp.toml`
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `background` | bool | false | Run as daemon process |
+| `quiet` | bool | false | Suppress console output |
+| `disable_status_reporter` | bool | false | Disable periodic status logging |
+| `config_auto_reload` | bool | false | Enable file watch for auto-reload |
 
-## Hot Reload
+## Logging Configuration
 
-LogWisp supports automatic configuration reloading without restart:
-
-```bash
-# Enable hot reload
-logwisp --config-auto-reload --config /etc/logwisp/config.toml
-
-# Manual reload via signal
-kill -HUP $(pidof logwisp)  # or SIGUSR1
-```
-
-Hot reload updates:
-- Pipeline configurations
-- Filters
-- Formatters
-- Rate limits
-- Router mode changes
-
-Not reloaded (requires restart):
-- Logging configuration
-- Background mode
-
-## Configuration Structure
+LogWisp's internal operational logging:
 
 ```toml
-# Optional: Enable router mode
-router = false
-
-# Optional: Background mode
-background = false
-
-# Optional: Quiet mode
-quiet = false
-
-# Optional: Disable status reporter
-disable_status_reporter = false
-
-# Optional: LogWisp's own logging
 [logging]
-output = "stderr"  # file, stdout, stderr, both, none
-level = "info"     # debug, info, warn, error
+output = "stdout"  # file|stdout|stderr|split|all|none
+level = "info"     # debug|info|warn|error
 
 [logging.file]
-directory = "./logs"
+directory = "./log"
 name = "logwisp"
 max_size_mb = 100
 max_total_size_mb = 1000
-retention_hours = 168
+retention_hours = 168.0
 
 [logging.console]
-target = "stderr"  # stdout, stderr, split
-format = "txt"     # txt or json
+target = "stdout"  # stdout|stderr|split
+format = "txt"     # txt|json
+```
 
-# Required: At least one pipeline
+### Output Modes
+
+- **file**: Write to log files only
+- **stdout**: Write to standard output
+- **stderr**: Write to standard error
+- **split**: INFO/DEBUG to stdout, WARN/ERROR to stderr
+- **all**: Write to both file and console
+- **none**: Disable all logging
+
+## Pipeline Configuration
+
+Each `[[pipelines]]` section defines an independent processing pipeline:
+
+```toml
 [[pipelines]]
-name = "default"
+name = "pipeline-name"
 
-# Sources (required)
+# Rate limiting (optional)
+[pipelines.rate_limit]
+rate = 1000.0
+burst = 2000.0
+policy = "drop"  # pass|drop
+max_entry_size_bytes = 0  # 0=unlimited
+
+# Format configuration (optional)
+[pipelines.format]
+type = "json"  # raw|json|txt
+
+# Sources (required, 1+)
 [[pipelines.sources]]
 type = "directory"
-options = { ... }
+# ... source-specific config
 
 # Filters (optional)
 [[pipelines.filters]]
 type = "include"
-patterns = [...]
+logic = "or"
+patterns = ["ERROR", "WARN"]
 
-# Sinks (required)
+# Sinks (required, 1+)
 [[pipelines.sinks]]
 type = "http"
-options = { ... }
+# ... sink-specific config
 ```
 
-## Pipeline Configuration
+## Environment Variables
 
-Each `[[pipelines]]` section defines an independent processing pipeline.
+All configuration options support environment variable overrides:
 
-### Pipeline Formatters
+### Naming Convention
 
-Control output format per pipeline:
+- Prefix: `LOGWISP_`
+- Path separator: `_` (underscore)
+- Array indices: Numeric suffix (0-based)
+- Case: UPPERCASE
 
-```toml
-[[pipelines]]
-name = "json-output"
-format = "json"  # raw, json, text
+### Mapping Examples
 
-[pipelines.format_options]
-# JSON formatter
-pretty = false
-timestamp_field = "timestamp"
-level_field = "level"
-message_field = "message"
-source_field = "source"
+| TOML Path | Environment Variable |
+|-----------|---------------------|
+| `quiet` | `LOGWISP_QUIET` |
+| `logging.level` | `LOGWISP_LOGGING_LEVEL` |
+| `pipelines[0].name` | `LOGWISP_PIPELINES_0_NAME` |
+| `pipelines[0].sources[0].type` | `LOGWISP_PIPELINES_0_SOURCES_0_TYPE` |
 
-# Text formatter
-template = "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Message}}"
-timestamp_format = "2006-01-02T15:04:05Z07:00"
+## Command-Line Overrides
+
+All configuration options can be overridden via CLI flags:
+
+```bash
+logwisp --quiet \
+  --logging.level=debug \
+  --pipelines.0.name=myapp \
+  --pipelines.0.sources.0.type=stdin
 ```
 
-### Sources
+## Configuration Validation
 
-Input data sources:
+LogWisp validates configuration at startup:
+- Required fields presence
+- Type correctness
+- Port conflicts
+- Path accessibility
+- Pattern compilation
+- Network address formats
 
-#### Directory Source
-```toml
-[[pipelines.sources]]
-type = "directory"
-options = {
-    path = "/var/log/myapp",      # Directory to monitor
-    pattern = "*.log",            # File pattern (glob)
-    check_interval_ms = 100       # Check interval (10-60000)
-}
-```
+## Hot Reload
 
-#### File Source
-```toml
-[[pipelines.sources]]
-type = "file"
-options = {
-    path = "/var/log/app.log"     # Specific file
-}
-```
-
-#### Stdin Source
-```toml
-[[pipelines.sources]]
-type = "stdin"
-options = {}
-```
-
-#### HTTP Source
-```toml
-[[pipelines.sources]]
-type = "http"
-options = {
-    port = 8081,                  # Port to listen on
-    ingest_path = "/ingest",      # Path for POST requests
-    buffer_size = 1000,           # Input buffer size
-    rate_limit = {                # Optional rate limiting
-        enabled = true,
-        requests_per_second = 10.0,
-        burst_size = 20,
-        limit_by = "ip"
-    }
-}
-```
-
-#### TCP Source
-```toml
-[[pipelines.sources]]
-type = "tcp"
-options = {
-    port = 9091,                  # Port to listen on
-    buffer_size = 1000,           # Input buffer size
-    rate_limit = {                # Optional rate limiting
-        enabled = true,
-        requests_per_second = 5.0,
-        burst_size = 10,
-        limit_by = "ip"
-    }
-}
-```
-
-### Filters
-
-Control which log entries pass through:
-
-```toml
-# Include filter - only matching logs pass
-[[pipelines.filters]]
-type = "include"
-logic = "or"      # or: match any, and: match all
-patterns = [
-    "ERROR",
-    "(?i)warn",   # Case-insensitive
-    "\\bfatal\\b" # Word boundary
-]
-
-# Exclude filter - matching logs are dropped
-[[pipelines.filters]]
-type = "exclude"
-patterns = ["DEBUG", "health-check"]
-```
-
-### Sinks
-
-Output destinations:
-
-#### HTTP Sink (SSE)
-```toml
-[[pipelines.sinks]]
-type = "http"
-options = {
-    port = 8080,
-    buffer_size = 1000,
-    stream_path = "/stream",
-    status_path = "/status",
-    
-    # Heartbeat
-    heartbeat = {
-        enabled = true,
-        interval_seconds = 30,
-        format = "comment",  # comment or json
-        include_timestamp = true,
-        include_stats = false
-    },
-    
-    # Rate limiting
-    rate_limit = {
-        enabled = true,
-        requests_per_second = 10.0,
-        burst_size = 20,
-        limit_by = "ip",  # ip or global
-        max_connections_per_ip = 5,
-        max_total_connections = 100,
-        response_code = 429,
-        response_message = "Rate limit exceeded"
-    }
-}
-```
-
-#### TCP Sink
-```toml
-[[pipelines.sinks]]
-type = "tcp"
-options = {
-    port = 9090,
-    buffer_size = 5000,
-    heartbeat = { enabled = true, interval_seconds = 60, format = "json" },
-    rate_limit = { enabled = true, requests_per_second = 5.0, burst_size = 10 }
-}
-```
-
-#### HTTP Client Sink
-```toml
-[[pipelines.sinks]]
-type = "http_client"
-options = {
-    url = "https://remote-log-server.com/ingest",
-    buffer_size = 1000,
-    batch_size = 100,
-    batch_delay_ms = 1000,
-    timeout_seconds = 30,
-    max_retries = 3,
-    retry_delay_ms = 1000,
-    retry_backoff = 2.0,
-    headers = {
-        "Authorization" = "Bearer <API_KEY_HERE>",
-        "X-Custom-Header" = "value"
-    },
-    insecure_skip_verify = false
-}
-```
-
-#### TCP Client Sink
-```toml
-[[pipelines.sinks]]
-type = "tcp_client"
-options = {
-    address = "remote-server.com:9090",
-    buffer_size = 1000,
-    dial_timeout_seconds = 10,
-    write_timeout_seconds = 30,
-    keep_alive_seconds = 30,
-    reconnect_delay_ms = 1000,
-    max_reconnect_delay_seconds = 30,
-    reconnect_backoff = 1.5
-}
-```
-
-#### File Sink
-```toml
-[[pipelines.sinks]]
-type = "file"
-options = {
-    directory = "/var/log/logwisp",
-    name = "app",
-    max_size_mb = 100,
-    max_total_size_mb = 1000,
-    retention_hours = 168.0,
-    min_disk_free_mb = 1000,
-    buffer_size = 2000
-}
-```
-
-#### Console Sinks
-```toml
-[[pipelines.sinks]]
-type = "stdout"  # or "stderr"
-options = { 
-    buffer_size = 500,
-    target = "stdout"  # stdout, stderr, or split
-}
-```
-
-## Complete Examples
-
-### Basic Application Monitoring
-
-```toml
-[[pipelines]]
-name = "app"
-
-[[pipelines.sources]]
-type = "directory"
-options = { path = "/var/log/app", pattern = "*.log" }
-
-[[pipelines.sinks]]
-type = "http"
-options = { port = 8080 }
-```
-
-### Hot Reload with JSON Output
+Enable configuration hot reload:
 
 ```toml
 config_auto_reload = true
-config_save_on_exit = true
-
-[[pipelines]]
-name = "app"
-format = "json"
-
-[pipelines.format_options]
-pretty = true
-
-[[pipelines.sources]]
-type = "directory"
-options = { path = "/var/log/app", pattern = "*.log" }
-
-[[pipelines.sinks]]
-type = "http"
-options = { port = 8080 }
 ```
 
-### Filtering
-
-```toml
-[logging]
-output = "file"
-level = "info"
-
-[[pipelines]]
-name = "production"
-
-[[pipelines.sources]]
-type = "directory"
-options = { path = "/var/log/app", pattern = "*.log", check_interval_ms = 50 }
-
-[[pipelines.filters]]
-type = "include"
-patterns = ["ERROR", "WARN", "CRITICAL"]
-
-[[pipelines.filters]]
-type = "exclude"
-patterns = ["/health", "/metrics"]
-
-[[pipelines.sinks]]
-type = "http"
-options = {
-    port = 8080,
-    rate_limit = { enabled = true, requests_per_second = 25.0 }
-}
-
-[[pipelines.sinks]]
-type = "file"
-options = { directory = "/var/log/archive", name = "errors" }
+Or via command line:
+```bash
+logwisp --config-auto-reload
 ```
 
-### Multi-Source Aggregation
+Reload triggers:
+- File modification detection
+- SIGHUP or SIGUSR1 signals
+
+Reloadable items:
+- Pipeline configurations
+- Sources and sinks
+- Filters and formatters
+- Rate limits
+
+Non-reloadable (requires restart):
+- Logging configuration
+- Background mode
+- Global settings
+
+## Default Configuration
+
+Minimal working configuration:
 
 ```toml
 [[pipelines]]
-name = "aggregated"
+name = "default"
 
 [[pipelines.sources]]
 type = "directory"
-options = { path = "/var/log/nginx", pattern = "*.log" }
-
-[[pipelines.sources]]
-type = "directory"
-options = { path = "/var/log/app", pattern = "*.log" }
-
-[[pipelines.sources]]
-type = "stdin"
-options = {}
-
-[[pipelines.sources]]
-type = "http"
-options = { port = 8081, ingest_path = "/logs" }
+[pipelines.sources.directory]
+path = "./"
+pattern = "*.log"
 
 [[pipelines.sinks]]
-type = "tcp"
-options = { port = 9090 }
+type = "console"
+[pipelines.sinks.console]
+target = "stdout"
 ```
 
-### Router Mode
+## Configuration Schema
 
-```toml
-# Run with: logwisp --router
-router = true
+### Type Reference
 
-[[pipelines]]
-name = "api"
-[[pipelines.sources]]
-type = "directory"
-options = { path = "/var/log/api", pattern = "*.log" }
-[[pipelines.sinks]]
-type = "http"
-options = { port = 8080 }  # Same port OK in router mode
-
-[[pipelines]]
-name = "web"
-[[pipelines.sources]]
-type = "directory"
-options = { path = "/var/log/nginx", pattern = "*.log" }
-[[pipelines.sinks]]
-type = "http"
-options = { port = 8080 }  # Shared port
-
-# Access:
-# http://localhost:8080/api/stream
-# http://localhost:8080/web/stream
-# http://localhost:8080/status
-```
-
-### Remote Log Forwarding
-
-```toml
-[[pipelines]]
-name = "forwarder"
-
-[[pipelines.sources]]
-type = "directory"
-options = { path = "/var/log/app", pattern = "*.log" }
-
-[[pipelines.filters]]
-type = "include"
-patterns = ["ERROR", "WARN"]
-
-[[pipelines.sinks]]
-type = "http_client"
-options = {
-    url = "https://log-aggregator.example.com/ingest",
-    batch_size = 100,
-    batch_delay_ms = 5000,
-    headers = { "Authorization" = "Bearer <API_KEY_HERE>" }
-}
-
-[[pipelines.sinks]]
-type = "tcp_client"
-options = {
-    address = "backup-logger.example.com:9090",
-    reconnect_delay_ms = 5000
-}
-```
+| TOML Type | Go Type | Environment Format |
+|-----------|---------|-------------------|
+| String | string | Plain text |
+| Integer | int64 | Numeric string |
+| Float | float64 | Decimal string |
+| Boolean | bool | true/false |
+| Array | []T | JSON array string |
+| Table | struct | Nested with `_` |

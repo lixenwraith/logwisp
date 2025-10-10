@@ -62,18 +62,11 @@ func (rm *ReloadManager) Start(ctx context.Context) error {
 		rm.startStatusReporter(ctx, svc)
 	}
 
-	// Create lconfig instance for file watching, logwisp config is always TOML
-	lcfg, err := lconfig.NewBuilder().
-		WithFile(rm.configPath).
-		WithTarget(rm.cfg).
-		WithFileFormat("toml").
-		WithSecurityOptions(lconfig.SecurityOptions{
-			PreventPathTraversal: true,
-			MaxFileSize:          10 * 1024 * 1024,
-		}).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create config watcher: %w", err)
+	// Use the same lconfig instance from initial load
+	lcfg := config.GetConfigManager()
+	if lcfg == nil {
+		// Config manager not initialized - potential for config bypass
+		return fmt.Errorf("config manager not initialized - cannot enable hot reload")
 	}
 
 	rm.lcfg = lcfg
@@ -83,7 +76,7 @@ func (rm *ReloadManager) Start(ctx context.Context) error {
 		PollInterval:      time.Second,
 		Debounce:          500 * time.Millisecond,
 		ReloadTimeout:     30 * time.Second,
-		VerifyPermissions: true, // TODO: Prevent malicious config replacement, to be implemented
+		VerifyPermissions: true,
 	}
 	lcfg.AutoUpdateWithOptions(watchOpts)
 
@@ -243,7 +236,13 @@ func (rm *ReloadManager) performReload(ctx context.Context) error {
 		return fmt.Errorf("failed to get updated config: %w", err)
 	}
 
+	// AsStruct returns the target pointer, not a new instance
 	newCfg := updatedCfg.(*config.Config)
+
+	// Validate the new config
+	if err := config.ValidateConfig(newCfg); err != nil {
+		return fmt.Errorf("updated config validation failed: %w", err)
+	}
 
 	// Get current service snapshot
 	rm.mu.RLock()
@@ -267,8 +266,7 @@ func (rm *ReloadManager) performReload(ctx context.Context) error {
 	// Stop old status reporter and start new one
 	rm.restartStatusReporter(ctx, newService)
 
-	// Gracefully shutdown old services
-	// This happens after the swap to minimize downtime
+	// Gracefully shutdown old services after swap to minimize downtime
 	go rm.shutdownOldServices(oldService)
 
 	return nil

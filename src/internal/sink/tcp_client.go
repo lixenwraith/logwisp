@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"logwisp/src/internal/auth"
 	"net"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
@@ -22,6 +22,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
+// TODO: implement heartbeat for TCP Client Sink, similar to TCP Sink
 // Forwards log entries to a remote TCP endpoint
 type TCPClientSink struct {
 	input     chan core.LogEntry

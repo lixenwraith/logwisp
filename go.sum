@@ -10,8 +10,8 @@ github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zt
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
 github.com/lixenwraith/config v0.0.0-20251003140149-580459b815f6 h1:G9qP8biXBT6bwBOjEe1tZwjA0gPuB5DC+fLBRXDNXqo=
 github.com/lixenwraith/config v0.0.0-20251003140149-580459b815f6/go.mod h1:I7ddNPT8MouXXz/ae4DQfBKMq5EisxdDLRX0C7Dv4O0=
-github.com/lixenwraith/log v0.0.0-20250929145347-45cc8a5099c2 h1:9Qf+BR83sKjok2E1Nct+3Sfzoj2dLGwC/zyQDVNmmqs=
-github.com/lixenwraith/log v0.0.0-20250929145347-45cc8a5099c2/go.mod h1:E7REMCVTr6DerzDtd2tpEEaZ9R9nduyAIKQFOqHqKr0=
+github.com/lixenwraith/log v0.0.0-20251010094026-6a161eb2b686 h1:STgvFUpjvZquBF322PNLXaU67oEScewGDLy0aV+lIkY=
+github.com/lixenwraith/log v0.0.0-20251010094026-6a161eb2b686/go.mod h1:E7REMCVTr6DerzDtd2tpEEaZ9R9nduyAIKQFOqHqKr0=
 github.com/panjf2000/ants/v2 v2.11.3 h1:AfI0ngBoXJmYOpDh9m516vjqoUu2sLrIVgppI9TZVpg=
 github.com/panjf2000/ants/v2 v2.11.3/go.mod h1:8u92CYMUc6gyvTIw8Ru7Mt7+/ESnJahz5EVtqfrilek=
 github.com/panjf2000/gnet/v2 v2.9.4 h1:XvPCcaFwO4XWg4IgSfZnNV4dfDy5g++HIEx7sH0ldHc=

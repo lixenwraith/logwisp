@@ -3,8 +3,8 @@ package format
 
 import (
 	"fmt"
-	"logwisp/src/internal/config"
 
+	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
@@ -25,7 +25,7 @@ func NewFormatter(cfg *config.FormatConfig, logger *log.Logger) (Formatter, erro
 	case "json":
 		return NewJSONFormatter(cfg.JSONFormatOptions, logger)
 	case "txt":
-		return NewTextFormatter(cfg.TextFormatOptions, logger)
+		return NewTxtFormatter(cfg.TxtFormatOptions, logger)
 	case "raw", "":
 		return NewRawFormatter(cfg.RawFormatOptions, logger)
 	default:

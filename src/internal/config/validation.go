@@ -13,7 +13,7 @@ import (
 
 // validateConfig is the centralized validator for the entire configuration
 // This replaces the old (c *Config) validate() method
-func validateConfig(cfg *Config) error {
+func ValidateConfig(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
@@ -599,14 +599,6 @@ func validateHTTPClientSink(pipelineName string, index int, opts *HTTPClientSink
 	if opts.RetryBackoff < 1.0 {
 		opts.RetryBackoff = 2.0
 	}
-	if opts.Headers == nil {
-		opts.Headers = make(map[string]string)
-	}
-
-	// Set default Content-Type if not specified
-	if _, exists := opts.Headers["Content-Type"]; !exists {
-		opts.Headers["Content-Type"] = "application/json"
-	}
 
 	// Validate auth configuration
 	if opts.Auth != nil {
@@ -748,20 +740,20 @@ func validateFormatterConfig(p *PipelineConfig) error {
 		}
 
 	case "txt":
-		if p.Format.TextFormatOptions == nil {
-			p.Format.TextFormatOptions = &TextFormatterOptions{}
+		if p.Format.TxtFormatOptions == nil {
+			p.Format.TxtFormatOptions = &TxtFormatterOptions{}
 		}
 
 		// Default template format
 		templateStr := "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}{{ if .Fields }} {{.Fields}}{{ end }}"
-		if p.Format.TextFormatOptions.Template != "" {
-			p.Format.TextFormatOptions.Template = templateStr
+		if p.Format.TxtFormatOptions.Template != "" {
+			p.Format.TxtFormatOptions.Template = templateStr
 		}
 
 		// Default timestamp format
 		timestampFormat := time.RFC3339
-		if p.Format.TextFormatOptions.TimestampFormat != "" {
-			p.Format.TextFormatOptions.TimestampFormat = timestampFormat
+		if p.Format.TxtFormatOptions.TimestampFormat != "" {
+			p.Format.TxtFormatOptions.TimestampFormat = timestampFormat
 		}
 
 	case "json":
@@ -810,7 +802,7 @@ func validateHeartbeat(pipelineName, location string, hb *HeartbeatConfig) error
 		return nil // Skip validation if disabled
 	}
 
-	if hb.Interval < 1000 { // At least 1 second
+	if hb.IntervalMS < 1000 { // At least 1 second
 		return fmt.Errorf("pipeline '%s' %s: heartbeat interval must be at least 1000ms", pipelineName, location)
 	}
 

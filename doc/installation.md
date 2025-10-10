@@ -1,77 +1,76 @@
 # Installation Guide
 
-Installation process on tested platforms.
+LogWisp installation and service configuration for Linux and FreeBSD systems.
 
-## Requirements
-
-- **OS**: Linux, FreeBSD
-- **Architecture**: amd64
-- **Go**: 1.24+ (for building)
-
-## Installation
+## Installation Methods
 
 ### Pre-built Binaries
 
+Download the latest release binary for your platform and install to `/usr/local/bin`:
+
 ```bash
 # Linux amd64
-wget https://github.com/lixenwraith/logwisp/releases/latest/download/logwisp-linux-amd64
+wget https://github.com/yourusername/logwisp/releases/latest/download/logwisp-linux-amd64
 chmod +x logwisp-linux-amd64
 sudo mv logwisp-linux-amd64 /usr/local/bin/logwisp
 
-# Verify
-logwisp --version
+# FreeBSD amd64  
+fetch https://github.com/yourusername/logwisp/releases/latest/download/logwisp-freebsd-amd64
+chmod +x logwisp-freebsd-amd64
+sudo mv logwisp-freebsd-amd64 /usr/local/bin/logwisp
 ```
 
-### From Source
+### Building from Source
+
+Requires Go 1.24 or newer:
 
 ```bash
-git clone https://github.com/lixenwraith/logwisp.git
+git clone https://github.com/yourusername/logwisp.git
 cd logwisp
-make build
-sudo make install
+go build -o logwisp ./src/cmd/logwisp
+sudo install -m 755 logwisp /usr/local/bin/
 ```
 
-### Go Install
+### Go Install Method
+
+Install directly using Go (version information will not be embedded):
 
 ```bash
-go install github.com/lixenwraith/logwisp/src/cmd/logwisp@latest
+go install github.com/yourusername/logwisp/src/cmd/logwisp@latest
 ```
-Note: Binary created with this method will not contain version information.
 
-## Platform-Specific
+## Service Configuration
 
 ### Linux (systemd)
 
-```bash
-# Create service
-sudo tee /etc/systemd/system/logwisp.service << EOF
+Create systemd service file `/etc/systemd/system/logwisp.service`:
+
+```ini
 [Unit]
-Description=LogWisp Log Monitoring Service
+Description=LogWisp Log Transport Service
 After=network.target
 
 [Service]
 Type=simple
 User=logwisp
-ExecStart=/usr/local/bin/logwisp --config /etc/logwisp/logwisp.toml
-Restart=always
+Group=logwisp
+ExecStart=/usr/local/bin/logwisp -c /etc/logwisp/logwisp.toml
+Restart=on-failure
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
+WorkingDirectory=/var/lib/logwisp
 
 [Install]
 WantedBy=multi-user.target
-EOF
+```
 
-# Create user
+Setup service user and directories:
+
+```bash
 sudo useradd -r -s /bin/false logwisp
-
-# Create service user
-sudo useradd -r -s /bin/false logwisp
-
-# Create configuration directory
-sudo mkdir -p /etc/logwisp
-sudo chown logwisp:logwisp /etc/logwisp
-
-# Enable and start
+sudo mkdir -p /etc/logwisp /var/lib/logwisp /var/log/logwisp
+sudo chown logwisp:logwisp /var/lib/logwisp /var/log/logwisp
 sudo systemctl daemon-reload
 sudo systemctl enable logwisp
 sudo systemctl start logwisp
@@ -79,141 +78,90 @@ sudo systemctl start logwisp
 
 ### FreeBSD (rc.d)
 
-```bash
-# Create service script
-sudo tee /usr/local/etc/rc.d/logwisp << 'EOF'
+Create rc script `/usr/local/etc/rc.d/logwisp`:
+
+```sh
 #!/bin/sh
 
 # PROVIDE: logwisp
-# REQUIRE: DAEMON
+# REQUIRE: DAEMON NETWORKING
 # KEYWORD: shutdown
 
 . /etc/rc.subr
 
 name="logwisp"
 rcvar="${name}_enable"
-command="/usr/local/bin/logwisp"
-command_args="--config /usr/local/etc/logwisp/logwisp.toml"
 pidfile="/var/run/${name}.pid"
-start_cmd="logwisp_start"
-stop_cmd="logwisp_stop"
-
-logwisp_start()
-{
-    echo "Starting logwisp service..."
-    /usr/sbin/daemon -c -f -p ${pidfile} ${command} ${command_args}
-}
-
-logwisp_stop()
-{
-    if [ -f ${pidfile} ]; then
-        echo "Stopping logwisp service..."
-        kill $(cat ${pidfile})
-        rm -f ${pidfile}
-    fi
-}
+command="/usr/local/bin/logwisp"
+command_args="-c /usr/local/etc/logwisp/logwisp.toml"
 
 load_rc_config $name
 : ${logwisp_enable:="NO"}
-: ${logwisp_config:="/usr/local/etc/logwisp/logwisp.toml"}
 
 run_rc_command "$1"
-EOF
+```
 
-# Make executable
+Setup service:
+
+```bash
 sudo chmod +x /usr/local/etc/rc.d/logwisp
-
-# Create service user
 sudo pw useradd logwisp -d /nonexistent -s /usr/sbin/nologin
-
-# Create configuration directory
-sudo mkdir -p /usr/local/etc/logwisp
-sudo chown logwisp:logwisp /usr/local/etc/logwisp
-
-# Enable service
+sudo mkdir -p /usr/local/etc/logwisp /var/log/logwisp
+sudo chown logwisp:logwisp /var/log/logwisp
 sudo sysrc logwisp_enable="YES"
-
-# Start service
 sudo service logwisp start
 ```
 
-## Post-Installation
+## Directory Structure
 
-### Verify Installation
+Standard installation directories:
+
+| Purpose | Linux | FreeBSD |
+|---------|-------|---------|
+| Binary | `/usr/local/bin/logwisp` | `/usr/local/bin/logwisp` |
+| Configuration | `/etc/logwisp/` | `/usr/local/etc/logwisp/` |
+| Working Directory | `/var/lib/logwisp/` | `/var/db/logwisp/` |
+| Log Files | `/var/log/logwisp/` | `/var/log/logwisp/` |
+| PID File | `/var/run/logwisp.pid` | `/var/run/logwisp.pid` |
+
+## Post-Installation Verification
+
+Verify the installation:
+
 ```bash
 # Check version
-logwisp --version
+logwisp version
 
 # Test configuration
-logwisp --config /etc/logwisp/logwisp.toml --log-level debug
+logwisp -c /etc/logwisp/logwisp.toml --disable-status-reporter
 
-# Check service
+# Check service status (Linux)
 sudo systemctl status logwisp
-```
 
-### Linux Service Status
-```bash
-sudo systemctl status logwisp
-```
-
-### FreeBSD Service Status
-```bash
+# Check service status (FreeBSD)
 sudo service logwisp status
-```
-
-### Initial Configuration
-
-Create a basic configuration file:
-
-```toml
-# /etc/logwisp/logwisp.toml (Linux)
-# /usr/local/etc/logwisp/logwisp.toml (FreeBSD)
-
-[[pipelines]]
-name = "myapp"
-
-[[pipelines.sources]]
-type = "directory"
-options = { 
-    path = "/path/to/application/logs",
-    pattern = "*.log"
-}
-
-[[pipelines.sinks]]
-type = "http"
-options = { port = 8080 }
-```
-
-Restart service after configuration changes:
-
-**Linux:**
-```bash
-sudo systemctl restart logwisp
-```
-
-**FreeBSD:**
-```bash
-sudo service logwisp restart
 ```
 
 ## Uninstallation
 
 ### Linux
+
 ```bash
 sudo systemctl stop logwisp
 sudo systemctl disable logwisp
 sudo rm /usr/local/bin/logwisp
 sudo rm /etc/systemd/system/logwisp.service
-sudo rm -rf /etc/logwisp
+sudo rm -rf /etc/logwisp /var/lib/logwisp /var/log/logwisp
 sudo userdel logwisp
 ```
 
 ### FreeBSD
+
 ```bash
 sudo service logwisp stop
-sudo sysrc logwisp_enable="NO"
+sudo sysrc -x logwisp_enable
 sudo rm /usr/local/bin/logwisp
 sudo rm /usr/local/etc/rc.d/logwisp
-sudo rm -rf /usr/local/etc/logwisp
+sudo rm -rf /usr/local/etc/logwisp /var/db/logwisp /var/log/logwisp
 sudo pw userdel logwisp
 ```

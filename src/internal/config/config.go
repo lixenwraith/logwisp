@@ -13,11 +13,11 @@ type Config struct {
 	DisableStatusReporter bool `toml:"disable_status_reporter"`
 	ConfigAutoReload      bool `toml:"config_auto_reload"`
 
-	// Internal flag indicating demonized child process
-	BackgroundDaemon bool `toml:"background-daemon"`
+	// Internal flag indicating demonized child process (DO NOT SET IN CONFIG FILE)
+	BackgroundDaemon bool
 
 	// Configuration file path
-	ConfigFile string `toml:"config"`
+	ConfigFile string `toml:"config_file"`
 
 	// Existing fields
 	Logging   *LogConfig       `toml:"logging"`
@@ -83,18 +83,16 @@ type PipelineConfig struct {
 // Common configuration structs used across components
 
 type NetLimitConfig struct {
-	Enabled                bool     `toml:"enabled"`
-	MaxConnections         int64    `toml:"max_connections"`
-	RequestsPerSecond      float64  `toml:"requests_per_second"`
-	BurstSize              int64    `toml:"burst_size"`
-	ResponseMessage        string   `toml:"response_message"`
-	ResponseCode           int64    `toml:"response_code"` // Default: 429
-	MaxConnectionsPerIP    int64    `toml:"max_connections_per_ip"`
-	MaxConnectionsPerUser  int64    `toml:"max_connections_per_user"`
-	MaxConnectionsPerToken int64    `toml:"max_connections_per_token"`
-	MaxConnectionsTotal    int64    `toml:"max_connections_total"`
-	IPWhitelist            []string `toml:"ip_whitelist"`
-	IPBlacklist            []string `toml:"ip_blacklist"`
+	Enabled             bool     `toml:"enabled"`
+	MaxConnections      int64    `toml:"max_connections"`
+	RequestsPerSecond   float64  `toml:"requests_per_second"`
+	BurstSize           int64    `toml:"burst_size"`
+	ResponseMessage     string   `toml:"response_message"`
+	ResponseCode        int64    `toml:"response_code"` // Default: 429
+	MaxConnectionsPerIP int64    `toml:"max_connections_per_ip"`
+	MaxConnectionsTotal int64    `toml:"max_connections_total"`
+	IPWhitelist         []string `toml:"ip_whitelist"`
+	IPBlacklist         []string `toml:"ip_blacklist"`
 }
 
 type TLSConfig struct {
@@ -120,7 +118,7 @@ type TLSConfig struct {
 
 type HeartbeatConfig struct {
 	Enabled          bool   `toml:"enabled"`
-	Interval         int64  `toml:"interval_ms"`
+	IntervalMS       int64  `toml:"interval_ms"`
 	IncludeTimestamp bool   `toml:"include_timestamp"`
 	IncludeStats     bool   `toml:"include_stats"`
 	Format           string `toml:"format"`
@@ -149,10 +147,7 @@ type DirectorySourceOptions struct {
 	Path            string `toml:"path"`
 	Pattern         string `toml:"pattern"` // glob pattern
 	CheckIntervalMS int64  `toml:"check_interval_ms"`
-	Recursive       bool   `toml:"recursive"`
-	FollowSymlinks  bool   `toml:"follow_symlinks"`
-	DeleteAfterRead bool   `toml:"delete_after_read"`
-	MoveToDirectory string `toml:"move_to_directory"` // move after processing
+	Recursive       bool   `toml:"recursive"` // TODO: implement logic
 }
 
 type StdinSourceOptions struct {
@@ -204,9 +199,8 @@ type ConsoleSinkOptions struct {
 }
 
 type FileSinkOptions struct {
-	Directory string `toml:"directory"`
-	Name      string `toml:"name"`
-	//  Extension      string  `toml:"extension"`
+	Directory      string  `toml:"directory"`
+	Name           string  `toml:"name"`
 	MaxSizeMB      int64   `toml:"max_size_mb"`
 	MaxTotalSizeMB int64   `toml:"max_total_size_mb"`
 	MinDiskFreeMB  int64   `toml:"min_disk_free_mb"`
@@ -242,7 +236,6 @@ type TCPSinkOptions struct {
 
 type HTTPClientSinkOptions struct {
 	URL                string            `toml:"url"`
-	Headers            map[string]string `toml:"headers"`
 	BufferSize         int64             `toml:"buffer_size"`
 	BatchSize          int64             `toml:"batch_size"`
 	BatchDelayMS       int64             `toml:"batch_delay_ms"`
@@ -322,12 +315,12 @@ type FilterConfig struct {
 
 type FormatConfig struct {
 	// Format configuration - polymorphic like sources/sinks
-	Type string `toml:"type"` // "json", "text", "raw"
+	Type string `toml:"type"` // "json", "txt", "raw"
 
 	// Only one will be populated based on format type
-	JSONFormatOptions *JSONFormatterOptions `toml:"json_format,omitempty"`
-	TextFormatOptions *TextFormatterOptions `toml:"text_format,omitempty"`
-	RawFormatOptions  *RawFormatterOptions  `toml:"raw_format,omitempty"`
+	JSONFormatOptions *JSONFormatterOptions `toml:"json,omitempty"`
+	TxtFormatOptions  *TxtFormatterOptions  `toml:"txt,omitempty"`
+	RawFormatOptions  *RawFormatterOptions  `toml:"raw,omitempty"`
 }
 
 type JSONFormatterOptions struct {
@@ -338,7 +331,7 @@ type JSONFormatterOptions struct {
 	SourceField    string `toml:"source_field"`
 }
 
-type TextFormatterOptions struct {
+type TxtFormatterOptions struct {
 	Template        string `toml:"template"`
 	TimestampFormat string `toml:"timestamp_format"`
 }

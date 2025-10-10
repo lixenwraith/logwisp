@@ -6,7 +6,7 @@
     <td>
       <h1>LogWisp</h1>
       <p>
-        <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.24-00ADD8?style=flat&logo=go" alt="Go"></a>
+        <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat&logo=go" alt="Go"></a>
         <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License"></a>
         <a href="doc/"><img src="https://img.shields.io/badge/Docs-Available-green.svg" alt="Documentation"></a>
       </p>
@@ -14,41 +14,81 @@
   </tr>
 </table>
 
-**Flexible log monitoring with real-time streaming over HTTP/SSE and TCP**
+# LogWisp
 
-LogWisp watches log files and streams updates to connected clients in real-time using a pipeline architecture: **sources → filters → sinks**. Perfect for monitoring multiple applications, filtering noise, and routing logs to multiple destinations.
+A high-performance, pipeline-based log transport and processing system built in Go. LogWisp provides flexible log collection, filtering, formatting, and distribution with enterprise-grade security and reliability features.
 
-## 🚀 Quick Start
+## Features
 
-```bash
-# Install
-git clone https://github.com/lixenwraith/logwisp.git
-cd logwisp
-make install
+### Core Capabilities
+- **Pipeline Architecture**: Independent processing pipelines with source → filter → format → sink flow.
+- **Multiple Input Sources**: Directory monitoring, stdin, HTTP, TCP.
+- **Flexible Output Sinks**: Console, file, HTTP SSE, TCP streaming, HTTP/TCP forwarding.
+- **Real-time Processing**: Sub-millisecond latency with configurable buffering.
+- **Hot Configuration Reload**: Update pipelines without service restart.
 
-# Run with defaults (monitors *.log in current directory)
-logwisp
+### Data Processing
+- **Pattern-based Filtering**: Chainable include/exclude filters with regex support.
+- **Multiple Formatters**: Raw, JSON, and template-based text formatting.
+- **Rate Limiting**: Pipeline rate control.
+
+### Security & Reliability
+- **Authentication**: Basic, token, and mTLS support for HTTPS, and SCRAM for TCP.
+- **TLS Encryption**: TLS 1.2/1.3 support for HTTP connections.
+- **Access Control**: IP whitelisting/blacklisting, connection limits.
+- **Automatic Reconnection**: Resilient client connections with exponential backoff.
+- **File Rotation**: Size-based rotation with retention policies.
+
+### Operational Features
+- **Status Monitoring**: Real-time statistics and health endpoints.
+- **Signal Handling**: Graceful shutdown and configuration reload via signals.
+- **Background Mode**: Daemon operation with proper signal handling.
+- **Quiet Mode**: Silent operation for automated deployments.
+
+## Documentation
+
+Available in `doc/` directory.
+
+- [Installation Guide](installation.md) - Platform setup and service configuration
+- [Architecture Overview](architecture.md) - System design and component interaction
+- [Configuration Reference](configuration.md) - TOML structure and configuration methods
+- [Input Sources](sources.md) - Available source types and configurations
+- [Output Sinks](sinks.md) - Sink types and output options
+- [Filters](filters.md) - Pattern-based log filtering
+- [Formatters](formatters.md) - Log formatting and transformation
+- [Authentication](authentication.md) - Security configurations and auth methods
+- [Networking](networking.md) - TLS, rate limiting, and network features
+- [Command Line Interface](cli.md) - CLI flags and subcommands
+- [Operations Guide](operations.md) - Running and maintaining LogWisp
+
+## Quick Start
+
+Install LogWisp and create a basic configuration:
+
+```toml
+[[pipelines]]
+name = "default"
+
+[[pipelines.sources]]
+type = "directory"
+[pipelines.sources.directory]
+path = "./"
+pattern = "*.log"
+
+[[pipelines.sinks]]
+type = "console"
+[pipelines.sinks.console]
+target = "stdout"
 ```
 
-## ✨ Key Features
+Run with: `logwisp -c config.toml`
 
-- **🔧 Pipeline Architecture** - Flexible source → filter → sink processing
-- **📡 Real-time Streaming** - SSE (HTTP) and TCP protocols
-- **🔍 Pattern Filtering** - Include/exclude logs with regex patterns
-- **🛡️ Rate Limiting** - Protect against abuse with configurable limits
-- **📊 Multi-pipeline** - Process different log sources simultaneously
-- **🔄 Rotation Aware** - Handles log rotation seamlessly
-- **⚡ High Performance** - Minimal CPU/memory footprint
+## System Requirements
 
-## 📖 Documentation
+- **Operating Systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
+- **Architecture**: amd64
+- **Go Version**: 1.25+ (for building from source)
 
-Complete documentation is available in the [`doc/`](doc/) directory:
+## License
 
-- [**Quick Start Guide**](doc/quickstart.md) - Get running in 5 minutes
-- [**Configuration**](doc/configuration.md) - All configuration options
-- [**CLI Reference**](doc/cli.md) - Command-line interface
-- [**Examples**](doc/examples/) - Ready-to-use configurations
-
-## 📄 License
-
-BSD-3-Clause
+BSD 3-Clause License
