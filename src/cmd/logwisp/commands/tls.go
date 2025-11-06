@@ -17,11 +17,13 @@ import (
 	"time"
 )
 
+// TLSCommand handles the generation of TLS certificates.
 type TLSCommand struct {
 	output io.Writer
 	errOut io.Writer
 }
 
+// NewTLSCommand creates a new TLS command handler.
 func NewTLSCommand() *TLSCommand {
 	return &TLSCommand{
 		output: os.Stdout,
@@ -29,6 +31,7 @@ func NewTLSCommand() *TLSCommand {
 	}
 }
 
+// Execute parses flags and routes to the appropriate certificate generation function.
 func (tc *TLSCommand) Execute(args []string) error {
 	cmd := flag.NewFlagSet("tls", flag.ContinueOnError)
 	cmd.SetOutput(tc.errOut)
@@ -133,10 +136,12 @@ func (tc *TLSCommand) Execute(args []string) error {
 	}
 }
 
+// Description returns a brief one-line description of the command.
 func (tc *TLSCommand) Description() string {
 	return "Generate TLS certificates (CA, server, client, self-signed)"
 }
 
+// Help returns the detailed help text for the command.
 func (tc *TLSCommand) Help() string {
 	return `TLS Command - Generate TLS certificates for LogWisp
 
@@ -195,7 +200,7 @@ Security Notes:
 `
 }
 
-// Create and manage private CA
+// generateCA creates a new Certificate Authority (CA) certificate and private key.
 func (tc *TLSCommand) generateCA(cn, org, country string, days, bits int, certFile, keyFile string) error {
 	// Generate RSA key
 	priv, err := rsa.GenerateKey(rand.Reader, bits)
@@ -250,28 +255,7 @@ func (tc *TLSCommand) generateCA(cn, org, country string, days, bits int, certFi
 	return nil
 }
 
-func parseHosts(hostList string) ([]string, []net.IP) {
-	var dnsNames []string
-	var ipAddrs []net.IP
-
-	if hostList == "" {
-		return dnsNames, ipAddrs
-	}
-
-	hosts := strings.Split(hostList, ",")
-	for _, h := range hosts {
-		h = strings.TrimSpace(h)
-		if ip := net.ParseIP(h); ip != nil {
-			ipAddrs = append(ipAddrs, ip)
-		} else {
-			dnsNames = append(dnsNames, h)
-		}
-	}
-
-	return dnsNames, ipAddrs
-}
-
-// Generate self-signed certificate
+// generateSelfSigned creates a new self-signed server certificate and private key.
 func (tc *TLSCommand) generateSelfSigned(cn, org, country, hosts string, days, bits int, certFile, keyFile string) error {
 	// 1. Generate an RSA private key with the specified bit size
 	priv, err := rsa.GenerateKey(rand.Reader, bits)
@@ -338,7 +322,7 @@ func (tc *TLSCommand) generateSelfSigned(cn, org, country, hosts string, days, b
 	return nil
 }
 
-// Generate server cert with CA
+// generateServerCert creates a new server certificate signed by a provided CA.
 func (tc *TLSCommand) generateServerCert(cn, org, country, hosts, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
 	caCert, caKey, err := loadCA(caFile, caKeyFile)
 	if err != nil {
@@ -401,7 +385,7 @@ func (tc *TLSCommand) generateServerCert(cn, org, country, hosts, caFile, caKeyF
 	return nil
 }
 
-// Generate client cert with CA
+// generateClientCert creates a new client certificate signed by a provided CA for mTLS.
 func (tc *TLSCommand) generateClientCert(cn, org, country, caFile, caKeyFile string, days, bits int, certFile, keyFile string) error {
 	caCert, caKey, err := loadCA(caFile, caKeyFile)
 	if err != nil {
@@ -458,7 +442,7 @@ func (tc *TLSCommand) generateClientCert(cn, org, country, caFile, caKeyFile str
 	return nil
 }
 
-// Load cert with CA
+// loadCA reads and parses a CA certificate and its corresponding private key from files.
 func loadCA(certFile, keyFile string) (*x509.Certificate, *rsa.PrivateKey, error) {
 	// Load CA certificate
 	certPEM, err := os.ReadFile(certFile)
@@ -517,6 +501,7 @@ func loadCA(certFile, keyFile string) (*x509.Certificate, *rsa.PrivateKey, error
 	return caCert, caKey, nil
 }
 
+// saveCert saves a DER-encoded certificate to a file in PEM format.
 func saveCert(filename string, certDER []byte) error {
 	certFile, err := os.Create(filename)
 	if err != nil {
@@ -539,6 +524,7 @@ func saveCert(filename string, certDER []byte) error {
 	return nil
 }
 
+// saveKey saves an RSA private key to a file in PEM format with restricted permissions.
 func saveKey(filename string, key *rsa.PrivateKey) error {
 	keyFile, err := os.Create(filename)
 	if err != nil {
@@ -560,4 +546,26 @@ func saveKey(filename string, key *rsa.PrivateKey) error {
 	}
 
 	return nil
+}
+
+// parseHosts splits a comma-separated string of hosts into slices of DNS names and IP addresses.
+func parseHosts(hostList string) ([]string, []net.IP) {
+	var dnsNames []string
+	var ipAddrs []net.IP
+
+	if hostList == "" {
+		return dnsNames, ipAddrs
+	}
+
+	hosts := strings.Split(hostList, ",")
+	for _, h := range hosts {
+		h = strings.TrimSpace(h)
+		if ip := net.ParseIP(h); ip != nil {
+			ipAddrs = append(ipAddrs, ip)
+		} else {
+			dnsNames = append(dnsNames, h)
+		}
+	}
+
+	return dnsNames, ipAddrs
 }

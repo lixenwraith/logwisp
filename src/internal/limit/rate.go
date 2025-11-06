@@ -11,7 +11,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Enforces rate limits on log entries flowing through a pipeline.
+// RateLimiter enforces rate limits on log entries flowing through a pipeline.
 type RateLimiter struct {
 	bucket *TokenBucket
 	policy config.RateLimitPolicy
@@ -23,7 +23,7 @@ type RateLimiter struct {
 	droppedCount       atomic.Uint64
 }
 
-// Creates a new rate limiter. If cfg.Rate is 0, it returns nil.
+// NewRateLimiter creates a new pipeline-level rate limiter from configuration.
 func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimiter, error) {
 	if cfg.Rate <= 0 {
 		return nil, nil // No rate limit
@@ -56,8 +56,7 @@ func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimite
 	return l, nil
 }
 
-// Checks if a log entry is allowed to pass based on the rate limit.
-// It returns true if the entry should pass, false if it should be dropped.
+// Allow checks if a log entry is permitted to pass based on the rate limit.
 func (l *RateLimiter) Allow(entry core.LogEntry) bool {
 	if l == nil || l.policy == config.PolicyPass {
 		return true
@@ -83,7 +82,7 @@ func (l *RateLimiter) Allow(entry core.LogEntry) bool {
 	return true
 }
 
-// GetStats returns the statistics for the limiter.
+// GetStats returns statistics for the rate limiter.
 func (l *RateLimiter) GetStats() map[string]any {
 	if l == nil {
 		return map[string]any{
@@ -106,7 +105,7 @@ func (l *RateLimiter) GetStats() map[string]any {
 	return stats
 }
 
-// policyString returns the string representation of the policy.
+// policyString returns the string representation of a rate limit policy.
 func policyString(p config.RateLimitPolicy) string {
 	switch p {
 	case config.PolicyDrop:

@@ -10,7 +10,7 @@ import (
 	"logwisp/src/internal/service"
 )
 
-// Periodically logs service status
+// statusReporter is a goroutine that periodically logs the health and statistics of the service.
 func statusReporter(service *service.Service, ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -60,55 +60,7 @@ func statusReporter(service *service.Service, ctx context.Context) {
 	}
 }
 
-// Logs the status of an individual pipeline
-func logPipelineStatus(name string, stats map[string]any) {
-	statusFields := []any{
-		"msg", "Pipeline status",
-		"pipeline", name,
-	}
-
-	// Add processing statistics
-	if totalProcessed, ok := stats["total_processed"].(uint64); ok {
-		statusFields = append(statusFields, "entries_processed", totalProcessed)
-	}
-	if totalFiltered, ok := stats["total_filtered"].(uint64); ok {
-		statusFields = append(statusFields, "entries_filtered", totalFiltered)
-	}
-
-	// Add source count
-	if sourceCount, ok := stats["source_count"].(int); ok {
-		statusFields = append(statusFields, "sources", sourceCount)
-	}
-
-	// Add sink statistics
-	if sinks, ok := stats["sinks"].([]map[string]any); ok {
-		tcpConns := int64(0)
-		httpConns := int64(0)
-
-		for _, sink := range sinks {
-			sinkType := sink["type"].(string)
-			if activeConns, ok := sink["active_connections"].(int64); ok {
-				switch sinkType {
-				case "tcp":
-					tcpConns += activeConns
-				case "http":
-					httpConns += activeConns
-				}
-			}
-		}
-
-		if tcpConns > 0 {
-			statusFields = append(statusFields, "tcp_connections", tcpConns)
-		}
-		if httpConns > 0 {
-			statusFields = append(statusFields, "http_connections", httpConns)
-		}
-	}
-
-	logger.Debug(statusFields...)
-}
-
-// Logs the configured endpoints for a pipeline
+// displayPipelineEndpoints logs the configured source and sink endpoints for a pipeline at startup.
 func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	// Display sink endpoints
 	for i, sinkCfg := range cfg.Sinks {
@@ -256,4 +208,52 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 			"pipeline", cfg.Name,
 			"filter_count", len(cfg.Filters))
 	}
+}
+
+// logPipelineStatus logs the detailed status and statistics of an individual pipeline.
+func logPipelineStatus(name string, stats map[string]any) {
+	statusFields := []any{
+		"msg", "Pipeline status",
+		"pipeline", name,
+	}
+
+	// Add processing statistics
+	if totalProcessed, ok := stats["total_processed"].(uint64); ok {
+		statusFields = append(statusFields, "entries_processed", totalProcessed)
+	}
+	if totalFiltered, ok := stats["total_filtered"].(uint64); ok {
+		statusFields = append(statusFields, "entries_filtered", totalFiltered)
+	}
+
+	// Add source count
+	if sourceCount, ok := stats["source_count"].(int); ok {
+		statusFields = append(statusFields, "sources", sourceCount)
+	}
+
+	// Add sink statistics
+	if sinks, ok := stats["sinks"].([]map[string]any); ok {
+		tcpConns := int64(0)
+		httpConns := int64(0)
+
+		for _, sink := range sinks {
+			sinkType := sink["type"].(string)
+			if activeConns, ok := sink["active_connections"].(int64); ok {
+				switch sinkType {
+				case "tcp":
+					tcpConns += activeConns
+				case "http":
+					httpConns += activeConns
+				}
+			}
+		}
+
+		if tcpConns > 0 {
+			statusFields = append(statusFields, "tcp_connections", tcpConns)
+		}
+		if httpConns > 0 {
+			statusFields = append(statusFields, "http_connections", httpConns)
+		}
+	}
+
+	logger.Debug(statusFields...)
 }

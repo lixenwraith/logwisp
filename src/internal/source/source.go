@@ -7,22 +7,22 @@ import (
 	"logwisp/src/internal/core"
 )
 
-// Represents an input data stream
+// Source represents an input data stream for log entries.
 type Source interface {
-	// Returns a channel that receives log entries
+	// Subscribe returns a channel that receives log entries from the source.
 	Subscribe() <-chan core.LogEntry
 
-	// Begins reading from the source
+	// Start begins reading from the source.
 	Start() error
 
-	// Gracefully shuts down the source
+	// Stop gracefully shuts down the source.
 	Stop()
 
-	// Returns source statistics
+	// SourceStats contains statistics about a source.
 	GetStats() SourceStats
 }
 
-// Contains statistics about a source
+// SourceStats contains statistics about a source.
 type SourceStats struct {
 	Type           string
 	TotalEntries   uint64

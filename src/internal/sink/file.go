@@ -15,7 +15,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Writes log entries to files with rotation
+// FileSink writes log entries to files with rotation.
 type FileSink struct {
 	config    *config.FileSinkOptions
 	input     chan core.LogEntry
@@ -30,7 +30,7 @@ type FileSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-// Creates a new file sink
+// NewFileSink creates a new file sink.
 func NewFileSink(opts *config.FileSinkOptions, logger *log.Logger, formatter format.Formatter) (*FileSink, error) {
 	if opts == nil {
 		return nil, fmt.Errorf("file sink options cannot be nil")
@@ -63,10 +63,12 @@ func NewFileSink(opts *config.FileSinkOptions, logger *log.Logger, formatter for
 	return fs, nil
 }
 
+// Input returns the channel for sending log entries.
 func (fs *FileSink) Input() chan<- core.LogEntry {
 	return fs.input
 }
 
+// Start begins the processing loop for the sink.
 func (fs *FileSink) Start(ctx context.Context) error {
 	// Start the internal file writer
 	if err := fs.writer.Start(); err != nil {
@@ -78,6 +80,7 @@ func (fs *FileSink) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully shuts down the sink.
 func (fs *FileSink) Stop() {
 	fs.logger.Info("msg", "Stopping file sink")
 	close(fs.done)
@@ -92,6 +95,7 @@ func (fs *FileSink) Stop() {
 	fs.logger.Info("msg", "File sink stopped")
 }
 
+// GetStats returns the sink's statistics.
 func (fs *FileSink) GetStats() SinkStats {
 	lastProc, _ := fs.lastProcessed.Load().(time.Time)
 
@@ -104,6 +108,7 @@ func (fs *FileSink) GetStats() SinkStats {
 	}
 }
 
+// processLoop reads entries, formats them, and writes to a file.
 func (fs *FileSink) processLoop(ctx context.Context) {
 	for {
 		select {

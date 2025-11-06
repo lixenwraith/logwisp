@@ -11,31 +11,32 @@ import (
 	"sync/atomic"
 	"time"
 
-	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
 	"logwisp/src/internal/limit"
+	"logwisp/src/internal/session"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/compat"
 	"github.com/panjf2000/gnet/v2"
 )
 
-// Streams log entries via TCP
+// TCPSink streams log entries to connected TCP clients.
 type TCPSink struct {
-	input       chan core.LogEntry
-	config      *config.TCPSinkOptions
-	server      *tcpServer
-	done        chan struct{}
-	activeConns atomic.Int64
-	startTime   time.Time
-	engine      *gnet.Engine
-	engineMu    sync.Mutex
-	wg          sync.WaitGroup
-	netLimiter  *limit.NetLimiter
-	logger      *log.Logger
-	formatter   format.Formatter
+	input          chan core.LogEntry
+	config         *config.TCPSinkOptions
+	server         *tcpServer
+	done           chan struct{}
+	activeConns    atomic.Int64
+	startTime      time.Time
+	engine         *gnet.Engine
+	engineMu       sync.Mutex
+	wg             sync.WaitGroup
+	netLimiter     *limit.NetLimiter
+	logger         *log.Logger
+	formatter      format.Formatter
+	sessionManager *session.Manager
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -47,7 +48,7 @@ type TCPSink struct {
 	errorMu                sync.Mutex
 }
 
-// Holds TCP sink configuration
+// TCPConfig holds configuration for the TCPSink.
 type TCPConfig struct {
 	Host       string
 	Port       int64
@@ -56,19 +57,21 @@ type TCPConfig struct {
 	NetLimit   *config.NetLimitConfig
 }
 
-// Creates a new TCP streaming sink
+// NewTCPSink creates a new TCP streaming sink.
 func NewTCPSink(opts *config.TCPSinkOptions, logger *log.Logger, formatter format.Formatter) (*TCPSink, error) {
 	if opts == nil {
 		return nil, fmt.Errorf("TCP sink options cannot be nil")
 	}
 
 	t := &TCPSink{
-		config:    opts, // Direct reference to config
-		input:     make(chan core.LogEntry, opts.BufferSize),
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
-		formatter: formatter,
+		config:                 opts,
+		input:                  make(chan core.LogEntry, opts.BufferSize),
+		done:                   make(chan struct{}),
+		startTime:              time.Now(),
+		logger:                 logger,
+		formatter:              formatter,
+		consecutiveWriteErrors: make(map[gnet.Conn]int),
+		sessionManager:         session.NewManager(30 * time.Minute),
 	}
 	t.lastProcessed.Store(time.Time{})
 
@@ -82,15 +85,22 @@ func NewTCPSink(opts *config.TCPSinkOptions, logger *log.Logger, formatter forma
 	return t, nil
 }
 
+// Input returns the channel for sending log entries.
 func (t *TCPSink) Input() chan<- core.LogEntry {
 	return t.input
 }
 
+// Start initializes the TCP server and begins the broadcast loop.
 func (t *TCPSink) Start(ctx context.Context) error {
 	t.server = &tcpServer{
 		sink:    t,
 		clients: make(map[gnet.Conn]*tcpClient),
 	}
+
+	// Register expiry callback
+	t.sessionManager.RegisterExpiryCallback("tcp_sink", func(sessionID, remoteAddr string) {
+		t.handleSessionExpiry(sessionID, remoteAddr)
+	})
 
 	// Start log broadcast loop
 	t.wg.Add(1)
@@ -155,8 +165,13 @@ func (t *TCPSink) Start(ctx context.Context) error {
 	}
 }
 
+// Stop gracefully shuts down the TCP server.
 func (t *TCPSink) Stop() {
 	t.logger.Info("msg", "Stopping TCP sink")
+
+	// Unregister callback
+	t.sessionManager.UnregisterExpiryCallback("tcp_sink")
+
 	// Signal broadcast loop to stop
 	close(t.done)
 
@@ -174,15 +189,26 @@ func (t *TCPSink) Stop() {
 	// Wait for broadcast loop to finish
 	t.wg.Wait()
 
+	// Stop session manager
+	if t.sessionManager != nil {
+		t.sessionManager.Stop()
+	}
+
 	t.logger.Info("msg", "TCP sink stopped")
 }
 
+// GetStats returns the sink's statistics.
 func (t *TCPSink) GetStats() SinkStats {
 	lastProc, _ := t.lastProcessed.Load().(time.Time)
 
 	var netLimitStats map[string]any
 	if t.netLimiter != nil {
 		netLimitStats = t.netLimiter.GetStats()
+	}
+
+	var sessionStats map[string]any
+	if t.sessionManager != nil {
+		sessionStats = t.sessionManager.GetStats()
 	}
 
 	return SinkStats{
@@ -195,11 +221,32 @@ func (t *TCPSink) GetStats() SinkStats {
 			"port":        t.config.Port,
 			"buffer_size": t.config.BufferSize,
 			"net_limit":   netLimitStats,
-			"auth":        map[string]any{"enabled": false},
+			"sessions":    sessionStats,
 		},
 	}
 }
 
+// GetActiveConnections returns the current number of active connections.
+func (t *TCPSink) GetActiveConnections() int64 {
+	return t.activeConns.Load()
+}
+
+// tcpServer implements the gnet.EventHandler interface for the TCP sink.
+type tcpServer struct {
+	gnet.BuiltinEventEngine
+	sink    *TCPSink
+	clients map[gnet.Conn]*tcpClient
+	mu      sync.RWMutex
+}
+
+// tcpClient represents a connected TCP client.
+type tcpClient struct {
+	conn      gnet.Conn
+	buffer    bytes.Buffer
+	sessionID string
+}
+
+// broadcastLoop manages the central broadcasting of log entries to all clients.
 func (t *TCPSink) broadcastLoop(ctx context.Context) {
 	var ticker *time.Ticker
 	var tickerChan <-chan time.Time
@@ -248,101 +295,7 @@ func (t *TCPSink) broadcastLoop(ctx context.Context) {
 	}
 }
 
-func (t *TCPSink) broadcastData(data []byte) {
-	t.server.mu.RLock()
-	defer t.server.mu.RUnlock()
-
-	for conn, _ := range t.server.clients {
-		conn.AsyncWrite(data, func(c gnet.Conn, err error) error {
-			if err != nil {
-				t.writeErrors.Add(1)
-				t.handleWriteError(c, err)
-			} else {
-				// Reset consecutive error count on success
-				t.errorMu.Lock()
-				delete(t.consecutiveWriteErrors, c)
-				t.errorMu.Unlock()
-			}
-			return nil
-		})
-	}
-}
-
-// Handle write errors with threshold-based connection termination
-func (t *TCPSink) handleWriteError(c gnet.Conn, err error) {
-	t.errorMu.Lock()
-	defer t.errorMu.Unlock()
-
-	// Track consecutive errors per connection
-	if t.consecutiveWriteErrors == nil {
-		t.consecutiveWriteErrors = make(map[gnet.Conn]int)
-	}
-
-	t.consecutiveWriteErrors[c]++
-	errorCount := t.consecutiveWriteErrors[c]
-
-	t.logger.Debug("msg", "AsyncWrite error",
-		"component", "tcp_sink",
-		"remote_addr", c.RemoteAddr(),
-		"error", err,
-		"consecutive_errors", errorCount)
-
-	// Close connection after 3 consecutive write errors
-	if errorCount >= 3 {
-		t.logger.Warn("msg", "Closing connection due to repeated write errors",
-			"component", "tcp_sink",
-			"remote_addr", c.RemoteAddr(),
-			"error_count", errorCount)
-		delete(t.consecutiveWriteErrors, c)
-		c.Close()
-	}
-}
-
-// Create heartbeat as a proper LogEntry
-func (t *TCPSink) createHeartbeatEntry() core.LogEntry {
-	message := "heartbeat"
-
-	// Build fields for heartbeat metadata
-	fields := make(map[string]any)
-	fields["type"] = "heartbeat"
-
-	if t.config.Heartbeat.IncludeStats {
-		fields["active_connections"] = t.activeConns.Load()
-		fields["uptime_seconds"] = int64(time.Since(t.startTime).Seconds())
-	}
-
-	fieldsJSON, _ := json.Marshal(fields)
-
-	return core.LogEntry{
-		Time:    time.Now(),
-		Source:  "logwisp-tcp",
-		Level:   "INFO",
-		Message: message,
-		Fields:  fieldsJSON,
-	}
-}
-
-// Returns the current number of connections
-func (t *TCPSink) GetActiveConnections() int64 {
-	return t.activeConns.Load()
-}
-
-// Represents a connected TCP client with auth state
-type tcpClient struct {
-	conn        gnet.Conn
-	buffer      bytes.Buffer
-	authTimeout time.Time
-	session     *auth.Session
-}
-
-// Handles gnet events with authentication
-type tcpServer struct {
-	gnet.BuiltinEventEngine
-	sink    *TCPSink
-	clients map[gnet.Conn]*tcpClient
-	mu      sync.RWMutex
-}
-
+// OnBoot is called when the server starts.
 func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
 	// Store engine reference for shutdown
 	s.sink.engineMu.Lock()
@@ -355,6 +308,7 @@ func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
 	return gnet.None
 }
 
+// OnOpen is called when a new connection is established.
 func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	remoteAddr := c.RemoteAddr()
 	s.sink.logger.Debug("msg", "TCP connection attempt", "remote_addr", remoteAddr)
@@ -387,10 +341,14 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		s.sink.netLimiter.AddConnection(remoteStr)
 	}
 
+	// Create session for tracking
+	sess := s.sink.sessionManager.CreateSession(c.RemoteAddr().String(), "tcp_sink", nil)
+
 	// TCP Sink accepts all connections without authentication
 	client := &tcpClient{
-		conn:   c,
-		buffer: bytes.Buffer{},
+		conn:      c,
+		buffer:    bytes.Buffer{},
+		sessionID: sess.ID,
 	}
 
 	s.mu.Lock()
@@ -400,13 +358,29 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	newCount := s.sink.activeConns.Add(1)
 	s.sink.logger.Debug("msg", "TCP connection opened",
 		"remote_addr", remoteAddr,
+		"session_id", sess.ID,
 		"active_connections", newCount)
 
 	return nil, gnet.None
 }
 
+// OnClose is called when a connection is closed.
 func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	remoteAddr := c.RemoteAddr().String()
+
+	// Get client to retrieve session ID
+	s.mu.RLock()
+	client, exists := s.clients[c]
+	s.mu.RUnlock()
+
+	if exists && client.sessionID != "" {
+		// Remove session
+		s.sink.sessionManager.RemoveSession(client.sessionID)
+		s.sink.logger.Debug("msg", "Session removed",
+			"component", "tcp_sink",
+			"session_id", client.sessionID,
+			"remote_addr", remoteAddr)
+	}
 
 	// Remove client state
 	s.mu.Lock()
@@ -431,8 +405,141 @@ func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	return gnet.None
 }
 
+// OnTraffic is called when data is received from a connection.
 func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
+	s.mu.RLock()
+	client, exists := s.clients[c]
+	s.mu.RUnlock()
+
+	// Update session activity when client sends data
+	if exists && client.sessionID != "" {
+		s.sink.sessionManager.UpdateActivity(client.sessionID)
+	}
+
 	// TCP Sink doesn't expect any data from clients, discard all
 	c.Discard(-1)
 	return gnet.None
+}
+
+// handleSessionExpiry is the callback for cleaning up expired sessions.
+func (t *TCPSink) handleSessionExpiry(sessionID, remoteAddr string) {
+	t.server.mu.RLock()
+	defer t.server.mu.RUnlock()
+
+	// Find connection by session ID
+	for conn, client := range t.server.clients {
+		if client.sessionID == sessionID {
+			t.logger.Info("msg", "Closing expired session connection",
+				"component", "tcp_sink",
+				"session_id", sessionID,
+				"remote_addr", remoteAddr)
+
+			// Close connection
+			conn.Close()
+			return
+		}
+	}
+}
+
+// broadcastData sends a formatted byte slice to all connected clients.
+func (t *TCPSink) broadcastData(data []byte) {
+	t.server.mu.RLock()
+	defer t.server.mu.RUnlock()
+
+	// Track clients to remove after iteration
+	var staleClients []gnet.Conn
+
+	for conn, client := range t.server.clients {
+		// Update session activity before sending data
+		if client.sessionID != "" {
+			if !t.sessionManager.IsSessionActive(client.sessionID) {
+				// Session expired, mark for cleanup
+				staleClients = append(staleClients, conn)
+				continue
+			}
+			t.sessionManager.UpdateActivity(client.sessionID)
+		}
+
+		conn.AsyncWrite(data, func(c gnet.Conn, err error) error {
+			if err != nil {
+				t.writeErrors.Add(1)
+				t.handleWriteError(c, err)
+			} else {
+				// Reset consecutive error count on success
+				t.errorMu.Lock()
+				delete(t.consecutiveWriteErrors, c)
+				t.errorMu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	// Clean up stale connections outside the read lock
+	if len(staleClients) > 0 {
+		go t.cleanupStaleConnections(staleClients)
+	}
+}
+
+// handleWriteError manages errors during async writes, closing faulty connections.
+func (t *TCPSink) handleWriteError(c gnet.Conn, err error) {
+	t.errorMu.Lock()
+	defer t.errorMu.Unlock()
+
+	// Track consecutive errors per connection
+	if t.consecutiveWriteErrors == nil {
+		t.consecutiveWriteErrors = make(map[gnet.Conn]int)
+	}
+
+	t.consecutiveWriteErrors[c]++
+	errorCount := t.consecutiveWriteErrors[c]
+
+	t.logger.Debug("msg", "AsyncWrite error",
+		"component", "tcp_sink",
+		"remote_addr", c.RemoteAddr(),
+		"error", err,
+		"consecutive_errors", errorCount)
+
+	// Close connection after 3 consecutive write errors
+	if errorCount >= 3 {
+		t.logger.Warn("msg", "Closing connection due to repeated write errors",
+			"component", "tcp_sink",
+			"remote_addr", c.RemoteAddr(),
+			"error_count", errorCount)
+		delete(t.consecutiveWriteErrors, c)
+		c.Close()
+	}
+}
+
+// createHeartbeatEntry generates a new heartbeat log entry.
+func (t *TCPSink) createHeartbeatEntry() core.LogEntry {
+	message := "heartbeat"
+
+	// Build fields for heartbeat metadata
+	fields := make(map[string]any)
+	fields["type"] = "heartbeat"
+
+	if t.config.Heartbeat.IncludeStats {
+		fields["active_connections"] = t.activeConns.Load()
+		fields["uptime_seconds"] = int64(time.Since(t.startTime).Seconds())
+	}
+
+	fieldsJSON, _ := json.Marshal(fields)
+
+	return core.LogEntry{
+		Time:    time.Now(),
+		Source:  "logwisp-tcp",
+		Level:   "INFO",
+		Message: message,
+		Fields:  fieldsJSON,
+	}
+}
+
+// cleanupStaleConnections closes connections associated with expired sessions.
+func (t *TCPSink) cleanupStaleConnections(staleConns []gnet.Conn) {
+	for _, conn := range staleConns {
+		t.logger.Info("msg", "Closing stale connection",
+			"component", "tcp_sink",
+			"remote_addr", conn.RemoteAddr())
+		conn.Close()
+	}
 }

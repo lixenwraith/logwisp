@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// generalHelpTemplate is the default help message shown when no specific command is requested.
 const generalHelpTemplate = `LogWisp: A flexible log transport and processing tool.
 
 Usage: 
@@ -37,9 +38,6 @@ Configuration Sources (Precedence: CLI > Env > File > Defaults):
   - TOML configuration file is the primary method
 
 Examples:
-  # Generate password for admin user
-  logwisp auth -u admin
-  
   # Start service with custom config
   logwisp -c /etc/logwisp/prod.toml
   
@@ -49,17 +47,17 @@ Examples:
 For detailed configuration options, please refer to the documentation.
 `
 
-// HelpCommand handles help display
+// HelpCommand handles the display of general or command-specific help messages.
 type HelpCommand struct {
 	router *CommandRouter
 }
 
-// NewHelpCommand creates a new help command
+// NewHelpCommand creates a new help command handler.
 func NewHelpCommand(router *CommandRouter) *HelpCommand {
 	return &HelpCommand{router: router}
 }
 
-// Execute displays help information
+// Execute displays the appropriate help message based on the provided arguments.
 func (c *HelpCommand) Execute(args []string) error {
 	// Check if help is requested for a specific command
 	if len(args) > 0 && args[0] != "" {
@@ -78,7 +76,27 @@ func (c *HelpCommand) Execute(args []string) error {
 	return nil
 }
 
-// formatCommandList creates a formatted list of available commands
+// Description returns a brief one-line description of the command.
+func (c *HelpCommand) Description() string {
+	return "Display help information"
+}
+
+// Help returns the detailed help text for the 'help' command itself.
+func (c *HelpCommand) Help() string {
+	return `Help Command - Display help information
+
+Usage:
+  logwisp help              Show general help
+  logwisp help <command>    Show help for a specific command
+  
+Examples:
+  logwisp help              # Show general help
+  logwisp help auth         # Show auth command help
+  logwisp auth --help       # Alternative way to get command help
+`
+}
+
+// formatCommandList creates a formatted and aligned list of all available commands.
 func (c *HelpCommand) formatCommandList() string {
 	commands := c.router.GetCommands()
 
@@ -102,22 +120,4 @@ func (c *HelpCommand) formatCommandList() string {
 	}
 
 	return strings.Join(lines, "\n")
-}
-
-func (c *HelpCommand) Description() string {
-	return "Display help information"
-}
-
-func (c *HelpCommand) Help() string {
-	return `Help Command - Display help information
-
-Usage:
-  logwisp help              Show general help
-  logwisp help <command>    Show help for a specific command
-  
-Examples:
-  logwisp help              # Show general help
-  logwisp help auth         # Show auth command help
-  logwisp auth --help       # Alternative way to get command help
-`
 }

@@ -11,8 +11,7 @@ import (
 	lconfig "github.com/lixenwraith/config"
 )
 
-// validateConfig is the centralized validator for the entire configuration
-// This replaces the old (c *Config) validate() method
+// ValidateConfig is the centralized validator for the entire configuration structure.
 func ValidateConfig(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
@@ -39,6 +38,7 @@ func ValidateConfig(cfg *Config) error {
 	return nil
 }
 
+// validateLogConfig validates the application's own logging settings.
 func validateLogConfig(cfg *LogConfig) error {
 	validOutputs := map[string]bool{
 		"file": true, "stdout": true, "stderr": true,
@@ -74,6 +74,7 @@ func validateLogConfig(cfg *LogConfig) error {
 	return nil
 }
 
+// validatePipeline validates a single pipeline's configuration.
 func validatePipeline(index int, p *PipelineConfig, pipelineNames map[string]bool, allPorts map[int64]string) error {
 	// Validate pipeline name
 	if err := lconfig.NonEmpty(p.Name); err != nil {
@@ -131,7 +132,7 @@ func validatePipeline(index int, p *PipelineConfig, pipelineNames map[string]boo
 	return nil
 }
 
-// validateSourceConfig validates typed source configuration
+// validateSourceConfig validates a polymorphic source configuration.
 func validateSourceConfig(pipelineName string, index int, s *SourceConfig) error {
 	if err := lconfig.NonEmpty(s.Type); err != nil {
 		return fmt.Errorf("pipeline '%s' source[%d]: missing type", pipelineName, index)
@@ -186,177 +187,7 @@ func validateSourceConfig(pipelineName string, index int, s *SourceConfig) error
 	}
 }
 
-func validateDirectorySource(pipelineName string, index int, opts *DirectorySourceOptions) error {
-	if err := lconfig.NonEmpty(opts.Path); err != nil {
-		return fmt.Errorf("pipeline '%s' source[%d]: directory requires 'path'", pipelineName, index)
-	} else {
-		absPath, err := filepath.Abs(opts.Path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", opts.Path, err)
-		}
-		opts.Path = absPath
-	}
-
-	// Check for directory traversal
-	// TODO: traversal check only if optional security settings from cli/env set
-	if strings.Contains(opts.Path, "..") {
-		return fmt.Errorf("pipeline '%s' source[%d]: path contains directory traversal", pipelineName, index)
-	}
-
-	// Validate pattern if provided
-	if opts.Pattern != "" {
-		if strings.Count(opts.Pattern, "*") == 0 && strings.Count(opts.Pattern, "?") == 0 {
-			// If no wildcards, ensure valid filename
-			if filepath.Base(opts.Pattern) != opts.Pattern {
-				return fmt.Errorf("pipeline '%s' source[%d]: pattern contains path separators", pipelineName, index)
-			}
-		}
-	} else {
-		opts.Pattern = "*"
-	}
-
-	// Validate check interval
-	if opts.CheckIntervalMS < 10 {
-		return fmt.Errorf("pipeline '%s' source[%d]: check_interval_ms must be at least 10ms", pipelineName, index)
-	}
-
-	return nil
-}
-
-func validateStdinSource(pipelineName string, index int, opts *StdinSourceOptions) error {
-	if opts.BufferSize < 0 {
-		return fmt.Errorf("pipeline '%s' source[%d]: buffer_size must be positive", pipelineName, index)
-	} else if opts.BufferSize == 0 {
-		opts.BufferSize = 1000
-	}
-	return nil
-}
-
-func validateHTTPSource(pipelineName string, index int, opts *HTTPSourceOptions) error {
-	// Validate port
-	if err := lconfig.Port(opts.Port); err != nil {
-		return fmt.Errorf("pipeline '%s' source[%d]: %w", pipelineName, index, err)
-	}
-
-	// Set defaults
-	if opts.Host == "" {
-		opts.Host = "0.0.0.0"
-	}
-	if opts.IngestPath == "" {
-		opts.IngestPath = "/ingest"
-	}
-	if opts.MaxRequestBodySize <= 0 {
-		opts.MaxRequestBodySize = 10 * 1024 * 1024 // 10MB default
-	}
-	if opts.ReadTimeout <= 0 {
-		opts.ReadTimeout = 5000 // 5 seconds
-	}
-	if opts.WriteTimeout <= 0 {
-		opts.WriteTimeout = 5000 // 5 seconds
-	}
-
-	// Validate host if specified
-	if opts.Host != "" && opts.Host != "0.0.0.0" {
-		if err := lconfig.IPAddress(opts.Host); err != nil {
-			return fmt.Errorf("pipeline '%s' source[%d]: %w", pipelineName, index, err)
-		}
-	}
-
-	// Validate paths
-	if !strings.HasPrefix(opts.IngestPath, "/") {
-		return fmt.Errorf("pipeline '%s' source[%d]: ingest_path must start with /", pipelineName, index)
-	}
-
-	// Validate auth configuration
-	validHTTPSourceAuthTypes := map[string]bool{"basic": true, "token": true, "mtls": true}
-	if opts.Auth != nil && opts.Auth.Type != "none" && opts.Auth.Type != "" {
-		if !validHTTPSourceAuthTypes[opts.Auth.Type] {
-			return fmt.Errorf("pipeline '%s' source[%d]: %s is not a valid auth type",
-				pipelineName, index, opts.Auth.Type)
-		}
-		// All non-none auth types require TLS for HTTP
-		if opts.TLS == nil || !opts.TLS.Enabled {
-			return fmt.Errorf("pipeline '%s' source[%d]: %s auth requires TLS to be enabled",
-				pipelineName, index, opts.Auth.Type)
-		}
-
-		// Validate specific auth types
-		if err := validateServerAuth(pipelineName, opts.Auth); err != nil {
-			return fmt.Errorf("source[%d]: %w", index, err)
-		}
-	}
-
-	// Validate nested configs
-	if opts.NetLimit != nil {
-		if err := validateNetLimit(pipelineName, fmt.Sprintf("source[%d]", index), opts.NetLimit); err != nil {
-			return err
-		}
-	}
-
-	if opts.TLS != nil {
-		if err := validateTLS(pipelineName, fmt.Sprintf("source[%d]", index), opts.TLS); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func validateTCPSource(pipelineName string, index int, opts *TCPSourceOptions) error {
-	// Validate port
-	if err := lconfig.Port(opts.Port); err != nil {
-		return fmt.Errorf("pipeline '%s' source[%d]: %w", pipelineName, index, err)
-	}
-
-	// Set defaults
-	if opts.Host == "" {
-		opts.Host = "0.0.0.0"
-	}
-	if opts.ReadTimeout <= 0 {
-		opts.ReadTimeout = 5000 // 5 seconds
-	}
-	if !opts.KeepAlive {
-		opts.KeepAlive = true // Default enabled
-	}
-	if opts.KeepAlivePeriod <= 0 {
-		opts.KeepAlivePeriod = 30000 // 30 seconds
-	}
-
-	// Validate host if specified
-	if opts.Host != "" && opts.Host != "0.0.0.0" {
-		if err := lconfig.IPAddress(opts.Host); err != nil {
-			return fmt.Errorf("pipeline '%s' source[%d]: %w", pipelineName, index, err)
-		}
-	}
-
-	// TCP source does NOT support TLS
-	// Validate auth configuration - only none and scram are allowed
-	if opts.Auth != nil {
-		switch opts.Auth.Type {
-		case "", "none":
-			// OK
-		case "scram":
-			// SCRAM doesn't require TLS
-			if err := validateServerAuth(pipelineName, opts.Auth); err != nil {
-				return fmt.Errorf("source[%d]: %w", index, err)
-			}
-		default:
-			return fmt.Errorf("pipeline '%s' source[%d]: TCP source only supports 'none' or 'scram' auth (got '%s')",
-				pipelineName, index, opts.Auth.Type)
-		}
-	}
-
-	// Validate NetLimit if present
-	if opts.NetLimit != nil {
-		if err := validateNetLimit(pipelineName, fmt.Sprintf("source[%d]", index), opts.NetLimit); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// validateSinkConfig validates typed sink configuration
+// validateSinkConfig validates a polymorphic sink configuration.
 func validateSinkConfig(pipelineName string, index int, s *SinkConfig, allPorts map[int64]string) error {
 	if err := lconfig.NonEmpty(s.Type); err != nil {
 		return fmt.Errorf("pipeline '%s' sink[%d]: missing type", pipelineName, index)
@@ -423,6 +254,268 @@ func validateSinkConfig(pipelineName string, index int, s *SinkConfig, allPorts 
 	}
 }
 
+// validateFormatterConfig validates formatter configuration
+func validateFormatterConfig(p *PipelineConfig) error {
+	if p.Format == nil {
+		p.Format = &FormatConfig{
+			Type: "raw",
+		}
+	} else if p.Format.Type == "" {
+		p.Format.Type = "raw" // Default
+	}
+
+	switch p.Format.Type {
+
+	case "raw":
+		if p.Format.RawFormatOptions == nil {
+			p.Format.RawFormatOptions = &RawFormatterOptions{}
+		}
+
+	case "txt":
+		if p.Format.TxtFormatOptions == nil {
+			p.Format.TxtFormatOptions = &TxtFormatterOptions{}
+		}
+
+		// Default template format
+		templateStr := "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}{{ if .Fields }} {{.Fields}}{{ end }}"
+		if p.Format.TxtFormatOptions.Template != "" {
+			p.Format.TxtFormatOptions.Template = templateStr
+		}
+
+		// Default timestamp format
+		timestampFormat := time.RFC3339
+		if p.Format.TxtFormatOptions.TimestampFormat != "" {
+			p.Format.TxtFormatOptions.TimestampFormat = timestampFormat
+		}
+
+	case "json":
+		if p.Format.JSONFormatOptions == nil {
+			p.Format.JSONFormatOptions = &JSONFormatterOptions{}
+		}
+	}
+
+	return nil
+}
+
+// validateRateLimit validates the pipeline-level rate limit settings.
+func validateRateLimit(pipelineName string, cfg *RateLimitConfig) error {
+	if cfg == nil {
+		return nil
+	}
+
+	if cfg.Rate < 0 {
+		return fmt.Errorf("pipeline '%s': rate limit rate cannot be negative", pipelineName)
+	}
+
+	if cfg.Burst < 0 {
+		return fmt.Errorf("pipeline '%s': rate limit burst cannot be negative", pipelineName)
+	}
+
+	if cfg.MaxEntrySizeBytes < 0 {
+		return fmt.Errorf("pipeline '%s': max entry size bytes cannot be negative", pipelineName)
+	}
+
+	// Validate policy
+	switch strings.ToLower(cfg.Policy) {
+	case "", "pass", "drop":
+		// Valid policies
+	default:
+		return fmt.Errorf("pipeline '%s': invalid rate limit policy '%s' (must be 'pass' or 'drop')",
+			pipelineName, cfg.Policy)
+	}
+
+	return nil
+}
+
+// validateFilter validates a single filter's configuration.
+func validateFilter(pipelineName string, filterIndex int, cfg *FilterConfig) error {
+	// Validate filter type
+	switch cfg.Type {
+	case FilterTypeInclude, FilterTypeExclude, "":
+		// Valid types
+	default:
+		return fmt.Errorf("pipeline '%s' filter[%d]: invalid type '%s' (must be 'include' or 'exclude')",
+			pipelineName, filterIndex, cfg.Type)
+	}
+
+	// Validate filter logic
+	switch cfg.Logic {
+	case FilterLogicOr, FilterLogicAnd, "":
+		// Valid logic
+	default:
+		return fmt.Errorf("pipeline '%s' filter[%d]: invalid logic '%s' (must be 'or' or 'and')",
+			pipelineName, filterIndex, cfg.Logic)
+	}
+
+	// Empty patterns is valid - passes everything
+	if len(cfg.Patterns) == 0 {
+		return nil
+	}
+
+	// Validate regex patterns
+	for i, pattern := range cfg.Patterns {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return fmt.Errorf("pipeline '%s' filter[%d] pattern[%d] '%s': invalid regex: %w",
+				pipelineName, filterIndex, i, pattern, err)
+		}
+	}
+
+	return nil
+}
+
+// validateDirectorySource validates the settings for a directory source.
+func validateDirectorySource(pipelineName string, index int, opts *DirectorySourceOptions) error {
+	if err := lconfig.NonEmpty(opts.Path); err != nil {
+		return fmt.Errorf("pipeline '%s' source[%d]: directory requires 'path'", pipelineName, index)
+	} else {
+		absPath, err := filepath.Abs(opts.Path)
+		if err != nil {
+			return fmt.Errorf("invalid path %s: %w", opts.Path, err)
+		}
+		opts.Path = absPath
+	}
+
+	// Check for directory traversal
+	// TODO: traversal check only if optional security settings from cli/env set
+	if strings.Contains(opts.Path, "..") {
+		return fmt.Errorf("pipeline '%s' source[%d]: path contains directory traversal", pipelineName, index)
+	}
+
+	// Validate pattern if provided
+	if opts.Pattern != "" {
+		if strings.Count(opts.Pattern, "*") == 0 && strings.Count(opts.Pattern, "?") == 0 {
+			// If no wildcards, ensure valid filename
+			if filepath.Base(opts.Pattern) != opts.Pattern {
+				return fmt.Errorf("pipeline '%s' source[%d]: pattern contains path separators", pipelineName, index)
+			}
+		}
+	} else {
+		opts.Pattern = "*"
+	}
+
+	// Validate check interval
+	if opts.CheckIntervalMS < 10 {
+		return fmt.Errorf("pipeline '%s' source[%d]: check_interval_ms must be at least 10ms", pipelineName, index)
+	}
+
+	return nil
+}
+
+// validateStdinSource validates the settings for a stdin source.
+func validateStdinSource(pipelineName string, index int, opts *StdinSourceOptions) error {
+	if opts.BufferSize < 0 {
+		return fmt.Errorf("pipeline '%s' source[%d]: buffer_size must be positive", pipelineName, index)
+	} else if opts.BufferSize == 0 {
+		opts.BufferSize = 1000
+	}
+	return nil
+}
+
+// validateHTTPSource validates the settings for an HTTP source.
+func validateHTTPSource(pipelineName string, index int, opts *HTTPSourceOptions) error {
+	// Validate port
+	if err := lconfig.Port(opts.Port); err != nil {
+		return fmt.Errorf("pipeline '%s' source[%d]: %w", pipelineName, index, err)
+	}
+
+	// Set defaults
+	if opts.Host == "" {
+		opts.Host = "0.0.0.0"
+	}
+	if opts.IngestPath == "" {
+		opts.IngestPath = "/ingest"
+	}
+	if opts.MaxRequestBodySize <= 0 {
+		opts.MaxRequestBodySize = 10 * 1024 * 1024 // 10MB default
+	}
+	if opts.ReadTimeout <= 0 {
+		opts.ReadTimeout = 5000 // 5 seconds
+	}
+	if opts.WriteTimeout <= 0 {
+		opts.WriteTimeout = 5000 // 5 seconds
+	}
+
+	// Validate host if specified
+	if opts.Host != "" && opts.Host != "0.0.0.0" {
+		if err := lconfig.IPAddress(opts.Host); err != nil {
+			return fmt.Errorf("pipeline '%s' source[%d]: %w", pipelineName, index, err)
+		}
+	}
+
+	// Validate paths
+	if !strings.HasPrefix(opts.IngestPath, "/") {
+		return fmt.Errorf("pipeline '%s' source[%d]: ingest_path must start with /", pipelineName, index)
+	}
+
+	// Validate auth configuration
+	validHTTPSourceAuthTypes := map[string]bool{"basic": true, "token": true, "mtls": true}
+	if opts.Auth != nil && opts.Auth.Type != "none" && opts.Auth.Type != "" {
+		if !validHTTPSourceAuthTypes[opts.Auth.Type] {
+			return fmt.Errorf("pipeline '%s' source[%d]: %s is not a valid auth type",
+				pipelineName, index, opts.Auth.Type)
+		}
+		// All non-none auth types require TLS for HTTP
+		if opts.TLS == nil || !opts.TLS.Enabled {
+			return fmt.Errorf("pipeline '%s' source[%d]: %s auth requires TLS to be enabled",
+				pipelineName, index, opts.Auth.Type)
+		}
+	}
+
+	// Validate nested configs
+	if opts.NetLimit != nil {
+		if err := validateNetLimit(pipelineName, fmt.Sprintf("source[%d]", index), opts.NetLimit); err != nil {
+			return err
+		}
+	}
+
+	if opts.TLS != nil {
+		if err := validateTLSServer(pipelineName, fmt.Sprintf("source[%d]", index), opts.TLS); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateTCPSource validates the settings for a TCP source.
+func validateTCPSource(pipelineName string, index int, opts *TCPSourceOptions) error {
+	// Validate port
+	if err := lconfig.Port(opts.Port); err != nil {
+		return fmt.Errorf("pipeline '%s' source[%d]: %w", pipelineName, index, err)
+	}
+
+	// Set defaults
+	if opts.Host == "" {
+		opts.Host = "0.0.0.0"
+	}
+	if opts.ReadTimeout <= 0 {
+		opts.ReadTimeout = 5000 // 5 seconds
+	}
+	if !opts.KeepAlive {
+		opts.KeepAlive = true // Default enabled
+	}
+	if opts.KeepAlivePeriod <= 0 {
+		opts.KeepAlivePeriod = 30000 // 30 seconds
+	}
+
+	// Validate host if specified
+	if opts.Host != "" && opts.Host != "0.0.0.0" {
+		if err := lconfig.IPAddress(opts.Host); err != nil {
+			return fmt.Errorf("pipeline '%s' source[%d]: %w", pipelineName, index, err)
+		}
+	}
+
+	// Validate NetLimit if present
+	if opts.NetLimit != nil {
+		if err := validateNetLimit(pipelineName, fmt.Sprintf("source[%d]", index), opts.NetLimit); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateConsoleSink validates the settings for a console sink.
 func validateConsoleSink(pipelineName string, index int, opts *ConsoleSinkOptions) error {
 	if opts.BufferSize < 1 {
 		return fmt.Errorf("pipeline '%s' sink[%d]: buffer_size must be positive", pipelineName, index)
@@ -430,6 +523,7 @@ func validateConsoleSink(pipelineName string, index int, opts *ConsoleSinkOption
 	return nil
 }
 
+// validateFileSink validates the settings for a file sink.
 func validateFileSink(pipelineName string, index int, opts *FileSinkOptions) error {
 	if err := lconfig.NonEmpty(opts.Directory); err != nil {
 		return fmt.Errorf("pipeline '%s' sink[%d]: file requires 'directory'", pipelineName, index)
@@ -463,6 +557,7 @@ func validateFileSink(pipelineName string, index int, opts *FileSinkOptions) err
 	return nil
 }
 
+// validateHTTPSink validates the settings for an HTTP sink.
 func validateHTTPSink(pipelineName string, index int, opts *HTTPSinkOptions, allPorts map[int64]string) error {
 	// Validate port
 	if err := lconfig.Port(opts.Port); err != nil {
@@ -511,7 +606,7 @@ func validateHTTPSink(pipelineName string, index int, opts *HTTPSinkOptions, all
 	}
 
 	if opts.TLS != nil {
-		if err := validateTLS(pipelineName, fmt.Sprintf("sink[%d]", index), opts.TLS); err != nil {
+		if err := validateTLSServer(pipelineName, fmt.Sprintf("sink[%d]", index), opts.TLS); err != nil {
 			return err
 		}
 	}
@@ -519,6 +614,7 @@ func validateHTTPSink(pipelineName string, index int, opts *HTTPSinkOptions, all
 	return nil
 }
 
+// validateTCPSink validates the settings for a TCP sink.
 func validateTCPSink(pipelineName string, index int, opts *TCPSinkOptions, allPorts map[int64]string) error {
 	// Validate port
 	if err := lconfig.Port(opts.Port); err != nil {
@@ -560,6 +656,7 @@ func validateTCPSink(pipelineName string, index int, opts *TCPSinkOptions, allPo
 	return nil
 }
 
+// validateHTTPClientSink validates the settings for an HTTP client sink.
 func validateHTTPClientSink(pipelineName string, index int, opts *HTTPClientSinkOptions) error {
 	// Validate URL
 	if err := lconfig.NonEmpty(opts.URL); err != nil {
@@ -574,8 +671,6 @@ func validateHTTPClientSink(pipelineName string, index int, opts *HTTPClientSink
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 		return fmt.Errorf("pipeline '%s' sink[%d]: URL must use http or https scheme", pipelineName, index)
 	}
-
-	isHTTPS := parsedURL.Scheme == "https"
 
 	// Set defaults for unspecified fields
 	if opts.BufferSize <= 0 {
@@ -600,57 +695,9 @@ func validateHTTPClientSink(pipelineName string, index int, opts *HTTPClientSink
 		opts.RetryBackoff = 2.0
 	}
 
-	// Validate auth configuration
-	if opts.Auth != nil {
-		switch opts.Auth.Type {
-		case "basic":
-			if opts.Auth.Username == "" || opts.Auth.Password == "" {
-				return fmt.Errorf("pipeline '%s' sink[%d]: username and password required for basic auth",
-					pipelineName, index)
-			}
-			if !isHTTPS && !opts.InsecureSkipVerify {
-				return fmt.Errorf("pipeline '%s' sink[%d]: basic auth requires HTTPS (security: credentials would be sent in plaintext)",
-					pipelineName, index)
-			}
-
-		case "token":
-			if opts.Auth.Token == "" {
-				return fmt.Errorf("pipeline '%s' sink[%d]: token required for %s auth",
-					pipelineName, index, opts.Auth.Type)
-			}
-			if !isHTTPS && !opts.InsecureSkipVerify {
-				return fmt.Errorf("pipeline '%s' sink[%d]: %s auth requires HTTPS (security: token would be sent in plaintext)",
-					pipelineName, index, opts.Auth.Type)
-			}
-
-		case "mtls":
-			if !isHTTPS {
-				return fmt.Errorf("pipeline '%s' sink[%d]: mTLS requires HTTPS",
-					pipelineName, index)
-			}
-			// mTLS certs should be in TLS config, not auth config
-			if opts.TLS == nil || opts.TLS.CertFile == "" || opts.TLS.KeyFile == "" {
-				return fmt.Errorf("pipeline '%s' sink[%d]: cert_file and key_file required in TLS config for mTLS auth",
-					pipelineName, index)
-			}
-
-		case "none", "":
-			// Clear any credentials if auth is "none" or empty
-			if opts.Auth != nil {
-				opts.Auth.Username = ""
-				opts.Auth.Password = ""
-				opts.Auth.Token = ""
-			}
-
-		default:
-			return fmt.Errorf("pipeline '%s' sink[%d]: invalid auth type '%s' (valid: none, basic, token, mtls)",
-				pipelineName, index, opts.Auth.Type)
-		}
-	}
-
 	// Validate TLS config if present
 	if opts.TLS != nil {
-		if err := validateTLS(pipelineName, fmt.Sprintf("sink[%d]", index), opts.TLS); err != nil {
+		if err := validateTLSClient(pipelineName, fmt.Sprintf("sink[%d]", index), opts.TLS); err != nil {
 			return err
 		}
 	}
@@ -658,6 +705,7 @@ func validateHTTPClientSink(pipelineName string, index int, opts *HTTPClientSink
 	return nil
 }
 
+// validateTCPClientSink validates the settings for a TCP client sink.
 func validateTCPClientSink(pipelineName string, index int, opts *TCPClientSinkOptions) error {
 	// Validate host and port
 	if err := lconfig.NonEmpty(opts.Host); err != nil {
@@ -694,78 +742,10 @@ func validateTCPClientSink(pipelineName string, index int, opts *TCPClientSinkOp
 		opts.ReconnectBackoff = 1.5
 	}
 
-	// Validate auth configuration
-	if opts.Auth != nil {
-		switch opts.Auth.Type {
-
-		case "scram":
-			if opts.Auth.Username == "" || opts.Auth.Password == "" {
-				return fmt.Errorf("pipeline '%s' sink[%d]: username and password required for SCRAM auth",
-					pipelineName, index)
-			}
-			// SCRAM doesn't require TLS as it uses challenge-response
-
-		case "none", "":
-			// Clear credentials
-			if opts.Auth != nil {
-				opts.Auth.Username = ""
-				opts.Auth.Password = ""
-				opts.Auth.Token = ""
-			}
-
-		default:
-			return fmt.Errorf("pipeline '%s' sink[%d]: invalid auth type '%s' (valid: none, basic, token, scram, mtls)",
-				pipelineName, index, opts.Auth.Type)
-		}
-	}
-
 	return nil
 }
 
-// validateFormatterConfig validates formatter configuration
-func validateFormatterConfig(p *PipelineConfig) error {
-	if p.Format == nil {
-		p.Format = &FormatConfig{
-			Type: "raw",
-		}
-	} else if p.Format.Type == "" {
-		p.Format.Type = "raw" // Default
-	}
-
-	switch p.Format.Type {
-
-	case "raw":
-		if p.Format.RawFormatOptions == nil {
-			p.Format.RawFormatOptions = &RawFormatterOptions{}
-		}
-
-	case "txt":
-		if p.Format.TxtFormatOptions == nil {
-			p.Format.TxtFormatOptions = &TxtFormatterOptions{}
-		}
-
-		// Default template format
-		templateStr := "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}{{ if .Fields }} {{.Fields}}{{ end }}"
-		if p.Format.TxtFormatOptions.Template != "" {
-			p.Format.TxtFormatOptions.Template = templateStr
-		}
-
-		// Default timestamp format
-		timestampFormat := time.RFC3339
-		if p.Format.TxtFormatOptions.TimestampFormat != "" {
-			p.Format.TxtFormatOptions.TimestampFormat = timestampFormat
-		}
-
-	case "json":
-		if p.Format.JSONFormatOptions == nil {
-			p.Format.JSONFormatOptions = &JSONFormatterOptions{}
-		}
-	}
-
-	return nil
-}
-
-// Helper validation functions for nested configs
+// validateNetLimit validates nested NetLimitConfig settings.
 func validateNetLimit(pipelineName, location string, nl *NetLimitConfig) error {
 	if !nl.Enabled {
 		return nil // Skip validation if disabled
@@ -782,21 +762,45 @@ func validateNetLimit(pipelineName, location string, nl *NetLimitConfig) error {
 	return nil
 }
 
-func validateTLS(pipelineName, location string, tls *TLSConfig) error {
+// validateTLSServer validates the new TLSServerConfig struct.
+func validateTLSServer(pipelineName, location string, tls *TLSServerConfig) error {
 	if !tls.Enabled {
 		return nil // Skip validation if disabled
 	}
 
-	// If TLS enabled, cert and key files required (unless skip verify)
-	if !tls.SkipVerify {
-		if tls.CertFile == "" || tls.KeyFile == "" {
-			return fmt.Errorf("pipeline '%s' %s: TLS enabled requires cert_file and key_file", pipelineName, location)
-		}
+	// If TLS is enabled for a server, cert and key files are mandatory.
+	if tls.CertFile == "" || tls.KeyFile == "" {
+		return fmt.Errorf("pipeline '%s' %s: TLS enabled requires both cert_file and key_file", pipelineName, location)
+	}
+
+	// If mTLS (ClientAuth) is enabled, a client CA file is mandatory.
+	if tls.ClientAuth && tls.ClientCAFile == "" {
+		return fmt.Errorf("pipeline '%s' %s: client_auth is enabled, which requires a client_ca_file", pipelineName, location)
 	}
 
 	return nil
 }
 
+// validateTLSClient validates the new TLSClientConfig struct.
+func validateTLSClient(pipelineName, location string, tls *TLSClientConfig) error {
+	if !tls.Enabled {
+		return nil // Skip validation if disabled
+	}
+
+	// If verification is not skipped, a server CA file must be provided.
+	if !tls.InsecureSkipVerify && tls.ServerCAFile == "" {
+		return fmt.Errorf("pipeline '%s' %s: TLS verification is enabled (insecure_skip_verify=false) but server_ca_file is not provided", pipelineName, location)
+	}
+
+	// For client mTLS, both the cert and key must be provided together.
+	if (tls.ClientCertFile != "" && tls.ClientKeyFile == "") || (tls.ClientCertFile == "" && tls.ClientKeyFile != "") {
+		return fmt.Errorf("pipeline '%s' %s: for client mTLS, both client_cert_file and client_key_file must be provided", pipelineName, location)
+	}
+
+	return nil
+}
+
+// validateHeartbeat validates nested HeartbeatConfig settings.
 func validateHeartbeat(pipelineName, location string, hb *HeartbeatConfig) error {
 	if !hb.Enabled {
 		return nil // Skip validation if disabled
@@ -804,141 +808,6 @@ func validateHeartbeat(pipelineName, location string, hb *HeartbeatConfig) error
 
 	if hb.IntervalMS < 1000 { // At least 1 second
 		return fmt.Errorf("pipeline '%s' %s: heartbeat interval must be at least 1000ms", pipelineName, location)
-	}
-
-	return nil
-}
-
-func validateServerAuth(pipelineName string, auth *ServerAuthConfig) error {
-	if auth.Type == "" || auth.Type == "none" {
-		return nil
-	}
-
-	// Count populated auth configs
-	populated := 0
-	var populatedType string
-
-	if auth.Basic != nil {
-		populated++
-		populatedType = "basic"
-	}
-	if auth.Token != nil {
-		populated++
-		populatedType = "token"
-	}
-	if auth.Scram != nil {
-		populated++
-		populatedType = "scram"
-	}
-
-	if populated == 0 {
-		return fmt.Errorf("pipeline '%s': auth type '%s' specified but config missing", pipelineName, auth.Type)
-	}
-	if populated > 1 {
-		return fmt.Errorf("pipeline '%s': multiple auth configurations provided", pipelineName)
-	}
-	if populatedType != auth.Type {
-		return fmt.Errorf("pipeline '%s': auth type mismatch - type is '%s' but config is for '%s'",
-			pipelineName, auth.Type, populatedType)
-	}
-
-	// Validate specific auth type
-	switch auth.Type {
-	case "basic":
-		if len(auth.Basic.Users) == 0 {
-			return fmt.Errorf("pipeline '%s': basic auth requires at least one user", pipelineName)
-		}
-		for i, user := range auth.Basic.Users {
-			if err := lconfig.NonEmpty(user.Username); err != nil {
-				return fmt.Errorf("pipeline '%s': basic auth user[%d] missing username", pipelineName, i)
-			}
-			if err := lconfig.NonEmpty(user.PasswordHash); err != nil {
-				return fmt.Errorf("pipeline '%s': basic auth user[%d] missing password_hash", pipelineName, i)
-			}
-		}
-	case "token":
-		if len(auth.Token.Tokens) == 0 {
-			return fmt.Errorf("pipeline '%s': token auth requires at least one token", pipelineName)
-		}
-	case "scram":
-		if len(auth.Scram.Users) == 0 {
-			return fmt.Errorf("pipeline '%s': scram auth requires at least one user", pipelineName)
-		}
-		for i, user := range auth.Scram.Users {
-			if err := lconfig.NonEmpty(user.Username); err != nil {
-				return fmt.Errorf("pipeline '%s': scram auth user[%d] missing username", pipelineName, i)
-			}
-			// Validate required SCRAM fields
-			if user.StoredKey == "" || user.ServerKey == "" || user.Salt == "" {
-				return fmt.Errorf("pipeline '%s': scram auth user[%d] missing required fields", pipelineName, i)
-			}
-		}
-	default:
-		return fmt.Errorf("pipeline '%s': unknown auth type '%s'", pipelineName, auth.Type)
-	}
-
-	return nil
-}
-
-func validateRateLimit(pipelineName string, cfg *RateLimitConfig) error {
-	if cfg == nil {
-		return nil
-	}
-
-	if cfg.Rate < 0 {
-		return fmt.Errorf("pipeline '%s': rate limit rate cannot be negative", pipelineName)
-	}
-
-	if cfg.Burst < 0 {
-		return fmt.Errorf("pipeline '%s': rate limit burst cannot be negative", pipelineName)
-	}
-
-	if cfg.MaxEntrySizeBytes < 0 {
-		return fmt.Errorf("pipeline '%s': max entry size bytes cannot be negative", pipelineName)
-	}
-
-	// Validate policy
-	switch strings.ToLower(cfg.Policy) {
-	case "", "pass", "drop":
-		// Valid policies
-	default:
-		return fmt.Errorf("pipeline '%s': invalid rate limit policy '%s' (must be 'pass' or 'drop')",
-			pipelineName, cfg.Policy)
-	}
-
-	return nil
-}
-
-func validateFilter(pipelineName string, filterIndex int, cfg *FilterConfig) error {
-	// Validate filter type
-	switch cfg.Type {
-	case FilterTypeInclude, FilterTypeExclude, "":
-		// Valid types
-	default:
-		return fmt.Errorf("pipeline '%s' filter[%d]: invalid type '%s' (must be 'include' or 'exclude')",
-			pipelineName, filterIndex, cfg.Type)
-	}
-
-	// Validate filter logic
-	switch cfg.Logic {
-	case FilterLogicOr, FilterLogicAnd, "":
-		// Valid logic
-	default:
-		return fmt.Errorf("pipeline '%s' filter[%d]: invalid logic '%s' (must be 'or' or 'and')",
-			pipelineName, filterIndex, cfg.Logic)
-	}
-
-	// Empty patterns is valid - passes everything
-	if len(cfg.Patterns) == 0 {
-		return nil
-	}
-
-	// Validate regex patterns
-	for i, pattern := range cfg.Patterns {
-		if _, err := regexp.Compile(pattern); err != nil {
-			return fmt.Errorf("pipeline '%s' filter[%d] pattern[%d] '%s': invalid regex: %w",
-				pipelineName, filterIndex, i, pattern, err)
-		}
 	}
 
 	return nil

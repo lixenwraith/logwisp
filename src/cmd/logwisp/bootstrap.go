@@ -13,7 +13,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Creates and initializes the log transport service
+// bootstrapService creates and initializes the main log transport service and its pipelines.
 func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, error) {
 	// Create service with logger dependency injection
 	svc := service.NewService(ctx, logger)
@@ -45,7 +45,7 @@ func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service
 	return svc, nil
 }
 
-// Sets up the logger based on configuration
+// initializeLogger sets up the global logger based on the application's configuration.
 func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 	logCfg := log.DefaultConfig()
@@ -103,7 +103,7 @@ func initializeLogger(cfg *config.Config) error {
 	return logger.ApplyConfig(logCfg)
 }
 
-// Sets up file-based logging parameters
+// configureFileLogging sets up file-based logging parameters from the configuration.
 func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	if cfg.Logging.File != nil {
 		logCfg.Directory = cfg.Logging.File.Directory
@@ -116,6 +116,7 @@ func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	}
 }
 
+// parseLogLevel converts a string log level to its corresponding integer value.
 func parseLogLevel(level string) (int64, error) {
 	switch strings.ToLower(level) {
 	case "debug":

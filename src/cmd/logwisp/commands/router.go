@@ -6,26 +6,25 @@ import (
 	"os"
 )
 
-// Handler defines the interface for subcommands
+// Handler defines the interface required for all subcommands.
 type Handler interface {
 	Execute(args []string) error
 	Description() string
 	Help() string
 }
 
-// CommandRouter handles subcommand routing before main app initialization
+// CommandRouter handles the routing of CLI arguments to the appropriate subcommand handler.
 type CommandRouter struct {
 	commands map[string]Handler
 }
 
-// NewCommandRouter creates and initializes the command router
+// NewCommandRouter creates and initializes the command router with all available commands.
 func NewCommandRouter() *CommandRouter {
 	router := &CommandRouter{
 		commands: make(map[string]Handler),
 	}
 
 	// Register available commands
-	router.commands["auth"] = NewAuthCommand()
 	router.commands["tls"] = NewTLSCommand()
 	router.commands["version"] = NewVersionCommand()
 	router.commands["help"] = NewHelpCommand(router)
@@ -33,7 +32,7 @@ func NewCommandRouter() *CommandRouter {
 	return router
 }
 
-// Route checks for and executes subcommands
+// Route checks for and executes a subcommand based on the provided CLI arguments.
 func (r *CommandRouter) Route(args []string) (bool, error) {
 	if len(args) < 2 {
 		return false, nil // No command specified, let main app continue
@@ -69,18 +68,18 @@ func (r *CommandRouter) Route(args []string) (bool, error) {
 	return true, handler.Execute(args[2:])
 }
 
-// GetCommand returns a command handler by name
+// GetCommand returns a specific command handler by its name.
 func (r *CommandRouter) GetCommand(name string) (Handler, bool) {
 	cmd, exists := r.commands[name]
 	return cmd, exists
 }
 
-// GetCommands returns all registered commands
+// GetCommands returns a map of all registered commands.
 func (r *CommandRouter) GetCommands() map[string]Handler {
 	return r.commands
 }
 
-// ShowCommands displays available subcommands
+// ShowCommands displays a list of available subcommands to stderr.
 func (r *CommandRouter) ShowCommands() {
 	for name, handler := range r.commands {
 		fmt.Fprintf(os.Stderr, "  %-10s %s\n", name, handler.Description())
@@ -88,7 +87,7 @@ func (r *CommandRouter) ShowCommands() {
 	fmt.Fprintln(os.Stderr, "\nUse 'logwisp <command> --help' for command-specific help")
 }
 
-// Helper functions to merge short and long options
+// coalesceString returns the first non-empty string from a list of arguments.
 func coalesceString(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -98,6 +97,7 @@ func coalesceString(values ...string) string {
 	return ""
 }
 
+// coalesceInt returns the first non-default integer from a list of arguments.
 func coalesceInt(primary, secondary, defaultVal int) int {
 	if primary != defaultVal {
 		return primary
@@ -108,6 +108,7 @@ func coalesceInt(primary, secondary, defaultVal int) int {
 	return defaultVal
 }
 
+// coalesceBool returns true if any of the boolean arguments is true.
 func coalesceBool(values ...bool) bool {
 	for _, v := range values {
 		if v {

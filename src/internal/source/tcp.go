@@ -7,15 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/limit"
+	"logwisp/src/internal/session"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/compat"
@@ -27,21 +26,19 @@ const (
 	maxLineLength       = 1 * 1024 * 1024  // 1MB max per log line
 )
 
-// Receives log entries via TCP connections
+// TCPSource receives log entries via TCP connections.
 type TCPSource struct {
-	config               *config.TCPSourceOptions
-	server               *tcpSourceServer
-	subscribers          []chan core.LogEntry
-	mu                   sync.RWMutex
-	done                 chan struct{}
-	engine               *gnet.Engine
-	engineMu             sync.Mutex
-	wg                   sync.WaitGroup
-	authenticator        *auth.Authenticator
-	netLimiter           *limit.NetLimiter
-	logger               *log.Logger
-	scramManager         *auth.ScramManager
-	scramProtocolHandler *auth.ScramProtocolHandler
+	config         *config.TCPSourceOptions
+	server         *tcpSourceServer
+	subscribers    []chan core.LogEntry
+	mu             sync.RWMutex
+	done           chan struct{}
+	engine         *gnet.Engine
+	engineMu       sync.Mutex
+	wg             sync.WaitGroup
+	sessionManager *session.Manager
+	netLimiter     *limit.NetLimiter
+	logger         *log.Logger
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -50,11 +47,9 @@ type TCPSource struct {
 	activeConns    atomic.Int64
 	startTime      time.Time
 	lastEntryTime  atomic.Value // time.Time
-	authFailures   atomic.Uint64
-	authSuccesses  atomic.Uint64
 }
 
-// Creates a new TCP server source
+// NewTCPSource creates a new TCP server source.
 func NewTCPSource(opts *config.TCPSourceOptions, logger *log.Logger) (*TCPSource, error) {
 	// Accept typed config - validation done in config package
 	if opts == nil {
@@ -62,10 +57,11 @@ func NewTCPSource(opts *config.TCPSourceOptions, logger *log.Logger) (*TCPSource
 	}
 
 	t := &TCPSource{
-		config:    opts,
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
+		config:         opts,
+		done:           make(chan struct{}),
+		startTime:      time.Now(),
+		logger:         logger,
+		sessionManager: session.NewManager(core.MaxSessionTime),
 	}
 	t.lastEntryTime.Store(time.Time{})
 
@@ -76,20 +72,10 @@ func NewTCPSource(opts *config.TCPSourceOptions, logger *log.Logger) (*TCPSource
 		t.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
 	}
 
-	// Initialize SCRAM
-	if opts.Auth != nil && opts.Auth.Type == "scram" && opts.Auth.Scram != nil {
-		t.scramManager = auth.NewScramManager(opts.Auth.Scram)
-		t.scramProtocolHandler = auth.NewScramProtocolHandler(t.scramManager, logger)
-		logger.Info("msg", "SCRAM authentication configured for TCP source",
-			"component", "tcp_source",
-			"users", len(opts.Auth.Scram.Users))
-	} else if opts.Auth != nil && opts.Auth.Type != "none" && opts.Auth.Type != "" {
-		return nil, fmt.Errorf("TCP source only supports 'none' or 'scram' auth")
-	}
-
 	return t, nil
 }
 
+// Subscribe returns a channel for receiving log entries.
 func (t *TCPSource) Subscribe() <-chan core.LogEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -99,11 +85,17 @@ func (t *TCPSource) Subscribe() <-chan core.LogEntry {
 	return ch
 }
 
+// Start initializes and starts the TCP server.
 func (t *TCPSource) Start() error {
 	t.server = &tcpSourceServer{
 		source:  t,
 		clients: make(map[gnet.Conn]*tcpClient),
 	}
+
+	// Register expiry callback
+	t.sessionManager.RegisterExpiryCallback("tcp_source", func(sessionID, remoteAddr string) {
+		t.handleSessionExpiry(sessionID, remoteAddr)
+	})
 
 	// Use configured host and port
 	addr := fmt.Sprintf("tcp://%s:%d", t.config.Host, t.config.Port)
@@ -119,7 +111,7 @@ func (t *TCPSource) Start() error {
 		t.logger.Info("msg", "TCP source server starting",
 			"component", "tcp_source",
 			"port", t.config.Port,
-			"auth_enabled", t.authenticator != nil)
+		)
 
 		err := gnet.Run(t.server, addr,
 			gnet.WithLogger(gnetLogger),
@@ -150,8 +142,13 @@ func (t *TCPSource) Start() error {
 	}
 }
 
+// Stop gracefully shuts down the TCP server.
 func (t *TCPSource) Stop() {
 	t.logger.Info("msg", "Stopping TCP source")
+
+	// Unregister callback
+	t.sessionManager.UnregisterExpiryCallback("tcp_source")
+
 	close(t.done)
 
 	// Stop gnet engine if running
@@ -182,6 +179,7 @@ func (t *TCPSource) Stop() {
 	t.logger.Info("msg", "TCP source stopped")
 }
 
+// GetStats returns the source's statistics.
 func (t *TCPSource) GetStats() SourceStats {
 	lastEntry, _ := t.lastEntryTime.Load().(time.Time)
 
@@ -190,14 +188,9 @@ func (t *TCPSource) GetStats() SourceStats {
 		netLimitStats = t.netLimiter.GetStats()
 	}
 
-	var authStats map[string]any
-	if t.authenticator != nil {
-		authStats = map[string]any{
-			"enabled":   true,
-			"type":      t.config.Auth.Type,
-			"failures":  t.authFailures.Load(),
-			"successes": t.authSuccesses.Load(),
-		}
+	var sessionStats map[string]any
+	if t.sessionManager != nil {
+		sessionStats = t.sessionManager.GetStats()
 	}
 
 	return SourceStats{
@@ -211,40 +204,12 @@ func (t *TCPSource) GetStats() SourceStats {
 			"active_connections": t.activeConns.Load(),
 			"invalid_entries":    t.invalidEntries.Load(),
 			"net_limit":          netLimitStats,
-			"auth":               authStats,
+			"sessions":           sessionStats,
 		},
 	}
 }
 
-func (t *TCPSource) publish(entry core.LogEntry) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	t.totalEntries.Add(1)
-	t.lastEntryTime.Store(entry.Time)
-
-	for _, ch := range t.subscribers {
-		select {
-		case ch <- entry:
-		default:
-			t.droppedEntries.Add(1)
-			t.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
-				"component", "tcp_source")
-		}
-	}
-}
-
-// Represents a connected TCP client
-type tcpClient struct {
-	conn          gnet.Conn
-	buffer        *bytes.Buffer
-	authenticated bool
-	authTimeout   time.Time
-	session       *auth.Session
-	maxBufferSeen int
-}
-
-// Handles gnet events
+// tcpSourceServer implements the gnet.EventHandler interface for the source.
 type tcpSourceServer struct {
 	gnet.BuiltinEventEngine
 	source  *TCPSource
@@ -252,6 +217,15 @@ type tcpSourceServer struct {
 	mu      sync.RWMutex
 }
 
+// tcpClient represents a connected TCP client and its state.
+type tcpClient struct {
+	conn          gnet.Conn
+	buffer        *bytes.Buffer
+	sessionID     string
+	maxBufferSeen int
+}
+
+// OnBoot is called when the server starts.
 func (s *tcpSourceServer) OnBoot(eng gnet.Engine) gnet.Action {
 	// Store engine reference for shutdown
 	s.source.engineMu.Lock()
@@ -264,6 +238,7 @@ func (s *tcpSourceServer) OnBoot(eng gnet.Engine) gnet.Action {
 	return gnet.None
 }
 
+// OnOpen is called when a new connection is established.
 func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	remoteAddr := c.RemoteAddr().String()
 	s.source.logger.Debug("msg", "TCP connection attempt",
@@ -299,7 +274,6 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		}
 
 		// Track connection
-		// s.source.netLimiter.AddConnection(remoteAddr)
 		if !s.source.netLimiter.TrackConnection(ip.String(), "", "") {
 			s.source.logger.Warn("msg", "TCP connection limit exceeded",
 				"component", "tcp_source",
@@ -308,21 +282,14 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		}
 	}
 
+	// Create session
+	sess := s.source.sessionManager.CreateSession(remoteAddr, "tcp_source", nil)
+
 	// Create client state
 	client := &tcpClient{
-		conn:          c,
-		buffer:        bytes.NewBuffer(nil),
-		authenticated: s.source.authenticator == nil, // No auth = auto authenticated
-	}
-
-	if s.source.authenticator != nil {
-		// Set auth timeout
-		client.authTimeout = time.Now().Add(10 * time.Second)
-
-		// Send auth challenge for SCRAM
-		if s.source.config.Auth.Type == "scram" {
-			out = []byte("AUTH_REQUIRED\n")
-		}
+		conn:      c,
+		buffer:    bytes.NewBuffer(nil),
+		sessionID: sess.ID,
 	}
 
 	s.mu.Lock()
@@ -333,19 +300,29 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	s.source.logger.Debug("msg", "TCP connection opened",
 		"component", "tcp_source",
 		"remote_addr", remoteAddr,
-		"auth_enabled", s.source.authenticator != nil)
+		"session_id", sess.ID)
 
 	return out, gnet.None
 }
 
+// OnClose is called when a connection is closed.
 func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	remoteAddr := c.RemoteAddr().String()
+
+	// Get client to retrieve session ID
+	s.mu.RLock()
+	client, exists := s.clients[c]
+	s.mu.RUnlock()
+
+	if exists && client.sessionID != "" {
+		// Remove session
+		s.source.sessionManager.RemoveSession(client.sessionID)
+	}
 
 	// Untrack connection
 	if s.source.netLimiter != nil {
 		if tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddr); err == nil {
 			s.source.netLimiter.ReleaseConnection(tcpAddr.IP.String(), "", "")
-			// s.source.netLimiter.RemoveConnection(remoteAddr)
 		}
 	}
 
@@ -363,6 +340,7 @@ func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	return gnet.None
 }
 
+// OnTraffic is called when data is received from a connection.
 func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 	s.mu.RLock()
 	client, exists := s.clients[c]
@@ -370,6 +348,11 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 
 	if !exists {
 		return gnet.Close
+	}
+
+	// Update session activity when client sends data
+	if client.sessionID != "" {
+		s.source.sessionManager.UpdateActivity(client.sessionID)
 	}
 
 	// Read all available data
@@ -381,76 +364,10 @@ func (s *tcpSourceServer) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.Close
 	}
 
-	// SCRAM Authentication phase
-	if !client.authenticated && s.source.scramManager != nil {
-		// Check auth timeout
-		if !client.authTimeout.IsZero() && time.Now().After(client.authTimeout) {
-			s.source.logger.Warn("msg", "Authentication timeout",
-				"component", "tcp_source",
-				"remote_addr", c.RemoteAddr().String())
-			s.source.authFailures.Add(1)
-			c.AsyncWrite([]byte("AUTH_TIMEOUT\n"), nil)
-			return gnet.Close
-		}
-
-		if len(data) == 0 {
-			return gnet.None
-		}
-
-		client.buffer.Write(data)
-
-		// Use centralized SCRAM protocol handler
-		if s.source.scramProtocolHandler == nil {
-			s.source.scramProtocolHandler = auth.NewScramProtocolHandler(s.source.scramManager, s.source.logger)
-		}
-
-		// Look for complete auth line
-		for {
-			idx := bytes.IndexByte(client.buffer.Bytes(), '\n')
-			if idx < 0 {
-				break
-			}
-
-			line := client.buffer.Bytes()[:idx]
-			client.buffer.Next(idx + 1)
-
-			// Process auth message through handler
-			authenticated, session, err := s.source.scramProtocolHandler.HandleAuthMessage(line, c)
-			if err != nil {
-				s.source.logger.Warn("msg", "SCRAM authentication failed",
-					"component", "tcp_source",
-					"remote_addr", c.RemoteAddr().String(),
-					"error", err)
-
-				if strings.Contains(err.Error(), "unknown command") {
-					return gnet.Close
-				}
-				// Continue for other errors (might be multi-step auth)
-			}
-
-			if authenticated && session != nil {
-				// Authentication successful
-				s.mu.Lock()
-				client.authenticated = true
-				client.session = session
-				s.mu.Unlock()
-
-				s.source.logger.Info("msg", "Client authenticated via SCRAM",
-					"component", "tcp_source",
-					"remote_addr", c.RemoteAddr().String(),
-					"session_id", session.ID)
-
-				// Clear auth buffer
-				client.buffer.Reset()
-				break
-			}
-		}
-		return gnet.None
-	}
-
 	return s.processLogData(c, client, data)
 }
 
+// processLogData processes raw data from a client, parsing and publishing log entries.
 func (s *tcpSourceServer) processLogData(c gnet.Conn, client *tcpClient, data []byte) gnet.Action {
 	// Check if appending the new data would exceed the client buffer limit.
 	if client.buffer.Len()+len(data) > maxClientBufferSize {
@@ -542,4 +459,43 @@ func (s *tcpSourceServer) processLogData(c gnet.Conn, client *tcpClient, data []
 	}
 
 	return gnet.None
+}
+
+// publish sends a log entry to all subscribers.
+func (t *TCPSource) publish(entry core.LogEntry) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	t.totalEntries.Add(1)
+	t.lastEntryTime.Store(entry.Time)
+
+	for _, ch := range t.subscribers {
+		select {
+		case ch <- entry:
+		default:
+			t.droppedEntries.Add(1)
+			t.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
+				"component", "tcp_source")
+		}
+	}
+}
+
+// handleSessionExpiry is the callback for cleaning up expired sessions.
+func (t *TCPSource) handleSessionExpiry(sessionID, remoteAddr string) {
+	t.server.mu.RLock()
+	defer t.server.mu.RUnlock()
+
+	// Find connection by session ID
+	for conn, client := range t.server.clients {
+		if client.sessionID == sessionID {
+			t.logger.Info("msg", "Closing expired session connection",
+				"component", "tcp_source",
+				"session_id", sessionID,
+				"remote_addr", remoteAddr)
+
+			// Close connection
+			conn.Close()
+			return
+		}
+	}
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Service manages multiple pipelines
+// Service manages a collection of log processing pipelines.
 type Service struct {
 	pipelines map[string]*Pipeline
 	mu        sync.RWMutex
@@ -25,7 +25,7 @@ type Service struct {
 	logger    *log.Logger
 }
 
-// Creates a new service
+// NewService creates a new, empty service.
 func NewService(ctx context.Context, logger *log.Logger) *Service {
 	serviceCtx, cancel := context.WithCancel(ctx)
 	return &Service{
@@ -36,7 +36,97 @@ func NewService(ctx context.Context, logger *log.Logger) *Service {
 	}
 }
 
-// Connects sources to sinks through filters
+// GetPipeline returns a pipeline by its name.
+func (s *Service) GetPipeline(name string) (*Pipeline, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	pipeline, exists := s.pipelines[name]
+	if !exists {
+		return nil, fmt.Errorf("pipeline '%s' not found", name)
+	}
+	return pipeline, nil
+}
+
+// ListPipelines returns the names of all currently managed pipelines.
+func (s *Service) ListPipelines() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	names := make([]string, 0, len(s.pipelines))
+	for name := range s.pipelines {
+		names = append(names, name)
+	}
+	return names
+}
+
+// RemovePipeline stops and removes a pipeline from the service.
+func (s *Service) RemovePipeline(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pipeline, exists := s.pipelines[name]
+	if !exists {
+		err := fmt.Errorf("pipeline '%s' not found", name)
+		s.logger.Warn("msg", "Cannot remove non-existent pipeline",
+			"component", "service",
+			"pipeline", name,
+			"error", err)
+		return err
+	}
+
+	s.logger.Info("msg", "Removing pipeline", "pipeline", name)
+	pipeline.Shutdown()
+	delete(s.pipelines, name)
+	return nil
+}
+
+// Shutdown gracefully stops all pipelines managed by the service.
+func (s *Service) Shutdown() {
+	s.logger.Info("msg", "Service shutdown initiated")
+
+	s.mu.Lock()
+	pipelines := make([]*Pipeline, 0, len(s.pipelines))
+	for _, pipeline := range s.pipelines {
+		pipelines = append(pipelines, pipeline)
+	}
+	s.mu.Unlock()
+
+	// Stop all pipelines concurrently
+	var wg sync.WaitGroup
+	for _, pipeline := range pipelines {
+		wg.Add(1)
+		go func(p *Pipeline) {
+			defer wg.Done()
+			p.Shutdown()
+		}(pipeline)
+	}
+	wg.Wait()
+
+	s.cancel()
+	s.wg.Wait()
+
+	s.logger.Info("msg", "Service shutdown complete")
+}
+
+// GetGlobalStats returns statistics for all pipelines.
+func (s *Service) GetGlobalStats() map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stats := map[string]any{
+		"pipelines":       make(map[string]any),
+		"total_pipelines": len(s.pipelines),
+	}
+
+	for name, pipeline := range s.pipelines {
+		stats["pipelines"].(map[string]any)[name] = pipeline.GetStats()
+	}
+
+	return stats
+}
+
+// wirePipeline connects a pipeline's sources to its sinks through its filter chain.
 func (s *Service) wirePipeline(p *Pipeline) {
 	// For each source, subscribe and process entries
 	for _, src := range p.Sources {
@@ -113,7 +203,7 @@ func (s *Service) wirePipeline(p *Pipeline) {
 	}
 }
 
-// Creates a source instance based on configuration
+// createSource is a factory function for creating a source instance from configuration.
 func (s *Service) createSource(cfg *config.SourceConfig) (source.Source, error) {
 	switch cfg.Type {
 	case "directory":
@@ -129,7 +219,7 @@ func (s *Service) createSource(cfg *config.SourceConfig) (source.Source, error) 
 	}
 }
 
-// Creates a sink instance based on configuration
+// createSink is a factory function for creating a sink instance from configuration.
 func (s *Service) createSink(cfg config.SinkConfig, formatter format.Formatter) (sink.Sink, error) {
 
 	switch cfg.Type {
@@ -156,94 +246,4 @@ func (s *Service) createSink(cfg config.SinkConfig, formatter format.Formatter) 
 	default:
 		return nil, fmt.Errorf("unknown sink type: %s", cfg.Type)
 	}
-}
-
-// Returns a pipeline by name
-func (s *Service) GetPipeline(name string) (*Pipeline, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	pipeline, exists := s.pipelines[name]
-	if !exists {
-		return nil, fmt.Errorf("pipeline '%s' not found", name)
-	}
-	return pipeline, nil
-}
-
-// Returns all pipeline names
-func (s *Service) ListPipelines() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	names := make([]string, 0, len(s.pipelines))
-	for name := range s.pipelines {
-		names = append(names, name)
-	}
-	return names
-}
-
-// Stops and removes a pipeline
-func (s *Service) RemovePipeline(name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	pipeline, exists := s.pipelines[name]
-	if !exists {
-		err := fmt.Errorf("pipeline '%s' not found", name)
-		s.logger.Warn("msg", "Cannot remove non-existent pipeline",
-			"component", "service",
-			"pipeline", name,
-			"error", err)
-		return err
-	}
-
-	s.logger.Info("msg", "Removing pipeline", "pipeline", name)
-	pipeline.Shutdown()
-	delete(s.pipelines, name)
-	return nil
-}
-
-// Stops all pipelines
-func (s *Service) Shutdown() {
-	s.logger.Info("msg", "Service shutdown initiated")
-
-	s.mu.Lock()
-	pipelines := make([]*Pipeline, 0, len(s.pipelines))
-	for _, pipeline := range s.pipelines {
-		pipelines = append(pipelines, pipeline)
-	}
-	s.mu.Unlock()
-
-	// Stop all pipelines concurrently
-	var wg sync.WaitGroup
-	for _, pipeline := range pipelines {
-		wg.Add(1)
-		go func(p *Pipeline) {
-			defer wg.Done()
-			p.Shutdown()
-		}(pipeline)
-	}
-	wg.Wait()
-
-	s.cancel()
-	s.wg.Wait()
-
-	s.logger.Info("msg", "Service shutdown complete")
-}
-
-// Returns statistics for all pipelines
-func (s *Service) GetGlobalStats() map[string]any {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	stats := map[string]any{
-		"pipelines":       make(map[string]any),
-		"total_pipelines": len(s.pipelines),
-	}
-
-	for name, pipeline := range s.pipelines {
-		stats["pipelines"].(map[string]any)[name] = pipeline.GetStats()
-	}
-
-	return stats
 }

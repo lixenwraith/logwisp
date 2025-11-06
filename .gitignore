@@ -9,3 +9,4 @@ script
 build
 *.log
 *.toml
+build.sh

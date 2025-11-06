@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// TokenBucket implements a token bucket rate limiter
-// Safe for concurrent use.
+// TokenBucket implements a thread-safe token bucket rate limiter.
 type TokenBucket struct {
 	capacity   float64
 	tokens     float64
@@ -16,7 +15,7 @@ type TokenBucket struct {
 	mu         sync.Mutex
 }
 
-// Creates a new token bucket with given capacity and refill rate
+// NewTokenBucket creates a new token bucket with a given capacity and refill rate.
 func NewTokenBucket(capacity float64, refillRate float64) *TokenBucket {
 	return &TokenBucket{
 		capacity:   capacity,
@@ -26,12 +25,12 @@ func NewTokenBucket(capacity float64, refillRate float64) *TokenBucket {
 	}
 }
 
-// Attempts to consume one token, returns true if allowed
+// Allow attempts to consume one token, returning true if successful.
 func (tb *TokenBucket) Allow() bool {
 	return tb.AllowN(1)
 }
 
-// Attempts to consume n tokens, returns true if allowed
+// AllowN attempts to consume n tokens, returning true if successful.
 func (tb *TokenBucket) AllowN(n float64) bool {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
@@ -45,7 +44,7 @@ func (tb *TokenBucket) AllowN(n float64) bool {
 	return false
 }
 
-// Returns the current number of available tokens
+// Tokens returns the current number of available tokens in the bucket.
 func (tb *TokenBucket) Tokens() float64 {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
@@ -54,8 +53,7 @@ func (tb *TokenBucket) Tokens() float64 {
 	return tb.tokens
 }
 
-// Adds tokens based on time elapsed since last refill
-// MUST be called with mutex held
+// refill adds new tokens to the bucket based on the elapsed time.
 func (tb *TokenBucket) refill() {
 	now := time.Now()
 	elapsed := now.Sub(tb.lastRefill).Seconds()

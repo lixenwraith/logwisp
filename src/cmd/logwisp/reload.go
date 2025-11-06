@@ -17,7 +17,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Handles configuration hot reload
+// ReloadManager handles the configuration hot-reloading functionality.
 type ReloadManager struct {
 	configPath  string
 	service     *service.Service
@@ -35,7 +35,7 @@ type ReloadManager struct {
 	statusReporterMu     sync.Mutex
 }
 
-// Creates a new reload manager
+// NewReloadManager creates a new reload manager.
 func NewReloadManager(configPath string, initialCfg *config.Config, logger *log.Logger) *ReloadManager {
 	return &ReloadManager{
 		configPath: configPath,
@@ -45,7 +45,7 @@ func NewReloadManager(configPath string, initialCfg *config.Config, logger *log.
 	}
 }
 
-// Begins watching for configuration changes
+// Start bootstraps the initial service and begins watching for configuration changes.
 func (rm *ReloadManager) Start(ctx context.Context) error {
 	// Bootstrap initial service
 	svc, err := bootstrapService(ctx, rm.cfg)
@@ -90,7 +90,75 @@ func (rm *ReloadManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Monitors configuration changes
+// Shutdown gracefully stops the reload manager and the currently active service.
+func (rm *ReloadManager) Shutdown() {
+	rm.logger.Info("msg", "Shutting down reload manager")
+
+	// Stop status reporter
+	rm.stopStatusReporter()
+
+	// Stop watching
+	close(rm.shutdownCh)
+	rm.wg.Wait()
+
+	// Stop config watching
+	if rm.lcfg != nil {
+		rm.lcfg.StopAutoUpdate()
+	}
+
+	// Shutdown current services
+	rm.mu.RLock()
+	currentService := rm.service
+	rm.mu.RUnlock()
+
+	if currentService != nil {
+		rm.logger.Info("msg", "Shutting down service")
+		currentService.Shutdown()
+	}
+}
+
+// GetService returns the currently active service instance in a thread-safe manner.
+func (rm *ReloadManager) GetService() *service.Service {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	return rm.service
+}
+
+// triggerReload initiates the configuration reload process.
+func (rm *ReloadManager) triggerReload(ctx context.Context) {
+	// Prevent concurrent reloads
+	rm.reloadingMu.Lock()
+	if rm.isReloading {
+		rm.reloadingMu.Unlock()
+		rm.logger.Debug("msg", "Reload already in progress, skipping")
+		return
+	}
+	rm.isReloading = true
+	rm.reloadingMu.Unlock()
+
+	defer func() {
+		rm.reloadingMu.Lock()
+		rm.isReloading = false
+		rm.reloadingMu.Unlock()
+	}()
+
+	rm.logger.Info("msg", "Starting configuration hot reload")
+
+	// Create reload context with timeout
+	reloadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if err := rm.performReload(reloadCtx); err != nil {
+		rm.logger.Error("msg", "Hot reload failed",
+			"error", err,
+			"action", "keeping current configuration and services")
+		return
+	}
+
+	rm.logger.Info("msg", "Configuration hot reload completed successfully")
+}
+
+// watchLoop is the main goroutine that monitors for configuration file changes.
 func (rm *ReloadManager) watchLoop(ctx context.Context) {
 	defer rm.wg.Done()
 
@@ -144,91 +212,7 @@ func (rm *ReloadManager) watchLoop(ctx context.Context) {
 	}
 }
 
-// Verify file permissions for security
-func verifyFilePermissions(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("failed to stat config file: %w", err)
-	}
-
-	// Extract file mode and system stats
-	mode := info.Mode()
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fmt.Errorf("unable to get file ownership info")
-	}
-
-	// Check ownership - must be current user or root
-	currentUID := uint32(os.Getuid())
-	if stat.Uid != currentUID && stat.Uid != 0 {
-		return fmt.Errorf("config file owned by uid %d, expected %d or 0", stat.Uid, currentUID)
-	}
-
-	// Check permissions - must not be writable by group or other
-	perm := mode.Perm()
-	if perm&0022 != 0 {
-		// Group or other has write permission
-		return fmt.Errorf("insecure permissions %04o - file must not be writable by group/other", perm)
-	}
-
-	return nil
-}
-
-// Determines if a config change requires service reload
-func (rm *ReloadManager) shouldReload(path string) bool {
-	// Pipeline changes always require reload
-	if strings.HasPrefix(path, "pipelines.") || path == "pipelines" {
-		return true
-	}
-
-	// Logging changes don't require service reload
-	if strings.HasPrefix(path, "logging.") {
-		return false
-	}
-
-	// Status reporter changes
-	if path == "disable_status_reporter" {
-		return true
-	}
-
-	return false
-}
-
-// Performs the actual reload
-func (rm *ReloadManager) triggerReload(ctx context.Context) {
-	// Prevent concurrent reloads
-	rm.reloadingMu.Lock()
-	if rm.isReloading {
-		rm.reloadingMu.Unlock()
-		rm.logger.Debug("msg", "Reload already in progress, skipping")
-		return
-	}
-	rm.isReloading = true
-	rm.reloadingMu.Unlock()
-
-	defer func() {
-		rm.reloadingMu.Lock()
-		rm.isReloading = false
-		rm.reloadingMu.Unlock()
-	}()
-
-	rm.logger.Info("msg", "Starting configuration hot reload")
-
-	// Create reload context with timeout
-	reloadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if err := rm.performReload(reloadCtx); err != nil {
-		rm.logger.Error("msg", "Hot reload failed",
-			"error", err,
-			"action", "keeping current configuration and services")
-		return
-	}
-
-	rm.logger.Info("msg", "Configuration hot reload completed successfully")
-}
-
-// Executes the reload process
+// performReload executes the steps to validate and apply a new configuration.
 func (rm *ReloadManager) performReload(ctx context.Context) error {
 	// Get updated config from lconfig
 	updatedCfg, err := rm.lcfg.AsStruct()
@@ -272,7 +256,57 @@ func (rm *ReloadManager) performReload(ctx context.Context) error {
 	return nil
 }
 
-// Gracefully shuts down old services
+// shouldReload determines if a given configuration change requires a full service reload.
+func (rm *ReloadManager) shouldReload(path string) bool {
+	// Pipeline changes always require reload
+	if strings.HasPrefix(path, "pipelines.") || path == "pipelines" {
+		return true
+	}
+
+	// Logging changes don't require service reload
+	if strings.HasPrefix(path, "logging.") {
+		return false
+	}
+
+	// Status reporter changes
+	if path == "disable_status_reporter" {
+		return true
+	}
+
+	return false
+}
+
+// verifyFilePermissions checks the ownership and permissions of the config file for security.
+func verifyFilePermissions(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to stat config file: %w", err)
+	}
+
+	// Extract file mode and system stats
+	mode := info.Mode()
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("unable to get file ownership info")
+	}
+
+	// Check ownership - must be current user or root
+	currentUID := uint32(os.Getuid())
+	if stat.Uid != currentUID && stat.Uid != 0 {
+		return fmt.Errorf("config file owned by uid %d, expected %d or 0", stat.Uid, currentUID)
+	}
+
+	// Check permissions - must not be writable by group or other
+	perm := mode.Perm()
+	if perm&0022 != 0 {
+		// Group or other has write permission
+		return fmt.Errorf("insecure permissions %04o - file must not be writable by group/other", perm)
+	}
+
+	return nil
+}
+
+// shutdownOldServices gracefully shuts down the previous service instance after a successful reload.
 func (rm *ReloadManager) shutdownOldServices(svc *service.Service) {
 	// Give connections time to drain
 	rm.logger.Debug("msg", "Draining connections from old services")
@@ -286,7 +320,7 @@ func (rm *ReloadManager) shutdownOldServices(svc *service.Service) {
 	rm.logger.Debug("msg", "Old services shutdown complete")
 }
 
-// Starts a new status reporter
+// startStatusReporter starts a new status reporter for service.
 func (rm *ReloadManager) startStatusReporter(ctx context.Context, svc *service.Service) {
 	rm.statusReporterMu.Lock()
 	defer rm.statusReporterMu.Unlock()
@@ -299,7 +333,19 @@ func (rm *ReloadManager) startStatusReporter(ctx context.Context, svc *service.S
 	rm.logger.Debug("msg", "Started status reporter")
 }
 
-// Stops old and starts new status reporter
+// stopStatusReporter stops the currently running status reporter.
+func (rm *ReloadManager) stopStatusReporter() {
+	rm.statusReporterMu.Lock()
+	defer rm.statusReporterMu.Unlock()
+
+	if rm.statusReporterCancel != nil {
+		rm.statusReporterCancel()
+		rm.statusReporterCancel = nil
+		rm.logger.Debug("msg", "Stopped status reporter")
+	}
+}
+
+// restartStatusReporter stops the old status reporter and starts a new one.
 func (rm *ReloadManager) restartStatusReporter(ctx context.Context, newService *service.Service) {
 	if rm.cfg.DisableStatusReporter {
 		// Just stop the old one if disabled
@@ -322,50 +368,4 @@ func (rm *ReloadManager) restartStatusReporter(ctx context.Context, newService *
 
 	go statusReporter(newService, reporterCtx)
 	rm.logger.Debug("msg", "Started new status reporter")
-}
-
-// Stops the status reporter
-func (rm *ReloadManager) stopStatusReporter() {
-	rm.statusReporterMu.Lock()
-	defer rm.statusReporterMu.Unlock()
-
-	if rm.statusReporterCancel != nil {
-		rm.statusReporterCancel()
-		rm.statusReporterCancel = nil
-		rm.logger.Debug("msg", "Stopped status reporter")
-	}
-}
-
-// Stops the reload manager
-func (rm *ReloadManager) Shutdown() {
-	rm.logger.Info("msg", "Shutting down reload manager")
-
-	// Stop status reporter
-	rm.stopStatusReporter()
-
-	// Stop watching
-	close(rm.shutdownCh)
-	rm.wg.Wait()
-
-	// Stop config watching
-	if rm.lcfg != nil {
-		rm.lcfg.StopAutoUpdate()
-	}
-
-	// Shutdown current services
-	rm.mu.RLock()
-	currentService := rm.service
-	rm.mu.RUnlock()
-
-	if currentService != nil {
-		rm.logger.Info("msg", "Shutting down service")
-		currentService.Shutdown()
-	}
-}
-
-// Returns the current service (thread-safe)
-func (rm *ReloadManager) GetService() *service.Service {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	return rm.service
 }

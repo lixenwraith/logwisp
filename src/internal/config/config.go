@@ -3,6 +3,7 @@ package config
 
 // --- LogWisp Configuration Options ---
 
+// Config is the top-level configuration structure for the LogWisp application.
 type Config struct {
 	// Top-level flags for application control
 	Background  bool `toml:"background"`
@@ -26,7 +27,7 @@ type Config struct {
 
 // --- Logging Options ---
 
-// Represents logging configuration for LogWisp
+// LogConfig represents the logging configuration for the LogWisp application itself.
 type LogConfig struct {
 	// Output mode: "file", "stdout", "stderr", "split", "all", "none"
 	Output string `toml:"output"`
@@ -41,6 +42,7 @@ type LogConfig struct {
 	Console *LogConsoleConfig `toml:"console"`
 }
 
+// LogFileConfig defines settings for file-based application logging.
 type LogFileConfig struct {
 	// Directory for log files
 	Directory string `toml:"directory"`
@@ -58,6 +60,7 @@ type LogFileConfig struct {
 	RetentionHours float64 `toml:"retention_hours"`
 }
 
+// LogConsoleConfig defines settings for console-based application logging.
 type LogConsoleConfig struct {
 	// Target for console output: "stdout", "stderr", "split"
 	// "split": info/debug to stdout, warn/error to stderr
@@ -69,19 +72,19 @@ type LogConsoleConfig struct {
 
 // --- Pipeline Options ---
 
+// PipelineConfig defines a complete data flow from sources to sinks.
 type PipelineConfig struct {
 	Name      string           `toml:"name"`
 	Sources   []SourceConfig   `toml:"sources"`
 	RateLimit *RateLimitConfig `toml:"rate_limit"`
 	Filters   []FilterConfig   `toml:"filters"`
 	Format    *FormatConfig    `toml:"format"`
-
-	Sinks []SinkConfig `toml:"sinks"`
-	// Auth  *ServerAuthConfig `toml:"auth"` // Global auth for pipeline
+	Sinks     []SinkConfig     `toml:"sinks"`
 }
 
 // Common configuration structs used across components
 
+// NetLimitConfig defines network-level access control and rate limiting rules.
 type NetLimitConfig struct {
 	Enabled             bool     `toml:"enabled"`
 	MaxConnections      int64    `toml:"max_connections"`
@@ -95,27 +98,37 @@ type NetLimitConfig struct {
 	IPBlacklist         []string `toml:"ip_blacklist"`
 }
 
-type TLSConfig struct {
-	Enabled    bool   `toml:"enabled"`
-	CertFile   string `toml:"cert_file"`
-	KeyFile    string `toml:"key_file"`
-	CAFile     string `toml:"ca_file"`
-	ServerName string `toml:"server_name"` // for client verification
-	SkipVerify bool   `toml:"skip_verify"`
+// TLSServerConfig defines TLS settings for a server (HTTP Source, HTTP Sink).
+type TLSServerConfig struct {
+	Enabled          bool   `toml:"enabled"`
+	CertFile         string `toml:"cert_file"`          // Server's certificate file.
+	KeyFile          string `toml:"key_file"`           // Server's private key file.
+	ClientAuth       bool   `toml:"client_auth"`        // Enable/disable mTLS.
+	ClientCAFile     string `toml:"client_ca_file"`     // CA for verifying client certificates.
+	VerifyClientCert bool   `toml:"verify_client_cert"` // Require and verify client certs.
 
-	// Client certificate authentication
-	ClientAuth       bool   `toml:"client_auth"`
-	ClientCAFile     string `toml:"client_ca_file"`
-	VerifyClientCert bool   `toml:"verify_client_cert"`
-
-	// TLS version constraints
-	MinVersion string `toml:"min_version"` // "TLS1.2", "TLS1.3"
-	MaxVersion string `toml:"max_version"`
-
-	// Cipher suites (comma-separated list)
+	// Common TLS settings
+	MinVersion   string `toml:"min_version"` // "TLS1.2", "TLS1.3"
+	MaxVersion   string `toml:"max_version"`
 	CipherSuites string `toml:"cipher_suites"`
 }
 
+// TLSClientConfig defines TLS settings for a client (HTTP Client Sink).
+type TLSClientConfig struct {
+	Enabled            bool   `toml:"enabled"`
+	ServerCAFile       string `toml:"server_ca_file"`       // CA for verifying the remote server's certificate.
+	ClientCertFile     string `toml:"client_cert_file"`     // Client's certificate for mTLS.
+	ClientKeyFile      string `toml:"client_key_file"`      // Client's private key for mTLS.
+	ServerName         string `toml:"server_name"`          // For server certificate validation (SNI).
+	InsecureSkipVerify bool   `toml:"insecure_skip_verify"` // Use with caution.
+
+	// Common TLS settings
+	MinVersion   string `toml:"min_version"`
+	MaxVersion   string `toml:"max_version"`
+	CipherSuites string `toml:"cipher_suites"`
+}
+
+// HeartbeatConfig defines settings for periodic keep-alive or status messages.
 type HeartbeatConfig struct {
 	Enabled          bool   `toml:"enabled"`
 	IntervalMS       int64  `toml:"interval_ms"`
@@ -124,15 +137,15 @@ type HeartbeatConfig struct {
 	Format           string `toml:"format"`
 }
 
+// TODO: Future implementation
+// ClientAuthConfig defines settings for client-side authentication.
 type ClientAuthConfig struct {
-	Type     string `toml:"type"` // "none", "basic", "token", "scram"
-	Username string `toml:"username"`
-	Password string `toml:"password"`
-	Token    string `toml:"token"`
+	Type string `toml:"type"` // "none"
 }
 
 // --- Source Options ---
 
+// SourceConfig is a polymorphic struct representing a single data source.
 type SourceConfig struct {
 	Type string `toml:"type"`
 
@@ -143,6 +156,7 @@ type SourceConfig struct {
 	TCP       *TCPSourceOptions       `toml:"tcp,omitempty"`
 }
 
+// DirectorySourceOptions defines settings for a directory-based source.
 type DirectorySourceOptions struct {
 	Path            string `toml:"path"`
 	Pattern         string `toml:"pattern"` // glob pattern
@@ -150,10 +164,12 @@ type DirectorySourceOptions struct {
 	Recursive       bool   `toml:"recursive"` // TODO: implement logic
 }
 
+// StdinSourceOptions defines settings for a stdin-based source.
 type StdinSourceOptions struct {
 	BufferSize int64 `toml:"buffer_size"`
 }
 
+// HTTPSourceOptions defines settings for an HTTP server source.
 type HTTPSourceOptions struct {
 	Host               string            `toml:"host"`
 	Port               int64             `toml:"port"`
@@ -163,10 +179,11 @@ type HTTPSourceOptions struct {
 	ReadTimeout        int64             `toml:"read_timeout_ms"`
 	WriteTimeout       int64             `toml:"write_timeout_ms"`
 	NetLimit           *NetLimitConfig   `toml:"net_limit"`
-	TLS                *TLSConfig        `toml:"tls"`
+	TLS                *TLSServerConfig  `toml:"tls"`
 	Auth               *ServerAuthConfig `toml:"auth"`
 }
 
+// TCPSourceOptions defines settings for a TCP server source.
 type TCPSourceOptions struct {
 	Host            string            `toml:"host"`
 	Port            int64             `toml:"port"`
@@ -180,6 +197,7 @@ type TCPSourceOptions struct {
 
 // --- Sink Options ---
 
+// SinkConfig is a polymorphic struct representing a single data sink.
 type SinkConfig struct {
 	Type string `toml:"type"`
 
@@ -192,12 +210,14 @@ type SinkConfig struct {
 	TCPClient  *TCPClientSinkOptions  `toml:"tcp_client,omitempty"`
 }
 
+// ConsoleSinkOptions defines settings for a console-based sink.
 type ConsoleSinkOptions struct {
 	Target     string `toml:"target"` // "stdout", "stderr", "split"
 	Colorize   bool   `toml:"colorize"`
 	BufferSize int64  `toml:"buffer_size"`
 }
 
+// FileSinkOptions defines settings for a file-based sink.
 type FileSinkOptions struct {
 	Directory      string  `toml:"directory"`
 	Name           string  `toml:"name"`
@@ -209,6 +229,7 @@ type FileSinkOptions struct {
 	FlushInterval  int64   `toml:"flush_interval_ms"`
 }
 
+// HTTPSinkOptions defines settings for an HTTP server sink.
 type HTTPSinkOptions struct {
 	Host         string            `toml:"host"`
 	Port         int64             `toml:"port"`
@@ -218,10 +239,11 @@ type HTTPSinkOptions struct {
 	WriteTimeout int64             `toml:"write_timeout_ms"`
 	Heartbeat    *HeartbeatConfig  `toml:"heartbeat"`
 	NetLimit     *NetLimitConfig   `toml:"net_limit"`
-	TLS          *TLSConfig        `toml:"tls"`
+	TLS          *TLSServerConfig  `toml:"tls"`
 	Auth         *ServerAuthConfig `toml:"auth"`
 }
 
+// TCPSinkOptions defines settings for a TCP server sink.
 type TCPSinkOptions struct {
 	Host            string            `toml:"host"`
 	Port            int64             `toml:"port"`
@@ -234,6 +256,7 @@ type TCPSinkOptions struct {
 	Auth            *ServerAuthConfig `toml:"auth"`
 }
 
+// HTTPClientSinkOptions defines settings for an HTTP client sink.
 type HTTPClientSinkOptions struct {
 	URL                string            `toml:"url"`
 	BufferSize         int64             `toml:"buffer_size"`
@@ -244,10 +267,11 @@ type HTTPClientSinkOptions struct {
 	RetryDelayMS       int64             `toml:"retry_delay_ms"`
 	RetryBackoff       float64           `toml:"retry_backoff"`
 	InsecureSkipVerify bool              `toml:"insecure_skip_verify"`
-	TLS                *TLSConfig        `toml:"tls"`
+	TLS                *TLSClientConfig  `toml:"tls"`
 	Auth               *ClientAuthConfig `toml:"auth"`
 }
 
+// TCPClientSinkOptions defines settings for a TCP client sink.
 type TCPClientSinkOptions struct {
 	Host                string            `toml:"host"`
 	Port                int64             `toml:"port"`
@@ -264,7 +288,7 @@ type TCPClientSinkOptions struct {
 
 // --- Rate Limit Options ---
 
-// Defines the action to take when a rate limit is exceeded.
+// RateLimitPolicy defines the action to take when a rate limit is exceeded.
 type RateLimitPolicy int
 
 const (
@@ -274,7 +298,7 @@ const (
 	PolicyDrop
 )
 
-// Defines the configuration for pipeline-level rate limiting.
+// RateLimitConfig defines the configuration for pipeline-level rate limiting.
 type RateLimitConfig struct {
 	// Rate is the number of log entries allowed per second. Default: 0 (disabled).
 	Rate float64 `toml:"rate"`
@@ -288,23 +312,27 @@ type RateLimitConfig struct {
 
 // --- Filter Options ---
 
-// Represents the filter type
+// FilterType represents the filter's behavior (include or exclude).
 type FilterType string
 
 const (
+	// FilterTypeInclude specifies that only matching logs will pass.
 	FilterTypeInclude FilterType = "include" // Whitelist - only matching logs pass
+	// FilterTypeExclude specifies that matching logs will be dropped.
 	FilterTypeExclude FilterType = "exclude" // Blacklist - matching logs are dropped
 )
 
-// Represents how multiple patterns are combined
+// FilterLogic represents how multiple filter patterns are combined.
 type FilterLogic string
 
 const (
-	FilterLogicOr  FilterLogic = "or"  // Match any pattern
+	// FilterLogicOr specifies that a match on any pattern is sufficient.
+	FilterLogicOr FilterLogic = "or" // Match any pattern
+	// FilterLogicAnd specifies that all patterns must match.
 	FilterLogicAnd FilterLogic = "and" // Match all patterns
 )
 
-// Represents filter configuration
+// FilterConfig represents the configuration for a single filter.
 type FilterConfig struct {
 	Type     FilterType  `toml:"type"`
 	Logic    FilterLogic `toml:"logic"`
@@ -313,6 +341,7 @@ type FilterConfig struct {
 
 // --- Formatter Options ---
 
+// FormatConfig is a polymorphic struct representing log entry formatting options.
 type FormatConfig struct {
 	// Format configuration - polymorphic like sources/sinks
 	Type string `toml:"type"` // "json", "txt", "raw"
@@ -323,6 +352,7 @@ type FormatConfig struct {
 	RawFormatOptions  *RawFormatterOptions  `toml:"raw,omitempty"`
 }
 
+// JSONFormatterOptions defines settings for the JSON formatter.
 type JSONFormatterOptions struct {
 	Pretty         bool   `toml:"pretty"`
 	TimestampField string `toml:"timestamp_field"`
@@ -331,49 +361,21 @@ type JSONFormatterOptions struct {
 	SourceField    string `toml:"source_field"`
 }
 
+// TxtFormatterOptions defines settings for the text template formatter.
 type TxtFormatterOptions struct {
 	Template        string `toml:"template"`
 	TimestampFormat string `toml:"timestamp_format"`
 }
 
+// RawFormatterOptions defines settings for the raw pass-through formatter.
 type RawFormatterOptions struct {
 	AddNewLine bool `toml:"add_new_line"`
 }
 
 // --- Server-side Auth (for sources) ---
 
-type BasicAuthConfig struct {
-	Users []BasicAuthUser `toml:"users"`
-	Realm string          `toml:"realm"`
-}
-
-type BasicAuthUser struct {
-	Username     string `toml:"username"`
-	PasswordHash string `toml:"password_hash"` // Argon2
-}
-
-type ScramAuthConfig struct {
-	Users []ScramUser `toml:"users"`
-}
-
-type ScramUser struct {
-	Username     string `toml:"username"`
-	StoredKey    string `toml:"stored_key"` // base64
-	ServerKey    string `toml:"server_key"` // base64
-	Salt         string `toml:"salt"`       // base64
-	ArgonTime    uint32 `toml:"argon_time"`
-	ArgonMemory  uint32 `toml:"argon_memory"`
-	ArgonThreads uint8  `toml:"argon_threads"`
-}
-
-type TokenAuthConfig struct {
-	Tokens []string `toml:"tokens"`
-}
-
-// Server auth wrapper (for sources accepting connections)
+// TODO: future implementation
+// ServerAuthConfig defines settings for server-side authentication.
 type ServerAuthConfig struct {
-	Type  string           `toml:"type"` // "none", "basic", "token", "scram"
-	Basic *BasicAuthConfig `toml:"basic,omitempty"`
-	Token *TokenAuthConfig `toml:"token,omitempty"`
-	Scram *ScramAuthConfig `toml:"scram,omitempty"`
+	Type string `toml:"type"` // "none"
 }

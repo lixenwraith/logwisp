@@ -8,13 +8,13 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Outputs the log message as-is with a newline
+// RawFormatter outputs the raw log message, optionally with a newline.
 type RawFormatter struct {
 	config *config.RawFormatterOptions
 	logger *log.Logger
 }
 
-// Creates a new raw formatter
+// NewRawFormatter creates a new raw pass-through formatter.
 func NewRawFormatter(cfg *config.RawFormatterOptions, logger *log.Logger) (*RawFormatter, error) {
 	return &RawFormatter{
 		config: cfg,
@@ -22,7 +22,7 @@ func NewRawFormatter(cfg *config.RawFormatterOptions, logger *log.Logger) (*RawF
 	}, nil
 }
 
-// Returns the message with a newline appended
+// Format returns the raw message from the LogEntry as a byte slice.
 func (f *RawFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// TODO: Standardize not to add "\n" when processing raw, check lixenwraith/log for consistency
 	if f.config.AddNewLine {
@@ -32,7 +32,7 @@ func (f *RawFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	}
 }
 
-// Returns the formatter name
+// Name returns the formatter's type name.
 func (f *RawFormatter) Name() string {
 	return "raw"
 }

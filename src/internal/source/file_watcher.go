@@ -20,7 +20,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Contains information about a file watcher
+// WatcherInfo contains snapshot information about a file watcher's state.
 type WatcherInfo struct {
 	Path         string
 	Size         int64
@@ -31,6 +31,7 @@ type WatcherInfo struct {
 	Rotations    int64
 }
 
+// fileWatcher tails a single file, handles rotations, and sends new lines to a callback.
 type fileWatcher struct {
 	path         string
 	callback     func(core.LogEntry)
@@ -46,6 +47,7 @@ type fileWatcher struct {
 	logger       *log.Logger
 }
 
+// newFileWatcher creates a new watcher for a specific file path.
 func newFileWatcher(path string, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
 	w := &fileWatcher{
 		path:     path,
@@ -57,6 +59,7 @@ func newFileWatcher(path string, callback func(core.LogEntry), logger *log.Logge
 	return w
 }
 
+// watch starts the main monitoring loop for the file.
 func (w *fileWatcher) watch(ctx context.Context) error {
 	if err := w.seekToEnd(); err != nil {
 		return fmt.Errorf("seekToEnd failed: %w", err)
@@ -81,49 +84,34 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 	}
 }
 
-func (w *fileWatcher) seekToEnd() error {
-	file, err := os.Open(w.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			w.mu.Lock()
-			w.position = 0
-			w.size = 0
-			w.modTime = time.Now()
-			w.inode = 0
-			w.mu.Unlock()
-			return nil
-		}
-		return err
-	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-
+// stop signals the watcher to terminate its loop.
+func (w *fileWatcher) stop() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	// Keep existing position (including 0)
-	// First time initialization seeks to the end of the file
-	if w.position == -1 {
-		pos, err := file.Seek(0, io.SeekEnd)
-		if err != nil {
-			return err
-		}
-		w.position = pos
-	}
-
-	w.size = info.Size()
-	w.modTime = info.ModTime()
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		w.inode = stat.Ino
-	}
-
-	return nil
+	w.stopped = true
+	w.mu.Unlock()
 }
 
+// getInfo returns a snapshot of the watcher's current statistics.
+func (w *fileWatcher) getInfo() WatcherInfo {
+	w.mu.Lock()
+	info := WatcherInfo{
+		Path:        w.path,
+		Size:        w.size,
+		Position:    w.position,
+		ModTime:     w.modTime,
+		EntriesRead: w.entriesRead.Load(),
+		Rotations:   w.rotationSeq,
+	}
+	w.mu.Unlock()
+
+	if lastRead, ok := w.lastReadTime.Load().(time.Time); ok {
+		info.LastReadTime = lastRead
+	}
+
+	return info
+}
+
+// checkFile examines the file for changes, rotations, or new content.
 func (w *fileWatcher) checkFile() error {
 	file, err := os.Open(w.path)
 	if err != nil {
@@ -310,6 +298,58 @@ func (w *fileWatcher) checkFile() error {
 	return nil
 }
 
+// seekToEnd sets the initial read position to the end of the file.
+func (w *fileWatcher) seekToEnd() error {
+	file, err := os.Open(w.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			w.mu.Lock()
+			w.position = 0
+			w.size = 0
+			w.modTime = time.Now()
+			w.inode = 0
+			w.mu.Unlock()
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// Keep existing position (including 0)
+	// First time initialization seeks to the end of the file
+	if w.position == -1 {
+		pos, err := file.Seek(0, io.SeekEnd)
+		if err != nil {
+			return err
+		}
+		w.position = pos
+	}
+
+	w.size = info.Size()
+	w.modTime = info.ModTime()
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		w.inode = stat.Ino
+	}
+
+	return nil
+}
+
+// isStopped checks if the watcher has been instructed to stop.
+func (w *fileWatcher) isStopped() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.stopped
+}
+
+// parseLine attempts to parse a line as JSON, falling back to plain text.
 func (w *fileWatcher) parseLine(line string) core.LogEntry {
 	var jsonLog struct {
 		Time    string          `json:"time"`
@@ -343,6 +383,7 @@ func (w *fileWatcher) parseLine(line string) core.LogEntry {
 	}
 }
 
+// extractLogLevel heuristically determines the log level from a line of text.
 func extractLogLevel(line string) string {
 	patterns := []struct {
 		patterns []string
@@ -365,39 +406,4 @@ func extractLogLevel(line string) string {
 	}
 
 	return ""
-}
-
-func (w *fileWatcher) getInfo() WatcherInfo {
-	w.mu.Lock()
-	info := WatcherInfo{
-		Path:        w.path,
-		Size:        w.size,
-		Position:    w.position,
-		ModTime:     w.modTime,
-		EntriesRead: w.entriesRead.Load(),
-		Rotations:   w.rotationSeq,
-	}
-	w.mu.Unlock()
-
-	if lastRead, ok := w.lastReadTime.Load().(time.Time); ok {
-		info.LastReadTime = lastRead
-	}
-
-	return info
-}
-
-func (w *fileWatcher) close() {
-	w.stop()
-}
-
-func (w *fileWatcher) stop() {
-	w.mu.Lock()
-	w.stopped = true
-	w.mu.Unlock()
-}
-
-func (w *fileWatcher) isStopped() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.stopped
 }

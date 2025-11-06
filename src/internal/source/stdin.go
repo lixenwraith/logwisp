@@ -13,7 +13,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Reads log entries from standard input
+// StdinSource reads log entries from the standard input stream.
 type StdinSource struct {
 	config         *config.StdinSourceOptions
 	subscribers    []chan core.LogEntry
@@ -25,6 +25,7 @@ type StdinSource struct {
 	logger         *log.Logger
 }
 
+// NewStdinSource creates a new stdin source.
 func NewStdinSource(opts *config.StdinSourceOptions, logger *log.Logger) (*StdinSource, error) {
 	if opts == nil {
 		opts = &config.StdinSourceOptions{
@@ -43,18 +44,21 @@ func NewStdinSource(opts *config.StdinSourceOptions, logger *log.Logger) (*Stdin
 	return source, nil
 }
 
+// Subscribe returns a channel for receiving log entries.
 func (s *StdinSource) Subscribe() <-chan core.LogEntry {
 	ch := make(chan core.LogEntry, s.config.BufferSize)
 	s.subscribers = append(s.subscribers, ch)
 	return ch
 }
 
+// Start begins reading from the standard input.
 func (s *StdinSource) Start() error {
 	go s.readLoop()
 	s.logger.Info("msg", "Stdin source started", "component", "stdin_source")
 	return nil
 }
 
+// Stop signals the source to stop reading.
 func (s *StdinSource) Stop() {
 	close(s.done)
 	for _, ch := range s.subscribers {
@@ -63,6 +67,7 @@ func (s *StdinSource) Stop() {
 	s.logger.Info("msg", "Stdin source stopped", "component", "stdin_source")
 }
 
+// GetStats returns the source's statistics.
 func (s *StdinSource) GetStats() SourceStats {
 	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
 
@@ -76,6 +81,7 @@ func (s *StdinSource) GetStats() SourceStats {
 	}
 }
 
+// readLoop continuously reads lines from stdin and publishes them.
 func (s *StdinSource) readLoop() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -107,6 +113,7 @@ func (s *StdinSource) readLoop() {
 	}
 }
 
+// publish sends a log entry to all subscribers.
 func (s *StdinSource) publish(entry core.LogEntry) {
 	s.totalEntries.Add(1)
 	s.lastEntryTime.Store(entry.Time)

@@ -8,22 +8,22 @@ import (
 	"logwisp/src/internal/core"
 )
 
-// Represents an output data stream
+// Sink represents an output data stream.
 type Sink interface {
-	// Returns the channel for sending log entries to this sink
+	// Input returns the channel for sending log entries to this sink.
 	Input() chan<- core.LogEntry
 
-	// Begins processing log entries
+	// Start begins processing log entries.
 	Start(ctx context.Context) error
 
-	// Gracefully shuts down the sink
+	// Stop gracefully shuts down the sink.
 	Stop()
 
-	// Returns sink statistics
+	// GetStats returns sink statistics.
 	GetStats() SinkStats
 }
 
-// Contains statistics about a sink
+// SinkStats contains statistics about a sink.
 type SinkStats struct {
 	Type              string
 	TotalProcessed    uint64

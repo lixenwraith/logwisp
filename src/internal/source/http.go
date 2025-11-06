@@ -2,6 +2,7 @@
 package source
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -9,17 +10,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/limit"
-	"logwisp/src/internal/tls"
+	"logwisp/src/internal/session"
+	ltls "logwisp/src/internal/tls"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
 )
 
-// Receives log entries via HTTP POST requests
+// HTTPSource receives log entries via HTTP POST requests.
 type HTTPSource struct {
 	config *config.HTTPSourceOptions
 
@@ -35,10 +36,10 @@ type HTTPSource struct {
 	wg   sync.WaitGroup
 
 	// Security
-	authenticator *auth.Authenticator
-	authFailures  atomic.Uint64
-	authSuccesses atomic.Uint64
-	tlsManager    *tls.Manager
+	httpSessions   sync.Map
+	sessionManager *session.Manager
+	tlsManager     *ltls.ServerManager
+	tlsStates      sync.Map // remoteAddr -> *tls.ConnectionState
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -48,7 +49,7 @@ type HTTPSource struct {
 	lastEntryTime  atomic.Value // time.Time
 }
 
-// Creates a new HTTP server source
+// NewHTTPSource creates a new HTTP server source.
 func NewHTTPSource(opts *config.HTTPSourceOptions, logger *log.Logger) (*HTTPSource, error) {
 	// Validation done in config package
 	if opts == nil {
@@ -56,10 +57,11 @@ func NewHTTPSource(opts *config.HTTPSourceOptions, logger *log.Logger) (*HTTPSou
 	}
 
 	h := &HTTPSource{
-		config:    opts,
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
+		config:         opts,
+		done:           make(chan struct{}),
+		startTime:      time.Now(),
+		logger:         logger,
+		sessionManager: session.NewManager(core.MaxSessionTime),
 	}
 	h.lastEntryTime.Store(time.Time{})
 
@@ -72,34 +74,17 @@ func NewHTTPSource(opts *config.HTTPSourceOptions, logger *log.Logger) (*HTTPSou
 
 	// Initialize TLS manager if configured
 	if opts.TLS != nil && opts.TLS.Enabled {
-		tlsManager, err := tls.NewManager(opts.TLS, logger)
+		tlsManager, err := ltls.NewServerManager(opts.TLS, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TLS manager: %w", err)
 		}
 		h.tlsManager = tlsManager
 	}
 
-	// Initialize authenticator if configured
-	if opts.Auth != nil && opts.Auth.Type != "none" && opts.Auth.Type != "" {
-		// Verify TLS is enabled for auth (validation should have caught this)
-		if h.tlsManager == nil {
-			return nil, fmt.Errorf("authentication requires TLS to be enabled")
-		}
-
-		authenticator, err := auth.NewAuthenticator(opts.Auth, logger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create authenticator: %w", err)
-		}
-		h.authenticator = authenticator
-
-		logger.Info("msg", "Authentication configured for HTTP source",
-			"component", "http_source",
-			"auth_type", opts.Auth.Type)
-	}
-
 	return h, nil
 }
 
+// Subscribe returns a channel for receiving log entries.
 func (h *HTTPSource) Subscribe() <-chan core.LogEntry {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -109,7 +94,13 @@ func (h *HTTPSource) Subscribe() <-chan core.LogEntry {
 	return ch
 }
 
+// Start initializes and starts the HTTP server.
 func (h *HTTPSource) Start() error {
+	// Register expiry callback
+	h.sessionManager.RegisterExpiryCallback("http_source", func(sessionID, remoteAddr string) {
+		h.handleSessionExpiry(sessionID, remoteAddr)
+	})
+
 	h.server = &fasthttp.Server{
 		Handler:            h.requestHandler,
 		DisableKeepalive:   false,
@@ -118,6 +109,20 @@ func (h *HTTPSource) Start() error {
 		ReadTimeout:        time.Duration(h.config.ReadTimeout) * time.Millisecond,
 		WriteTimeout:       time.Duration(h.config.WriteTimeout) * time.Millisecond,
 		MaxRequestBodySize: int(h.config.MaxRequestBodySize),
+	}
+
+	// TLS and mTLS configuration
+	if h.tlsManager != nil {
+		h.server.TLSConfig = h.tlsManager.GetHTTPConfig()
+
+		// Enforce mTLS configuration from the TLSServerConfig struct.
+		if h.config.TLS.ClientAuth {
+			if h.config.TLS.VerifyClientCert {
+				h.server.TLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
+			} else {
+				h.server.TLSConfig.ClientAuth = tls.RequireAnyClientCert
+			}
+		}
 	}
 
 	// Use configured host and port
@@ -133,12 +138,22 @@ func (h *HTTPSource) Start() error {
 			"port", h.config.Port,
 			"ingest_path", h.config.IngestPath,
 			"tls_enabled", h.tlsManager != nil,
-			"auth_enabled", h.authenticator != nil)
+			"mtls_enabled", h.config.TLS != nil && h.config.TLS.ClientAuth,
+		)
 
 		var err error
 		if h.tlsManager != nil {
-			// HTTPS server
 			h.server.TLSConfig = h.tlsManager.GetHTTPConfig()
+
+			// Add certificate verification callback
+			if h.config.TLS.ClientAuth {
+				h.server.TLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
+				if h.config.TLS.ClientCAFile != "" {
+					// ClientCAs already set by tls.Manager
+				}
+			}
+
+			// HTTPS server
 			err = h.server.ListenAndServeTLS(addr, h.config.TLS.CertFile, h.config.TLS.KeyFile)
 		} else {
 			// HTTP server
@@ -163,8 +178,13 @@ func (h *HTTPSource) Start() error {
 	}
 }
 
+// Stop gracefully shuts down the HTTP server.
 func (h *HTTPSource) Stop() {
 	h.logger.Info("msg", "Stopping HTTP source")
+
+	// Unregister callback
+	h.sessionManager.UnregisterExpiryCallback("http_source")
+
 	close(h.done)
 
 	if h.server != nil {
@@ -189,9 +209,15 @@ func (h *HTTPSource) Stop() {
 	}
 	h.mu.Unlock()
 
+	// Stop session manager
+	if h.sessionManager != nil {
+		h.sessionManager.Stop()
+	}
+
 	h.logger.Info("msg", "HTTP source stopped")
 }
 
+// GetStats returns the source's statistics.
 func (h *HTTPSource) GetStats() SourceStats {
 	lastEntry, _ := h.lastEntryTime.Load().(time.Time)
 
@@ -200,14 +226,9 @@ func (h *HTTPSource) GetStats() SourceStats {
 		netLimitStats = h.netLimiter.GetStats()
 	}
 
-	var authStats map[string]any
-	if h.authenticator != nil {
-		authStats = map[string]any{
-			"enabled":   true,
-			"type":      h.config.Auth.Type,
-			"failures":  h.authFailures.Load(),
-			"successes": h.authSuccesses.Load(),
-		}
+	var sessionStats map[string]any
+	if h.sessionManager != nil {
+		sessionStats = h.sessionManager.GetStats()
 	}
 
 	var tlsStats map[string]any
@@ -227,12 +248,13 @@ func (h *HTTPSource) GetStats() SourceStats {
 			"path":            h.config.IngestPath,
 			"invalid_entries": h.invalidEntries.Load(),
 			"net_limit":       netLimitStats,
-			"auth":            authStats,
+			"sessions":        sessionStats,
 			"tls":             tlsStats,
 		},
 	}
 }
 
+// requestHandler is the main entry point for all incoming HTTP requests.
 func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 	remoteAddr := ctx.RemoteAddr().String()
 
@@ -262,42 +284,26 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
-	// 3. Check TLS requirement for auth
-	if h.authenticator != nil {
-		isTLS := ctx.IsTLS() || h.tlsManager != nil
-		if !isTLS {
-			ctx.SetStatusCode(fasthttp.StatusForbidden)
-			ctx.SetContentType("application/json")
-			json.NewEncoder(ctx).Encode(map[string]string{
-				"error": "TLS required for authentication",
-				"hint":  "Use HTTPS to submit authenticated requests",
-			})
-			return
+	// 3. Create session for connections
+	var sess *session.Session
+	if savedID, exists := h.httpSessions.Load(remoteAddr); exists {
+		if s, found := h.sessionManager.GetSession(savedID.(string)); found {
+			sess = s
+			h.sessionManager.UpdateActivity(savedID.(string))
 		}
+	}
 
-		// Authenticate request
-		authHeader := string(ctx.Request.Header.Peek("Authorization"))
-		session, err := h.authenticator.AuthenticateHTTP(authHeader, remoteAddr)
-		if err != nil {
-			h.authFailures.Add(1)
-			h.logger.Warn("msg", "Authentication failed",
-				"component", "http_source",
-				"remote_addr", remoteAddr,
-				"error", err)
+	if sess == nil {
+		// New connection
+		sess = h.sessionManager.CreateSession(remoteAddr, "http_source", map[string]any{
+			"tls":          ctx.IsTLS() || h.tlsManager != nil,
+			"mtls_enabled": h.config.TLS != nil && h.config.TLS.ClientAuth,
+		})
+		h.httpSessions.Store(remoteAddr, sess.ID)
 
-			ctx.SetStatusCode(fasthttp.StatusUnauthorized)
-			if h.config.Auth.Type == "basic" && h.config.Auth.Basic != nil && h.config.Auth.Basic.Realm != "" {
-				ctx.Response.Header.Set("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, h.config.Auth.Basic.Realm))
-			}
-			ctx.SetContentType("application/json")
-			json.NewEncoder(ctx).Encode(map[string]string{
-				"error": "Authentication failed",
-			})
-			return
-		}
-
-		h.authSuccesses.Add(1)
-		_ = session // Session can be used for audit logging
+		// Setup connection close handler
+		ctx.SetConnectionClose()
+		go h.cleanupHTTPSession(remoteAddr, sess.ID)
 	}
 
 	// 4. Path check
@@ -359,14 +365,58 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 	// Publish to subscribers
 	h.publish(entry)
 
+	// Update session activity after successful processing
+	h.sessionManager.UpdateActivity(sess.ID)
+
 	// Success response
 	ctx.SetStatusCode(fasthttp.StatusAccepted)
 	ctx.SetContentType("application/json")
 	json.NewEncoder(ctx).Encode(map[string]string{
-		"status": "accepted",
+		"status":     "accepted",
+		"session_id": sess.ID,
 	})
 }
 
+// publish sends a log entry to all subscribers.
+func (h *HTTPSource) publish(entry core.LogEntry) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	h.totalEntries.Add(1)
+	h.lastEntryTime.Store(entry.Time)
+
+	for _, ch := range h.subscribers {
+		select {
+		case ch <- entry:
+		default:
+			h.droppedEntries.Add(1)
+			h.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
+				"component", "http_source")
+		}
+	}
+}
+
+// handleSessionExpiry is the callback for cleaning up expired sessions.
+func (h *HTTPSource) handleSessionExpiry(sessionID, remoteAddr string) {
+	h.logger.Info("msg", "Removing expired HTTP session",
+		"component", "http_source",
+		"session_id", sessionID,
+		"remote_addr", remoteAddr)
+
+	// Remove from mapping
+	h.httpSessions.Delete(remoteAddr)
+}
+
+// cleanupHTTPSession removes a session when a client connection is closed.
+func (h *HTTPSource) cleanupHTTPSession(addr, sessionID string) {
+	// Wait for connection to actually close
+	time.Sleep(100 * time.Millisecond)
+
+	h.httpSessions.CompareAndDelete(addr, sessionID)
+	h.sessionManager.RemoveSession(sessionID)
+}
+
+// parseEntries attempts to parse a request body as a single JSON object, a JSON array, or newline-delimited JSON.
 func (h *HTTPSource) parseEntries(body []byte) ([]core.LogEntry, error) {
 	var entries []core.LogEntry
 
@@ -442,25 +492,7 @@ func (h *HTTPSource) parseEntries(body []byte) ([]core.LogEntry, error) {
 	return entries, nil
 }
 
-func (h *HTTPSource) publish(entry core.LogEntry) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	h.totalEntries.Add(1)
-	h.lastEntryTime.Store(entry.Time)
-
-	for _, ch := range h.subscribers {
-		select {
-		case ch <- entry:
-		default:
-			h.droppedEntries.Add(1)
-			h.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
-				"component", "http_source")
-		}
-	}
-}
-
-// Splits bytes into lines, handling both \n and \r\n
+// splitLines splits a byte slice into lines, handling both \n and \r\n.
 func splitLines(data []byte) [][]byte {
 	var lines [][]byte
 	start := 0

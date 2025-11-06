@@ -5,18 +5,19 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
 	"logwisp/src/internal/limit"
-	"logwisp/src/internal/tls"
+	"logwisp/src/internal/session"
+	ltls "logwisp/src/internal/tls"
 	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
@@ -24,7 +25,7 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-// Streams log entries via Server-Sent Events
+// HTTPSink streams log entries via Server-Sent Events (SSE).
 type HTTPSink struct {
 	// Configuration reference (NOT a copy)
 	config *config.HTTPSinkOptions
@@ -46,10 +47,11 @@ type HTTPSink struct {
 	unregister   chan uint64
 	nextClientID atomic.Uint64
 
-	// Security components
-	authenticator *auth.Authenticator
-	tlsManager    *tls.Manager
-	authConfig    *config.ServerAuthConfig
+	// Session and security
+	sessionManager *session.Manager
+	clientSessions map[uint64]string // clientID -> sessionID
+	sessionsMu     sync.RWMutex
+	tlsManager     *ltls.ServerManager
 
 	// Net limiting
 	netLimiter *limit.NetLimiter
@@ -57,31 +59,32 @@ type HTTPSink struct {
 	// Statistics
 	totalProcessed atomic.Uint64
 	lastProcessed  atomic.Value // time.Time
-	authFailures   atomic.Uint64
-	authSuccesses  atomic.Uint64
 }
 
-// Creates a new HTTP streaming sink
+// NewHTTPSink creates a new HTTP streaming sink.
 func NewHTTPSink(opts *config.HTTPSinkOptions, logger *log.Logger, formatter format.Formatter) (*HTTPSink, error) {
 	if opts == nil {
 		return nil, fmt.Errorf("HTTP sink options cannot be nil")
 	}
 
 	h := &HTTPSink{
-		config:    opts, // Direct reference to config struct
-		input:     make(chan core.LogEntry, opts.BufferSize),
-		startTime: time.Now(),
-		done:      make(chan struct{}),
-		logger:    logger,
-		formatter: formatter,
-		clients:   make(map[uint64]chan core.LogEntry),
+		config:         opts,
+		input:          make(chan core.LogEntry, opts.BufferSize),
+		startTime:      time.Now(),
+		done:           make(chan struct{}),
+		logger:         logger,
+		formatter:      formatter,
+		clients:        make(map[uint64]chan core.LogEntry),
+		unregister:     make(chan uint64),
+		sessionManager: session.NewManager(30 * time.Minute),
+		clientSessions: make(map[uint64]string),
 	}
 
 	h.lastProcessed.Store(time.Time{})
 
 	// Initialize TLS manager if configured
 	if opts.TLS != nil && opts.TLS.Enabled {
-		tlsManager, err := tls.NewManager(opts.TLS, logger)
+		tlsManager, err := ltls.NewServerManager(opts.TLS, logger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TLS manager: %w", err)
 		}
@@ -97,32 +100,21 @@ func NewHTTPSink(opts *config.HTTPSinkOptions, logger *log.Logger, formatter for
 		h.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
 	}
 
-	// Initialize authenticator if auth is not "none"
-	if opts.Auth != nil && opts.Auth.Type != "none" {
-		// Only "basic" and "token" are valid for HTTP sink
-		if opts.Auth.Type != "basic" && opts.Auth.Type != "token" {
-			return nil, fmt.Errorf("invalid auth type '%s' for HTTP sink (valid: none, basic, token)", opts.Auth.Type)
-		}
-
-		authenticator, err := auth.NewAuthenticator(opts.Auth, logger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create authenticator: %w", err)
-		}
-		h.authenticator = authenticator
-		h.authConfig = opts.Auth
-		logger.Info("msg", "Authentication enabled",
-			"component", "http_sink",
-			"type", opts.Auth.Type)
-	}
-
 	return h, nil
 }
 
+// Input returns the channel for sending log entries.
 func (h *HTTPSink) Input() chan<- core.LogEntry {
 	return h.input
 }
 
+// Start initializes the HTTP server and begins the broker loop.
 func (h *HTTPSink) Start(ctx context.Context) error {
+	// Register expiry callback
+	h.sessionManager.RegisterExpiryCallback("http_sink", func(sessionID, remoteAddr string) {
+		h.handleSessionExpiry(sessionID, remoteAddr)
+	})
+
 	// Start central broker goroutine
 	h.wg.Add(1)
 	go h.brokerLoop(ctx)
@@ -144,6 +136,16 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	// Configure TLS if enabled
 	if h.tlsManager != nil {
 		h.server.TLSConfig = h.tlsManager.GetHTTPConfig()
+
+		// Enforce mTLS configuration
+		if h.config.TLS.ClientAuth {
+			if h.config.TLS.VerifyClientCert {
+				h.server.TLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
+			} else {
+				h.server.TLSConfig.ClientAuth = tls.RequireAnyClientCert
+			}
+		}
+
 		h.logger.Info("msg", "TLS enabled for HTTP sink",
 			"component", "http_sink",
 			"port", h.config.Port)
@@ -183,7 +185,7 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 		if h.server != nil {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
-			h.server.ShutdownWithContext(shutdownCtx)
+			_ = h.server.ShutdownWithContext(shutdownCtx)
 		}
 	}()
 
@@ -197,7 +199,105 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	}
 }
 
-// Broadcasts only to active clients
+// Stop gracefully shuts down the HTTP server and all client connections.
+func (h *HTTPSink) Stop() {
+	h.logger.Info("msg", "Stopping HTTP sink")
+
+	// Unregister callback
+	h.sessionManager.UnregisterExpiryCallback("http_sink")
+
+	// Signal all client handlers to stop
+	close(h.done)
+
+	// Shutdown HTTP server
+	if h.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = h.server.ShutdownWithContext(ctx)
+	}
+
+	// Wait for all active client handlers to finish
+	h.wg.Wait()
+
+	// Close unregister channel after all clients have finished
+	close(h.unregister)
+
+	// Close all client channels
+	h.clientsMu.Lock()
+	for _, ch := range h.clients {
+		close(ch)
+	}
+	h.clients = make(map[uint64]chan core.LogEntry)
+	h.clientsMu.Unlock()
+
+	// Stop session manager
+	if h.sessionManager != nil {
+		h.sessionManager.Stop()
+	}
+
+	h.logger.Info("msg", "HTTP sink stopped")
+}
+
+// GetStats returns the sink's statistics.
+func (h *HTTPSink) GetStats() SinkStats {
+	lastProc, _ := h.lastProcessed.Load().(time.Time)
+
+	var netLimitStats map[string]any
+	if h.netLimiter != nil {
+		netLimitStats = h.netLimiter.GetStats()
+	}
+
+	var sessionStats map[string]any
+	if h.sessionManager != nil {
+		sessionStats = h.sessionManager.GetStats()
+	}
+
+	var tlsStats map[string]any
+	if h.tlsManager != nil {
+		tlsStats = h.tlsManager.GetStats()
+	}
+
+	return SinkStats{
+		Type:              "http",
+		TotalProcessed:    h.totalProcessed.Load(),
+		ActiveConnections: h.activeClients.Load(),
+		StartTime:         h.startTime,
+		LastProcessed:     lastProc,
+		Details: map[string]any{
+			"port":        h.config.Port,
+			"buffer_size": h.config.BufferSize,
+			"endpoints": map[string]string{
+				"stream": h.config.StreamPath,
+				"status": h.config.StatusPath,
+			},
+			"net_limit": netLimitStats,
+			"sessions":  sessionStats,
+			"tls":       tlsStats,
+		},
+	}
+}
+
+// GetActiveConnections returns the current number of active clients.
+func (h *HTTPSink) GetActiveConnections() int64 {
+	return h.activeClients.Load()
+}
+
+// GetStreamPath returns the configured transport endpoint path.
+func (h *HTTPSink) GetStreamPath() string {
+	return h.config.StreamPath
+}
+
+// GetStatusPath returns the configured status endpoint path.
+func (h *HTTPSink) GetStatusPath() string {
+	return h.config.StatusPath
+}
+
+// GetHost returns the configured host.
+func (h *HTTPSink) GetHost() string {
+	return h.config.Host
+}
+
+// brokerLoop manages client connections and broadcasts log entries.
 func (h *HTTPSink) brokerLoop(ctx context.Context) {
 	defer h.wg.Done()
 
@@ -233,6 +333,11 @@ func (h *HTTPSink) brokerLoop(ctx context.Context) {
 			}
 			h.clientsMu.Unlock()
 
+			// Clean up session tracking
+			h.sessionsMu.Lock()
+			delete(h.clientSessions, clientID)
+			h.sessionsMu.Unlock()
+
 		case entry, ok := <-h.input:
 			if !ok {
 				h.logger.Debug("msg", "Input channel closed, broker stopping",
@@ -248,23 +353,50 @@ func (h *HTTPSink) brokerLoop(ctx context.Context) {
 			clientCount := len(h.clients)
 			if clientCount > 0 {
 				slowClients := 0
+				var staleClients []uint64
+
 				for id, ch := range h.clients {
-					select {
-					case ch <- entry:
-						// Successfully sent
-					default:
-						// Client buffer full
-						slowClients++
-						if slowClients == 1 { // Log only once per broadcast
-							h.logger.Debug("msg", "Dropped entry for slow client(s)",
-								"component", "http_sink",
-								"client_id", id,
-								"slow_clients", slowClients,
-								"total_clients", clientCount)
+					h.sessionsMu.RLock()
+					sessionID, hasSession := h.clientSessions[id]
+					h.sessionsMu.RUnlock()
+
+					if hasSession {
+						if !h.sessionManager.IsSessionActive(sessionID) {
+							staleClients = append(staleClients, id)
+							continue
 						}
+						select {
+						case ch <- entry:
+							h.sessionManager.UpdateActivity(sessionID)
+						default:
+							slowClients++
+							if slowClients == 1 {
+								h.logger.Debug("msg", "Dropped entry for slow client(s)",
+									"component", "http_sink",
+									"client_id", id,
+									"slow_clients", slowClients,
+									"total_clients", clientCount)
+							}
+						}
+					} else {
+						delete(h.clients, id)
 					}
 				}
+
+				// Clean up stale clients after broadcast
+				if len(staleClients) > 0 {
+					go func() {
+						for _, clientID := range staleClients {
+							select {
+							case h.unregister <- clientID:
+							case <-h.done:
+								return
+							}
+						}
+					}()
+				}
 			}
+
 			// If no clients connected, entry is discarded (no buffering)
 			h.clientsMu.RUnlock()
 
@@ -275,91 +407,29 @@ func (h *HTTPSink) brokerLoop(ctx context.Context) {
 
 				h.clientsMu.RLock()
 				for id, ch := range h.clients {
-					select {
-					case ch <- heartbeatEntry:
-					default:
-						// Client buffer full, skip heartbeat
-						h.logger.Debug("msg", "Skipped heartbeat for slow client",
-							"component", "http_sink",
-							"client_id", id)
+					h.sessionsMu.RLock()
+					sessionID, hasSession := h.clientSessions[id]
+					h.sessionsMu.RUnlock()
+
+					if hasSession {
+						select {
+						case ch <- heartbeatEntry:
+							// Update session activity on heartbeat
+							h.sessionManager.UpdateActivity(sessionID)
+						default:
+							// Client buffer full, skip heartbeat
+							h.logger.Debug("msg", "Skipped heartbeat for slow client",
+								"component", "http_sink",
+								"client_id", id)
+						}
 					}
 				}
-				h.clientsMu.RUnlock()
 			}
 		}
 	}
 }
 
-func (h *HTTPSink) Stop() {
-	h.logger.Info("msg", "Stopping HTTP sink")
-
-	// Signal all client handlers to stop
-	close(h.done)
-
-	// Shutdown HTTP server
-	if h.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		h.server.ShutdownWithContext(ctx)
-	}
-
-	// Wait for all active client handlers to finish
-	h.wg.Wait()
-
-	// Close unregister channel after all clients have finished
-	close(h.unregister)
-
-	// Close all client channels
-	h.clientsMu.Lock()
-	for _, ch := range h.clients {
-		close(ch)
-	}
-	h.clients = make(map[uint64]chan core.LogEntry)
-	h.clientsMu.Unlock()
-
-	h.logger.Info("msg", "HTTP sink stopped")
-}
-
-func (h *HTTPSink) GetStats() SinkStats {
-	lastProc, _ := h.lastProcessed.Load().(time.Time)
-
-	var netLimitStats map[string]any
-	if h.netLimiter != nil {
-		netLimitStats = h.netLimiter.GetStats()
-	}
-
-	var authStats map[string]any
-	if h.authenticator != nil {
-		authStats = h.authenticator.GetStats()
-		authStats["failures"] = h.authFailures.Load()
-		authStats["successes"] = h.authSuccesses.Load()
-	}
-
-	var tlsStats map[string]any
-	if h.tlsManager != nil {
-		tlsStats = h.tlsManager.GetStats()
-	}
-
-	return SinkStats{
-		Type:              "http",
-		TotalProcessed:    h.totalProcessed.Load(),
-		ActiveConnections: h.activeClients.Load(),
-		StartTime:         h.startTime,
-		LastProcessed:     lastProc,
-		Details: map[string]any{
-			"port":        h.config.Port,
-			"buffer_size": h.config.BufferSize,
-			"endpoints": map[string]string{
-				"stream": h.config.StreamPath,
-				"status": h.config.StatusPath,
-			},
-			"net_limit": netLimitStats,
-			"auth":      authStats,
-			"tls":       tlsStats,
-		},
-	}
-}
-
+// requestHandler is the main entry point for all incoming HTTP requests.
 func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	remoteAddr := ctx.RemoteAddr().String()
 
@@ -380,21 +450,6 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
-	// Enforce TLS for authentication
-	if h.authenticator != nil && h.authConfig.Type != "none" {
-		isTLS := ctx.IsTLS() || h.tlsManager != nil
-
-		if !isTLS {
-			ctx.SetStatusCode(fasthttp.StatusForbidden)
-			ctx.SetContentType("application/json")
-			json.NewEncoder(ctx).Encode(map[string]string{
-				"error": "TLS required for authentication",
-				"hint":  "Use HTTPS for authenticated connections",
-			})
-			return
-		}
-	}
-
 	path := string(ctx.Path())
 
 	// Status endpoint doesn't require auth
@@ -403,52 +458,14 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Authenticate request
-	var session *auth.Session
-	if h.authenticator != nil {
-		authHeader := string(ctx.Request.Header.Peek("Authorization"))
-		var err error
-		session, err = h.authenticator.AuthenticateHTTP(authHeader, remoteAddr)
-		if err != nil {
-			h.authFailures.Add(1)
-			h.logger.Warn("msg", "Authentication failed",
-				"component", "http_sink",
-				"remote_addr", remoteAddr,
-				"error", err)
-
-			// Return 401 with WWW-Authenticate header
-			ctx.SetStatusCode(fasthttp.StatusUnauthorized)
-			if h.authConfig.Type == "basic" && h.authConfig.Basic != nil {
-				realm := h.authConfig.Basic.Realm
-				if realm == "" {
-					realm = "Restricted"
-				}
-				ctx.Response.Header.Set("WWW-Authenticate", fmt.Sprintf("Basic realm=\"%s\"", realm))
-			} else if h.authConfig.Type == "token" {
-				ctx.Response.Header.Set("WWW-Authenticate", "Token")
-			}
-
-			ctx.SetContentType("application/json")
-			json.NewEncoder(ctx).Encode(map[string]string{
-				"error": "Unauthorized",
-			})
-			return
-		}
-		h.authSuccesses.Add(1)
-	} else {
-		// Create anonymous session for unauthenticated connections
-		session = &auth.Session{
-			ID:         fmt.Sprintf("anon-%d", time.Now().UnixNano()),
-			Username:   "anonymous",
-			Method:     "none",
-			RemoteAddr: remoteAddr,
-			CreatedAt:  time.Now(),
-		}
-	}
+	// Create anonymous session for all connections
+	sess := h.sessionManager.CreateSession(remoteAddr, "http_sink", map[string]any{
+		"tls": ctx.IsTLS() || h.tlsManager != nil,
+	})
 
 	switch path {
 	case h.config.StreamPath:
-		h.handleStream(ctx, session)
+		h.handleStream(ctx, sess)
 	default:
 		ctx.SetStatusCode(fasthttp.StatusNotFound)
 		ctx.SetContentType("application/json")
@@ -456,18 +473,11 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 			"error": "Not Found",
 		})
 	}
-	// Handle stream endpoint
-	// if path == h.config.StreamPath {
-	// 	h.handleStream(ctx, session)
-	// 	return
-	// }
-	//
-	// // Unknown path
-	// ctx.SetStatusCode(fasthttp.StatusNotFound)
-	// ctx.SetBody([]byte("Not Found"))
+
 }
 
-func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session) {
+// handleStream manages a client's Server-Sent Events (SSE) stream.
+func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, sess *session.Session) {
 	// Track connection for net limiting
 	remoteAddr := ctx.RemoteAddr().String()
 	if h.netLimiter != nil {
@@ -490,14 +500,18 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 	h.clients[clientID] = clientChan
 	h.clientsMu.Unlock()
 
+	// Register session mapping
+	h.sessionsMu.Lock()
+	h.clientSessions[clientID] = sess.ID
+	h.sessionsMu.Unlock()
+
 	// Define the stream writer function
 	streamFunc := func(w *bufio.Writer) {
 		connectCount := h.activeClients.Add(1)
 		h.logger.Debug("msg", "HTTP client connected",
 			"component", "http_sink",
 			"remote_addr", remoteAddr,
-			"username", session.Username,
-			"auth_method", session.Method,
+			"session_id", sess.ID,
 			"client_id", clientID,
 			"active_clients", connectCount)
 
@@ -510,7 +524,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 			h.logger.Debug("msg", "HTTP client disconnected",
 				"component", "http_sink",
 				"remote_addr", remoteAddr,
-				"username", session.Username,
+				"session_id", sess.ID,
 				"client_id", clientID,
 				"active_clients", disconnectCount)
 
@@ -521,14 +535,16 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 				// Shutting down, don't block
 			}
 
+			// Remove session
+			h.sessionManager.RemoveSession(sess.ID)
+
 			h.wg.Done()
 		}()
 
 		// Send initial connected event with metadata
 		connectionInfo := map[string]any{
 			"client_id":   fmt.Sprintf("%d", clientID),
-			"username":    session.Username,
-			"auth_method": session.Method,
+			"session_id":  sess.ID,
 			"stream_path": h.config.StreamPath,
 			"status_path": h.config.StatusPath,
 			"buffer_size": h.config.BufferSize,
@@ -573,20 +589,15 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 					return
 				}
 
-			case <-tickerChan:
-				// Validate session is still active
-				if h.authenticator != nil && session != nil && !h.authenticator.ValidateSession(session.ID) {
-					fmt.Fprintf(w, "event: disconnect\ndata: {\"reason\":\"session_expired\"}\n\n")
-					w.Flush()
-					return
-				}
+				// Update session activity
+				h.sessionManager.UpdateActivity(sess.ID)
 
-				// Heartbeat is sent from broker, additional client-specific heartbeat is sent here
-				// This provides per-client heartbeat validation with session check
+			case <-tickerChan:
+				// Client-specific heartbeat
 				sessionHB := map[string]any{
-					"type":          "session_heartbeat",
-					"client_id":     fmt.Sprintf("%d", clientID),
-					"session_valid": true,
+					"type":       "heartbeat",
+					"client_id":  fmt.Sprintf("%d", clientID),
+					"session_id": sess.ID,
 				}
 				hbData, _ := json.Marshal(sessionHB)
 				fmt.Fprintf(w, "event: heartbeat\ndata: %s\n\n", hbData)
@@ -607,49 +618,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, session *auth.Session)
 	ctx.SetBodyStreamWriter(streamFunc)
 }
 
-func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry core.LogEntry) error {
-	formatted, err := h.formatter.Format(entry)
-	if err != nil {
-		return err
-	}
-
-	// Remove trailing newline if present (SSE adds its own)
-	formatted = bytes.TrimSuffix(formatted, []byte{'\n'})
-
-	// Multi-line content handler
-	lines := bytes.Split(formatted, []byte{'\n'})
-	for _, line := range lines {
-		// SSE needs "data: " prefix for each line based on W3C spec
-		fmt.Fprintf(w, "data: %s\n", line)
-	}
-	fmt.Fprintf(w, "\n") // Empty line to terminate event
-
-	return nil
-}
-
-func (h *HTTPSink) createHeartbeatEntry() core.LogEntry {
-	message := "heartbeat"
-
-	// Build fields for heartbeat metadata
-	fields := make(map[string]any)
-	fields["type"] = "heartbeat"
-
-	if h.config.Heartbeat.Enabled {
-		fields["active_clients"] = h.activeClients.Load()
-		fields["uptime_seconds"] = int(time.Since(h.startTime).Seconds())
-	}
-
-	fieldsJSON, _ := json.Marshal(fields)
-
-	return core.LogEntry{
-		Time:    time.Now(),
-		Source:  "logwisp-http",
-		Level:   "INFO",
-		Message: message,
-		Fields:  fieldsJSON,
-	}
-}
-
+// handleStatus provides a JSON status report of the sink.
 func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetContentType("application/json")
 
@@ -662,17 +631,6 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 		}
 	}
 
-	var authStats any
-	if h.authenticator != nil {
-		authStats = h.authenticator.GetStats()
-		authStats.(map[string]any)["failures"] = h.authFailures.Load()
-		authStats.(map[string]any)["successes"] = h.authSuccesses.Load()
-	} else {
-		authStats = map[string]any{
-			"enabled": false,
-		}
-	}
-
 	var tlsStats any
 	if h.tlsManager != nil {
 		tlsStats = h.tlsManager.GetStats()
@@ -680,6 +638,11 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 		tlsStats = map[string]any{
 			"enabled": false,
 		}
+	}
+
+	var sessionStats any
+	if h.sessionManager != nil {
+		sessionStats = h.sessionManager.GetStats()
 	}
 
 	status := map[string]any{
@@ -703,13 +666,11 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 				"format":      h.config.Heartbeat.Format,
 			},
 			"tls":       tlsStats,
-			"auth":      authStats,
+			"sessions":  sessionStats,
 			"net_limit": netLimitStats,
 		},
 		"statistics": map[string]any{
 			"total_processed": h.totalProcessed.Load(),
-			"auth_failures":   h.authFailures.Load(),
-			"auth_successes":  h.authSuccesses.Load(),
 		},
 	}
 
@@ -717,22 +678,71 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 	ctx.SetBody(data)
 }
 
-// Returns the current number of active clients
-func (h *HTTPSink) GetActiveConnections() int64 {
-	return h.activeClients.Load()
+// handleSessionExpiry is the callback for cleaning up expired sessions.
+func (h *HTTPSink) handleSessionExpiry(sessionID, remoteAddr string) {
+	h.sessionsMu.RLock()
+	defer h.sessionsMu.RUnlock()
+
+	// Find client by session ID
+	for clientID, sessID := range h.clientSessions {
+		if sessID == sessionID {
+			h.logger.Info("msg", "Closing expired session client",
+				"component", "http_sink",
+				"session_id", sessionID,
+				"client_id", clientID,
+				"remote_addr", remoteAddr)
+
+			// Signal broker to unregister
+			select {
+			case h.unregister <- clientID:
+			case <-h.done:
+			}
+			return
+		}
+	}
 }
 
-// Returns the configured transport endpoint path
-func (h *HTTPSink) GetStreamPath() string {
-	return h.config.StreamPath
+// createHeartbeatEntry generates a new heartbeat log entry.
+func (h *HTTPSink) createHeartbeatEntry() core.LogEntry {
+	message := "heartbeat"
+
+	// Build fields for heartbeat metadata
+	fields := make(map[string]any)
+	fields["type"] = "heartbeat"
+
+	if h.config.Heartbeat.Enabled {
+		fields["active_clients"] = h.activeClients.Load()
+		fields["uptime_seconds"] = int(time.Since(h.startTime).Seconds())
+	}
+
+	fieldsJSON, _ := json.Marshal(fields)
+
+	return core.LogEntry{
+		Time:    time.Now(),
+		Source:  "logwisp-http",
+		Level:   "INFO",
+		Message: message,
+		Fields:  fieldsJSON,
+	}
 }
 
-// Returns the configured status endpoint path
-func (h *HTTPSink) GetStatusPath() string {
-	return h.config.StatusPath
-}
+// formatEntryForSSE formats a log entry into the SSE 'data:' format.
+func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry core.LogEntry) error {
+	formatted, err := h.formatter.Format(entry)
+	if err != nil {
+		return err
+	}
 
-// Returns the configured host
-func (h *HTTPSink) GetHost() string {
-	return h.config.Host
+	// Remove trailing newline if present (SSE adds its own)
+	formatted = bytes.TrimSuffix(formatted, []byte{'\n'})
+
+	// Multi-line content handler
+	lines := bytes.Split(formatted, []byte{'\n'})
+	for _, line := range lines {
+		// SSE needs "data: " prefix for each line based on W3C spec
+		fmt.Fprintf(w, "data: %s\n", line)
+	}
+	fmt.Fprintf(w, "\n") // Empty line to terminate event
+
+	return nil
 }

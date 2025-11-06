@@ -18,8 +18,10 @@ import (
 	"github.com/lixenwraith/log"
 )
 
+// logger is the global logger instance for the application.
 var logger *log.Logger
 
+// main is the entry point for the LogWisp application.
 func main() {
 	// Handle subcommands before any config loading
 	// This prevents flag conflicts with lixenwraith/config
@@ -185,6 +187,7 @@ func main() {
 	logger.Info("msg", "Shutdown complete")
 }
 
+// shutdownLogger gracefully shuts down the global logger.
 func shutdownLogger() {
 	if logger != nil {
 		if err := logger.Shutdown(2 * time.Second); err != nil {

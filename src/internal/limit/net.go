@@ -14,7 +14,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// DenialReason indicates why a request was denied
+// DenialReason indicates why a network request was denied.
 type DenialReason string
 
 // ** THIS PROGRAM IS IPV4 ONLY !!**
@@ -32,7 +32,7 @@ const (
 	ReasonInvalidIP         DenialReason = "Invalid IP address"
 )
 
-// NetLimiter manages net limiting for a transport
+// NetLimiter manages network-level limiting including ACLs, rate limits, and connection counts.
 type NetLimiter struct {
 	config *config.NetLimitConfig
 	logger *log.Logger
@@ -75,20 +75,21 @@ type NetLimiter struct {
 	cleanupDone chan struct{}
 }
 
+// ipLimiter holds the rate limiting and activity state for a single IP address.
 type ipLimiter struct {
 	bucket      *TokenBucket
 	lastSeen    time.Time
 	connections atomic.Int64
 }
 
-// Connection tracking with activity timestamp
+// connTracker tracks active connections and their last activity.
 type connTracker struct {
 	connections atomic.Int64
 	lastSeen    time.Time
 	mu          sync.Mutex
 }
 
-// Creates a new net limiter
+// NewNetLimiter creates a new network limiter from configuration.
 func NewNetLimiter(cfg *config.NetLimitConfig, logger *log.Logger) *NetLimiter {
 	if cfg == nil {
 		return nil
@@ -145,120 +146,7 @@ func NewNetLimiter(cfg *config.NetLimitConfig, logger *log.Logger) *NetLimiter {
 	return l
 }
 
-// parseIPLists parses and validates IP whitelist/blacklist
-func (l *NetLimiter) parseIPLists() {
-	// Parse whitelist
-	for _, entry := range l.config.IPWhitelist {
-		if ipNet := l.parseIPEntry(entry, "whitelist"); ipNet != nil {
-			l.ipWhitelist = append(l.ipWhitelist, ipNet)
-		}
-	}
-
-	// Parse blacklist
-	for _, entry := range l.config.IPBlacklist {
-		if ipNet := l.parseIPEntry(entry, "blacklist"); ipNet != nil {
-			l.ipBlacklist = append(l.ipBlacklist, ipNet)
-		}
-	}
-}
-
-// parseIPEntry parses a single IP or CIDR entry
-func (l *NetLimiter) parseIPEntry(entry, listType string) *net.IPNet {
-	// Handle single IP
-	if !strings.Contains(entry, "/") {
-		ip := net.ParseIP(entry)
-		if ip == nil {
-			l.logger.Warn("msg", "Invalid IP entry",
-				"component", "netlimit",
-				"list", listType,
-				"entry", entry)
-			return nil
-		}
-
-		// Reject IPv6
-		if ip.To4() == nil {
-			l.logger.Warn("msg", "IPv6 address rejected",
-				"component", "netlimit",
-				"list", listType,
-				"entry", entry,
-				"reason", IPv4Only)
-			return nil
-		}
-
-		return &net.IPNet{IP: ip.To4(), Mask: net.CIDRMask(32, 32)}
-	}
-
-	// Parse CIDR
-	ipAddr, ipNet, err := net.ParseCIDR(entry)
-	if err != nil {
-		l.logger.Warn("msg", "Invalid CIDR entry",
-			"component", "netlimit",
-			"list", listType,
-			"entry", entry,
-			"error", err)
-		return nil
-	}
-
-	// Reject IPv6 CIDR
-	if ipAddr.To4() == nil {
-		l.logger.Warn("msg", "IPv6 CIDR rejected",
-			"component", "netlimit",
-			"list", listType,
-			"entry", entry,
-			"reason", IPv4Only)
-		return nil
-	}
-
-	// Ensure mask is IPv4
-	_, bits := ipNet.Mask.Size()
-	if bits != 32 {
-		l.logger.Warn("msg", "Non-IPv4 CIDR mask rejected",
-			"component", "netlimit",
-			"list", listType,
-			"entry", entry,
-			"mask_bits", bits,
-			"reason", IPv4Only)
-		return nil
-	}
-
-	return &net.IPNet{IP: ipAddr.To4(), Mask: ipNet.Mask}
-}
-
-// checkIPAccess checks if an IP is allowed by ACLs
-func (l *NetLimiter) checkIPAccess(ip net.IP) DenialReason {
-	// 1. Check blacklist first (deny takes precedence)
-	for _, ipNet := range l.ipBlacklist {
-		if ipNet.Contains(ip) {
-			l.blockedByBlacklist.Add(1)
-			l.logger.Debug("msg", "IP denied by blacklist",
-				"component", "netlimit",
-				"ip", ip.String(),
-				"rule", ipNet.String())
-			return ReasonBlacklisted
-		}
-	}
-
-	// 2. If whitelist is configured, IP must be in it
-	if len(l.ipWhitelist) > 0 {
-		for _, ipNet := range l.ipWhitelist {
-			if ipNet.Contains(ip) {
-				l.logger.Debug("msg", "IP allowed by whitelist",
-					"component", "netlimit",
-					"ip", ip.String(),
-					"rule", ipNet.String())
-				return ReasonAllowed
-			}
-		}
-		l.blockedByWhitelist.Add(1)
-		l.logger.Debug("msg", "IP not in whitelist",
-			"component", "netlimit",
-			"ip", ip.String())
-		return ReasonNotWhitelisted
-	}
-
-	return ReasonAllowed
-}
-
+// Shutdown gracefully stops the net limiter's background cleanup processes.
 func (l *NetLimiter) Shutdown() {
 	if l == nil {
 		return
@@ -278,7 +166,7 @@ func (l *NetLimiter) Shutdown() {
 	}
 }
 
-// Checks if an HTTP request should be allowed: IP access control + connection limits (IP only) + calls
+// CheckHTTP checks if an incoming HTTP request is allowed based on all configured limits.
 func (l *NetLimiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int64, message string) {
 	if l == nil {
 		return true, 0, ""
@@ -361,20 +249,7 @@ func (l *NetLimiter) CheckHTTP(remoteAddr string) (allowed bool, statusCode int6
 	return true, 0, ""
 }
 
-// Update connection activity
-func (l *NetLimiter) updateConnectionActivity(ip string) {
-	l.connMu.RLock()
-	tracker, exists := l.ipConnections[ip]
-	l.connMu.RUnlock()
-
-	if exists {
-		tracker.mu.Lock()
-		tracker.lastSeen = time.Now()
-		tracker.mu.Unlock()
-	}
-}
-
-// Checks if a TCP connection should be allowed: IP access control + calls checkIPLimit()
+// CheckTCP checks if an incoming TCP connection is allowed based on ACLs and rate limits.
 func (l *NetLimiter) CheckTCP(remoteAddr net.Addr) bool {
 	if l == nil {
 		return true
@@ -422,11 +297,7 @@ func (l *NetLimiter) CheckTCP(remoteAddr net.Addr) bool {
 	return true
 }
 
-func isIPv4(ip net.IP) bool {
-	return ip.To4() != nil
-}
-
-// Tracks a new connection for an IP
+// AddConnection tracks a new connection from a specific remote address (for HTTP).
 func (l *NetLimiter) AddConnection(remoteAddr string) {
 	if l == nil {
 		return
@@ -477,7 +348,7 @@ func (l *NetLimiter) AddConnection(remoteAddr string) {
 		"connections", newCount)
 }
 
-// Removes a connection for an IP
+// RemoveConnection removes a tracked connection (for HTTP).
 func (l *NetLimiter) RemoveConnection(remoteAddr string) {
 	if l == nil {
 		return
@@ -527,7 +398,113 @@ func (l *NetLimiter) RemoveConnection(remoteAddr string) {
 	}
 }
 
-// Returns net limiter statistics
+// TrackConnection checks connection limits and tracks a new connection (for TCP).
+func (l *NetLimiter) TrackConnection(ip string, user string, token string) bool {
+	if l == nil {
+		return true
+	}
+
+	l.connMu.Lock()
+	defer l.connMu.Unlock()
+
+	// Check total connections limit (0 = disabled)
+	if l.config.MaxConnectionsTotal > 0 {
+		currentTotal := l.totalConnections.Load()
+		if currentTotal >= l.config.MaxConnectionsTotal {
+			l.blockedByConnLimit.Add(1)
+			l.logger.Debug("msg", "TCP connection blocked by total limit",
+				"component", "netlimit",
+				"current_total", currentTotal,
+				"max_connections_total", l.config.MaxConnectionsTotal)
+			return false
+		}
+	}
+
+	// Check per-IP connection limit (0 = disabled)
+	if l.config.MaxConnectionsPerIP > 0 && ip != "" {
+		tracker, exists := l.ipConnections[ip]
+		if !exists {
+			tracker = &connTracker{lastSeen: time.Now()}
+			l.ipConnections[ip] = tracker
+		}
+		if tracker.connections.Load() >= l.config.MaxConnectionsPerIP {
+			l.blockedByConnLimit.Add(1)
+			l.logger.Debug("msg", "TCP connection blocked by IP limit",
+				"component", "netlimit",
+				"ip", ip,
+				"current", tracker.connections.Load(),
+				"max", l.config.MaxConnectionsPerIP)
+			return false
+		}
+	}
+
+	// All checks passed, increment counters
+	l.totalConnections.Add(1)
+
+	if ip != "" && l.config.MaxConnectionsPerIP > 0 {
+		if tracker, exists := l.ipConnections[ip]; exists {
+			tracker.connections.Add(1)
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+
+	return true
+}
+
+// ReleaseConnection decrements connection counters when a connection is closed (for TCP).
+func (l *NetLimiter) ReleaseConnection(ip string, user string, token string) {
+	if l == nil {
+		return
+	}
+
+	l.connMu.Lock()
+	defer l.connMu.Unlock()
+
+	// Decrement total
+	if l.totalConnections.Load() > 0 {
+		l.totalConnections.Add(-1)
+	}
+
+	// Decrement IP counter
+	if ip != "" {
+		if tracker, exists := l.ipConnections[ip]; exists {
+			if tracker.connections.Load() > 0 {
+				tracker.connections.Add(-1)
+			}
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+
+	// Decrement user counter
+	if user != "" {
+		if tracker, exists := l.userConnections[user]; exists {
+			if tracker.connections.Load() > 0 {
+				tracker.connections.Add(-1)
+			}
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+
+	// Decrement token counter
+	if token != "" {
+		if tracker, exists := l.tokenConnections[token]; exists {
+			if tracker.connections.Load() > 0 {
+				tracker.connections.Add(-1)
+			}
+			tracker.mu.Lock()
+			tracker.lastSeen = time.Now()
+			tracker.mu.Unlock()
+		}
+	}
+}
+
+// GetStats returns a map of the net limiter's current statistics.
 func (l *NetLimiter) GetStats() map[string]any {
 	if l == nil {
 		return map[string]any{"enabled": false}
@@ -613,53 +590,26 @@ func (l *NetLimiter) GetStats() map[string]any {
 	}
 }
 
-// Performs IP net limit check (req/sec)
-func (l *NetLimiter) checkIPLimit(ip string) bool {
-	// Validate IP format
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil || !isIPv4(parsedIP) {
-		l.logger.Warn("msg", "Invalid or non-IPv4 address in rate limiter",
-			"component", "netlimit",
-			"ip", ip)
-		return false
-	}
+// cleanupLoop runs a periodic cleanup of stale limiter and tracker entries.
+func (l *NetLimiter) cleanupLoop() {
+	defer close(l.cleanupDone)
 
-	// Maybe run cleanup
-	l.maybeCleanup()
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
 
-	// IP limit
-	l.ipMu.Lock()
-	lim, exists := l.ipLimiters[ip]
-	if !exists {
-		// Create new limiter for this IP
-		lim = &ipLimiter{
-			bucket: NewTokenBucket(
-				float64(l.config.BurstSize),
-				l.config.RequestsPerSecond,
-			),
-			lastSeen: time.Now(),
+	for {
+		select {
+		case <-l.ctx.Done():
+			// Exit when context is cancelled
+			l.logger.Debug("msg", "Cleanup loop stopping", "component", "netlimit")
+			return
+		case <-ticker.C:
+			l.cleanup()
 		}
-		l.ipLimiters[ip] = lim
-		l.uniqueIPs.Add(1)
-
-		l.logger.Debug("msg", "Created new IP limiter",
-			"ip", ip,
-			"total_ips", l.uniqueIPs.Load())
-	} else {
-		lim.lastSeen = time.Now()
 	}
-	l.ipMu.Unlock()
-
-	// Rate limit check
-	allowed := lim.bucket.Allow()
-	if !allowed {
-		l.blockedByRateLimit.Add(1)
-	}
-
-	return allowed
 }
 
-// Runs cleanup if enough time has passed
+// maybeCleanup triggers an asynchronous cleanup if enough time has passed since the last one.
 func (l *NetLimiter) maybeCleanup() {
 	l.cleanupMu.Lock()
 
@@ -685,7 +635,7 @@ func (l *NetLimiter) maybeCleanup() {
 	}()
 }
 
-// Removes stale IP limiters
+// cleanup removes stale IP limiters and connection trackers from memory.
 func (l *NetLimiter) cleanup() {
 	staleTimeout := 5 * time.Minute
 	now := time.Now()
@@ -767,127 +717,180 @@ func (l *NetLimiter) cleanup() {
 	}
 }
 
-// Runs periodic cleanup
-func (l *NetLimiter) cleanupLoop() {
-	defer close(l.cleanupDone)
+// checkIPAccess verifies if an IP address is permitted by the configured ACLs.
+func (l *NetLimiter) checkIPAccess(ip net.IP) DenialReason {
+	// 1. Check blacklist first (deny takes precedence)
+	for _, ipNet := range l.ipBlacklist {
+		if ipNet.Contains(ip) {
+			l.blockedByBlacklist.Add(1)
+			l.logger.Debug("msg", "IP denied by blacklist",
+				"component", "netlimit",
+				"ip", ip.String(),
+				"rule", ipNet.String())
+			return ReasonBlacklisted
+		}
+	}
 
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
+	// 2. If whitelist is configured, IP must be in it
+	if len(l.ipWhitelist) > 0 {
+		for _, ipNet := range l.ipWhitelist {
+			if ipNet.Contains(ip) {
+				l.logger.Debug("msg", "IP allowed by whitelist",
+					"component", "netlimit",
+					"ip", ip.String(),
+					"rule", ipNet.String())
+				return ReasonAllowed
+			}
+		}
+		l.blockedByWhitelist.Add(1)
+		l.logger.Debug("msg", "IP not in whitelist",
+			"component", "netlimit",
+			"ip", ip.String())
+		return ReasonNotWhitelisted
+	}
 
-	for {
-		select {
-		case <-l.ctx.Done():
-			// Exit when context is cancelled
-			l.logger.Debug("msg", "Cleanup loop stopping", "component", "netlimit")
-			return
-		case <-ticker.C:
-			l.cleanup()
+	return ReasonAllowed
+}
+
+// checkIPLimit enforces the requests-per-second limit for a given IP address.
+func (l *NetLimiter) checkIPLimit(ip string) bool {
+	// Validate IP format
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil || !isIPv4(parsedIP) {
+		l.logger.Warn("msg", "Invalid or non-IPv4 address in rate limiter",
+			"component", "netlimit",
+			"ip", ip)
+		return false
+	}
+
+	// Maybe run cleanup
+	l.maybeCleanup()
+
+	// IP limit
+	l.ipMu.Lock()
+	lim, exists := l.ipLimiters[ip]
+	if !exists {
+		// Create new limiter for this IP
+		lim = &ipLimiter{
+			bucket: NewTokenBucket(
+				float64(l.config.BurstSize),
+				l.config.RequestsPerSecond,
+			),
+			lastSeen: time.Now(),
+		}
+		l.ipLimiters[ip] = lim
+		l.uniqueIPs.Add(1)
+
+		l.logger.Debug("msg", "Created new IP limiter",
+			"ip", ip,
+			"total_ips", l.uniqueIPs.Load())
+	} else {
+		lim.lastSeen = time.Now()
+	}
+	l.ipMu.Unlock()
+
+	// Rate limit check
+	allowed := lim.bucket.Allow()
+	if !allowed {
+		l.blockedByRateLimit.Add(1)
+	}
+
+	return allowed
+}
+
+// parseIPLists converts the string-based IP rules from the config into parsed net.IPNet objects.
+func (l *NetLimiter) parseIPLists() {
+	// Parse whitelist
+	for _, entry := range l.config.IPWhitelist {
+		if ipNet := l.parseIPEntry(entry, "whitelist"); ipNet != nil {
+			l.ipWhitelist = append(l.ipWhitelist, ipNet)
+		}
+	}
+
+	// Parse blacklist
+	for _, entry := range l.config.IPBlacklist {
+		if ipNet := l.parseIPEntry(entry, "blacklist"); ipNet != nil {
+			l.ipBlacklist = append(l.ipBlacklist, ipNet)
 		}
 	}
 }
 
-// Tracks a new connection with optional user/token info: Connection limits (IP/user/token/total) for TCP only
-func (l *NetLimiter) TrackConnection(ip string, user string, token string) bool {
-	if l == nil {
-		return true
-	}
-
-	l.connMu.Lock()
-	defer l.connMu.Unlock()
-
-	// Check total connections limit (0 = disabled)
-	if l.config.MaxConnectionsTotal > 0 {
-		currentTotal := l.totalConnections.Load()
-		if currentTotal >= l.config.MaxConnectionsTotal {
-			l.blockedByConnLimit.Add(1)
-			l.logger.Debug("msg", "TCP connection blocked by total limit",
+// parseIPEntry parses a single IP address or CIDR notation string into a net.IPNet object.
+func (l *NetLimiter) parseIPEntry(entry, listType string) *net.IPNet {
+	// Handle single IP
+	if !strings.Contains(entry, "/") {
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			l.logger.Warn("msg", "Invalid IP entry",
 				"component", "netlimit",
-				"current_total", currentTotal,
-				"max_connections_total", l.config.MaxConnectionsTotal)
-			return false
+				"list", listType,
+				"entry", entry)
+			return nil
 		}
-	}
 
-	// Check per-IP connection limit (0 = disabled)
-	if l.config.MaxConnectionsPerIP > 0 && ip != "" {
-		tracker, exists := l.ipConnections[ip]
-		if !exists {
-			tracker = &connTracker{lastSeen: time.Now()}
-			l.ipConnections[ip] = tracker
-		}
-		if tracker.connections.Load() >= l.config.MaxConnectionsPerIP {
-			l.blockedByConnLimit.Add(1)
-			l.logger.Debug("msg", "TCP connection blocked by IP limit",
+		// Reject IPv6
+		if ip.To4() == nil {
+			l.logger.Warn("msg", "IPv6 address rejected",
 				"component", "netlimit",
-				"ip", ip,
-				"current", tracker.connections.Load(),
-				"max", l.config.MaxConnectionsPerIP)
-			return false
+				"list", listType,
+				"entry", entry,
+				"reason", IPv4Only)
+			return nil
 		}
+
+		return &net.IPNet{IP: ip.To4(), Mask: net.CIDRMask(32, 32)}
 	}
 
-	// All checks passed, increment counters
-	l.totalConnections.Add(1)
-
-	if ip != "" && l.config.MaxConnectionsPerIP > 0 {
-		if tracker, exists := l.ipConnections[ip]; exists {
-			tracker.connections.Add(1)
-			tracker.mu.Lock()
-			tracker.lastSeen = time.Now()
-			tracker.mu.Unlock()
-		}
+	// Parse CIDR
+	ipAddr, ipNet, err := net.ParseCIDR(entry)
+	if err != nil {
+		l.logger.Warn("msg", "Invalid CIDR entry",
+			"component", "netlimit",
+			"list", listType,
+			"entry", entry,
+			"error", err)
+		return nil
 	}
 
-	return true
+	// Reject IPv6 CIDR
+	if ipAddr.To4() == nil {
+		l.logger.Warn("msg", "IPv6 CIDR rejected",
+			"component", "netlimit",
+			"list", listType,
+			"entry", entry,
+			"reason", IPv4Only)
+		return nil
+	}
+
+	// Ensure mask is IPv4
+	_, bits := ipNet.Mask.Size()
+	if bits != 32 {
+		l.logger.Warn("msg", "Non-IPv4 CIDR mask rejected",
+			"component", "netlimit",
+			"list", listType,
+			"entry", entry,
+			"mask_bits", bits,
+			"reason", IPv4Only)
+		return nil
+	}
+
+	return &net.IPNet{IP: ipAddr.To4(), Mask: ipNet.Mask}
 }
 
-// Releases a tracked connection
-func (l *NetLimiter) ReleaseConnection(ip string, user string, token string) {
-	if l == nil {
-		return
-	}
+// updateConnectionActivity updates the last seen timestamp for a connection tracker.
+func (l *NetLimiter) updateConnectionActivity(ip string) {
+	l.connMu.RLock()
+	tracker, exists := l.ipConnections[ip]
+	l.connMu.RUnlock()
 
-	l.connMu.Lock()
-	defer l.connMu.Unlock()
-
-	// Decrement total
-	if l.totalConnections.Load() > 0 {
-		l.totalConnections.Add(-1)
+	if exists {
+		tracker.mu.Lock()
+		tracker.lastSeen = time.Now()
+		tracker.mu.Unlock()
 	}
+}
 
-	// Decrement IP counter
-	if ip != "" {
-		if tracker, exists := l.ipConnections[ip]; exists {
-			if tracker.connections.Load() > 0 {
-				tracker.connections.Add(-1)
-			}
-			tracker.mu.Lock()
-			tracker.lastSeen = time.Now()
-			tracker.mu.Unlock()
-		}
-	}
-
-	// Decrement user counter
-	if user != "" {
-		if tracker, exists := l.userConnections[user]; exists {
-			if tracker.connections.Load() > 0 {
-				tracker.connections.Add(-1)
-			}
-			tracker.mu.Lock()
-			tracker.lastSeen = time.Now()
-			tracker.mu.Unlock()
-		}
-	}
-
-	// Decrement token counter
-	if token != "" {
-		if tracker, exists := l.tokenConnections[token]; exists {
-			if tracker.connections.Load() > 0 {
-				tracker.connections.Add(-1)
-			}
-			tracker.mu.Lock()
-			tracker.lastSeen = time.Now()
-			tracker.mu.Unlock()
-		}
-	}
+// isIPv4 is a helper function to check if a net.IP is an IPv4 address.
+func isIPv4(ip net.IP) bool {
+	return ip.To4() != nil
 }

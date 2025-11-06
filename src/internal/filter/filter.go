@@ -13,7 +13,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Applies regex-based filtering to log entries
+// Filter applies regex-based filtering to log entries.
 type Filter struct {
 	config   config.FilterConfig
 	patterns []*regexp.Regexp
@@ -26,7 +26,7 @@ type Filter struct {
 	totalDropped   atomic.Uint64
 }
 
-// Creates a new filter from configuration
+// NewFilter creates a new filter from a configuration.
 func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 	// Set defaults
 	if cfg.Type == "" {
@@ -60,7 +60,7 @@ func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 	return f, nil
 }
 
-// Checks if a log entry should be passed through
+// Apply determines if a log entry should be passed through based on the filter's rules.
 func (f *Filter) Apply(entry core.LogEntry) bool {
 	f.totalProcessed.Add(1)
 
@@ -130,7 +130,44 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 	return shouldPass
 }
 
-// Checks if text matches the patterns according to the logic
+// GetStats returns the filter's current statistics.
+func (f *Filter) GetStats() map[string]any {
+	return map[string]any{
+		"type":            f.config.Type,
+		"logic":           f.config.Logic,
+		"pattern_count":   len(f.patterns),
+		"total_processed": f.totalProcessed.Load(),
+		"total_matched":   f.totalMatched.Load(),
+		"total_dropped":   f.totalDropped.Load(),
+	}
+}
+
+// UpdatePatterns allows for dynamic, thread-safe updates to the filter's regex patterns.
+func (f *Filter) UpdatePatterns(patterns []string) error {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+
+	// Compile all patterns first
+	for i, pattern := range patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern[%d] '%s': %w", i, pattern, err)
+		}
+		compiled = append(compiled, re)
+	}
+
+	// Update atomically
+	f.mu.Lock()
+	f.patterns = compiled
+	f.config.Patterns = patterns
+	f.mu.Unlock()
+
+	f.logger.Info("msg", "Filter patterns updated",
+		"component", "filter",
+		"pattern_count", len(patterns))
+	return nil
+}
+
+// matches checks if the given text matches the filter's patterns according to its logic.
 func (f *Filter) matches(text string) bool {
 	switch f.config.Logic {
 	case config.FilterLogicOr:
@@ -158,41 +195,4 @@ func (f *Filter) matches(text string) bool {
 			"logic", f.config.Logic)
 		return false
 	}
-}
-
-// Returns filter statistics
-func (f *Filter) GetStats() map[string]any {
-	return map[string]any{
-		"type":            f.config.Type,
-		"logic":           f.config.Logic,
-		"pattern_count":   len(f.patterns),
-		"total_processed": f.totalProcessed.Load(),
-		"total_matched":   f.totalMatched.Load(),
-		"total_dropped":   f.totalDropped.Load(),
-	}
-}
-
-// Allows dynamic pattern updates
-func (f *Filter) UpdatePatterns(patterns []string) error {
-	compiled := make([]*regexp.Regexp, 0, len(patterns))
-
-	// Compile all patterns first
-	for i, pattern := range patterns {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			return fmt.Errorf("invalid regex pattern[%d] '%s': %w", i, pattern, err)
-		}
-		compiled = append(compiled, re)
-	}
-
-	// Update atomically
-	f.mu.Lock()
-	f.patterns = compiled
-	f.config.Patterns = patterns
-	f.mu.Unlock()
-
-	f.logger.Info("msg", "Filter patterns updated",
-		"component", "filter",
-		"pattern_count", len(patterns))
-	return nil
 }

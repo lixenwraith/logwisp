@@ -5,39 +5,39 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/base64"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
+	"logwisp/src/internal/session"
+	ltls "logwisp/src/internal/tls"
 	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
 	"github.com/valyala/fasthttp"
 )
 
-// TODO: implement heartbeat for HTTP Client Sink, similar to HTTP Sink
-// Forwards log entries to a remote HTTP endpoint
+// TODO: add heartbeat
+// HTTPClientSink forwards log entries to a remote HTTP endpoint.
 type HTTPClientSink struct {
-	input         chan core.LogEntry
-	config        *config.HTTPClientSinkOptions
-	client        *fasthttp.Client
-	batch         []core.LogEntry
-	batchMu       sync.Mutex
-	done          chan struct{}
-	wg            sync.WaitGroup
-	startTime     time.Time
-	logger        *log.Logger
-	formatter     format.Formatter
-	authenticator *auth.Authenticator
+	input          chan core.LogEntry
+	config         *config.HTTPClientSinkOptions
+	client         *fasthttp.Client
+	batch          []core.LogEntry
+	batchMu        sync.Mutex
+	done           chan struct{}
+	wg             sync.WaitGroup
+	startTime      time.Time
+	logger         *log.Logger
+	formatter      format.Formatter
+	sessionID      string
+	sessionManager *session.Manager
+	tlsManager     *ltls.ClientManager
 
 	// Statistics
 	totalProcessed    atomic.Uint64
@@ -48,20 +48,21 @@ type HTTPClientSink struct {
 	activeConnections atomic.Int64
 }
 
-// Creates a new HTTP client sink
+// NewHTTPClientSink creates a new HTTP client sink.
 func NewHTTPClientSink(opts *config.HTTPClientSinkOptions, logger *log.Logger, formatter format.Formatter) (*HTTPClientSink, error) {
 	if opts == nil {
 		return nil, fmt.Errorf("HTTP client sink options cannot be nil")
 	}
 
 	h := &HTTPClientSink{
-		config:    opts,
-		input:     make(chan core.LogEntry, opts.BufferSize),
-		batch:     make([]core.LogEntry, 0, opts.BatchSize),
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
-		formatter: formatter,
+		config:         opts,
+		input:          make(chan core.LogEntry, opts.BufferSize),
+		batch:          make([]core.LogEntry, 0, opts.BatchSize),
+		done:           make(chan struct{}),
+		startTime:      time.Now(),
+		logger:         logger,
+		formatter:      formatter,
+		sessionManager: session.NewManager(30 * time.Minute),
 	}
 	h.lastProcessed.Store(time.Time{})
 	h.lastBatchSent.Store(time.Time{})
@@ -75,54 +76,48 @@ func NewHTTPClientSink(opts *config.HTTPClientSinkOptions, logger *log.Logger, f
 		DisableHeaderNamesNormalizing: true,
 	}
 
-	// Configure TLS if using HTTPS
+	// Configure TLS for HTTPS
 	if strings.HasPrefix(opts.URL, "https://") {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: opts.InsecureSkipVerify,
-		}
-
-		// Use TLS config if provided
-		if opts.TLS != nil {
-			// Load custom CA for server verification
-			if opts.TLS.CAFile != "" {
-				caCert, err := os.ReadFile(opts.TLS.CAFile)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read CA file '%s': %w", opts.TLS.CAFile, err)
-				}
-				caCertPool := x509.NewCertPool()
-				if !caCertPool.AppendCertsFromPEM(caCert) {
-					return nil, fmt.Errorf("failed to parse CA certificate from '%s'", opts.TLS.CAFile)
-				}
-				tlsConfig.RootCAs = caCertPool
-				logger.Debug("msg", "Custom CA loaded for server verification",
-					"component", "http_client_sink",
-					"ca_file", opts.TLS.CAFile)
+		if opts.TLS != nil && opts.TLS.Enabled {
+			// Use the new ClientManager with the clear client-specific config
+			tlsManager, err := ltls.NewClientManager(opts.TLS, logger)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create TLS client manager: %w", err)
 			}
+			h.tlsManager = tlsManager
+			// Get the generated config
+			h.client.TLSConfig = tlsManager.GetConfig()
 
-			// Load client certificate for mTLS if provided
-			if opts.TLS.CertFile != "" && opts.TLS.KeyFile != "" {
-				cert, err := tls.LoadX509KeyPair(opts.TLS.CertFile, opts.TLS.KeyFile)
-				if err != nil {
-					return nil, fmt.Errorf("failed to load client certificate: %w", err)
-				}
-				tlsConfig.Certificates = []tls.Certificate{cert}
-				logger.Info("msg", "Client certificate loaded for mTLS",
-					"component", "http_client_sink",
-					"cert_file", opts.TLS.CertFile)
+			logger.Info("msg", "Client TLS configured",
+				"component", "http_client_sink",
+				"has_client_cert", opts.TLS.ClientCertFile != "", // Clearer check
+				"has_server_ca", opts.TLS.ServerCAFile != "", // Clearer check
+				"min_version", opts.TLS.MinVersion)
+		} else if opts.InsecureSkipVerify { // Use the new clear field
+			// TODO: document this behavior
+			h.client.TLSConfig = &tls.Config{
+				InsecureSkipVerify: true,
 			}
 		}
-
-		h.client.TLSConfig = tlsConfig
 	}
 
 	return h, nil
 }
 
+// Input returns the channel for sending log entries.
 func (h *HTTPClientSink) Input() chan<- core.LogEntry {
 	return h.input
 }
 
+// Start begins the processing and batching loops.
 func (h *HTTPClientSink) Start(ctx context.Context) error {
+	// Create session for HTTP client sink lifetime
+	sess := h.sessionManager.CreateSession(h.config.URL, "http_client_sink", map[string]any{
+		"batch_size": h.config.BatchSize,
+		"timeout":    h.config.Timeout,
+	})
+	h.sessionID = sess.ID
+
 	h.wg.Add(2)
 	go h.processLoop(ctx)
 	go h.batchTimer(ctx)
@@ -131,10 +126,12 @@ func (h *HTTPClientSink) Start(ctx context.Context) error {
 		"component", "http_client_sink",
 		"url", h.config.URL,
 		"batch_size", h.config.BatchSize,
-		"batch_delay_ms", h.config.BatchDelayMS)
+		"batch_delay_ms", h.config.BatchDelayMS,
+		"session_id", h.sessionID)
 	return nil
 }
 
+// Stop gracefully shuts down the sink, sending any remaining batched entries.
 func (h *HTTPClientSink) Stop() {
 	h.logger.Info("msg", "Stopping HTTP client sink")
 	close(h.done)
@@ -151,12 +148,21 @@ func (h *HTTPClientSink) Stop() {
 		h.batchMu.Unlock()
 	}
 
+	// Remove session and stop manager
+	if h.sessionID != "" {
+		h.sessionManager.RemoveSession(h.sessionID)
+	}
+	if h.sessionManager != nil {
+		h.sessionManager.Stop()
+	}
+
 	h.logger.Info("msg", "HTTP client sink stopped",
 		"total_processed", h.totalProcessed.Load(),
 		"total_batches", h.totalBatches.Load(),
 		"failed_batches", h.failedBatches.Load())
 }
 
+// GetStats returns the sink's statistics.
 func (h *HTTPClientSink) GetStats() SinkStats {
 	lastProc, _ := h.lastProcessed.Load().(time.Time)
 	lastBatch, _ := h.lastBatchSent.Load().(time.Time)
@@ -164,6 +170,23 @@ func (h *HTTPClientSink) GetStats() SinkStats {
 	h.batchMu.Lock()
 	pendingEntries := len(h.batch)
 	h.batchMu.Unlock()
+
+	// Get session information
+	var sessionInfo map[string]any
+	if h.sessionID != "" {
+		if sess, exists := h.sessionManager.GetSession(h.sessionID); exists {
+			sessionInfo = map[string]any{
+				"session_id":    sess.ID,
+				"created_at":    sess.CreatedAt,
+				"last_activity": sess.LastActivity,
+			}
+		}
+	}
+
+	var tlsStats map[string]any
+	if h.tlsManager != nil {
+		tlsStats = h.tlsManager.GetStats()
+	}
 
 	return SinkStats{
 		Type:              "http_client",
@@ -178,10 +201,13 @@ func (h *HTTPClientSink) GetStats() SinkStats {
 			"total_batches":   h.totalBatches.Load(),
 			"failed_batches":  h.failedBatches.Load(),
 			"last_batch_sent": lastBatch,
+			"session":         sessionInfo,
+			"tls":             tlsStats,
 		},
 	}
 }
 
+// processLoop collects incoming log entries into a batch.
 func (h *HTTPClientSink) processLoop(ctx context.Context) {
 	defer h.wg.Done()
 
@@ -219,6 +245,7 @@ func (h *HTTPClientSink) processLoop(ctx context.Context) {
 	}
 }
 
+// batchTimer periodically triggers sending of the current batch.
 func (h *HTTPClientSink) batchTimer(ctx context.Context) {
 	defer h.wg.Done()
 
@@ -248,6 +275,7 @@ func (h *HTTPClientSink) batchTimer(ctx context.Context) {
 	}
 }
 
+// sendBatch sends a batch of log entries to the remote endpoint with retry logic.
 func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 	h.activeConnections.Add(1)
 	defer h.activeConnections.Add(-1)
@@ -293,7 +321,6 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 	var lastErr error
 	retryDelay := time.Duration(h.config.RetryDelayMS) * time.Millisecond
 
-	// TODO: verify retry loop placement is correct or should it be after acquiring resources (req :=....)
 	for attempt := int64(0); attempt <= h.config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			// Wait before retry
@@ -322,24 +349,6 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 		req.SetBody(body)
 
 		req.Header.Set("User-Agent", fmt.Sprintf("LogWisp/%s", version.Short()))
-
-		// Add authentication based on auth type
-		switch h.config.Auth.Type {
-		case "basic":
-			creds := h.config.Auth.Username + ":" + h.config.Auth.Password
-			encodedCreds := base64.StdEncoding.EncodeToString([]byte(creds))
-			req.Header.Set("Authorization", "Basic "+encodedCreds)
-
-		case "token":
-			req.Header.Set("Authorization", "Token "+h.config.Auth.Token)
-
-		case "mtls":
-			// mTLS auth is handled at TLS layer via client certificates
-			// No Authorization header needed
-
-		case "none":
-			// No authentication
-		}
 
 		// Send request
 		err := h.client.DoTimeout(req, resp, time.Duration(h.config.Timeout)*time.Second)
@@ -370,6 +379,12 @@ func (h *HTTPClientSink) sendBatch(batch []core.LogEntry) {
 		// Check response status
 		if statusCode >= 200 && statusCode < 300 {
 			// Success
+
+			// Update session activity on successful batch send
+			if h.sessionID != "" {
+				h.sessionManager.UpdateActivity(h.sessionID)
+			}
+
 			h.logger.Debug("msg", "Batch sent successfully",
 				"component", "http_client_sink",
 				"batch_size", len(batch),

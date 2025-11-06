@@ -10,14 +10,14 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Manages OS signals
+// SignalHandler manages OS signals for shutdown and configuration reloads.
 type SignalHandler struct {
 	reloadManager *ReloadManager
 	logger        *log.Logger
 	sigChan       chan os.Signal
 }
 
-// Creates a signal handler
+// NewSignalHandler creates a new signal handler.
 func NewSignalHandler(rm *ReloadManager, logger *log.Logger) *SignalHandler {
 	sh := &SignalHandler{
 		reloadManager: rm,
@@ -36,7 +36,7 @@ func NewSignalHandler(rm *ReloadManager, logger *log.Logger) *SignalHandler {
 	return sh
 }
 
-// Processes signals
+// Handle blocks and processes incoming OS signals.
 func (sh *SignalHandler) Handle(ctx context.Context) os.Signal {
 	for {
 		select {
@@ -58,7 +58,7 @@ func (sh *SignalHandler) Handle(ctx context.Context) os.Signal {
 	}
 }
 
-// Cleans up signal handling
+// Stop cleans up the signal handling channel.
 func (sh *SignalHandler) Stop() {
 	signal.Stop(sh.sigChan)
 	close(sh.sigChan)

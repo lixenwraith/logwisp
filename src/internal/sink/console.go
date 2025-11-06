@@ -16,7 +16,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// ConsoleSink writes log entries to the console (stdout/stderr) using an dedicated logger instance
+// ConsoleSink writes log entries to the console (stdout/stderr) using an dedicated logger instance.
 type ConsoleSink struct {
 	config    *config.ConsoleSinkOptions
 	input     chan core.LogEntry
@@ -31,7 +31,7 @@ type ConsoleSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-// Creates a new console sink
+// NewConsoleSink creates a new console sink.
 func NewConsoleSink(opts *config.ConsoleSinkOptions, appLogger *log.Logger, formatter format.Formatter) (*ConsoleSink, error) {
 	if opts == nil {
 		return nil, fmt.Errorf("console sink options cannot be nil")
@@ -73,10 +73,12 @@ func NewConsoleSink(opts *config.ConsoleSinkOptions, appLogger *log.Logger, form
 	return s, nil
 }
 
+// Input returns the channel for sending log entries.
 func (s *ConsoleSink) Input() chan<- core.LogEntry {
 	return s.input
 }
 
+// Start begins the processing loop for the sink.
 func (s *ConsoleSink) Start(ctx context.Context) error {
 	// Start the internal writer's processing goroutine.
 	if err := s.writer.Start(); err != nil {
@@ -89,6 +91,7 @@ func (s *ConsoleSink) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully shuts down the sink.
 func (s *ConsoleSink) Stop() {
 	target := s.writer.GetConfig().ConsoleTarget
 	s.logger.Info("msg", "Stopping console sink", "target", target)
@@ -103,6 +106,7 @@ func (s *ConsoleSink) Stop() {
 	s.logger.Info("msg", "Console sink stopped", "target", target)
 }
 
+// GetStats returns the sink's statistics.
 func (s *ConsoleSink) GetStats() SinkStats {
 	lastProc, _ := s.lastProcessed.Load().(time.Time)
 
@@ -117,7 +121,7 @@ func (s *ConsoleSink) GetStats() SinkStats {
 	}
 }
 
-// processLoop reads entries, formats them, and passes them to the internal writer.
+// processLoop reads entries, formats them, and writes to the console.
 func (s *ConsoleSink) processLoop(ctx context.Context) {
 	for {
 		select {

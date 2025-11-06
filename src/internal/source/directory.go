@@ -19,7 +19,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Monitors a directory for log files
+// DirectorySource monitors a directory for log files and tails them.
 type DirectorySource struct {
 	config         *config.DirectorySourceOptions
 	subscribers    []chan core.LogEntry
@@ -35,7 +35,7 @@ type DirectorySource struct {
 	logger         *log.Logger
 }
 
-// Creates a new directory monitoring source
+// NewDirectorySource creates a new directory monitoring source.
 func NewDirectorySource(opts *config.DirectorySourceOptions, logger *log.Logger) (*DirectorySource, error) {
 	if opts == nil {
 		return nil, fmt.Errorf("directory source options cannot be nil")
@@ -52,6 +52,7 @@ func NewDirectorySource(opts *config.DirectorySourceOptions, logger *log.Logger)
 	return ds, nil
 }
 
+// Subscribe returns a channel for receiving log entries.
 func (ds *DirectorySource) Subscribe() <-chan core.LogEntry {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
@@ -61,6 +62,7 @@ func (ds *DirectorySource) Subscribe() <-chan core.LogEntry {
 	return ch
 }
 
+// Start begins the directory monitoring loop.
 func (ds *DirectorySource) Start() error {
 	ds.ctx, ds.cancel = context.WithCancel(context.Background())
 	ds.wg.Add(1)
@@ -74,6 +76,7 @@ func (ds *DirectorySource) Start() error {
 	return nil
 }
 
+// Stop gracefully shuts down the directory source and all file watchers.
 func (ds *DirectorySource) Stop() {
 	if ds.cancel != nil {
 		ds.cancel()
@@ -82,7 +85,7 @@ func (ds *DirectorySource) Stop() {
 
 	ds.mu.Lock()
 	for _, w := range ds.watchers {
-		w.close()
+		w.stop()
 	}
 	for _, ch := range ds.subscribers {
 		close(ch)
@@ -94,6 +97,7 @@ func (ds *DirectorySource) Stop() {
 		"path", ds.config.Path)
 }
 
+// GetStats returns the source's statistics, including active watchers.
 func (ds *DirectorySource) GetStats() SourceStats {
 	lastEntry, _ := ds.lastEntryTime.Load().(time.Time)
 
@@ -128,24 +132,7 @@ func (ds *DirectorySource) GetStats() SourceStats {
 	}
 }
 
-func (ds *DirectorySource) publish(entry core.LogEntry) {
-	ds.mu.RLock()
-	defer ds.mu.RUnlock()
-
-	ds.totalEntries.Add(1)
-	ds.lastEntryTime.Store(entry.Time)
-
-	for _, ch := range ds.subscribers {
-		select {
-		case ch <- entry:
-		default:
-			ds.droppedEntries.Add(1)
-			ds.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
-				"component", "directory_source")
-		}
-	}
-}
-
+// monitorLoop periodically scans the directory for new or changed files.
 func (ds *DirectorySource) monitorLoop() {
 	defer ds.wg.Done()
 
@@ -164,6 +151,7 @@ func (ds *DirectorySource) monitorLoop() {
 	}
 }
 
+// checkTargets finds matching files and ensures watchers are running for them.
 func (ds *DirectorySource) checkTargets() {
 	files, err := ds.scanDirectory()
 	if err != nil {
@@ -182,34 +170,7 @@ func (ds *DirectorySource) checkTargets() {
 	ds.cleanupWatchers()
 }
 
-func (ds *DirectorySource) scanDirectory() ([]string, error) {
-	entries, err := os.ReadDir(ds.config.Path)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert glob pattern to regex
-	regexPattern := globToRegex(ds.config.Pattern)
-	re, err := regexp.Compile(regexPattern)
-	if err != nil {
-		return nil, fmt.Errorf("invalid pattern regex: %w", err)
-	}
-
-	var files []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		if re.MatchString(name) {
-			files = append(files, filepath.Join(ds.config.Path, name))
-		}
-	}
-
-	return files, nil
-}
-
+// ensureWatcher creates and starts a new file watcher if one doesn't exist for the given path.
 func (ds *DirectorySource) ensureWatcher(path string) {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
@@ -247,6 +208,7 @@ func (ds *DirectorySource) ensureWatcher(path string) {
 	}()
 }
 
+// cleanupWatchers stops and removes watchers for files that no longer exist.
 func (ds *DirectorySource) cleanupWatchers() {
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
@@ -262,6 +224,55 @@ func (ds *DirectorySource) cleanupWatchers() {
 	}
 }
 
+// publish sends a log entry to all subscribers.
+func (ds *DirectorySource) publish(entry core.LogEntry) {
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+
+	ds.totalEntries.Add(1)
+	ds.lastEntryTime.Store(entry.Time)
+
+	for _, ch := range ds.subscribers {
+		select {
+		case ch <- entry:
+		default:
+			ds.droppedEntries.Add(1)
+			ds.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
+				"component", "directory_source")
+		}
+	}
+}
+
+// scanDirectory finds all files in the configured path that match the pattern.
+func (ds *DirectorySource) scanDirectory() ([]string, error) {
+	entries, err := os.ReadDir(ds.config.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert glob pattern to regex
+	regexPattern := globToRegex(ds.config.Pattern)
+	re, err := regexp.Compile(regexPattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pattern regex: %w", err)
+	}
+
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if re.MatchString(name) {
+			files = append(files, filepath.Join(ds.config.Path, name))
+		}
+	}
+
+	return files, nil
+}
+
+// globToRegex converts a simple glob pattern to a regular expression.
 func globToRegex(glob string) string {
 	regex := regexp.QuoteMeta(glob)
 	regex = strings.ReplaceAll(regex, `\*`, `.*`)

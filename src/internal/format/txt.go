@@ -14,14 +14,14 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Produces human-readable text logs using templates
+// TxtFormatter produces human-readable, template-based text logs.
 type TxtFormatter struct {
 	config   *config.TxtFormatterOptions
 	template *template.Template
 	logger   *log.Logger
 }
 
-// Creates a new text formatter
+// NewTxtFormatter creates a new text formatter from a template configuration.
 func NewTxtFormatter(opts *config.TxtFormatterOptions, logger *log.Logger) (*TxtFormatter, error) {
 	f := &TxtFormatter{
 		config: opts,
@@ -47,7 +47,7 @@ func NewTxtFormatter(opts *config.TxtFormatterOptions, logger *log.Logger) (*Txt
 	return f, nil
 }
 
-// Formats the log entry using the template
+// Format transforms a LogEntry into a text byte slice using the configured template.
 func (f *TxtFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Prepare data for template
 	data := map[string]any{
@@ -91,7 +91,7 @@ func (f *TxtFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	return result, nil
 }
 
-// Returns the formatter name
+// Name returns the formatter's type name.
 func (f *TxtFormatter) Name() string {
 	return "txt"
 }

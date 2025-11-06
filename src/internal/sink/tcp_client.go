@@ -2,28 +2,25 @@
 package sink
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"logwisp/src/internal/auth"
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
+	"logwisp/src/internal/session"
 
 	"github.com/lixenwraith/log"
 )
 
-// TODO: implement heartbeat for TCP Client Sink, similar to TCP Sink
-// Forwards log entries to a remote TCP endpoint
+// TODO: add heartbeat
+// TCPClientSink forwards log entries to a remote TCP endpoint.
 type TCPClientSink struct {
 	input     chan core.LogEntry
 	config    *config.TCPClientSinkOptions
@@ -36,7 +33,9 @@ type TCPClientSink struct {
 	logger    *log.Logger
 	formatter format.Formatter
 
-	// Reconnection state
+	// Connection
+	sessionID      string
+	sessionManager *session.Manager
 	reconnecting   atomic.Bool
 	lastConnectErr error
 	connectTime    time.Time
@@ -49,7 +48,7 @@ type TCPClientSink struct {
 	connectionUptime atomic.Value // time.Duration
 }
 
-// Creates a new TCP client sink
+// NewTCPClientSink creates a new TCP client sink.
 func NewTCPClientSink(opts *config.TCPClientSinkOptions, logger *log.Logger, formatter format.Formatter) (*TCPClientSink, error) {
 	// Validation and defaults are handled in config package
 	if opts == nil {
@@ -57,13 +56,14 @@ func NewTCPClientSink(opts *config.TCPClientSinkOptions, logger *log.Logger, for
 	}
 
 	t := &TCPClientSink{
-		config:    opts,
-		address:   opts.Host + ":" + strconv.Itoa(int(opts.Port)),
-		input:     make(chan core.LogEntry, opts.BufferSize),
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
-		formatter: formatter,
+		config:         opts,
+		address:        opts.Host + ":" + strconv.Itoa(int(opts.Port)),
+		input:          make(chan core.LogEntry, opts.BufferSize),
+		done:           make(chan struct{}),
+		startTime:      time.Now(),
+		logger:         logger,
+		formatter:      formatter,
+		sessionManager: session.NewManager(30 * time.Minute),
 	}
 	t.lastProcessed.Store(time.Time{})
 	t.connectionUptime.Store(time.Duration(0))
@@ -71,10 +71,12 @@ func NewTCPClientSink(opts *config.TCPClientSinkOptions, logger *log.Logger, for
 	return t, nil
 }
 
+// Input returns the channel for sending log entries.
 func (t *TCPClientSink) Input() chan<- core.LogEntry {
 	return t.input
 }
 
+// Start begins the connection and processing loops.
 func (t *TCPClientSink) Start(ctx context.Context) error {
 	// Start connection manager
 	t.wg.Add(1)
@@ -91,6 +93,7 @@ func (t *TCPClientSink) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully shuts down the sink and its connection.
 func (t *TCPClientSink) Stop() {
 	t.logger.Info("msg", "Stopping TCP client sink")
 	close(t.done)
@@ -103,12 +106,21 @@ func (t *TCPClientSink) Stop() {
 	}
 	t.connMu.Unlock()
 
+	// Remove session and stop manager
+	if t.sessionID != "" {
+		t.sessionManager.RemoveSession(t.sessionID)
+	}
+	if t.sessionManager != nil {
+		t.sessionManager.Stop()
+	}
+
 	t.logger.Info("msg", "TCP client sink stopped",
 		"total_processed", t.totalProcessed.Load(),
 		"total_failed", t.totalFailed.Load(),
 		"total_reconnects", t.totalReconnects.Load())
 }
 
+// GetStats returns the sink's statistics.
 func (t *TCPClientSink) GetStats() SinkStats {
 	lastProc, _ := t.lastProcessed.Load().(time.Time)
 	uptime, _ := t.connectionUptime.Load().(time.Duration)
@@ -120,6 +132,19 @@ func (t *TCPClientSink) GetStats() SinkStats {
 	activeConns := int64(0)
 	if connected {
 		activeConns = 1
+	}
+
+	// Get session stats
+	var sessionInfo map[string]any
+	if t.sessionID != "" {
+		if sess, exists := t.sessionManager.GetSession(t.sessionID); exists {
+			sessionInfo = map[string]any{
+				"session_id":    sess.ID,
+				"created_at":    sess.CreatedAt,
+				"last_activity": sess.LastActivity,
+				"remote_addr":   sess.RemoteAddr,
+			}
+		}
 	}
 
 	return SinkStats{
@@ -136,10 +161,12 @@ func (t *TCPClientSink) GetStats() SinkStats {
 			"total_reconnects":  t.totalReconnects.Load(),
 			"connection_uptime": uptime.Seconds(),
 			"last_error":        fmt.Sprintf("%v", t.lastConnectErr),
+			"session":           sessionInfo,
 		},
 	}
 }
 
+// connectionManager handles the lifecycle of the TCP connection, including reconnections.
 func (t *TCPClientSink) connectionManager(ctx context.Context) {
 	defer t.wg.Done()
 
@@ -152,6 +179,11 @@ func (t *TCPClientSink) connectionManager(ctx context.Context) {
 		case <-t.done:
 			return
 		default:
+		}
+
+		if t.sessionID != "" {
+			t.sessionManager.RemoveSession(t.sessionID)
+			t.sessionID = ""
 		}
 
 		// Attempt to connect
@@ -190,6 +222,13 @@ func (t *TCPClientSink) connectionManager(ctx context.Context) {
 		t.connectTime = time.Now()
 		t.totalReconnects.Add(1)
 
+		// Create session for the connection
+		sess := t.sessionManager.CreateSession(t.address, "tcp_client_sink", map[string]any{
+			"local_addr": conn.LocalAddr().String(),
+			"sink_type":  "tcp_client",
+		})
+		t.sessionID = sess.ID
+
 		t.connMu.Lock()
 		t.conn = conn
 		t.connMu.Unlock()
@@ -197,7 +236,8 @@ func (t *TCPClientSink) connectionManager(ctx context.Context) {
 		t.logger.Info("msg", "Connected to TCP server",
 			"component", "tcp_client_sink",
 			"address", t.address,
-			"local_addr", conn.LocalAddr())
+			"local_addr", conn.LocalAddr(),
+			"session_id", t.sessionID)
 
 		// Monitor connection
 		t.monitorConnection(conn)
@@ -214,10 +254,57 @@ func (t *TCPClientSink) connectionManager(ctx context.Context) {
 		t.logger.Warn("msg", "Lost connection to TCP server",
 			"component", "tcp_client_sink",
 			"address", t.address,
-			"uptime", uptime)
+			"uptime", uptime,
+			"session_id", t.sessionID)
 	}
 }
 
+// processLoop reads entries from the input channel and sends them.
+func (t *TCPClientSink) processLoop(ctx context.Context) {
+	defer t.wg.Done()
+
+	for {
+		select {
+		case entry, ok := <-t.input:
+			if !ok {
+				return
+			}
+
+			t.totalProcessed.Add(1)
+			t.lastProcessed.Store(time.Now())
+
+			// Send entry
+			if err := t.sendEntry(entry); err != nil {
+				t.totalFailed.Add(1)
+				t.logger.Debug("msg", "Failed to send log entry",
+					"component", "tcp_client_sink",
+					"error", err)
+			} else {
+				// Update session activity on successful send
+				if t.sessionID != "" {
+					t.sessionManager.UpdateActivity(t.sessionID)
+				} else {
+					// Close invalid connection without session
+					t.logger.Warn("msg", "Connection without session detected, forcing reconnection",
+						"component", "tcp_client_sink")
+					t.connMu.Lock()
+					if t.conn != nil {
+						_ = t.conn.Close()
+						t.conn = nil
+					}
+					t.connMu.Unlock()
+				}
+			}
+
+		case <-ctx.Done():
+			return
+		case <-t.done:
+			return
+		}
+	}
+}
+
+// connect attempts to establish a connection to the remote server.
 func (t *TCPClientSink) connect() (net.Conn, error) {
 	dialer := &net.Dialer{
 		Timeout:   time.Duration(t.config.DialTimeout) * time.Second,
@@ -235,129 +322,10 @@ func (t *TCPClientSink) connect() (net.Conn, error) {
 		tcpConn.SetKeepAlivePeriod(time.Duration(t.config.KeepAlive) * time.Second)
 	}
 
-	// SCRAM authentication if credentials configured
-	if t.config.Auth != nil && t.config.Auth.Type == "scram" {
-		if err := t.performSCRAMAuth(conn); err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("SCRAM authentication failed: %w", err)
-		}
-		t.logger.Debug("msg", "SCRAM authentication completed",
-			"component", "tcp_client_sink",
-			"address", t.address)
-	}
-
 	return conn, nil
 }
 
-func (t *TCPClientSink) performSCRAMAuth(conn net.Conn) error {
-	reader := bufio.NewReader(conn)
-
-	// Create SCRAM client
-	scramClient := auth.NewScramClient(t.config.Auth.Username, t.config.Auth.Password)
-
-	// Wait for AUTH_REQUIRED from server
-	authPrompt, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read auth prompt: %w", err)
-	}
-
-	if strings.TrimSpace(authPrompt) != "AUTH_REQUIRED" {
-		return fmt.Errorf("unexpected server greeting: %s", authPrompt)
-	}
-
-	// Step 1: Send ClientFirst
-	clientFirst, err := scramClient.StartAuthentication()
-	if err != nil {
-		return fmt.Errorf("failed to start SCRAM: %w", err)
-	}
-
-	msg, err := auth.FormatSCRAMRequest("SCRAM-FIRST", clientFirst)
-	if err != nil {
-		return err
-	}
-
-	if _, err := conn.Write([]byte(msg)); err != nil {
-		return fmt.Errorf("failed to send SCRAM-FIRST: %w", err)
-	}
-
-	// Step 2: Receive ServerFirst challenge
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read SCRAM challenge: %w", err)
-	}
-
-	command, data, err := auth.ParseSCRAMResponse(response)
-	if err != nil {
-		return err
-	}
-
-	if command != "SCRAM-CHALLENGE" {
-		return fmt.Errorf("unexpected server response: %s", command)
-	}
-
-	var serverFirst auth.ServerFirst
-	if err := json.Unmarshal([]byte(data), &serverFirst); err != nil {
-		return fmt.Errorf("failed to parse server challenge: %w", err)
-	}
-
-	// Step 3: Process challenge and send proof
-	clientFinal, err := scramClient.ProcessServerFirst(&serverFirst)
-	if err != nil {
-		return fmt.Errorf("failed to process challenge: %w", err)
-	}
-
-	msg, err = auth.FormatSCRAMRequest("SCRAM-PROOF", clientFinal)
-	if err != nil {
-		return err
-	}
-
-	if _, err := conn.Write([]byte(msg)); err != nil {
-		return fmt.Errorf("failed to send SCRAM-PROOF: %w", err)
-	}
-
-	// Step 4: Receive ServerFinal
-	response, err = reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read SCRAM result: %w", err)
-	}
-
-	command, data, err = auth.ParseSCRAMResponse(response)
-	if err != nil {
-		return err
-	}
-
-	switch command {
-	case "SCRAM-OK":
-		var serverFinal auth.ServerFinal
-		if err := json.Unmarshal([]byte(data), &serverFinal); err != nil {
-			return fmt.Errorf("failed to parse server signature: %w", err)
-		}
-
-		// Verify server signature
-		if err := scramClient.VerifyServerFinal(&serverFinal); err != nil {
-			return fmt.Errorf("server signature verification failed: %w", err)
-		}
-
-		t.logger.Info("msg", "SCRAM authentication successful",
-			"component", "tcp_client_sink",
-			"address", t.address,
-			"username", t.config.Auth.Username,
-			"session_id", serverFinal.SessionID)
-
-		return nil
-
-	case "SCRAM-FAIL":
-		reason := data
-		if reason == "" {
-			reason = "unknown"
-		}
-		return fmt.Errorf("authentication failed: %s", reason)
-
-	default:
-		return fmt.Errorf("unexpected response: %s", command)
-	}
-}
-
+// monitorConnection checks the health of the connection.
 func (t *TCPClientSink) monitorConnection(conn net.Conn) {
 	// Simple connection monitoring by periodic zero-byte reads
 	ticker := time.NewTicker(5 * time.Second)
@@ -390,35 +358,7 @@ func (t *TCPClientSink) monitorConnection(conn net.Conn) {
 	}
 }
 
-func (t *TCPClientSink) processLoop(ctx context.Context) {
-	defer t.wg.Done()
-
-	for {
-		select {
-		case entry, ok := <-t.input:
-			if !ok {
-				return
-			}
-
-			t.totalProcessed.Add(1)
-			t.lastProcessed.Store(time.Now())
-
-			// Send entry
-			if err := t.sendEntry(entry); err != nil {
-				t.totalFailed.Add(1)
-				t.logger.Debug("msg", "Failed to send log entry",
-					"component", "tcp_client_sink",
-					"error", err)
-			}
-
-		case <-ctx.Done():
-			return
-		case <-t.done:
-			return
-		}
-	}
-}
-
+// sendEntry formats and sends a single log entry over the connection.
 func (t *TCPClientSink) sendEntry(entry core.LogEntry) error {
 	// Get current connection
 	t.connMu.RLock()
