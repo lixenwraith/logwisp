@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"logwisp/src/internal/core"
 	"os"
 	"strings"
 	"sync"
@@ -73,9 +74,9 @@ func (rm *ReloadManager) Start(ctx context.Context) error {
 
 	// Enable auto-update with custom options
 	watchOpts := lconfig.WatchOptions{
-		PollInterval:      time.Second,
-		Debounce:          500 * time.Millisecond,
-		ReloadTimeout:     30 * time.Second,
+		PollInterval:      core.ReloadWatchPollInterval,
+		Debounce:          core.ReloadWatchDebounce,
+		ReloadTimeout:     core.ReloadWatchTimeout,
 		VerifyPermissions: true,
 	}
 	lcfg.AutoUpdateWithOptions(watchOpts)
@@ -145,7 +146,7 @@ func (rm *ReloadManager) triggerReload(ctx context.Context) {
 	rm.logger.Info("msg", "Starting configuration hot reload")
 
 	// Create reload context with timeout
-	reloadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	reloadCtx, cancel := context.WithTimeout(ctx, core.ConfigReloadTimeout)
 	defer cancel()
 
 	if err := rm.performReload(reloadCtx); err != nil {

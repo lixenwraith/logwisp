@@ -15,7 +15,7 @@ import (
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/limit"
+	"logwisp/src/internal/network"
 	"logwisp/src/internal/session"
 	ltls "logwisp/src/internal/tls"
 	"logwisp/src/internal/version"
@@ -27,36 +27,38 @@ import (
 
 // HTTPSink streams log entries via Server-Sent Events (SSE).
 type HTTPSink struct {
-	// Configuration reference (NOT a copy)
+	// Configuration
 	config *config.HTTPSinkOptions
 
-	// Runtime
-	input         chan core.LogEntry
-	server        *fasthttp.Server
-	activeClients atomic.Int64
-	mu            sync.RWMutex
-	startTime     time.Time
-	done          chan struct{}
-	wg            sync.WaitGroup
-	logger        *log.Logger
-	formatter     format.Formatter
+	// Network
+	server     *fasthttp.Server
+	netLimiter *network.NetLimiter
 
-	// Broker architecture
+	// Application
+	input     chan core.LogEntry
+	formatter format.Formatter
+	logger    *log.Logger
+
+	// Runtime
+	mu        sync.RWMutex
+	done      chan struct{}
+	wg        sync.WaitGroup
+	startTime time.Time
+
+	// Broker
 	clients      map[uint64]chan core.LogEntry
 	clientsMu    sync.RWMutex
-	unregister   chan uint64
+	unregister   chan uint64 // client unregistration channel
 	nextClientID atomic.Uint64
 
-	// Session and security
+	// Security & Session
 	sessionManager *session.Manager
 	clientSessions map[uint64]string // clientID -> sessionID
 	sessionsMu     sync.RWMutex
 	tlsManager     *ltls.ServerManager
 
-	// Net limiting
-	netLimiter *limit.NetLimiter
-
 	// Statistics
+	activeClients  atomic.Int64
 	totalProcessed atomic.Uint64
 	lastProcessed  atomic.Value // time.Time
 }
@@ -94,10 +96,10 @@ func NewHTTPSink(opts *config.HTTPSinkOptions, logger *log.Logger, formatter for
 	}
 
 	// Initialize net limiter if configured
-	if opts.NetLimit != nil && (opts.NetLimit.Enabled ||
-		len(opts.NetLimit.IPWhitelist) > 0 ||
-		len(opts.NetLimit.IPBlacklist) > 0) {
-		h.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
+	if opts.ACL != nil && (opts.ACL.Enabled ||
+		len(opts.ACL.IPWhitelist) > 0 ||
+		len(opts.ACL.IPBlacklist) > 0) {
+		h.netLimiter = network.NewNetLimiter(opts.ACL, logger)
 	}
 
 	return h, nil
@@ -111,8 +113,8 @@ func (h *HTTPSink) Input() chan<- core.LogEntry {
 // Start initializes the HTTP server and begins the broker loop.
 func (h *HTTPSink) Start(ctx context.Context) error {
 	// Register expiry callback
-	h.sessionManager.RegisterExpiryCallback("http_sink", func(sessionID, remoteAddr string) {
-		h.handleSessionExpiry(sessionID, remoteAddr)
+	h.sessionManager.RegisterExpiryCallback("http_sink", func(sessionID, remoteAddrStr string) {
+		h.handleSessionExpiry(sessionID, remoteAddrStr)
 	})
 
 	// Start central broker goroutine
@@ -183,7 +185,7 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		if h.server != nil {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), core.HttpServerShutdownTimeout)
 			defer cancel()
 			_ = h.server.ShutdownWithContext(shutdownCtx)
 		}
@@ -193,7 +195,7 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	select {
 	case err := <-errChan:
 		return err
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(core.HttpServerStartTimeout):
 		// Server started successfully
 		return nil
 	}
@@ -431,16 +433,16 @@ func (h *HTTPSink) brokerLoop(ctx context.Context) {
 
 // requestHandler is the main entry point for all incoming HTTP requests.
 func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
-	remoteAddr := ctx.RemoteAddr().String()
+	remoteAddrStr := ctx.RemoteAddr().String()
 
 	// Check net limit
 	if h.netLimiter != nil {
-		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
+		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddrStr); !allowed {
 			ctx.SetStatusCode(int(statusCode))
 			ctx.SetContentType("application/json")
 			h.logger.Warn("msg", "Net limited",
 				"component", "http_sink",
-				"remote_addr", remoteAddr,
+				"remote_addr", remoteAddrStr,
 				"status_code", statusCode,
 				"error", message)
 			json.NewEncoder(ctx).Encode(map[string]any{
@@ -459,7 +461,7 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	}
 
 	// Create anonymous session for all connections
-	sess := h.sessionManager.CreateSession(remoteAddr, "http_sink", map[string]any{
+	sess := h.sessionManager.CreateSession(remoteAddrStr, "http_sink", map[string]any{
 		"tls": ctx.IsTLS() || h.tlsManager != nil,
 	})
 
@@ -478,11 +480,11 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 
 // handleStream manages a client's Server-Sent Events (SSE) stream.
 func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, sess *session.Session) {
+	remoteAddrStr := ctx.RemoteAddr().String()
 	// Track connection for net limiting
-	remoteAddr := ctx.RemoteAddr().String()
 	if h.netLimiter != nil {
-		h.netLimiter.AddConnection(remoteAddr)
-		defer h.netLimiter.RemoveConnection(remoteAddr)
+		h.netLimiter.RegisterConnection(remoteAddrStr)
+		defer h.netLimiter.ReleaseConnection(remoteAddrStr)
 	}
 
 	// Set SSE headers
@@ -510,7 +512,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, sess *session.Session)
 		connectCount := h.activeClients.Add(1)
 		h.logger.Debug("msg", "HTTP client connected",
 			"component", "http_sink",
-			"remote_addr", remoteAddr,
+			"remote_addr", remoteAddrStr,
 			"session_id", sess.ID,
 			"client_id", clientID,
 			"active_clients", connectCount)
@@ -523,7 +525,7 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx, sess *session.Session)
 			disconnectCount := h.activeClients.Add(-1)
 			h.logger.Debug("msg", "HTTP client disconnected",
 				"component", "http_sink",
-				"remote_addr", remoteAddr,
+				"remote_addr", remoteAddrStr,
 				"session_id", sess.ID,
 				"client_id", clientID,
 				"active_clients", disconnectCount)
@@ -679,7 +681,7 @@ func (h *HTTPSink) handleStatus(ctx *fasthttp.RequestCtx) {
 }
 
 // handleSessionExpiry is the callback for cleaning up expired sessions.
-func (h *HTTPSink) handleSessionExpiry(sessionID, remoteAddr string) {
+func (h *HTTPSink) handleSessionExpiry(sessionID, remoteAddrStr string) {
 	h.sessionsMu.RLock()
 	defer h.sessionsMu.RUnlock()
 
@@ -690,7 +692,7 @@ func (h *HTTPSink) handleSessionExpiry(sessionID, remoteAddr string) {
 				"component", "http_sink",
 				"session_id", sessionID,
 				"client_id", clientID,
-				"remote_addr", remoteAddr)
+				"remote_addr", remoteAddrStr)
 
 			// Signal broker to unregister
 			select {
@@ -732,9 +734,6 @@ func (h *HTTPSink) formatEntryForSSE(w *bufio.Writer, entry core.LogEntry) error
 	if err != nil {
 		return err
 	}
-
-	// Remove trailing newline if present (SSE adds its own)
-	formatted = bytes.TrimSuffix(formatted, []byte{'\n'})
 
 	// Multi-line content handler
 	lines := bytes.Split(formatted, []byte{'\n'})

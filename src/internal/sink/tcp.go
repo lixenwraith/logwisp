@@ -14,7 +14,7 @@ import (
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/limit"
+	"logwisp/src/internal/network"
 	"logwisp/src/internal/session"
 
 	"github.com/lixenwraith/log"
@@ -24,25 +24,34 @@ import (
 
 // TCPSink streams log entries to connected TCP clients.
 type TCPSink struct {
-	input          chan core.LogEntry
-	config         *config.TCPSinkOptions
-	server         *tcpServer
-	done           chan struct{}
-	activeConns    atomic.Int64
-	startTime      time.Time
-	engine         *gnet.Engine
-	engineMu       sync.Mutex
-	wg             sync.WaitGroup
-	netLimiter     *limit.NetLimiter
-	logger         *log.Logger
-	formatter      format.Formatter
+	// Configuration
+	config *config.TCPSinkOptions
+
+	// Network
+	server     *tcpServer
+	engine     *gnet.Engine
+	engineMu   sync.Mutex
+	netLimiter *network.NetLimiter
+
+	// Application
+	input     chan core.LogEntry
+	formatter format.Formatter
+	logger    *log.Logger
+
+	// Runtime
+	done      chan struct{}
+	wg        sync.WaitGroup
+	startTime time.Time
+
+	// Security & Session
 	sessionManager *session.Manager
 
 	// Statistics
+	activeConns    atomic.Int64
 	totalProcessed atomic.Uint64
 	lastProcessed  atomic.Value // time.Time
 
-	// Write error tracking
+	// Error tracking
 	writeErrors            atomic.Uint64
 	consecutiveWriteErrors map[gnet.Conn]int
 	errorMu                sync.Mutex
@@ -54,7 +63,7 @@ type TCPConfig struct {
 	Port       int64
 	BufferSize int64
 	Heartbeat  *config.HeartbeatConfig
-	NetLimit   *config.NetLimitConfig
+	ACL        *config.ACLConfig
 }
 
 // NewTCPSink creates a new TCP streaming sink.
@@ -76,10 +85,10 @@ func NewTCPSink(opts *config.TCPSinkOptions, logger *log.Logger, formatter forma
 	t.lastProcessed.Store(time.Time{})
 
 	// Initialize net limiter with pointer
-	if opts.NetLimit != nil && (opts.NetLimit.Enabled ||
-		len(opts.NetLimit.IPWhitelist) > 0 ||
-		len(opts.NetLimit.IPBlacklist) > 0) {
-		t.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
+	if opts.ACL != nil && (opts.ACL.Enabled ||
+		len(opts.ACL.IPWhitelist) > 0 ||
+		len(opts.ACL.IPBlacklist) > 0) {
+		t.netLimiter = network.NewNetLimiter(opts.ACL, logger)
 	}
 
 	return t, nil
@@ -311,7 +320,8 @@ func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
 // OnOpen is called when a new connection is established.
 func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	remoteAddr := c.RemoteAddr()
-	s.sink.logger.Debug("msg", "TCP connection attempt", "remote_addr", remoteAddr)
+	remoteAddrStr := remoteAddr.String()
+	s.sink.logger.Debug("msg", "TCP connection attempt", "remote_addr", remoteAddrStr)
 
 	// Reject IPv6 connections
 	if tcpAddr, ok := remoteAddr.(*net.TCPAddr); ok {
@@ -322,27 +332,26 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 
 	// Check net limit
 	if s.sink.netLimiter != nil {
-		remoteStr := c.RemoteAddr().String()
-		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteStr)
+		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddrStr)
 		if err != nil {
 			s.sink.logger.Warn("msg", "Failed to parse TCP address",
-				"remote_addr", remoteAddr,
+				"remote_addr", remoteAddrStr,
 				"error", err)
 			return nil, gnet.Close
 		}
 
 		if !s.sink.netLimiter.CheckTCP(tcpAddr) {
 			s.sink.logger.Warn("msg", "TCP connection net limited",
-				"remote_addr", remoteAddr)
+				"remote_addr", remoteAddrStr)
 			return nil, gnet.Close
 		}
 
-		// Track connection
-		s.sink.netLimiter.AddConnection(remoteStr)
+		// Register connection post-establishment
+		s.sink.netLimiter.RegisterConnection(remoteAddrStr)
 	}
 
 	// Create session for tracking
-	sess := s.sink.sessionManager.CreateSession(c.RemoteAddr().String(), "tcp_sink", nil)
+	sess := s.sink.sessionManager.CreateSession(remoteAddrStr, "tcp_sink", nil)
 
 	// TCP Sink accepts all connections without authentication
 	client := &tcpClient{
@@ -366,7 +375,7 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 
 // OnClose is called when a connection is closed.
 func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
-	remoteAddr := c.RemoteAddr().String()
+	remoteAddrStr := c.RemoteAddr().String()
 
 	// Get client to retrieve session ID
 	s.mu.RLock()
@@ -379,7 +388,7 @@ func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 		s.sink.logger.Debug("msg", "Session removed",
 			"component", "tcp_sink",
 			"session_id", client.sessionID,
-			"remote_addr", remoteAddr)
+			"remote_addr", remoteAddrStr)
 	}
 
 	// Remove client state
@@ -392,14 +401,14 @@ func (s *tcpServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	delete(s.sink.consecutiveWriteErrors, c)
 	s.sink.errorMu.Unlock()
 
-	// Remove connection tracking
+	// Release connection
 	if s.sink.netLimiter != nil {
-		s.sink.netLimiter.RemoveConnection(remoteAddr)
+		s.sink.netLimiter.ReleaseConnection(remoteAddrStr)
 	}
 
 	newCount := s.sink.activeConns.Add(-1)
 	s.sink.logger.Debug("msg", "TCP connection closed",
-		"remote_addr", remoteAddr,
+		"remote_addr", remoteAddrStr,
 		"active_connections", newCount,
 		"error", err)
 	return gnet.None
@@ -482,6 +491,8 @@ func (t *TCPSink) broadcastData(data []byte) {
 
 // handleWriteError manages errors during async writes, closing faulty connections.
 func (t *TCPSink) handleWriteError(c gnet.Conn, err error) {
+	remoteAddrStr := c.RemoteAddr().String()
+
 	t.errorMu.Lock()
 	defer t.errorMu.Unlock()
 
@@ -495,7 +506,7 @@ func (t *TCPSink) handleWriteError(c gnet.Conn, err error) {
 
 	t.logger.Debug("msg", "AsyncWrite error",
 		"component", "tcp_sink",
-		"remote_addr", c.RemoteAddr(),
+		"remote_addr", remoteAddrStr,
 		"error", err,
 		"consecutive_errors", errorCount)
 
@@ -503,7 +514,7 @@ func (t *TCPSink) handleWriteError(c gnet.Conn, err error) {
 	if errorCount >= 3 {
 		t.logger.Warn("msg", "Closing connection due to repeated write errors",
 			"component", "tcp_sink",
-			"remote_addr", c.RemoteAddr(),
+			"remote_addr", remoteAddrStr,
 			"error_count", errorCount)
 		delete(t.consecutiveWriteErrors, c)
 		c.Close()
@@ -539,7 +550,7 @@ func (t *TCPSink) cleanupStaleConnections(staleConns []gnet.Conn) {
 	for _, conn := range staleConns {
 		t.logger.Info("msg", "Closing stale connection",
 			"component", "tcp_sink",
-			"remote_addr", conn.RemoteAddr())
+			"remote_addr", conn.RemoteAddr().String())
 		conn.Close()
 	}
 }

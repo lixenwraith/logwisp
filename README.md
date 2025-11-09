@@ -33,7 +33,7 @@ A high-performance, pipeline-based log transport and processing system built in 
 - **Rate Limiting**: Pipeline rate control
 
 ### Security & Reliability
-- **Authentication**: Basic, token, and mTLS support for HTTPS, and SCRAM for TCP
+- **Authentication**: mTLS support for HTTPS
 - **TLS Encryption**: TLS 1.2/1.3 support for HTTP connections
 - **Access Control**: IP whitelisting/blacklisting, connection limits
 - **Automatic Reconnection**: Resilient client connections with exponential backoff
@@ -56,7 +56,7 @@ Available in `doc/` directory.
 - [Output Sinks](doc/sinks.md) - Sink types and output options
 - [Filters](doc/filters.md) - Pattern-based log filtering
 - [Formatters](doc/formatters.md) - Log formatting and transformation
-- [Authentication](doc/authentication.md) - Security configurations and auth methods
+- [Security](doc/security.md) - mTLS configurations and access control
 - [Networking](doc/networking.md) - TLS, rate limiting, and network features
 - [Command Line Interface](doc/cli.md) - CLI flags and subcommands
 - [Operations Guide](doc/operations.md) - Running and maintaining LogWisp

@@ -84,10 +84,9 @@ type PipelineConfig struct {
 
 // Common configuration structs used across components
 
-// NetLimitConfig defines network-level access control and rate limiting rules.
-type NetLimitConfig struct {
+// ACLConfig defines network-level access control and rate limiting rules.
+type ACLConfig struct {
 	Enabled             bool     `toml:"enabled"`
-	MaxConnections      int64    `toml:"max_connections"`
 	RequestsPerSecond   float64  `toml:"requests_per_second"`
 	BurstSize           int64    `toml:"burst_size"`
 	ResponseMessage     string   `toml:"response_message"`
@@ -120,7 +119,7 @@ type TLSClientConfig struct {
 	ClientCertFile     string `toml:"client_cert_file"`     // Client's certificate for mTLS.
 	ClientKeyFile      string `toml:"client_key_file"`      // Client's private key for mTLS.
 	ServerName         string `toml:"server_name"`          // For server certificate validation (SNI).
-	InsecureSkipVerify bool   `toml:"insecure_skip_verify"` // Use with caution.
+	InsecureSkipVerify bool   `toml:"insecure_skip_verify"` // Skip server verification, Use with caution.
 
 	// Common TLS settings
 	MinVersion   string `toml:"min_version"`
@@ -150,22 +149,22 @@ type SourceConfig struct {
 	Type string `toml:"type"`
 
 	// Polymorphic - only one populated based on type
-	Directory *DirectorySourceOptions `toml:"directory,omitempty"`
-	Stdin     *StdinSourceOptions     `toml:"stdin,omitempty"`
-	HTTP      *HTTPSourceOptions      `toml:"http,omitempty"`
-	TCP       *TCPSourceOptions       `toml:"tcp,omitempty"`
+	File    *FileSourceOptions    `toml:"file,omitempty"`
+	Console *ConsoleSourceOptions `toml:"console,omitempty"`
+	HTTP    *HTTPSourceOptions    `toml:"http,omitempty"`
+	TCP     *TCPSourceOptions     `toml:"tcp,omitempty"`
 }
 
-// DirectorySourceOptions defines settings for a directory-based source.
-type DirectorySourceOptions struct {
-	Path            string `toml:"path"`
+// FileSourceOptions defines settings for a file-based source.
+type FileSourceOptions struct {
+	Directory       string `toml:"directory"`
 	Pattern         string `toml:"pattern"` // glob pattern
 	CheckIntervalMS int64  `toml:"check_interval_ms"`
 	Recursive       bool   `toml:"recursive"` // TODO: implement logic
 }
 
-// StdinSourceOptions defines settings for a stdin-based source.
-type StdinSourceOptions struct {
+// ConsoleSourceOptions defines settings for a stdin-based source.
+type ConsoleSourceOptions struct {
 	BufferSize int64 `toml:"buffer_size"`
 }
 
@@ -178,7 +177,7 @@ type HTTPSourceOptions struct {
 	MaxRequestBodySize int64             `toml:"max_body_size"`
 	ReadTimeout        int64             `toml:"read_timeout_ms"`
 	WriteTimeout       int64             `toml:"write_timeout_ms"`
-	NetLimit           *NetLimitConfig   `toml:"net_limit"`
+	ACL                *ACLConfig        `toml:"acl"`
 	TLS                *TLSServerConfig  `toml:"tls"`
 	Auth               *ServerAuthConfig `toml:"auth"`
 }
@@ -191,7 +190,7 @@ type TCPSourceOptions struct {
 	ReadTimeout     int64             `toml:"read_timeout_ms"`
 	KeepAlive       bool              `toml:"keep_alive"`
 	KeepAlivePeriod int64             `toml:"keep_alive_period_ms"`
-	NetLimit        *NetLimitConfig   `toml:"net_limit"`
+	ACL             *ACLConfig        `toml:"acl"`
 	Auth            *ServerAuthConfig `toml:"auth"`
 }
 
@@ -238,7 +237,7 @@ type HTTPSinkOptions struct {
 	BufferSize   int64             `toml:"buffer_size"`
 	WriteTimeout int64             `toml:"write_timeout_ms"`
 	Heartbeat    *HeartbeatConfig  `toml:"heartbeat"`
-	NetLimit     *NetLimitConfig   `toml:"net_limit"`
+	ACL          *ACLConfig        `toml:"acl"`
 	TLS          *TLSServerConfig  `toml:"tls"`
 	Auth         *ServerAuthConfig `toml:"auth"`
 }
@@ -252,7 +251,7 @@ type TCPSinkOptions struct {
 	KeepAlive       bool              `toml:"keep_alive"`
 	KeepAlivePeriod int64             `toml:"keep_alive_period_ms"`
 	Heartbeat       *HeartbeatConfig  `toml:"heartbeat"`
-	NetLimit        *NetLimitConfig   `toml:"net_limit"`
+	ACL             *ACLConfig        `toml:"acl"`
 	Auth            *ServerAuthConfig `toml:"auth"`
 }
 

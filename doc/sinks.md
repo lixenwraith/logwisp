@@ -244,31 +244,11 @@ HTTP Client TLS:
 ```toml
 [pipelines.sinks.http_client.tls]
 enabled = true
+server_ca_file = "/path/to/ca.pem"  # For server verification
 server_name = "logs.example.com"
-skip_verify = false
-cert_file = "/path/to/client.pem"  # For mTLS
-key_file = "/path/to/client.key"   # For mTLS
-```
-
-### Authentication
-
-HTTP/HTTP Client authentication:
-
-```toml
-[pipelines.sinks.http_client.auth]
-type = "basic"  # none|basic|token|mtls
-username = "user"
-password = "pass"
-token = "bearer-token"
-```
-
-TCP Client authentication:
-
-```toml
-[pipelines.sinks.tcp_client.auth]
-type = "scram"  # none|scram
-username = "user"
-password = "pass"
+insecure_skip_verify = false
+client_cert_file = "/path/to/client.pem"  # For mTLS
+client_key_file = "/path/to/client.key"   # For mTLS
 ```
 
 ## Sink Chaining
@@ -276,8 +256,8 @@ password = "pass"
 Designed connection patterns:
 
 ### Log Aggregation
-- **HTTP Client Sink → HTTP Source**: HTTPS with authentication
-- **TCP Client Sink → TCP Source**: Raw TCP with SCRAM
+- **HTTP Client Sink → HTTP Source**: HTTP/HTTPS (optional mTLS for HTTPS)
+- **TCP Client Sink → TCP Source**: Raw TCP
 
 ### Live Monitoring
 - **HTTP Sink**: Browser-based SSE streaming

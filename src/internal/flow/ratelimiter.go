@@ -1,5 +1,5 @@
-// FILE: logwisp/src/internal/limit/rate.go
-package limit
+// FILE: src/internal/flow/rate.go
+package flow
 
 import (
 	"strings"
@@ -7,13 +7,14 @@ import (
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
+	"logwisp/src/internal/tokenbucket"
 
 	"github.com/lixenwraith/log"
 )
 
 // RateLimiter enforces rate limits on log entries flowing through a pipeline.
 type RateLimiter struct {
-	bucket *TokenBucket
+	bucket *tokenbucket.TokenBucket
 	policy config.RateLimitPolicy
 	logger *log.Logger
 
@@ -43,14 +44,10 @@ func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimite
 	}
 
 	l := &RateLimiter{
-		bucket:            NewTokenBucket(burst, cfg.Rate),
+		bucket:            tokenbucket.New(burst, cfg.Rate),
 		policy:            policy,
 		logger:            logger,
 		maxEntrySizeBytes: cfg.MaxEntrySizeBytes,
-	}
-
-	if cfg.Rate > 0 {
-		l.bucket = NewTokenBucket(burst, cfg.Rate)
 	}
 
 	return l, nil

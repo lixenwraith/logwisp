@@ -105,7 +105,7 @@ Each component maintains internal buffers to handle burst traffic:
 ### Protocol Support
 
 - HTTP/1.1 and HTTP/2 for HTTP connections
-- Raw TCP with optional SCRAM authentication
+- Raw TCP connections
 - TLS 1.2/1.3 for HTTPS connections (HTTP only)
 - Server-Sent Events for real-time streaming
 

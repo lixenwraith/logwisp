@@ -13,7 +13,7 @@ import (
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
-	"logwisp/src/internal/limit"
+	"logwisp/src/internal/network"
 	"logwisp/src/internal/session"
 
 	"github.com/lixenwraith/log"
@@ -28,17 +28,26 @@ const (
 
 // TCPSource receives log entries via TCP connections.
 type TCPSource struct {
-	config         *config.TCPSourceOptions
-	server         *tcpSourceServer
-	subscribers    []chan core.LogEntry
-	mu             sync.RWMutex
-	done           chan struct{}
-	engine         *gnet.Engine
-	engineMu       sync.Mutex
-	wg             sync.WaitGroup
+	// Configuration
+	config *config.TCPSourceOptions
+
+	// Network
+	server     *tcpSourceServer
+	engine     *gnet.Engine
+	engineMu   sync.Mutex
+	netLimiter *network.NetLimiter
+
+	// Application
+	subscribers []chan core.LogEntry
+	logger      *log.Logger
+
+	// Runtime
+	mu   sync.RWMutex
+	done chan struct{}
+	wg   sync.WaitGroup
+
+	// Security & Session
 	sessionManager *session.Manager
-	netLimiter     *limit.NetLimiter
-	logger         *log.Logger
 
 	// Statistics
 	totalEntries   atomic.Uint64
@@ -66,10 +75,10 @@ func NewTCPSource(opts *config.TCPSourceOptions, logger *log.Logger) (*TCPSource
 	t.lastEntryTime.Store(time.Time{})
 
 	// Initialize net limiter if configured
-	if opts.NetLimit != nil && (opts.NetLimit.Enabled ||
-		len(opts.NetLimit.IPWhitelist) > 0 ||
-		len(opts.NetLimit.IPBlacklist) > 0) {
-		t.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
+	if opts.ACL != nil && (opts.ACL.Enabled ||
+		len(opts.ACL.IPWhitelist) > 0 ||
+		len(opts.ACL.IPBlacklist) > 0) {
+		t.netLimiter = network.NewNetLimiter(opts.ACL, logger)
 	}
 
 	return t, nil
@@ -93,8 +102,8 @@ func (t *TCPSource) Start() error {
 	}
 
 	// Register expiry callback
-	t.sessionManager.RegisterExpiryCallback("tcp_source", func(sessionID, remoteAddr string) {
-		t.handleSessionExpiry(sessionID, remoteAddr)
+	t.sessionManager.RegisterExpiryCallback("tcp_source", func(sessionID, remoteAddrStr string) {
+		t.handleSessionExpiry(sessionID, remoteAddrStr)
 	})
 
 	// Use configured host and port
@@ -240,18 +249,18 @@ func (s *tcpSourceServer) OnBoot(eng gnet.Engine) gnet.Action {
 
 // OnOpen is called when a new connection is established.
 func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
-	remoteAddr := c.RemoteAddr().String()
+	remoteAddrStr := c.RemoteAddr().String()
 	s.source.logger.Debug("msg", "TCP connection attempt",
 		"component", "tcp_source",
-		"remote_addr", remoteAddr)
+		"remote_addr", remoteAddrStr)
 
 	// Check net limit
 	if s.source.netLimiter != nil {
-		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddr)
+		tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddrStr)
 		if err != nil {
 			s.source.logger.Warn("msg", "Failed to parse TCP address",
 				"component", "tcp_source",
-				"remote_addr", remoteAddr,
+				"remote_addr", remoteAddrStr,
 				"error", err)
 			return nil, gnet.Close
 		}
@@ -262,28 +271,28 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 			// Reject IPv6
 			s.source.logger.Warn("msg", "IPv6 connection rejected",
 				"component", "tcp_source",
-				"remote_addr", remoteAddr)
+				"remote_addr", remoteAddrStr)
 			return []byte("IPv4-only (IPv6 not supported)\n"), gnet.Close
 		}
 
 		if !s.source.netLimiter.CheckTCP(tcpAddr) {
 			s.source.logger.Warn("msg", "TCP connection net limited",
 				"component", "tcp_source",
-				"remote_addr", remoteAddr)
+				"remote_addr", remoteAddrStr)
 			return nil, gnet.Close
 		}
 
-		// Track connection
-		if !s.source.netLimiter.TrackConnection(ip.String(), "", "") {
+		// Reserve connection atomically
+		if !s.source.netLimiter.ReserveConnection(remoteAddrStr) {
 			s.source.logger.Warn("msg", "TCP connection limit exceeded",
 				"component", "tcp_source",
-				"remote_addr", remoteAddr)
+				"remote_addr", remoteAddrStr)
 			return nil, gnet.Close
 		}
 	}
 
 	// Create session
-	sess := s.source.sessionManager.CreateSession(remoteAddr, "tcp_source", nil)
+	sess := s.source.sessionManager.CreateSession(remoteAddrStr, "tcp_source", nil)
 
 	// Create client state
 	client := &tcpClient{
@@ -299,7 +308,7 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	s.source.activeConns.Add(1)
 	s.source.logger.Debug("msg", "TCP connection opened",
 		"component", "tcp_source",
-		"remote_addr", remoteAddr,
+		"remote_addr", remoteAddrStr,
 		"session_id", sess.ID)
 
 	return out, gnet.None
@@ -307,7 +316,7 @@ func (s *tcpSourceServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 
 // OnClose is called when a connection is closed.
 func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
-	remoteAddr := c.RemoteAddr().String()
+	remoteAddrStr := c.RemoteAddr().String()
 
 	// Get client to retrieve session ID
 	s.mu.RLock()
@@ -319,11 +328,9 @@ func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
 		s.source.sessionManager.RemoveSession(client.sessionID)
 	}
 
-	// Untrack connection
+	// Release connection
 	if s.source.netLimiter != nil {
-		if tcpAddr, err := net.ResolveTCPAddr("tcp", remoteAddr); err == nil {
-			s.source.netLimiter.ReleaseConnection(tcpAddr.IP.String(), "", "")
-		}
+		s.source.netLimiter.ReleaseConnection(remoteAddrStr)
 	}
 
 	// Remove client state
@@ -334,7 +341,7 @@ func (s *tcpSourceServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	newConnectionCount := s.source.activeConns.Add(-1)
 	s.source.logger.Debug("msg", "TCP connection closed",
 		"component", "tcp_source",
-		"remote_addr", remoteAddr,
+		"remote_addr", remoteAddrStr,
 		"active_connections", newConnectionCount,
 		"error", err)
 	return gnet.None
@@ -481,7 +488,7 @@ func (t *TCPSource) publish(entry core.LogEntry) {
 }
 
 // handleSessionExpiry is the callback for cleaning up expired sessions.
-func (t *TCPSource) handleSessionExpiry(sessionID, remoteAddr string) {
+func (t *TCPSource) handleSessionExpiry(sessionID, remoteAddrStr string) {
 	t.server.mu.RLock()
 	defer t.server.mu.RUnlock()
 
@@ -491,7 +498,7 @@ func (t *TCPSource) handleSessionExpiry(sessionID, remoteAddr string) {
 			t.logger.Info("msg", "Closing expired session connection",
 				"component", "tcp_source",
 				"session_id", sessionID,
-				"remote_addr", remoteAddr)
+				"remote_addr", remoteAddrStr)
 
 			// Close connection
 			conn.Close()

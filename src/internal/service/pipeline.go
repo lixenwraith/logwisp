@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/filter"
+	"logwisp/src/internal/flow"
 	"logwisp/src/internal/format"
-	"logwisp/src/internal/limit"
 	"logwisp/src/internal/sink"
 	"logwisp/src/internal/source"
 
@@ -22,7 +23,7 @@ import (
 type Pipeline struct {
 	Config      *config.PipelineConfig
 	Sources     []source.Source
-	RateLimiter *limit.RateLimiter
+	RateLimiter *flow.RateLimiter
 	FilterChain *filter.Chain
 	Sinks       []sink.Sink
 	Stats       *PipelineStats
@@ -86,7 +87,7 @@ func (s *Service) NewPipeline(cfg *config.PipelineConfig) error {
 
 	// Create pipeline rate limiter
 	if cfg.RateLimit != nil {
-		limiter, err := limit.NewRateLimiter(*cfg.RateLimit, s.logger)
+		limiter, err := flow.NewRateLimiter(*cfg.RateLimit, s.logger)
 		if err != nil {
 			pipelineCancel()
 			return fmt.Errorf("failed to create pipeline rate limiter: %w", err)
@@ -267,7 +268,7 @@ func (p *Pipeline) GetStats() map[string]any {
 // startStatsUpdater runs a periodic stats updater.
 func (p *Pipeline) startStatsUpdater(ctx context.Context) {
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(core.ServiceStatsUpdateInterval)
 		defer ticker.Stop()
 
 		for {

@@ -22,23 +22,32 @@ import (
 // TODO: add heartbeat
 // TCPClientSink forwards log entries to a remote TCP endpoint.
 type TCPClientSink struct {
+	// Configuration
+	config  *config.TCPClientSinkOptions
+	address string // computed from host:port
+
+	// Network
+	conn   net.Conn
+	connMu sync.RWMutex
+
+	// Application
 	input     chan core.LogEntry
-	config    *config.TCPClientSinkOptions
-	address   string
-	conn      net.Conn
-	connMu    sync.RWMutex
+	formatter format.Formatter
+	logger    *log.Logger
+
+	// Runtime
 	done      chan struct{}
 	wg        sync.WaitGroup
 	startTime time.Time
-	logger    *log.Logger
-	formatter format.Formatter
 
-	// Connection
-	sessionID      string
-	sessionManager *session.Manager
+	// Connection state
 	reconnecting   atomic.Bool
 	lastConnectErr error
 	connectTime    time.Time
+
+	// Security & Session
+	sessionID      string
+	sessionManager *session.Manager
 
 	// Statistics
 	totalProcessed   atomic.Uint64

@@ -280,25 +280,10 @@ Rotate certificates:
 2. Update configuration
 3. Reload service (SIGHUP)
 
-### Credential Rotation
-
-Update authentication:
-```bash
-# Generate new credentials
-logwisp auth -u admin -b
-
-# Update configuration
-vim /etc/logwisp/logwisp.toml
-
-# Reload service
-kill -HUP $(pidof logwisp)
-```
-
 ### Access Auditing
 
 Monitor access patterns:
 - Review connection logs
-- Track authentication failures
 - Monitor rate limit hits
 
 ## Maintenance

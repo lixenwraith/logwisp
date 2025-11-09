@@ -106,9 +106,9 @@ func defaults() *Config {
 				Name: "default",
 				Sources: []SourceConfig{
 					{
-						Type: "directory",
-						Directory: &DirectorySourceOptions{
-							Path:            "./",
+						Type: "file",
+						File: &FileSourceOptions{
+							Directory:       "./",
 							Pattern:         "*.log",
 							CheckIntervalMS: int64(100),
 						},

@@ -22,7 +22,7 @@ import (
 
 // WatcherInfo contains snapshot information about a file watcher's state.
 type WatcherInfo struct {
-	Path         string
+	Directory    string
 	Size         int64
 	Position     int64
 	ModTime      time.Time
@@ -33,7 +33,7 @@ type WatcherInfo struct {
 
 // fileWatcher tails a single file, handles rotations, and sends new lines to a callback.
 type fileWatcher struct {
-	path         string
+	directory    string
 	callback     func(core.LogEntry)
 	position     int64
 	size         int64
@@ -48,12 +48,12 @@ type fileWatcher struct {
 }
 
 // newFileWatcher creates a new watcher for a specific file path.
-func newFileWatcher(path string, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
+func newFileWatcher(directory string, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
 	w := &fileWatcher{
-		path:     path,
-		callback: callback,
-		position: -1,
-		logger:   logger,
+		directory: directory,
+		callback:  callback,
+		position:  -1,
+		logger:    logger,
 	}
 	w.lastReadTime.Store(time.Time{})
 	return w
@@ -65,7 +65,7 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 		return fmt.Errorf("seekToEnd failed: %w", err)
 	}
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(core.FileWatcherPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -95,7 +95,7 @@ func (w *fileWatcher) stop() {
 func (w *fileWatcher) getInfo() WatcherInfo {
 	w.mu.Lock()
 	info := WatcherInfo{
-		Path:        w.path,
+		Directory:   w.directory,
 		Size:        w.size,
 		Position:    w.position,
 		ModTime:     w.modTime,
@@ -113,7 +113,7 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 
 // checkFile examines the file for changes, rotations, or new content.
 func (w *fileWatcher) checkFile() error {
-	file, err := os.Open(w.path)
+	file, err := os.Open(w.directory)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File doesn't exist yet, keep watching
@@ -121,7 +121,7 @@ func (w *fileWatcher) checkFile() error {
 		}
 		w.logger.Error("msg", "Failed to open file for checking",
 			"component", "file_watcher",
-			"path", w.path,
+			"directory", w.directory,
 			"error", err)
 		return err
 	}
@@ -131,7 +131,7 @@ func (w *fileWatcher) checkFile() error {
 	if err != nil {
 		w.logger.Error("msg", "Failed to stat file",
 			"component", "file_watcher",
-			"path", w.path,
+			"directory", w.directory,
 			"error", err)
 		return err
 	}
@@ -201,7 +201,7 @@ func (w *fileWatcher) checkFile() error {
 
 			w.logger.Debug("msg", "Atomic file update detected",
 				"component", "file_watcher",
-				"path", w.path,
+				"directory", w.directory,
 				"old_inode", oldInode,
 				"new_inode", currentInode,
 				"position", oldPos,
@@ -220,26 +220,26 @@ func (w *fileWatcher) checkFile() error {
 
 		w.callback(core.LogEntry{
 			Time:    time.Now(),
-			Source:  filepath.Base(w.path),
+			Source:  filepath.Base(w.directory),
 			Level:   "INFO",
 			Message: fmt.Sprintf("Log rotation detected (#%d): %s", seq, rotationReason),
 		})
 
 		w.logger.Info("msg", "Log rotation detected",
 			"component", "file_watcher",
-			"path", w.path,
+			"directory", w.directory,
 			"sequence", seq,
 			"reason", rotationReason)
 	}
 
-	// Only read if there's new content
+	// Read if there's new content OR if we need to continue from position
 	if currentSize > startPos {
 		if _, err := file.Seek(startPos, io.SeekStart); err != nil {
 			return err
 		}
 
 		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -259,7 +259,7 @@ func (w *fileWatcher) checkFile() error {
 		if err := scanner.Err(); err != nil {
 			w.logger.Error("msg", "Scanner error while reading file",
 				"component", "file_watcher",
-				"path", w.path,
+				"directory", w.directory,
 				"position", startPos,
 				"error", err)
 			return err
@@ -300,7 +300,7 @@ func (w *fileWatcher) checkFile() error {
 
 // seekToEnd sets the initial read position to the end of the file.
 func (w *fileWatcher) seekToEnd() error {
-	file, err := os.Open(w.path)
+	file, err := os.Open(w.directory)
 	if err != nil {
 		if os.IsNotExist(err) {
 			w.mu.Lock()
@@ -366,7 +366,7 @@ func (w *fileWatcher) parseLine(line string) core.LogEntry {
 
 		return core.LogEntry{
 			Time:    timestamp,
-			Source:  filepath.Base(w.path),
+			Source:  filepath.Base(w.directory),
 			Level:   jsonLog.Level,
 			Message: jsonLog.Message,
 			Fields:  jsonLog.Fields,
@@ -377,7 +377,7 @@ func (w *fileWatcher) parseLine(line string) core.LogEntry {
 
 	return core.LogEntry{
 		Time:    time.Now(),
-		Source:  filepath.Base(w.path),
+		Source:  filepath.Base(w.directory),
 		Level:   level,
 		Message: line,
 	}

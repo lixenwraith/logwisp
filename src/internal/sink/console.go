@@ -2,7 +2,6 @@
 package sink
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -18,13 +17,18 @@ import (
 
 // ConsoleSink writes log entries to the console (stdout/stderr) using an dedicated logger instance.
 type ConsoleSink struct {
-	config    *config.ConsoleSinkOptions
+	// Configuration
+	config *config.ConsoleSinkOptions
+
+	// Application
 	input     chan core.LogEntry
-	writer    *log.Logger // Dedicated internal logger instance for console writing
+	writer    *log.Logger // dedicated logger for console output
+	formatter format.Formatter
+	logger    *log.Logger // application logger
+
+	// Runtime
 	done      chan struct{}
 	startTime time.Time
-	logger    *log.Logger // Application logger for app logs
-	formatter format.Formatter
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -143,8 +147,7 @@ func (s *ConsoleSink) processLoop(ctx context.Context) {
 			}
 
 			// Convert to string to prevent hex encoding of []byte by log package
-			// Strip new line, writer adds it
-			message := string(bytes.TrimSuffix(formatted, []byte{'\n'}))
+			message := string(formatted)
 			switch strings.ToUpper(entry.Level) {
 			case "DEBUG":
 				s.writer.Debug(message)

@@ -1,3 +1,4 @@
+// FILE: logwisp/src/internal/config/validation.go
 package config
 
 import (
@@ -142,13 +143,13 @@ func validateSourceConfig(pipelineName string, index int, s *SourceConfig) error
 	populated := 0
 	var populatedType string
 
-	if s.Directory != nil {
+	if s.File != nil {
 		populated++
-		populatedType = "directory"
+		populatedType = "file"
 	}
-	if s.Stdin != nil {
+	if s.Console != nil {
 		populated++
-		populatedType = "stdin"
+		populatedType = "console"
 	}
 	if s.HTTP != nil {
 		populated++
@@ -174,10 +175,10 @@ func validateSourceConfig(pipelineName string, index int, s *SourceConfig) error
 
 	// Validate specific source type
 	switch s.Type {
-	case "directory":
-		return validateDirectorySource(pipelineName, index, s.Directory)
-	case "stdin":
-		return validateStdinSource(pipelineName, index, s.Stdin)
+	case "file":
+		return validateDirectorySource(pipelineName, index, s.File)
+	case "console":
+		return validateConsoleSource(pipelineName, index, s.Console)
 	case "http":
 		return validateHTTPSource(pipelineName, index, s.HTTP)
 	case "tcp":
@@ -364,20 +365,19 @@ func validateFilter(pipelineName string, filterIndex int, cfg *FilterConfig) err
 }
 
 // validateDirectorySource validates the settings for a directory source.
-func validateDirectorySource(pipelineName string, index int, opts *DirectorySourceOptions) error {
-	if err := lconfig.NonEmpty(opts.Path); err != nil {
+func validateDirectorySource(pipelineName string, index int, opts *FileSourceOptions) error {
+	if err := lconfig.NonEmpty(opts.Directory); err != nil {
 		return fmt.Errorf("pipeline '%s' source[%d]: directory requires 'path'", pipelineName, index)
 	} else {
-		absPath, err := filepath.Abs(opts.Path)
+		absPath, err := filepath.Abs(opts.Directory)
 		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", opts.Path, err)
+			return fmt.Errorf("invalid path %s: %w", opts.Directory, err)
 		}
-		opts.Path = absPath
+		opts.Directory = absPath
 	}
 
 	// Check for directory traversal
-	// TODO: traversal check only if optional security settings from cli/env set
-	if strings.Contains(opts.Path, "..") {
+	if strings.Contains(opts.Directory, "..") {
 		return fmt.Errorf("pipeline '%s' source[%d]: path contains directory traversal", pipelineName, index)
 	}
 
@@ -401,8 +401,8 @@ func validateDirectorySource(pipelineName string, index int, opts *DirectorySour
 	return nil
 }
 
-// validateStdinSource validates the settings for a stdin source.
-func validateStdinSource(pipelineName string, index int, opts *StdinSourceOptions) error {
+// validateConsoleSource validates the settings for a console source.
+func validateConsoleSource(pipelineName string, index int, opts *ConsoleSourceOptions) error {
 	if opts.BufferSize < 0 {
 		return fmt.Errorf("pipeline '%s' source[%d]: buffer_size must be positive", pipelineName, index)
 	} else if opts.BufferSize == 0 {
@@ -462,8 +462,8 @@ func validateHTTPSource(pipelineName string, index int, opts *HTTPSourceOptions)
 	}
 
 	// Validate nested configs
-	if opts.NetLimit != nil {
-		if err := validateNetLimit(pipelineName, fmt.Sprintf("source[%d]", index), opts.NetLimit); err != nil {
+	if opts.ACL != nil {
+		if err := validateACL(pipelineName, fmt.Sprintf("source[%d]", index), opts.ACL); err != nil {
 			return err
 		}
 	}
@@ -505,9 +505,9 @@ func validateTCPSource(pipelineName string, index int, opts *TCPSourceOptions) e
 		}
 	}
 
-	// Validate NetLimit if present
-	if opts.NetLimit != nil {
-		if err := validateNetLimit(pipelineName, fmt.Sprintf("source[%d]", index), opts.NetLimit); err != nil {
+	// Validate ACL if present
+	if opts.ACL != nil {
+		if err := validateACL(pipelineName, fmt.Sprintf("source[%d]", index), opts.ACL); err != nil {
 			return err
 		}
 	}
@@ -599,8 +599,8 @@ func validateHTTPSink(pipelineName string, index int, opts *HTTPSinkOptions, all
 		}
 	}
 
-	if opts.NetLimit != nil {
-		if err := validateNetLimit(pipelineName, fmt.Sprintf("sink[%d]", index), opts.NetLimit); err != nil {
+	if opts.ACL != nil {
+		if err := validateACL(pipelineName, fmt.Sprintf("sink[%d]", index), opts.ACL); err != nil {
 			return err
 		}
 	}
@@ -647,8 +647,8 @@ func validateTCPSink(pipelineName string, index int, opts *TCPSinkOptions, allPo
 		}
 	}
 
-	if opts.NetLimit != nil {
-		if err := validateNetLimit(pipelineName, fmt.Sprintf("sink[%d]", index), opts.NetLimit); err != nil {
+	if opts.ACL != nil {
+		if err := validateACL(pipelineName, fmt.Sprintf("sink[%d]", index), opts.ACL); err != nil {
 			return err
 		}
 	}
@@ -721,7 +721,7 @@ func validateTCPClientSink(pipelineName string, index int, opts *TCPClientSinkOp
 		opts.BufferSize = 1000
 	}
 	if opts.DialTimeout <= 0 {
-		opts.DialTimeout = 10 // 10 seconds
+		opts.DialTimeout = 10
 	}
 	if opts.WriteTimeout <= 0 {
 		opts.WriteTimeout = 30 // 30 seconds
@@ -745,14 +745,22 @@ func validateTCPClientSink(pipelineName string, index int, opts *TCPClientSinkOp
 	return nil
 }
 
-// validateNetLimit validates nested NetLimitConfig settings.
-func validateNetLimit(pipelineName, location string, nl *NetLimitConfig) error {
+// validateACL validates nested ACLConfig settings.
+func validateACL(pipelineName, location string, nl *ACLConfig) error {
 	if !nl.Enabled {
 		return nil // Skip validation if disabled
 	}
 
-	if nl.MaxConnections < 0 {
-		return fmt.Errorf("pipeline '%s' %s: max_connections cannot be negative", pipelineName, location)
+	if nl.MaxConnectionsPerIP < 0 {
+		return fmt.Errorf("pipeline '%s' %s: max_connections_per_ip cannot be negative", pipelineName, location)
+	}
+
+	if nl.MaxConnectionsTotal < 0 {
+		return fmt.Errorf("pipeline '%s' %s: max_connections_total cannot be negative", pipelineName, location)
+	}
+
+	if nl.MaxConnectionsTotal < nl.MaxConnectionsPerIP && nl.MaxConnectionsTotal != 0 {
+		return fmt.Errorf("pipeline '%s' %s: max_connections_total cannot be less than max_connections_per_ip", pipelineName, location)
 	}
 
 	if nl.BurstSize < 0 {

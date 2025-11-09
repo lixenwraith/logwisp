@@ -21,12 +21,19 @@ type Formatter interface {
 
 // NewFormatter is a factory function that creates a Formatter based on the provided configuration.
 func NewFormatter(cfg *config.FormatConfig, logger *log.Logger) (Formatter, error) {
+	if cfg == nil {
+		// Fallback to raw when no formatter configured
+		return NewRawFormatter(&config.RawFormatterOptions{
+			AddNewLine: true,
+		}, logger)
+	}
+
 	switch cfg.Type {
 	case "json":
 		return NewJSONFormatter(cfg.JSONFormatOptions, logger)
 	case "txt":
 		return NewTxtFormatter(cfg.TxtFormatOptions, logger)
-	case "raw", "":
+	case "raw":
 		return NewRawFormatter(cfg.RawFormatOptions, logger)
 	default:
 		return nil, fmt.Errorf("unknown formatter type: %s", cfg.Type)

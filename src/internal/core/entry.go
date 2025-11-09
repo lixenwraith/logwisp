@@ -1,12 +1,10 @@
-// FILE: logwisp/src/internal/core/data.go
+// FILE: logwisp/src/internal/core/entry.go
 package core
 
 import (
 	"encoding/json"
 	"time"
 )
-
-const MaxSessionTime = time.Minute * 30
 
 // Represents a single log record flowing through the pipeline
 type LogEntry struct {

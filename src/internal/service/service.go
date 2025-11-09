@@ -206,10 +206,10 @@ func (s *Service) wirePipeline(p *Pipeline) {
 // createSource is a factory function for creating a source instance from configuration.
 func (s *Service) createSource(cfg *config.SourceConfig) (source.Source, error) {
 	switch cfg.Type {
-	case "directory":
-		return source.NewDirectorySource(cfg.Directory, s.logger)
-	case "stdin":
-		return source.NewStdinSource(cfg.Stdin, s.logger)
+	case "file":
+		return source.NewFileSource(cfg.File, s.logger)
+	case "console":
+		return source.NewConsoleSource(cfg.Console, s.logger)
 	case "http":
 		return source.NewHTTPSource(cfg.HTTP, s.logger)
 	case "tcp":

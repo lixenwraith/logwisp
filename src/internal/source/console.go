@@ -1,4 +1,4 @@
-// FILE: logwisp/src/internal/source/stdin.go
+// FILE: logwisp/src/internal/source/console.go
 package source
 
 import (
@@ -13,27 +13,34 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// StdinSource reads log entries from the standard input stream.
-type StdinSource struct {
-	config         *config.StdinSourceOptions
-	subscribers    []chan core.LogEntry
-	done           chan struct{}
+// ConsoleSource reads log entries from the standard input stream.
+type ConsoleSource struct {
+	// Configuration
+	config *config.ConsoleSourceOptions
+
+	// Application
+	subscribers []chan core.LogEntry
+	logger      *log.Logger
+
+	// Runtime
+	done chan struct{}
+
+	// Statistics
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
 	startTime      time.Time
 	lastEntryTime  atomic.Value // time.Time
-	logger         *log.Logger
 }
 
-// NewStdinSource creates a new stdin source.
-func NewStdinSource(opts *config.StdinSourceOptions, logger *log.Logger) (*StdinSource, error) {
+// NewConsoleSource creates a new console(stdin) source.
+func NewConsoleSource(opts *config.ConsoleSourceOptions, logger *log.Logger) (*ConsoleSource, error) {
 	if opts == nil {
-		opts = &config.StdinSourceOptions{
+		opts = &config.ConsoleSourceOptions{
 			BufferSize: 1000, // Default
 		}
 	}
 
-	source := &StdinSource{
+	source := &ConsoleSource{
 		config:      opts,
 		subscribers: make([]chan core.LogEntry, 0),
 		done:        make(chan struct{}),
@@ -45,34 +52,34 @@ func NewStdinSource(opts *config.StdinSourceOptions, logger *log.Logger) (*Stdin
 }
 
 // Subscribe returns a channel for receiving log entries.
-func (s *StdinSource) Subscribe() <-chan core.LogEntry {
+func (s *ConsoleSource) Subscribe() <-chan core.LogEntry {
 	ch := make(chan core.LogEntry, s.config.BufferSize)
 	s.subscribers = append(s.subscribers, ch)
 	return ch
 }
 
 // Start begins reading from the standard input.
-func (s *StdinSource) Start() error {
+func (s *ConsoleSource) Start() error {
 	go s.readLoop()
-	s.logger.Info("msg", "Stdin source started", "component", "stdin_source")
+	s.logger.Info("msg", "Console source started", "component", "console_source")
 	return nil
 }
 
 // Stop signals the source to stop reading.
-func (s *StdinSource) Stop() {
+func (s *ConsoleSource) Stop() {
 	close(s.done)
 	for _, ch := range s.subscribers {
 		close(ch)
 	}
-	s.logger.Info("msg", "Stdin source stopped", "component", "stdin_source")
+	s.logger.Info("msg", "Console source stopped", "component", "console_source")
 }
 
 // GetStats returns the source's statistics.
-func (s *StdinSource) GetStats() SourceStats {
+func (s *ConsoleSource) GetStats() SourceStats {
 	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
 
 	return SourceStats{
-		Type:           "stdin",
+		Type:           "console",
 		TotalEntries:   s.totalEntries.Load(),
 		DroppedEntries: s.droppedEntries.Load(),
 		StartTime:      s.startTime,
@@ -82,24 +89,28 @@ func (s *StdinSource) GetStats() SourceStats {
 }
 
 // readLoop continuously reads lines from stdin and publishes them.
-func (s *StdinSource) readLoop() {
+func (s *ConsoleSource) readLoop() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		select {
 		case <-s.done:
 			return
 		default:
-			line := scanner.Text()
-			if line == "" {
+			// Get raw line
+			lineBytes := scanner.Bytes()
+			if len(lineBytes) == 0 {
 				continue
 			}
 
+			// Add newline back (scanner strips it)
+			lineWithNewline := append(lineBytes, '\n')
+
 			entry := core.LogEntry{
 				Time:    time.Now(),
-				Source:  "stdin",
-				Message: line,
-				Level:   extractLogLevel(line),
-				RawSize: int64(len(line)),
+				Source:  "console",
+				Message: string(lineWithNewline), // Keep newline
+				Level:   extractLogLevel(string(lineBytes)),
+				RawSize: int64(len(lineWithNewline)),
 			}
 
 			s.publish(entry)
@@ -108,13 +119,13 @@ func (s *StdinSource) readLoop() {
 
 	if err := scanner.Err(); err != nil {
 		s.logger.Error("msg", "Scanner error reading stdin",
-			"component", "stdin_source",
+			"component", "console_source",
 			"error", err)
 	}
 }
 
 // publish sends a log entry to all subscribers.
-func (s *StdinSource) publish(entry core.LogEntry) {
+func (s *ConsoleSource) publish(entry core.LogEntry) {
 	s.totalEntries.Add(1)
 	s.lastEntryTime.Store(entry.Time)
 
@@ -124,7 +135,7 @@ func (s *StdinSource) publish(entry core.LogEntry) {
 		default:
 			s.droppedEntries.Add(1)
 			s.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
-				"component", "stdin_source")
+				"component", "console_source")
 		}
 	}
 }

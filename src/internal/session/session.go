@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"logwisp/src/internal/core"
 )
 
 // Session represents a connection session.
@@ -39,7 +41,7 @@ type Manager struct {
 // NewManager creates a new session manager with a specified idle timeout.
 func NewManager(maxIdleTime time.Duration) *Manager {
 	if maxIdleTime == 0 {
-		maxIdleTime = 30 * time.Minute // Default idle timeout
+		maxIdleTime = core.SessionDefaultMaxIdleTime
 	}
 
 	m := &Manager{
@@ -233,7 +235,7 @@ func (m *Manager) UnregisterExpiryCallback(source string) {
 
 // startCleanup initializes the periodic cleanup of idle sessions.
 func (m *Manager) startCleanup() {
-	m.cleanupTicker = time.NewTicker(5 * time.Minute)
+	m.cleanupTicker = time.NewTicker(core.SessionCleanupInterval)
 
 	go func() {
 		for {

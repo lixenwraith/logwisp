@@ -40,7 +40,7 @@ Reads log entries from standard input.
 
 ```toml
 [[pipelines.sources]]
-type = "stdin"
+type = "console"
 
 [pipelines.sources.stdin]
 buffer_size = 1000
@@ -152,47 +152,10 @@ ip_blacklist = ["10.0.0.0/8"]
 enabled = true
 cert_file = "/path/to/cert.pem"
 key_file = "/path/to/key.pem"
-ca_file = "/path/to/ca.pem"
 min_version = "TLS1.2"
 client_auth = true
 client_ca_file = "/path/to/client-ca.pem"
 verify_client_cert = true
-```
-
-### Authentication
-
-HTTP Source authentication options:
-
-```toml
-[pipelines.sources.http.auth]
-type = "basic"  # none|basic|token|mtls
-realm = "LogWisp"
-
-# Basic auth
-[[pipelines.sources.http.auth.basic.users]]
-username = "admin"
-password_hash = "$argon2..."
-
-# Token auth
-[pipelines.sources.http.auth.token]
-tokens = ["token1", "token2"]
-```
-
-TCP Source authentication:
-
-```toml
-[pipelines.sources.tcp.auth]
-type = "scram"  # none|scram
-
-# SCRAM users
-[[pipelines.sources.tcp.auth.scram.users]]
-username = "user1"
-stored_key = "base64..."
-server_key = "base64..."
-salt = "base64..."
-argon_time = 3
-argon_memory = 65536
-argon_threads = 4
 ```
 
 ## Source Statistics

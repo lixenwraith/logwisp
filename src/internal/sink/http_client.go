@@ -25,19 +25,30 @@ import (
 // TODO: add heartbeat
 // HTTPClientSink forwards log entries to a remote HTTP endpoint.
 type HTTPClientSink struct {
-	input          chan core.LogEntry
-	config         *config.HTTPClientSinkOptions
-	client         *fasthttp.Client
-	batch          []core.LogEntry
-	batchMu        sync.Mutex
-	done           chan struct{}
-	wg             sync.WaitGroup
-	startTime      time.Time
-	logger         *log.Logger
-	formatter      format.Formatter
+	// Configuration
+	config *config.HTTPClientSinkOptions
+
+	// Network
+	client     *fasthttp.Client
+	tlsManager *ltls.ClientManager
+
+	// Application
+	input     chan core.LogEntry
+	formatter format.Formatter
+	logger    *log.Logger
+
+	// Runtime
+	done      chan struct{}
+	wg        sync.WaitGroup
+	startTime time.Time
+
+	// Batching
+	batch   []core.LogEntry
+	batchMu sync.Mutex
+
+	// Security & Session
 	sessionID      string
 	sessionManager *session.Manager
-	tlsManager     *ltls.ClientManager
 
 	// Statistics
 	totalProcessed    atomic.Uint64

@@ -79,12 +79,12 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 					"listen", fmt.Sprintf("%s:%d", host, sinkCfg.TCP.Port))
 
 				// Display net limit info if configured
-				if sinkCfg.TCP.NetLimit != nil && sinkCfg.TCP.NetLimit.Enabled {
+				if sinkCfg.TCP.ACL != nil && sinkCfg.TCP.ACL.Enabled {
 					logger.Info("msg", "TCP net limiting enabled",
 						"pipeline", cfg.Name,
 						"sink_index", i,
-						"requests_per_second", sinkCfg.TCP.NetLimit.RequestsPerSecond,
-						"burst_size", sinkCfg.TCP.NetLimit.BurstSize)
+						"requests_per_second", sinkCfg.TCP.ACL.RequestsPerSecond,
+						"burst_size", sinkCfg.TCP.ACL.BurstSize)
 				}
 			}
 
@@ -112,12 +112,12 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 					"status_url", fmt.Sprintf("http://%s:%d%s", host, sinkCfg.HTTP.Port, statusPath))
 
 				// Display net limit info if configured
-				if sinkCfg.HTTP.NetLimit != nil && sinkCfg.HTTP.NetLimit.Enabled {
+				if sinkCfg.HTTP.ACL != nil && sinkCfg.HTTP.ACL.Enabled {
 					logger.Info("msg", "HTTP net limiting enabled",
 						"pipeline", cfg.Name,
 						"sink_index", i,
-						"requests_per_second", sinkCfg.HTTP.NetLimit.RequestsPerSecond,
-						"burst_size", sinkCfg.HTTP.NetLimit.BurstSize)
+						"requests_per_second", sinkCfg.HTTP.ACL.RequestsPerSecond,
+						"burst_size", sinkCfg.HTTP.ACL.BurstSize)
 				}
 			}
 
@@ -143,6 +143,34 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	// Display source endpoints with host support
 	for i, sourceCfg := range cfg.Sources {
 		switch sourceCfg.Type {
+		case "tcp":
+			if sourceCfg.TCP != nil {
+				host := "0.0.0.0"
+				if sourceCfg.TCP.Host != "" {
+					host = sourceCfg.TCP.Host
+				}
+
+				displayHost := host
+				if host == "0.0.0.0" {
+					displayHost = "localhost"
+				}
+
+				logger.Info("msg", "TCP source configured",
+					"pipeline", cfg.Name,
+					"source_index", i,
+					"listen", fmt.Sprintf("%s:%d", host, sourceCfg.TCP.Port),
+					"endpoint", fmt.Sprintf("%s:%d", displayHost, sourceCfg.TCP.Port))
+
+				// Display net limit info if configured
+				if sourceCfg.TCP.ACL != nil && sourceCfg.TCP.ACL.Enabled {
+					logger.Info("msg", "TCP net limiting enabled",
+						"pipeline", cfg.Name,
+						"sink_index", i,
+						"requests_per_second", sourceCfg.TCP.ACL.RequestsPerSecond,
+						"burst_size", sourceCfg.TCP.ACL.BurstSize)
+				}
+			}
+
 		case "http":
 			if sourceCfg.HTTP != nil {
 				host := "0.0.0.0"
@@ -165,38 +193,28 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 					"source_index", i,
 					"listen", fmt.Sprintf("%s:%d", host, sourceCfg.HTTP.Port),
 					"ingest_url", fmt.Sprintf("http://%s:%d%s", displayHost, sourceCfg.HTTP.Port, ingestPath))
+
+				// Display net limit info if configured
+				if sourceCfg.HTTP.ACL != nil && sourceCfg.HTTP.ACL.Enabled {
+					logger.Info("msg", "HTTP net limiting enabled",
+						"pipeline", cfg.Name,
+						"sink_index", i,
+						"requests_per_second", sourceCfg.HTTP.ACL.RequestsPerSecond,
+						"burst_size", sourceCfg.HTTP.ACL.BurstSize)
+				}
 			}
 
-		case "tcp":
-			if sourceCfg.TCP != nil {
-				host := "0.0.0.0"
-				if sourceCfg.TCP.Host != "" {
-					host = sourceCfg.TCP.Host
-				}
-
-				displayHost := host
-				if host == "0.0.0.0" {
-					displayHost = "localhost"
-				}
-
-				logger.Info("msg", "TCP source configured",
+		case "file":
+			if sourceCfg.File != nil {
+				logger.Info("msg", "File source configured",
 					"pipeline", cfg.Name,
 					"source_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, sourceCfg.TCP.Port),
-					"endpoint", fmt.Sprintf("%s:%d", displayHost, sourceCfg.TCP.Port))
+					"path", sourceCfg.File.Directory,
+					"pattern", sourceCfg.File.Pattern)
 			}
 
-		case "directory":
-			if sourceCfg.Directory != nil {
-				logger.Info("msg", "Directory source configured",
-					"pipeline", cfg.Name,
-					"source_index", i,
-					"path", sourceCfg.Directory.Path,
-					"pattern", sourceCfg.Directory.Pattern)
-			}
-
-		case "stdin":
-			logger.Info("msg", "Stdin source configured",
+		case "console":
+			logger.Info("msg", "Console source configured",
 				"pipeline", cfg.Name,
 				"source_index", i)
 		}

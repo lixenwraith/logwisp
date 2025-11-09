@@ -12,7 +12,7 @@ import (
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
-	"logwisp/src/internal/limit"
+	"logwisp/src/internal/network"
 	"logwisp/src/internal/session"
 	ltls "logwisp/src/internal/tls"
 
@@ -22,12 +22,15 @@ import (
 
 // HTTPSource receives log entries via HTTP POST requests.
 type HTTPSource struct {
+	// Configuration
 	config *config.HTTPSourceOptions
 
+	// Network
+	server     *fasthttp.Server
+	netLimiter *network.NetLimiter
+
 	// Application
-	server      *fasthttp.Server
 	subscribers []chan core.LogEntry
-	netLimiter  *limit.NetLimiter
 	logger      *log.Logger
 
 	// Runtime
@@ -35,8 +38,8 @@ type HTTPSource struct {
 	done chan struct{}
 	wg   sync.WaitGroup
 
-	// Security
-	httpSessions   sync.Map
+	// Security & Session
+	httpSessions   sync.Map // remoteAddr -> sessionID
 	sessionManager *session.Manager
 	tlsManager     *ltls.ServerManager
 	tlsStates      sync.Map // remoteAddr -> *tls.ConnectionState
@@ -66,10 +69,10 @@ func NewHTTPSource(opts *config.HTTPSourceOptions, logger *log.Logger) (*HTTPSou
 	h.lastEntryTime.Store(time.Time{})
 
 	// Initialize net limiter if configured
-	if opts.NetLimit != nil && (opts.NetLimit.Enabled ||
-		len(opts.NetLimit.IPWhitelist) > 0 ||
-		len(opts.NetLimit.IPBlacklist) > 0) {
-		h.netLimiter = limit.NewNetLimiter(opts.NetLimit, logger)
+	if opts.ACL != nil && (opts.ACL.Enabled ||
+		len(opts.ACL.IPWhitelist) > 0 ||
+		len(opts.ACL.IPBlacklist) > 0) {
+		h.netLimiter = network.NewNetLimiter(opts.ACL, logger)
 	}
 
 	// Initialize TLS manager if configured
@@ -97,8 +100,8 @@ func (h *HTTPSource) Subscribe() <-chan core.LogEntry {
 // Start initializes and starts the HTTP server.
 func (h *HTTPSource) Start() error {
 	// Register expiry callback
-	h.sessionManager.RegisterExpiryCallback("http_source", func(sessionID, remoteAddr string) {
-		h.handleSessionExpiry(sessionID, remoteAddr)
+	h.sessionManager.RegisterExpiryCallback("http_source", func(sessionID, remoteAddrStr string) {
+		h.handleSessionExpiry(sessionID, remoteAddrStr)
 	})
 
 	h.server = &fasthttp.Server{
@@ -256,10 +259,10 @@ func (h *HTTPSource) GetStats() SourceStats {
 
 // requestHandler is the main entry point for all incoming HTTP requests.
 func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
-	remoteAddr := ctx.RemoteAddr().String()
+	remoteAddrStr := ctx.RemoteAddr().String()
 
 	// 1. IPv6 check (early reject)
-	ipStr, _, err := net.SplitHostPort(remoteAddr)
+	ipStr, _, err := net.SplitHostPort(remoteAddrStr)
 	if err == nil {
 		if ip := net.ParseIP(ipStr); ip != nil && ip.To4() == nil {
 			ctx.SetStatusCode(fasthttp.StatusForbidden)
@@ -273,7 +276,7 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 
 	// 2. Net limit check (early reject)
 	if h.netLimiter != nil {
-		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddr); !allowed {
+		if allowed, statusCode, message := h.netLimiter.CheckHTTP(remoteAddrStr); !allowed {
 			ctx.SetStatusCode(int(statusCode))
 			ctx.SetContentType("application/json")
 			json.NewEncoder(ctx).Encode(map[string]any{
@@ -282,11 +285,22 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 			})
 			return
 		}
+
+		// Reserve connection slot and release when finished
+		if !h.netLimiter.ReserveConnection(remoteAddrStr) {
+			ctx.SetStatusCode(fasthttp.StatusTooManyRequests)
+			ctx.SetContentType("application/json")
+			json.NewEncoder(ctx).Encode(map[string]string{
+				"error": "Connection limit exceeded",
+			})
+			return
+		}
+		defer h.netLimiter.ReleaseConnection(remoteAddrStr)
 	}
 
 	// 3. Create session for connections
 	var sess *session.Session
-	if savedID, exists := h.httpSessions.Load(remoteAddr); exists {
+	if savedID, exists := h.httpSessions.Load(remoteAddrStr); exists {
 		if s, found := h.sessionManager.GetSession(savedID.(string)); found {
 			sess = s
 			h.sessionManager.UpdateActivity(savedID.(string))
@@ -295,15 +309,15 @@ func (h *HTTPSource) requestHandler(ctx *fasthttp.RequestCtx) {
 
 	if sess == nil {
 		// New connection
-		sess = h.sessionManager.CreateSession(remoteAddr, "http_source", map[string]any{
+		sess = h.sessionManager.CreateSession(remoteAddrStr, "http_source", map[string]any{
 			"tls":          ctx.IsTLS() || h.tlsManager != nil,
 			"mtls_enabled": h.config.TLS != nil && h.config.TLS.ClientAuth,
 		})
-		h.httpSessions.Store(remoteAddr, sess.ID)
+		h.httpSessions.Store(remoteAddrStr, sess.ID)
 
 		// Setup connection close handler
 		ctx.SetConnectionClose()
-		go h.cleanupHTTPSession(remoteAddr, sess.ID)
+		go h.cleanupHTTPSession(remoteAddrStr, sess.ID)
 	}
 
 	// 4. Path check
@@ -397,14 +411,14 @@ func (h *HTTPSource) publish(entry core.LogEntry) {
 }
 
 // handleSessionExpiry is the callback for cleaning up expired sessions.
-func (h *HTTPSource) handleSessionExpiry(sessionID, remoteAddr string) {
+func (h *HTTPSource) handleSessionExpiry(sessionID, remoteAddrStr string) {
 	h.logger.Info("msg", "Removing expired HTTP session",
 		"component", "http_source",
 		"session_id", sessionID,
-		"remote_addr", remoteAddr)
+		"remote_addr", remoteAddrStr)
 
 	// Remove from mapping
-	h.httpSessions.Delete(remoteAddr)
+	h.httpSessions.Delete(remoteAddrStr)
 }
 
 // cleanupHTTPSession removes a session when a client connection is closed.

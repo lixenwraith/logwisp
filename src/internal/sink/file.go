@@ -2,7 +2,6 @@
 package sink
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync/atomic"
@@ -17,13 +16,18 @@ import (
 
 // FileSink writes log entries to files with rotation.
 type FileSink struct {
-	config    *config.FileSinkOptions
+	// Configuration
+	config *config.FileSinkOptions
+
+	// Application
 	input     chan core.LogEntry
-	writer    *log.Logger // Internal logger instance for file writing
+	writer    *log.Logger // internal logger for file writing
+	formatter format.Formatter
+	logger    *log.Logger // application logger
+
+	// Runtime
 	done      chan struct{}
 	startTime time.Time
-	logger    *log.Logger // Application logger
-	formatter format.Formatter
 
 	// Statistics
 	totalProcessed atomic.Uint64
@@ -130,8 +134,7 @@ func (fs *FileSink) processLoop(ctx context.Context) {
 			}
 
 			// Convert to string to prevent hex encoding of []byte by log package
-			// Strip new line, writer adds it
-			message := string(bytes.TrimSuffix(formatted, []byte{'\n'}))
+			message := string(formatted)
 			fs.writer.Message(message)
 
 		case <-ctx.Done():

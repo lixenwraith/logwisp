@@ -4,16 +4,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"logwisp/src/cmd/logwisp/commands"
+	"logwisp/src/internal/config"
+	"logwisp/src/internal/core"
+	"logwisp/src/internal/version"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
-
-	"logwisp/src/cmd/logwisp/commands"
-	"logwisp/src/internal/config"
-	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
 )
@@ -160,7 +159,7 @@ func main() {
 		logger.Info("msg", "Shutdown signal received, starting graceful shutdown...")
 
 		// Shutdown service with timeout
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), core.ShutdownTimeout)
 		defer shutdownCancel()
 
 		done := make(chan struct{})
@@ -190,7 +189,7 @@ func main() {
 // shutdownLogger gracefully shuts down the global logger.
 func shutdownLogger() {
 	if logger != nil {
-		if err := logger.Shutdown(2 * time.Second); err != nil {
+		if err := logger.Shutdown(core.LoggerShutdownTimeout); err != nil {
 			// Best effort - can't log the shutdown error
 			Error("Logger shutdown error: %v\n", err)
 		}

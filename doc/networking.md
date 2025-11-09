@@ -22,7 +22,6 @@ Network configuration for LogWisp connections, including TLS, rate limiting, and
 enabled = true
 cert_file = "/path/to/server.pem"
 key_file = "/path/to/server.key"
-ca_file = "/path/to/ca.pem"
 min_version = "TLS1.2"  # TLS1.2|TLS1.3
 client_auth = false
 client_ca_file = "/path/to/client-ca.pem"
@@ -34,10 +33,11 @@ verify_client_cert = true
 ```toml
 [pipelines.sinks.http_client.tls]
 enabled = true
+server_ca_file = "/path/to/ca.pem"  # For server verification
 server_name = "logs.example.com"
-skip_verify = false
-cert_file = "/path/to/client.pem"  # For mTLS
-key_file = "/path/to/client.key"   # For mTLS
+insecure_skip_verify = false
+client_cert_file = "/path/to/client.pem"  # For mTLS
+client_key_file = "/path/to/client.key"   # For mTLS
 ```
 
 ### TLS Certificate Generation

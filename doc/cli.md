@@ -15,29 +15,9 @@ logwisp [options]
 
 | Command | Description |
 |---------|-------------|
-| `auth` | Generate authentication credentials |
 | `tls` | Generate TLS certificates |
 | `version` | Display version information |
 | `help` | Show help information |
-
-### auth Command
-
-Generate authentication credentials.
-
-```bash
-logwisp auth [options]
-```
-
-**Options:**
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `-u, --user` | Username | Required for password auth |
-| `-p, --password` | Password | Prompts if not provided |
-| `-b, --basic` | Generate basic auth | - |
-| `-s, --scram` | Generate SCRAM auth | - |
-| `-k, --token` | Generate bearer token | - |
-| `-l, --length` | Token length in bytes | 32 |
 
 ### tls Command
 
