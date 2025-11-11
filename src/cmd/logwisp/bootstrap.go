@@ -13,39 +13,25 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// bootstrapService creates and initializes the main log transport service and its pipelines.
+// bootstrapService creates and initializes the main log transport service and its pipelines
 func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, error) {
 	// Create service with logger dependency injection
-	svc := service.NewService(ctx, logger)
-
-	// Initialize pipelines
-	successCount := 0
-	for _, pipelineCfg := range cfg.Pipelines {
-		logger.Info("msg", "Initializing pipeline", "pipeline", pipelineCfg.Name)
-
-		// Create the pipeline
-		if err := svc.NewPipeline(&pipelineCfg); err != nil {
-			logger.Error("msg", "Failed to create pipeline",
-				"pipeline", pipelineCfg.Name,
-				"error", err)
-			continue
-		}
-		successCount++
-		displayPipelineEndpoints(pipelineCfg)
-	}
-
-	if successCount == 0 {
-		return nil, fmt.Errorf("no pipelines successfully started (attempted %d)", len(cfg.Pipelines))
+	svc, err := service.NewService(ctx, cfg, logger)
+	if err != nil {
+		logger.Error("msg", "Failed to initialize service",
+			"component", "bootstrap",
+		)
+		return nil, err
 	}
 
 	logger.Info("msg", "LogWisp started",
 		"version", version.Short(),
-		"pipelines", successCount)
+	)
 
 	return svc, nil
 }
 
-// initializeLogger sets up the global logger based on the application's configuration.
+// initializeLogger sets up the global logger based on the application's configuration
 func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 	logCfg := log.DefaultConfig()
@@ -103,7 +89,7 @@ func initializeLogger(cfg *config.Config) error {
 	return logger.ApplyConfig(logCfg)
 }
 
-// configureFileLogging sets up file-based logging parameters from the configuration.
+// configureFileLogging sets up file-based logging parameters from the configuration
 func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	if cfg.Logging.File != nil {
 		logCfg.Directory = cfg.Logging.File.Directory
@@ -116,7 +102,7 @@ func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	}
 }
 
-// parseLogLevel converts a string log level to its corresponding integer value.
+// parseLogLevel converts a string log level to its corresponding integer value
 func parseLogLevel(level string) (int64, error) {
 	switch strings.ToLower(level) {
 	case "debug":

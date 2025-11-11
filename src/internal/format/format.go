@@ -10,16 +10,16 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Formatter defines the interface for transforming a LogEntry into a byte slice.
+// Formatter defines the interface for transforming a LogEntry into a byte slice
 type Formatter interface {
-	// Format takes a LogEntry and returns the formatted log as a byte slice.
+	// Format takes a LogEntry and returns the formatted log as a byte slice
 	Format(entry core.LogEntry) ([]byte, error)
 
-	// Name returns the formatter's type name (e.g., "json", "raw").
+	// Name returns the formatter's type name (e.g., "json", "raw")
 	Name() string
 }
 
-// NewFormatter is a factory function that creates a Formatter based on the provided configuration.
+// NewFormatter is a factory function that creates a Formatter based on the provided configuration
 func NewFormatter(cfg *config.FormatConfig, logger *log.Logger) (Formatter, error) {
 	if cfg == nil {
 		// Fallback to raw when no formatter configured

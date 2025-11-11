@@ -11,10 +11,10 @@ import (
 	lconfig "github.com/lixenwraith/config"
 )
 
-// configManager holds the global instance of the configuration manager.
+// configManager holds the global instance of the configuration manager
 var configManager *lconfig.Config
 
-// Load is the single entry point for loading all application configuration.
+// Load is the single entry point for loading all application configuration
 func Load(args []string) (*Config, error) {
 	configPath, isExplicit := resolveConfigPath(args)
 	// Build configuration with all sources
@@ -65,12 +65,12 @@ func Load(args []string) (*Config, error) {
 	return finalConfig, nil
 }
 
-// GetConfigManager returns the global configuration manager instance for hot-reloading.
+// GetConfigManager returns the global configuration manager instance for hot-reloading
 func GetConfigManager() *lconfig.Config {
 	return configManager
 }
 
-// defaults provides the default configuration values for the application.
+// defaults provides the default configuration values for the application
 func defaults() *Config {
 	return &Config{
 		// Top-level flag defaults
@@ -119,7 +119,6 @@ func defaults() *Config {
 						Type: "console",
 						Console: &ConsoleSinkOptions{
 							Target:     "stdout",
-							Colorize:   false,
 							BufferSize: 100,
 						},
 					},
@@ -129,7 +128,7 @@ func defaults() *Config {
 	}
 }
 
-// resolveConfigPath determines the configuration file path based on CLI args, env vars, and default locations.
+// resolveConfigPath determines the configuration file path based on CLI args, env vars, and default locations
 func resolveConfigPath(args []string) (path string, isExplicit bool) {
 	// 1. Check for --config flag in command-line arguments (highest precedence)
 	for i, arg := range args {
@@ -165,7 +164,7 @@ func resolveConfigPath(args []string) (path string, isExplicit bool) {
 	return "logwisp.toml", false
 }
 
-// customEnvTransform converts TOML-style config paths (e.g., logging.level) to environment variable format (LOGGING_LEVEL).
+// customEnvTransform converts TOML-style config paths (e.g., logging.level) to environment variable format (LOGGING_LEVEL)
 func customEnvTransform(path string) string {
 	env := strings.ReplaceAll(path, ".", "_")
 	env = strings.ToUpper(env)

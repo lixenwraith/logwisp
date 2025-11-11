@@ -1,4 +1,4 @@
-// FILE: logwisp/src/internal/core/entry.go
+// FILE: logwisp/src/internal/core/flow.go
 package core
 
 import (
@@ -14,4 +14,11 @@ type LogEntry struct {
 	Message string          `json:"message"`
 	Fields  json.RawMessage `json:"fields,omitempty"`
 	RawSize int64           `json:"-"`
+}
+
+// TransportEvent contains the final payload and minimal metadata needed by sinks
+type TransportEvent struct {
+	Time time.Time
+	// Formatted, serialized log payload
+	Payload []byte
 }

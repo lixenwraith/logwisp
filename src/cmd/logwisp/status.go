@@ -3,14 +3,13 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/service"
 )
 
-// statusReporter is a goroutine that periodically logs the health and statistics of the service.
+// statusReporter is a goroutine that periodically logs the health and statistics of the service
 func statusReporter(service *service.Service, ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -60,67 +59,11 @@ func statusReporter(service *service.Service, ctx context.Context) {
 	}
 }
 
-// displayPipelineEndpoints logs the configured source and sink endpoints for a pipeline at startup.
+// displayPipelineEndpoints logs the configured source and sink endpoints for a pipeline at startup
 func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	// Display sink endpoints
 	for i, sinkCfg := range cfg.Sinks {
 		switch sinkCfg.Type {
-		case "tcp":
-			if sinkCfg.TCP != nil {
-				host := "0.0.0.0"
-				if sinkCfg.TCP.Host != "" {
-					host = sinkCfg.TCP.Host
-				}
-
-				logger.Info("msg", "TCP endpoint configured",
-					"component", "main",
-					"pipeline", cfg.Name,
-					"sink_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, sinkCfg.TCP.Port))
-
-				// Display net limit info if configured
-				if sinkCfg.TCP.ACL != nil && sinkCfg.TCP.ACL.Enabled {
-					logger.Info("msg", "TCP net limiting enabled",
-						"pipeline", cfg.Name,
-						"sink_index", i,
-						"requests_per_second", sinkCfg.TCP.ACL.RequestsPerSecond,
-						"burst_size", sinkCfg.TCP.ACL.BurstSize)
-				}
-			}
-
-		case "http":
-			if sinkCfg.HTTP != nil {
-				host := "0.0.0.0"
-				if sinkCfg.HTTP.Host != "" {
-					host = sinkCfg.HTTP.Host
-				}
-
-				streamPath := "/stream"
-				statusPath := "/status"
-				if sinkCfg.HTTP.StreamPath != "" {
-					streamPath = sinkCfg.HTTP.StreamPath
-				}
-				if sinkCfg.HTTP.StatusPath != "" {
-					statusPath = sinkCfg.HTTP.StatusPath
-				}
-
-				logger.Info("msg", "HTTP endpoints configured",
-					"pipeline", cfg.Name,
-					"sink_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, sinkCfg.HTTP.Port),
-					"stream_url", fmt.Sprintf("http://%s:%d%s", host, sinkCfg.HTTP.Port, streamPath),
-					"status_url", fmt.Sprintf("http://%s:%d%s", host, sinkCfg.HTTP.Port, statusPath))
-
-				// Display net limit info if configured
-				if sinkCfg.HTTP.ACL != nil && sinkCfg.HTTP.ACL.Enabled {
-					logger.Info("msg", "HTTP net limiting enabled",
-						"pipeline", cfg.Name,
-						"sink_index", i,
-						"requests_per_second", sinkCfg.HTTP.ACL.RequestsPerSecond,
-						"burst_size", sinkCfg.HTTP.ACL.BurstSize)
-				}
-			}
-
 		case "file":
 			if sinkCfg.File != nil {
 				logger.Info("msg", "File sink configured",
@@ -143,67 +86,6 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	// Display source endpoints with host support
 	for i, sourceCfg := range cfg.Sources {
 		switch sourceCfg.Type {
-		case "tcp":
-			if sourceCfg.TCP != nil {
-				host := "0.0.0.0"
-				if sourceCfg.TCP.Host != "" {
-					host = sourceCfg.TCP.Host
-				}
-
-				displayHost := host
-				if host == "0.0.0.0" {
-					displayHost = "localhost"
-				}
-
-				logger.Info("msg", "TCP source configured",
-					"pipeline", cfg.Name,
-					"source_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, sourceCfg.TCP.Port),
-					"endpoint", fmt.Sprintf("%s:%d", displayHost, sourceCfg.TCP.Port))
-
-				// Display net limit info if configured
-				if sourceCfg.TCP.ACL != nil && sourceCfg.TCP.ACL.Enabled {
-					logger.Info("msg", "TCP net limiting enabled",
-						"pipeline", cfg.Name,
-						"sink_index", i,
-						"requests_per_second", sourceCfg.TCP.ACL.RequestsPerSecond,
-						"burst_size", sourceCfg.TCP.ACL.BurstSize)
-				}
-			}
-
-		case "http":
-			if sourceCfg.HTTP != nil {
-				host := "0.0.0.0"
-				if sourceCfg.HTTP.Host != "" {
-					host = sourceCfg.HTTP.Host
-				}
-
-				displayHost := host
-				if host == "0.0.0.0" {
-					displayHost = "localhost"
-				}
-
-				ingestPath := "/ingest"
-				if sourceCfg.HTTP.IngestPath != "" {
-					ingestPath = sourceCfg.HTTP.IngestPath
-				}
-
-				logger.Info("msg", "HTTP source configured",
-					"pipeline", cfg.Name,
-					"source_index", i,
-					"listen", fmt.Sprintf("%s:%d", host, sourceCfg.HTTP.Port),
-					"ingest_url", fmt.Sprintf("http://%s:%d%s", displayHost, sourceCfg.HTTP.Port, ingestPath))
-
-				// Display net limit info if configured
-				if sourceCfg.HTTP.ACL != nil && sourceCfg.HTTP.ACL.Enabled {
-					logger.Info("msg", "HTTP net limiting enabled",
-						"pipeline", cfg.Name,
-						"sink_index", i,
-						"requests_per_second", sourceCfg.HTTP.ACL.RequestsPerSecond,
-						"burst_size", sourceCfg.HTTP.ACL.BurstSize)
-				}
-			}
-
 		case "file":
 			if sourceCfg.File != nil {
 				logger.Info("msg", "File source configured",
@@ -221,14 +103,14 @@ func displayPipelineEndpoints(cfg config.PipelineConfig) {
 	}
 
 	// Display filter information
-	if len(cfg.Filters) > 0 {
+	if cfg.Flow != nil && len(cfg.Flow.Filters) > 0 {
 		logger.Info("msg", "Filters configured",
 			"pipeline", cfg.Name,
-			"filter_count", len(cfg.Filters))
+			"filter_count", len(cfg.Flow.Filters))
 	}
 }
 
-// logPipelineStatus logs the detailed status and statistics of an individual pipeline.
+// logPipelineStatus logs the detailed status and statistics of an individual pipeline
 func logPipelineStatus(name string, stats map[string]any) {
 	statusFields := []any{
 		"msg", "Pipeline status",
@@ -250,26 +132,69 @@ func logPipelineStatus(name string, stats map[string]any) {
 
 	// Add sink statistics
 	if sinks, ok := stats["sinks"].([]map[string]any); ok {
-		tcpConns := int64(0)
-		httpConns := int64(0)
+		fileCount := 0
+		consoleCount := 0
 
 		for _, sink := range sinks {
 			sinkType := sink["type"].(string)
-			if activeConns, ok := sink["active_connections"].(int64); ok {
-				switch sinkType {
-				case "tcp":
-					tcpConns += activeConns
-				case "http":
-					httpConns += activeConns
+			switch sinkType {
+			case "file":
+				fileCount++
+			case "console":
+				consoleCount++
+			}
+		}
+
+		if fileCount > 0 {
+			statusFields = append(statusFields, "file_sinks", fileCount)
+		}
+		if consoleCount > 0 {
+			statusFields = append(statusFields, "console_sinks", consoleCount)
+		}
+		statusFields = append(statusFields, "total_sinks", len(sinks))
+	}
+
+	// Add flow statistics if present
+	if flow, ok := stats["flow"].(map[string]any); ok {
+		// Add total from flow
+		if totalFormatted, ok := flow["total_formatted"].(uint64); ok {
+			statusFields = append(statusFields, "entries_formatted", totalFormatted)
+		}
+
+		// Check if filters are active
+		if filters, ok := flow["filters"].(map[string]any); ok {
+			if filterCount, ok := filters["filter_count"].(int); ok && filterCount > 0 {
+				statusFields = append(statusFields, "filters_active", filterCount)
+
+				// Add filter stats
+				if totalFiltered, ok := filters["total_passed"].(uint64); ok {
+					statusFields = append(statusFields, "entries_passed_filters", totalFiltered)
 				}
 			}
 		}
 
-		if tcpConns > 0 {
-			statusFields = append(statusFields, "tcp_connections", tcpConns)
+		// Check if rate limiter is active
+		if rateLimiter, ok := flow["rate_limiter"].(map[string]any); ok {
+			if enabled, ok := rateLimiter["enabled"].(bool); ok && enabled {
+				statusFields = append(statusFields, "rate_limiter", "active")
+
+				// Add rate limit stats
+				if droppedTotal, ok := rateLimiter["dropped_total"].(uint64); ok {
+					statusFields = append(statusFields, "rate_limited", droppedTotal)
+				}
+			}
 		}
-		if httpConns > 0 {
-			statusFields = append(statusFields, "http_connections", httpConns)
+
+		// Check formatter type
+		if formatter, ok := flow["formatter"].(string); ok {
+			statusFields = append(statusFields, "formatter", formatter)
+		}
+
+		// Check if heartbeat is enabled
+		if heartbeatEnabled, ok := flow["heartbeat_enabled"].(bool); ok && heartbeatEnabled {
+			if intervalMs, ok := flow["heartbeat_interval_ms"].(int64); ok {
+				statusFields = append(statusFields, "heartbeat_interval_ms", intervalMs)
+			}
 		}
 	}
 

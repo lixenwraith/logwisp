@@ -10,10 +10,13 @@ import (
 
 // Sink represents an output data stream.
 type Sink interface {
-	// Input returns the channel for sending log entries to this sink.
-	Input() chan<- core.LogEntry
+	// Capabilities returns a slice of supported Source capabilities
+	Capabilities() []core.Capability
 
-	// Start begins processing log entries.
+	// Input returns the channel for sending transport events to this sink.
+	Input() chan<- core.TransportEvent
+
+	// Start begins processing transport events.
 	Start(ctx context.Context) error
 
 	// Stop gracefully shuts down the sink.
@@ -25,6 +28,7 @@ type Sink interface {
 
 // SinkStats contains statistics about a sink.
 type SinkStats struct {
+	ID                string
 	Type              string
 	TotalProcessed    uint64
 	ActiveConnections int64

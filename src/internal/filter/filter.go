@@ -13,7 +13,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Filter applies regex-based filtering to log entries.
+// Filter applies regex-based filtering to log entries
 type Filter struct {
 	config   config.FilterConfig
 	patterns []*regexp.Regexp
@@ -26,7 +26,7 @@ type Filter struct {
 	totalDropped   atomic.Uint64
 }
 
-// NewFilter creates a new filter from a configuration.
+// NewFilter creates a new filter from a configuration
 func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 	// Set defaults
 	if cfg.Type == "" {
@@ -60,7 +60,7 @@ func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 	return f, nil
 }
 
-// Apply determines if a log entry should be passed through based on the filter's rules.
+// Apply determines if a log entry should be passed through based on the filter's rules
 func (f *Filter) Apply(entry core.LogEntry) bool {
 	f.totalProcessed.Add(1)
 
@@ -130,7 +130,7 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 	return shouldPass
 }
 
-// GetStats returns the filter's current statistics.
+// GetStats returns the filter's current statistics
 func (f *Filter) GetStats() map[string]any {
 	return map[string]any{
 		"type":            f.config.Type,
@@ -142,7 +142,7 @@ func (f *Filter) GetStats() map[string]any {
 	}
 }
 
-// UpdatePatterns allows for dynamic, thread-safe updates to the filter's regex patterns.
+// UpdatePatterns allows for dynamic, thread-safe updates to the filter's regex patterns
 func (f *Filter) UpdatePatterns(patterns []string) error {
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
 
@@ -167,7 +167,7 @@ func (f *Filter) UpdatePatterns(patterns []string) error {
 	return nil
 }
 
-// matches checks if the given text matches the filter's patterns according to its logic.
+// matches checks if the given text matches the filter's patterns according to its logic
 func (f *Filter) matches(text string) bool {
 	switch f.config.Logic {
 	case config.FilterLogicOr:

@@ -11,7 +11,7 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Chain manages a sequence of filters, applying them in order.
+// Chain manages a sequence of filters, applying them in order
 type Chain struct {
 	filters []*Filter
 	logger  *log.Logger
@@ -21,7 +21,7 @@ type Chain struct {
 	totalPassed    atomic.Uint64
 }
 
-// NewChain creates a new filter chain from a slice of filter configurations.
+// NewChain creates a new filter chain from a slice of filter configurations
 func NewChain(configs []config.FilterConfig, logger *log.Logger) (*Chain, error) {
 	chain := &Chain{
 		filters: make([]*Filter, 0, len(configs)),
@@ -42,7 +42,7 @@ func NewChain(configs []config.FilterConfig, logger *log.Logger) (*Chain, error)
 	return chain, nil
 }
 
-// Apply runs a log entry through all filters in the chain.
+// Apply runs a log entry through all filters in the chain
 func (c *Chain) Apply(entry core.LogEntry) bool {
 	c.totalProcessed.Add(1)
 
@@ -67,7 +67,7 @@ func (c *Chain) Apply(entry core.LogEntry) bool {
 	return true
 }
 
-// GetStats returns aggregated statistics for the entire chain.
+// GetStats returns aggregated statistics for the entire chain
 func (c *Chain) GetStats() map[string]any {
 	filterStats := make([]map[string]any, len(c.filters))
 	for i, filter := range c.filters {

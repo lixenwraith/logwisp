@@ -1,5 +1,5 @@
 // FILE: logwisp/src/internal/source/file_watcher.go
-package source
+package file
 
 import (
 	"bufio"
@@ -9,18 +9,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"logwisp/src/internal/core"
+	"logwisp/src/internal/source"
 
 	"github.com/lixenwraith/log"
 )
 
-// WatcherInfo contains snapshot information about a file watcher's state.
+// WatcherInfo contains snapshot information about a file watcher's state
 type WatcherInfo struct {
 	Directory    string
 	Size         int64
@@ -31,7 +31,7 @@ type WatcherInfo struct {
 	Rotations    int64
 }
 
-// fileWatcher tails a single file, handles rotations, and sends new lines to a callback.
+// fileWatcher tails a single file, handles rotations, and sends new lines to a callback
 type fileWatcher struct {
 	directory    string
 	callback     func(core.LogEntry)
@@ -47,7 +47,7 @@ type fileWatcher struct {
 	logger       *log.Logger
 }
 
-// newFileWatcher creates a new watcher for a specific file path.
+// newFileWatcher creates a new watcher for a specific file path
 func newFileWatcher(directory string, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
 	w := &fileWatcher{
 		directory: directory,
@@ -59,7 +59,7 @@ func newFileWatcher(directory string, callback func(core.LogEntry), logger *log.
 	return w
 }
 
-// watch starts the main monitoring loop for the file.
+// watch starts the main monitoring loop for the file
 func (w *fileWatcher) watch(ctx context.Context) error {
 	if err := w.seekToEnd(); err != nil {
 		return fmt.Errorf("seekToEnd failed: %w", err)
@@ -84,14 +84,14 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 	}
 }
 
-// stop signals the watcher to terminate its loop.
+// stop signals the watcher to terminate its loop
 func (w *fileWatcher) stop() {
 	w.mu.Lock()
 	w.stopped = true
 	w.mu.Unlock()
 }
 
-// getInfo returns a snapshot of the watcher's current statistics.
+// getInfo returns a snapshot of the watcher's current statistics
 func (w *fileWatcher) getInfo() WatcherInfo {
 	w.mu.Lock()
 	info := WatcherInfo{
@@ -111,7 +111,7 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 	return info
 }
 
-// checkFile examines the file for changes, rotations, or new content.
+// checkFile examines the file for changes, rotations, or new content
 func (w *fileWatcher) checkFile() error {
 	file, err := os.Open(w.directory)
 	if err != nil {
@@ -298,7 +298,7 @@ func (w *fileWatcher) checkFile() error {
 	return nil
 }
 
-// seekToEnd sets the initial read position to the end of the file.
+// seekToEnd sets the initial read position to the end of the file
 func (w *fileWatcher) seekToEnd() error {
 	file, err := os.Open(w.directory)
 	if err != nil {
@@ -342,14 +342,14 @@ func (w *fileWatcher) seekToEnd() error {
 	return nil
 }
 
-// isStopped checks if the watcher has been instructed to stop.
+// isStopped checks if the watcher has been instructed to stop
 func (w *fileWatcher) isStopped() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.stopped
 }
 
-// parseLine attempts to parse a line as JSON, falling back to plain text.
+// parseLine attempts to parse a line as JSON, falling back to plain text
 func (w *fileWatcher) parseLine(line string) core.LogEntry {
 	var jsonLog struct {
 		Time    string          `json:"time"`
@@ -373,7 +373,7 @@ func (w *fileWatcher) parseLine(line string) core.LogEntry {
 		}
 	}
 
-	level := extractLogLevel(line)
+	level := source.ExtractLogLevel(line)
 
 	return core.LogEntry{
 		Time:    time.Now(),
@@ -381,29 +381,4 @@ func (w *fileWatcher) parseLine(line string) core.LogEntry {
 		Level:   level,
 		Message: line,
 	}
-}
-
-// extractLogLevel heuristically determines the log level from a line of text.
-func extractLogLevel(line string) string {
-	patterns := []struct {
-		patterns []string
-		level    string
-	}{
-		{[]string{"[ERROR]", "ERROR:", " ERROR ", "ERR:", "[ERR]", "FATAL:", "[FATAL]"}, "ERROR"},
-		{[]string{"[WARN]", "WARN:", " WARN ", "WARNING:", "[WARNING]"}, "WARN"},
-		{[]string{"[INFO]", "INFO:", " INFO ", "[INF]", "INF:"}, "INFO"},
-		{[]string{"[DEBUG]", "DEBUG:", " DEBUG ", "[DBG]", "DBG:"}, "DEBUG"},
-		{[]string{"[TRACE]", "TRACE:", " TRACE "}, "TRACE"},
-	}
-
-	upperLine := strings.ToUpper(line)
-	for _, group := range patterns {
-		for _, pattern := range group.patterns {
-			if strings.Contains(upperLine, pattern) {
-				return group.level
-			}
-		}
-	}
-
-	return ""
 }

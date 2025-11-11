@@ -4,41 +4,24 @@ package main
 import (
 	"context"
 	"fmt"
-	"logwisp/src/cmd/logwisp/commands"
-	"logwisp/src/internal/config"
-	"logwisp/src/internal/core"
-	"logwisp/src/internal/version"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	"logwisp/src/internal/config"
+	"logwisp/src/internal/core"
+	"logwisp/src/internal/version"
+
 	"github.com/lixenwraith/log"
 )
 
-// logger is the global logger instance for the application.
+// logger is the global logger instance for the application
 var logger *log.Logger
 
-// main is the entry point for the LogWisp application.
+// main is the entry point for the LogWisp application
 func main() {
-	// Handle subcommands before any config loading
-	// This prevents flag conflicts with lixenwraith/config
-	router := commands.NewCommandRouter()
-	handled, err := router.Route(os.Args)
-
-	if err != nil {
-		// Command execution error
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if handled {
-		// Command was successfully handled
-		os.Exit(0)
-	}
-
-	// No subcommand, continue with main application
 
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
@@ -63,9 +46,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Background mode spawns a child with internal --background-daemon flag.
+	// Background mode spawns a child with internal --background-daemon flag
 	if cfg.Background && !cfg.BackgroundDaemon {
-		// Prepare arguments for the child process, including originals and daemon flag.
+		// Prepare arguments for the child process, including originals and daemon flag
 		args := append(os.Args[1:], "--background-daemon")
 
 		cmd := exec.Command(os.Args[0], args...)
@@ -75,7 +58,7 @@ func main() {
 		}
 
 		Print("Started LogWisp in background (PID: %d)\n", cmd.Process.Pid)
-		os.Exit(0) // The parent process exits successfully.
+		os.Exit(0) // The parent process exits successfully
 	}
 
 	// Initialize logger instance and apply configuration

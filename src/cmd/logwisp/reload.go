@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"logwisp/src/internal/core"
 	"os"
 	"strings"
 	"sync"
@@ -12,13 +11,14 @@ import (
 	"time"
 
 	"logwisp/src/internal/config"
+	"logwisp/src/internal/core"
 	"logwisp/src/internal/service"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
-// ReloadManager handles the configuration hot-reloading functionality.
+// ReloadManager handles the configuration hot-reloading functionality
 type ReloadManager struct {
 	configPath  string
 	service     *service.Service
@@ -36,7 +36,7 @@ type ReloadManager struct {
 	statusReporterMu     sync.Mutex
 }
 
-// NewReloadManager creates a new reload manager.
+// NewReloadManager creates a new reload manager
 func NewReloadManager(configPath string, initialCfg *config.Config, logger *log.Logger) *ReloadManager {
 	return &ReloadManager{
 		configPath: configPath,
@@ -46,7 +46,7 @@ func NewReloadManager(configPath string, initialCfg *config.Config, logger *log.
 	}
 }
 
-// Start bootstraps the initial service and begins watching for configuration changes.
+// Start bootstraps the initial service and begins watching for configuration changes
 func (rm *ReloadManager) Start(ctx context.Context) error {
 	// Bootstrap initial service
 	svc, err := bootstrapService(ctx, rm.cfg)
@@ -91,7 +91,7 @@ func (rm *ReloadManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown gracefully stops the reload manager and the currently active service.
+// Shutdown gracefully stops the reload manager and the currently active service
 func (rm *ReloadManager) Shutdown() {
 	rm.logger.Info("msg", "Shutting down reload manager")
 
@@ -118,7 +118,7 @@ func (rm *ReloadManager) Shutdown() {
 	}
 }
 
-// GetService returns the currently active service instance in a thread-safe manner.
+// GetService returns the currently active service instance in a thread-safe manner
 func (rm *ReloadManager) GetService() *service.Service {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -159,7 +159,7 @@ func (rm *ReloadManager) triggerReload(ctx context.Context) {
 	rm.logger.Info("msg", "Configuration hot reload completed successfully")
 }
 
-// watchLoop is the main goroutine that monitors for configuration file changes.
+// watchLoop is the main goroutine that monitors for configuration file changes
 func (rm *ReloadManager) watchLoop(ctx context.Context) {
 	defer rm.wg.Done()
 
@@ -213,7 +213,7 @@ func (rm *ReloadManager) watchLoop(ctx context.Context) {
 	}
 }
 
-// performReload executes the steps to validate and apply a new configuration.
+// performReload executes the steps to validate and apply a new configuration
 func (rm *ReloadManager) performReload(ctx context.Context) error {
 	// Get updated config from lconfig
 	updatedCfg, err := rm.lcfg.AsStruct()
@@ -257,7 +257,7 @@ func (rm *ReloadManager) performReload(ctx context.Context) error {
 	return nil
 }
 
-// shouldReload determines if a given configuration change requires a full service reload.
+// shouldReload determines if a given configuration change requires a full service reload
 func (rm *ReloadManager) shouldReload(path string) bool {
 	// Pipeline changes always require reload
 	if strings.HasPrefix(path, "pipelines.") || path == "pipelines" {
@@ -277,7 +277,7 @@ func (rm *ReloadManager) shouldReload(path string) bool {
 	return false
 }
 
-// verifyFilePermissions checks the ownership and permissions of the config file for security.
+// verifyFilePermissions checks the ownership and permissions of the config file for security
 func verifyFilePermissions(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -307,7 +307,7 @@ func verifyFilePermissions(path string) error {
 	return nil
 }
 
-// shutdownOldServices gracefully shuts down the previous service instance after a successful reload.
+// shutdownOldServices gracefully shuts down the previous service instance after a successful reload
 func (rm *ReloadManager) shutdownOldServices(svc *service.Service) {
 	// Give connections time to drain
 	rm.logger.Debug("msg", "Draining connections from old services")
@@ -321,7 +321,7 @@ func (rm *ReloadManager) shutdownOldServices(svc *service.Service) {
 	rm.logger.Debug("msg", "Old services shutdown complete")
 }
 
-// startStatusReporter starts a new status reporter for service.
+// startStatusReporter starts a new status reporter for service
 func (rm *ReloadManager) startStatusReporter(ctx context.Context, svc *service.Service) {
 	rm.statusReporterMu.Lock()
 	defer rm.statusReporterMu.Unlock()
@@ -334,7 +334,7 @@ func (rm *ReloadManager) startStatusReporter(ctx context.Context, svc *service.S
 	rm.logger.Debug("msg", "Started status reporter")
 }
 
-// stopStatusReporter stops the currently running status reporter.
+// stopStatusReporter stops the currently running status reporter
 func (rm *ReloadManager) stopStatusReporter() {
 	rm.statusReporterMu.Lock()
 	defer rm.statusReporterMu.Unlock()
@@ -346,7 +346,7 @@ func (rm *ReloadManager) stopStatusReporter() {
 	}
 }
 
-// restartStatusReporter stops the old status reporter and starts a new one.
+// restartStatusReporter stops the old status reporter and starts a new one
 func (rm *ReloadManager) restartStatusReporter(ctx context.Context, newService *service.Service) {
 	if rm.cfg.DisableStatusReporter {
 		// Just stop the old one if disabled

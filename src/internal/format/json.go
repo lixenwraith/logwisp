@@ -12,13 +12,13 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// JSONFormatter produces structured JSON logs from LogEntry objects.
+// JSONFormatter produces structured JSON logs from LogEntry objects
 type JSONFormatter struct {
 	config *config.JSONFormatterOptions
 	logger *log.Logger
 }
 
-// NewJSONFormatter creates a new JSON formatter from configuration options.
+// NewJSONFormatter creates a new JSON formatter from configuration options
 func NewJSONFormatter(opts *config.JSONFormatterOptions, logger *log.Logger) (*JSONFormatter, error) {
 	f := &JSONFormatter{
 		config: opts,
@@ -28,7 +28,7 @@ func NewJSONFormatter(opts *config.JSONFormatterOptions, logger *log.Logger) (*J
 	return f, nil
 }
 
-// Format transforms a single LogEntry into a JSON byte slice.
+// Format transforms a single LogEntry into a JSON byte slice
 func (f *JSONFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	// Start with a clean map
 	output := make(map[string]any)
@@ -92,12 +92,12 @@ func (f *JSONFormatter) Format(entry core.LogEntry) ([]byte, error) {
 	return append(result, '\n'), nil
 }
 
-// Name returns the formatter's type name.
+// Name returns the formatter's type name
 func (f *JSONFormatter) Name() string {
 	return "json"
 }
 
-// FormatBatch transforms a slice of LogEntry objects into a single JSON array byte slice.
+// FormatBatch transforms a slice of LogEntry objects into a single JSON array byte slice
 func (f *JSONFormatter) FormatBatch(entries []core.LogEntry) ([]byte, error) {
 	// For batching, we need to create an array of formatted objects
 	batch := make([]json.RawMessage, 0, len(entries))

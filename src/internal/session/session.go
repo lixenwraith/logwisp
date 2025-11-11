@@ -11,8 +11,9 @@ import (
 	"logwisp/src/internal/core"
 )
 
-// Session represents a connection session.
+// Session represents a connection session
 type Session struct {
+	InstanceID   string         // Plugin instance identifier
 	ID           string         // Unique session identifier
 	RemoteAddr   string         // Client address
 	CreatedAt    time.Time      // Session creation time
@@ -23,7 +24,7 @@ type Session struct {
 	Source string // Source type: "tcp_source", "http_source", "tcp_sink", etc.
 }
 
-// Manager handles the lifecycle of sessions.
+// Manager handles the lifecycle of sessions
 type Manager struct {
 	sessions map[string]*Session
 	mu       sync.RWMutex
@@ -38,7 +39,7 @@ type Manager struct {
 	callbacksMu     sync.RWMutex
 }
 
-// NewManager creates a new session manager with a specified idle timeout.
+// NewManager creates a new session manager with a specified idle timeout
 func NewManager(maxIdleTime time.Duration) *Manager {
 	if maxIdleTime == 0 {
 		maxIdleTime = core.SessionDefaultMaxIdleTime
@@ -56,7 +57,7 @@ func NewManager(maxIdleTime time.Duration) *Manager {
 	return m
 }
 
-// CreateSession creates and stores a new session for a connection.
+// CreateSession creates and stores a new session for a connection
 func (m *Manager) CreateSession(remoteAddr string, source string, metadata map[string]any) *Session {
 	session := &Session{
 		ID:           generateSessionID(),
@@ -75,14 +76,14 @@ func (m *Manager) CreateSession(remoteAddr string, source string, metadata map[s
 	return session
 }
 
-// StoreSession adds a session to the manager.
+// StoreSession adds a session to the manager
 func (m *Manager) StoreSession(session *Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[session.ID] = session
 }
 
-// GetSession retrieves a session by its unique ID.
+// GetSession retrieves a session by its unique ID
 func (m *Manager) GetSession(sessionID string) (*Session, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -90,14 +91,14 @@ func (m *Manager) GetSession(sessionID string) (*Session, bool) {
 	return session, exists
 }
 
-// RemoveSession removes a session from the manager.
+// RemoveSession removes a session from the manager
 func (m *Manager) RemoveSession(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.sessions, sessionID)
 }
 
-// UpdateActivity updates the last activity timestamp for a session.
+// UpdateActivity updates the last activity timestamp for a session
 func (m *Manager) UpdateActivity(sessionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -107,7 +108,7 @@ func (m *Manager) UpdateActivity(sessionID string) {
 	}
 }
 
-// IsSessionActive checks if a session exists and has not been idle for too long.
+// IsSessionActive checks if a session exists and has not been idle for too long
 func (m *Manager) IsSessionActive(sessionID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -119,7 +120,7 @@ func (m *Manager) IsSessionActive(sessionID string) bool {
 	return false
 }
 
-// GetActiveSessions returns a snapshot of all currently active sessions.
+// GetActiveSessions returns a snapshot of all currently active sessions
 func (m *Manager) GetActiveSessions() []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -131,14 +132,14 @@ func (m *Manager) GetActiveSessions() []*Session {
 	return sessions
 }
 
-// GetSessionCount returns the number of active sessions.
+// GetSessionCount returns the number of active sessions
 func (m *Manager) GetSessionCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.sessions)
 }
 
-// GetSessionsBySource returns all sessions matching a specific source type.
+// GetSessionsBySource returns all sessions matching a specific source type
 func (m *Manager) GetSessionsBySource(source string) []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -152,7 +153,7 @@ func (m *Manager) GetSessionsBySource(source string) []*Session {
 	return sessions
 }
 
-// GetActiveSessionsBySource returns all active sessions for a given source.
+// GetActiveSessionsBySource returns all active sessions for a given source
 func (m *Manager) GetActiveSessionsBySource(source string) []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -168,7 +169,7 @@ func (m *Manager) GetActiveSessionsBySource(source string) []*Session {
 	return sessions
 }
 
-// GetStats returns statistics about the session manager.
+// GetStats returns statistics about the session manager
 func (m *Manager) GetStats() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -206,7 +207,7 @@ func (m *Manager) GetStats() map[string]any {
 	return stats
 }
 
-// Stop gracefully stops the session manager and its cleanup goroutine.
+// Stop gracefully stops the session manager and its cleanup goroutine
 func (m *Manager) Stop() {
 	close(m.done)
 	if m.cleanupTicker != nil {
@@ -214,7 +215,7 @@ func (m *Manager) Stop() {
 	}
 }
 
-// RegisterExpiryCallback registers a callback function to be executed when a session expires.
+// RegisterExpiryCallback registers a callback function to be executed when a session expires
 func (m *Manager) RegisterExpiryCallback(source string, callback func(sessionID, remoteAddr string)) {
 	m.callbacksMu.Lock()
 	defer m.callbacksMu.Unlock()
@@ -225,7 +226,7 @@ func (m *Manager) RegisterExpiryCallback(source string, callback func(sessionID,
 	m.expiryCallbacks[source] = callback
 }
 
-// UnregisterExpiryCallback removes an expiry callback for a given source type.
+// UnregisterExpiryCallback removes an expiry callback for a given source type
 func (m *Manager) UnregisterExpiryCallback(source string) {
 	m.callbacksMu.Lock()
 	defer m.callbacksMu.Unlock()
@@ -233,7 +234,7 @@ func (m *Manager) UnregisterExpiryCallback(source string) {
 	delete(m.expiryCallbacks, source)
 }
 
-// startCleanup initializes the periodic cleanup of idle sessions.
+// startCleanup initializes the periodic cleanup of idle sessions
 func (m *Manager) startCleanup() {
 	m.cleanupTicker = time.NewTicker(core.SessionCleanupInterval)
 

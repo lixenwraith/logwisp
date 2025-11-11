@@ -8,23 +8,11 @@ import (
 const (
 	MaxLogEntryBytes = 1024 * 1024
 
-	MaxSessionTime = time.Minute * 30
-
 	FileWatcherPollInterval = 100 * time.Millisecond
-
-	HttpServerStartTimeout = 100 * time.Millisecond
-
-	HttpServerShutdownTimeout = 2 * time.Second
 
 	SessionDefaultMaxIdleTime = 30 * time.Minute
 
 	SessionCleanupInterval = 5 * time.Minute
-
-	NetLimitCleanupInterval = 30 * time.Second
-	NetLimitCleanupTimeout  = 2 * time.Second
-	NetLimitStaleTimeout    = 5 * time.Minute
-
-	NetLimitPeriodicCleanupInterval = 1 * time.Minute
 
 	ServiceStatsUpdateInterval = 1 * time.Second
 
