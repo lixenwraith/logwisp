@@ -1,11 +1,10 @@
-// FILE: src/internal/pipeline/registry.go
 package pipeline
 
 import (
 	"fmt"
-	"logwisp/src/internal/plugin"
 	"sync"
 
+	"logwisp/src/internal/plugin"
 	"logwisp/src/internal/session"
 	"logwisp/src/internal/sink"
 	"logwisp/src/internal/source"
@@ -47,10 +46,12 @@ type Registry struct {
 // NewRegistry creates a new registry for a pipeline
 func NewRegistry(pipelineName string, logger *log.Logger) *Registry {
 	return &Registry{
-		pipelineName:    pipelineName,
-		sourceInstances: make(map[string]source.Source),
-		sinkInstances:   make(map[string]sink.Sink),
-		logger:          logger,
+		pipelineName:     pipelineName,
+		sourceInstances:  make(map[string]source.Source),
+		sinkInstances:    make(map[string]sink.Sink),
+		sourceTypeCounts: make(map[string]int),
+		sinkTypeCounts:   make(map[string]int),
+		logger:           logger,
 	}
 }
 

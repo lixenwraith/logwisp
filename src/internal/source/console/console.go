@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/source/console.go
 package console
 
 import (
@@ -70,15 +69,11 @@ func NewConsoleSourcePlugin(
 	}
 
 	// Step 2: Use lconfig to scan map into struct (overriding defaults)
-	cfg := lconfig.New()
-	for path, value := range lconfig.FlattenMap(configMap, "") {
-		cfg.Set(path, value)
-	}
-	if err := cfg.Scan(opts); err != nil {
+	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Step 3: Validate required fields (none for console source)
+	// Step 3: Validate required fields
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = 1000
 	}
@@ -91,7 +86,6 @@ func NewConsoleSourcePlugin(
 		subscribers: make([]chan core.LogEntry, 0),
 		done:        make(chan struct{}),
 		logger:      logger,
-		startTime:   time.Now(),
 	}
 	cs.lastEntryTime.Store(time.Time{})
 
@@ -127,6 +121,7 @@ func (s *ConsoleSource) Subscribe() <-chan core.LogEntry {
 
 // Start begins reading from the standard input.
 func (s *ConsoleSource) Start() error {
+	s.startTime = time.Now()
 	go s.readLoop()
 
 	// Update session activity

@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/config/validation.go
 package config
 
 import (
@@ -6,7 +5,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	lconfig "github.com/lixenwraith/config"
 )
@@ -25,15 +23,15 @@ func ValidateConfig(cfg *Config) error {
 		return fmt.Errorf("logging config: %w", err)
 	}
 
-	// Track used ports across all pipelines
-	allPorts := make(map[int64]string)
-	pipelineNames := make(map[string]bool)
+	// // Track used ports across all pipelines
+	// allPorts := make(map[int64]string)
+	// pipelineNames := make(map[string]bool)
 
-	for i, pipeline := range cfg.Pipelines {
-		if err := validatePipeline(i, &pipeline, pipelineNames, allPorts); err != nil {
-			return err
-		}
-	}
+	// for i, pipeline := range cfg.Pipelines {
+	// 	if err := validatePipeline(i, &pipeline, pipelineNames, allPorts); err != nil {
+	// 		return err
+	// 	}
+	// }
 
 	return nil
 }
@@ -61,206 +59,6 @@ func validateLogConfig(cfg *LogConfig) error {
 		}
 		if !validTargets[cfg.Console.Target] {
 			return fmt.Errorf("invalid console target: %s", cfg.Console.Target)
-		}
-
-		validFormats := map[string]bool{
-			"txt": true, "json": true, "": true,
-		}
-		if !validFormats[cfg.Console.Format] {
-			return fmt.Errorf("invalid console format: %s", cfg.Console.Format)
-		}
-	}
-
-	return nil
-}
-
-// validatePipeline validates a single pipeline's configuration
-func validatePipeline(index int, p *PipelineConfig, pipelineNames map[string]bool, allPorts map[int64]string) error {
-	// Validate pipeline name
-	if err := lconfig.NonEmpty(p.Name); err != nil {
-		return fmt.Errorf("pipeline %d: missing name", index)
-	}
-
-	if pipelineNames[p.Name] {
-		return fmt.Errorf("pipeline %d: duplicate name '%s'", index, p.Name)
-	}
-	pipelineNames[p.Name] = true
-
-	// Must have at least one source
-	if len(p.Sources) == 0 {
-		return fmt.Errorf("pipeline '%s': no sources specified", p.Name)
-	}
-
-	// Validate each source
-	for j, source := range p.Sources {
-		if err := validateSourceConfig(p.Name, j, &source); err != nil {
-			return err
-		}
-	}
-
-	// Validate flow configuration
-	if p.Flow != nil {
-
-		// Validate rate limit if present
-		if p.Flow.RateLimit != nil {
-			if err := validateRateLimit(p.Name, p.Flow.RateLimit); err != nil {
-				return err
-			}
-		}
-
-		// Validate filters
-		for j, filter := range p.Flow.Filters {
-			if err := validateFilter(p.Name, j, &filter); err != nil {
-				return err
-			}
-		}
-
-		// Validate formatter configuration
-		if err := validateFormatterConfig(p); err != nil {
-			return fmt.Errorf("pipeline '%s': %w", p.Name, err)
-		}
-
-	}
-
-	// Must have at least one sink
-	if len(p.Sinks) == 0 {
-		return fmt.Errorf("pipeline '%s': no sinks specified", p.Name)
-	}
-
-	// Validate each sink
-	for j, sink := range p.Sinks {
-		if err := validateSinkConfig(p.Name, j, &sink, allPorts); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// validateSourceConfig validates a polymorphic source configuration
-func validateSourceConfig(pipelineName string, index int, s *SourceConfig) error {
-	if err := lconfig.NonEmpty(s.Type); err != nil {
-		return fmt.Errorf("pipeline '%s' source[%d]: missing type", pipelineName, index)
-	}
-
-	// Count how many source configs are populated
-	populated := 0
-	var populatedType string
-
-	if s.File != nil {
-		populated++
-		populatedType = "file"
-	}
-	if s.Console != nil {
-		populated++
-		populatedType = "console"
-	}
-
-	if populated == 0 {
-		return fmt.Errorf("pipeline '%s' source[%d]: no configuration provided for type '%s'",
-			pipelineName, index, s.Type)
-	}
-	if populated > 1 {
-		return fmt.Errorf("pipeline '%s' source[%d]: multiple configurations provided, only one allowed",
-			pipelineName, index)
-	}
-	if populatedType != s.Type {
-		return fmt.Errorf("pipeline '%s' source[%d]: type mismatch - type is '%s' but config is for '%s'",
-			pipelineName, index, s.Type, populatedType)
-	}
-
-	// Validate specific source type
-	switch s.Type {
-	case "file":
-		return validateFileSource(pipelineName, index, s.File)
-	case "console":
-		return validateConsoleSource(pipelineName, index, s.Console)
-	default:
-		return fmt.Errorf("pipeline '%s' source[%d]: unknown type '%s'", pipelineName, index, s.Type)
-	}
-}
-
-// validateSinkConfig validates a polymorphic sink configuration
-func validateSinkConfig(pipelineName string, index int, s *SinkConfig, allPorts map[int64]string) error {
-	if err := lconfig.NonEmpty(s.Type); err != nil {
-		return fmt.Errorf("pipeline '%s' sink[%d]: missing type", pipelineName, index)
-	}
-
-	// Count populated sink configs
-	populated := 0
-	var populatedType string
-
-	if s.Console != nil {
-		populated++
-		populatedType = "console"
-	}
-	if s.File != nil {
-		populated++
-		populatedType = "file"
-	}
-
-	if populated == 0 {
-		return fmt.Errorf("pipeline '%s' sink[%d]: no configuration provided for type '%s'",
-			pipelineName, index, s.Type)
-	}
-	if populated > 1 {
-		return fmt.Errorf("pipeline '%s' sink[%d]: multiple configurations provided, only one allowed",
-			pipelineName, index)
-	}
-	if populatedType != s.Type {
-		return fmt.Errorf("pipeline '%s' sink[%d]: type mismatch - type is '%s' but config is for '%s'",
-			pipelineName, index, s.Type, populatedType)
-	}
-
-	// Validate specific sink type
-	switch s.Type {
-	case "console":
-		return validateConsoleSink(pipelineName, index, s.Console)
-	case "file":
-		return validateFileSink(pipelineName, index, s.File)
-	default:
-		return fmt.Errorf("pipeline '%s' sink[%d]: unknown type '%s'", pipelineName, index, s.Type)
-	}
-}
-
-// validateFormatterConfig validates formatter configuration
-func validateFormatterConfig(p *PipelineConfig) error {
-	if p.Flow.Format == nil {
-		p.Flow.Format = &FormatConfig{
-			Type:             "raw",
-			RawFormatOptions: &RawFormatterOptions{AddNewLine: true},
-		}
-	} else if p.Flow.Format.Type == "" {
-		p.Flow.Format.Type = "raw" // Default
-	}
-
-	switch p.Flow.Format.Type {
-
-	case "raw":
-		if p.Flow.Format.RawFormatOptions == nil {
-			p.Flow.Format.RawFormatOptions = &RawFormatterOptions{}
-		}
-
-	case "txt":
-		if p.Flow.Format.TxtFormatOptions == nil {
-			p.Flow.Format.TxtFormatOptions = &TxtFormatterOptions{}
-		}
-
-		// Default template format
-		templateStr := "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}{{ if .Fields }} {{.Fields}}{{ end }}"
-		if p.Flow.Format.TxtFormatOptions.Template != "" {
-			p.Flow.Format.TxtFormatOptions.Template = templateStr
-		}
-
-		// Default timestamp format
-		timestampFormat := time.RFC3339
-		if p.Flow.Format.TxtFormatOptions.TimestampFormat != "" {
-			p.Flow.Format.TxtFormatOptions.TimestampFormat = timestampFormat
-		}
-
-	case "json":
-		if p.Flow.Format.JSONFormatOptions == nil {
-			p.Flow.Format.JSONFormatOptions = &JSONFormatterOptions{}
 		}
 	}
 

@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/config/loader.go
 package config
 
 import (
@@ -7,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"logwisp/src/internal/core"
 
 	lconfig "github.com/lixenwraith/config"
 )
@@ -48,7 +49,9 @@ func Load(args []string) (*Config, error) {
 		// Handle file not found errors - maintain existing behavior
 		if errors.Is(err, lconfig.ErrConfigNotFound) {
 			if isExplicit {
-				return nil, fmt.Errorf("config file not found: %s", configPath)
+				// Return empty config with file path
+				finalConfig.ConfigFile = configPath
+				return finalConfig, fmt.Errorf("config file not found: %s", configPath)
 			}
 			// If the default config file is not found, it's not an error, default/cli/env will be used
 		} else {
@@ -62,6 +65,17 @@ func Load(args []string) (*Config, error) {
 	// Store the manager for hot reload
 	configManager = cfg
 
+	// Start watcher if auto-reload is enabled
+	if finalConfig.ConfigAutoReload {
+		watchOpts := lconfig.WatchOptions{
+			PollInterval:      core.ReloadWatchPollInterval,
+			Debounce:          core.ReloadWatchDebounce,
+			ReloadTimeout:     core.ReloadWatchTimeout,
+			VerifyPermissions: true,
+		}
+		cfg.AutoUpdateWithOptions(watchOpts)
+	}
+
 	return finalConfig, nil
 }
 
@@ -74,13 +88,12 @@ func GetConfigManager() *lconfig.Config {
 func defaults() *Config {
 	return &Config{
 		// Top-level flag defaults
-		Background:  false,
 		ShowVersion: false,
 		Quiet:       false,
 
 		// Runtime behavior defaults
-		DisableStatusReporter: false,
-		ConfigAutoReload:      false,
+		StatusReporter:   true,
+		ConfigAutoReload: false,
 
 		// Child process indicator
 		BackgroundDaemon: false,
@@ -98,28 +111,32 @@ func defaults() *Config {
 			},
 			Console: &LogConsoleConfig{
 				Target: "stdout",
-				Format: "txt",
 			},
 		},
 		Pipelines: []PipelineConfig{
 			{
-				Name: "default",
-				Sources: []SourceConfig{
+				Name: "default_pipeline",
+				Flow: &FlowConfig{},
+				PluginSources: []PluginSourceConfig{
 					{
-						Type: "file",
-						File: &FileSourceOptions{
-							Directory:       "./",
-							Pattern:         "*.log",
-							CheckIntervalMS: int64(100),
+						ID:   "default_source",
+						Type: "random",
+						Config: map[string]any{
+							"special": true,
 						},
+						// Config: &FileSourceOptions{
+						// 	Directory:       "./",
+						// 	Pattern:         "*.log",
+						// 	CheckIntervalMS: int64(100),
 					},
 				},
-				Sinks: []SinkConfig{
+				PluginSinks: []PluginSinkConfig{
 					{
+						ID:   "default_sink",
 						Type: "console",
-						Console: &ConsoleSinkOptions{
-							Target:     "stdout",
-							BufferSize: 100,
+						Config: map[string]any{
+							"target":      "stdout",
+							"buffer_size": 100,
 						},
 					},
 				},

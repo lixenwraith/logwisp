@@ -1,14 +1,13 @@
-// FILE: logwisp/src/cmd/logwisp/main.go
 package main
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
@@ -22,7 +21,7 @@ var logger *log.Logger
 
 // main is the entry point for the LogWisp application
 func main() {
-
+	// --- 1. Initial setup ---
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
 
@@ -46,21 +45,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Background mode spawns a child with internal --background-daemon flag
-	if cfg.Background && !cfg.BackgroundDaemon {
-		// Prepare arguments for the child process, including originals and daemon flag
-		args := append(os.Args[1:], "--background-daemon")
-
-		cmd := exec.Command(os.Args[0], args...)
-
-		if err := cmd.Start(); err != nil {
-			FatalError(1, "Failed to start background process: %v\n", err)
-		}
-
-		Print("Started LogWisp in background (PID: %d)\n", cmd.Process.Pid)
-		os.Exit(0) // The parent process exits successfully
-	}
-
 	// Initialize logger instance and apply configuration
 	if err := initializeLogger(cfg); err != nil {
 		FatalError(1, "Failed to initialize logger: %v\n", err)
@@ -77,96 +61,87 @@ func main() {
 		"version", version.String(),
 		"config_file", cfg.ConfigFile,
 		"log_output", cfg.Logging.Output,
-		"background_mode", cfg.Background)
+		"status_reporter", cfg.StatusReporter,
+		"auto_reload", cfg.ConfigAutoReload)
+
+	time.Sleep(time.Second)
 
 	// Create context for shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Service and hot reload management
-	var reloadManager *ReloadManager
-
-	if cfg.ConfigAutoReload && cfg.ConfigFile != "" {
-		// Use reload manager for dynamic configuration
-		logger.Info("msg", "Config auto-reload enabled",
-			"config_file", cfg.ConfigFile)
-
-		reloadManager = NewReloadManager(cfg.ConfigFile, cfg, logger)
-
-		if err := reloadManager.Start(ctx); err != nil {
-			logger.Error("msg", "Failed to start reload manager", "error", err)
-			os.Exit(1)
-		}
-		defer reloadManager.Shutdown()
-
-		// Setup signal handler with reload support
-		signalHandler := NewSignalHandler(reloadManager, logger)
-		defer signalHandler.Stop()
-
-		// Handle signals in background
-		go func() {
-			sig := signalHandler.Handle(ctx)
-			if sig != nil {
-				logger.Info("msg", "Shutdown signal received",
-					"signal", sig)
-				cancel() // Trigger shutdown
-			}
-		}()
-	} else {
-		// Traditional static bootstrap
-		logger.Info("msg", "Config auto-reload disabled")
-
-		svc, err := bootstrapService(ctx, cfg)
-		if err != nil {
-			logger.Error("msg", "Failed to bootstrap service", "error", err)
-			os.Exit(1)
-		}
-
-		// Start status reporter if enabled (static mode)
-		if !cfg.DisableStatusReporter {
-			go statusReporter(svc, ctx)
-		}
-
-		// Setup traditional signal handling
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
-
-		// Wait for shutdown signal
-		sig := <-sigChan
-
-		// Handle SIGKILL for immediate shutdown
-		if sig == syscall.SIGKILL {
-			os.Exit(137) // Standard exit code for SIGKILL (128 + 9)
-		}
-
-		logger.Info("msg", "Shutdown signal received, starting graceful shutdown...")
-
-		// Shutdown service with timeout
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), core.ShutdownTimeout)
-		defer shutdownCancel()
-
-		done := make(chan struct{})
-		go func() {
-			svc.Shutdown()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			logger.Info("msg", "Shutdown complete")
-		case <-shutdownCtx.Done():
-			logger.Error("msg", "Shutdown timeout exceeded - forcing exit")
-			os.Exit(1)
-		}
-
-		return // Exit from static mode
+	// --- 2. Bootstrap initial service ---
+	svc, statusReporterCancel, err := bootstrapInitial(ctx, cfg)
+	if err != nil {
+		logger.Error("msg", "Failed to initialize service", "error", err)
+		os.Exit(1)
 	}
 
-	// Wait for context cancellation
-	<-ctx.Done()
+	// --- 3. Setup signals and shutdown ---
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
 
-	// Shutdown is handled by ReloadManager.Shutdown() in defer
-	logger.Info("msg", "Shutdown complete")
+	var configChanges <-chan string
+	lcfg := config.GetConfigManager()
+	if cfg.ConfigAutoReload && lcfg != nil {
+		configChanges = lcfg.Watch()
+		logger.Info("msg", "Config auto-reload enabled", "config_file", cfg.ConfigFile)
+	} else {
+		logger.Info("msg", "Config auto-reload disabled")
+	}
+
+	// Service shutdown sequence
+	defer func() {
+		logger.Info("msg", "Shutdown initiated")
+		if statusReporterCancel != nil {
+			statusReporterCancel()
+		}
+		if svc != nil {
+			svc.Shutdown()
+		}
+		if lcfg != nil {
+			lcfg.StopAutoUpdate()
+		}
+		logger.Info("msg", "Shutdown complete")
+		// Deferred logger shutdown will run after this
+	}()
+
+	// --- 4. Main Application Event Loop ---
+	logger.Info("msg", "Application started, waiting for signals or config changes")
+	for {
+		select {
+		case sig := <-sigChan:
+			if sig == syscall.SIGHUP || sig == syscall.SIGUSR1 {
+				logger.Info("msg", "Reload signal received, triggering manual reload", "signal", sig)
+				newSvc, newCfg, newStatusCancel, err := handleReload(ctx, svc, statusReporterCancel)
+				if err == nil {
+					svc = newSvc
+					cfg = newCfg
+					statusReporterCancel = newStatusCancel
+				}
+			} else {
+				logger.Info("msg", "Shutdown signal received", "signal", sig)
+				cancel() // Trigger service shutdown via context
+			}
+
+		case event, ok := <-configChanges:
+			if !ok {
+				logger.Warn("msg", "Configuration watch channel closed, disabling auto-reload")
+				configChanges = nil // Stop selecting on this channel
+				continue
+			}
+			logger.Info("msg", "Configuration file change detected, triggering reload", "event", event)
+			newSvc, newCfg, newStatusCancel, err := handleReload(ctx, svc, statusReporterCancel)
+			if err == nil {
+				svc = newSvc
+				cfg = newCfg
+				statusReporterCancel = newStatusCancel
+			}
+
+		case <-ctx.Done():
+			return // Exit the loop and trigger deferred shutdown
+		}
+	}
 }
 
 // shutdownLogger gracefully shuts down the global logger.

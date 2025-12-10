@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/sink/sink.go
 package sink
 
 import (

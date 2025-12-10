@@ -3,8 +3,8 @@ module logwisp
 go 1.25.4
 
 require (
-	github.com/lixenwraith/config v0.1.1-0.20251111084858-296c212421a8
-	github.com/lixenwraith/log v0.0.0-20251111085343-49493c8e323c
+	github.com/lixenwraith/config v0.1.1-0.20251114180219-f7875023a51b
+	github.com/lixenwraith/log v0.1.1-0.20251115213227-55d2c92d483f
 )
 
 require (

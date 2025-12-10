@@ -1,13 +1,8 @@
-// FILE: logwisp/src/internal/format/format.go
 package format
 
 import (
-	"fmt"
-
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
-
-	"github.com/lixenwraith/log"
 )
 
 // Formatter defines the interface for transforming a LogEntry into a byte slice
@@ -19,23 +14,17 @@ type Formatter interface {
 	Name() string
 }
 
-// NewFormatter is a factory function that creates a Formatter based on the provided configuration
-func NewFormatter(cfg *config.FormatConfig, logger *log.Logger) (Formatter, error) {
+// NewFormatter creates a Formatter using the new formatter/sanitizer packages
+func NewFormatter(cfg *config.FormatConfig) (Formatter, error) {
 	if cfg == nil {
-		// Fallback to raw when no formatter configured
-		return NewRawFormatter(&config.RawFormatterOptions{
-			AddNewLine: true,
-		}, logger)
+		// Default config
+		cfg = &config.FormatConfig{
+			Type:            "raw",
+			Flags:           0,
+			SanitizerPolicy: "raw",
+		}
 	}
 
-	switch cfg.Type {
-	case "json":
-		return NewJSONFormatter(cfg.JSONFormatOptions, logger)
-	case "txt":
-		return NewTxtFormatter(cfg.TxtFormatOptions, logger)
-	case "raw":
-		return NewRawFormatter(cfg.RawFormatOptions, logger)
-	default:
-		return nil, fmt.Errorf("unknown formatter type: %s", cfg.Type)
-	}
+	// Use the new FormatterAdapter that integrates formatter and sanitizer
+	return NewFormatterAdapter(cfg)
 }

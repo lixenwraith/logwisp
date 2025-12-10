@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/config/config.go
 package config
 
 // --- LogWisp Configuration Options ---
@@ -6,13 +5,12 @@ package config
 // Config is the top-level configuration structure for the LogWisp application
 type Config struct {
 	// Top-level flags for application control
-	Background  bool `toml:"background"`
 	ShowVersion bool `toml:"version"`
 	Quiet       bool `toml:"quiet"`
 
 	// Runtime behavior flags
-	DisableStatusReporter bool `toml:"disable_status_reporter"`
-	ConfigAutoReload      bool `toml:"config_auto_reload"`
+	StatusReporter   bool `toml:"status_reporter"`
+	ConfigAutoReload bool `toml:"auto_reload"`
 
 	// Internal flag indicating demonized child process (DO NOT SET IN CONFIG FILE)
 	BackgroundDaemon bool
@@ -34,6 +32,12 @@ type LogConfig struct {
 
 	// Log level: "debug", "info", "warn", "error"
 	Level string `toml:"level"`
+
+	// Format: "raw", "txt", "json"
+	Format string `toml:"format"`
+
+	// Sanitization policy for console output
+	Sanitization string `toml:"sanitization"`
 
 	// File output settings (when Output includes "file" or "all")
 	File *LogFileConfig `toml:"file"`
@@ -64,9 +68,6 @@ type LogFileConfig struct {
 type LogConsoleConfig struct {
 	// Target for console output: "stdout", "stderr"
 	Target string `toml:"target"`
-
-	// Format: "txt" or "json"
-	Format string `toml:"format"`
 }
 
 // --- Pipeline ---
@@ -76,11 +77,6 @@ type PipelineConfig struct {
 	Name string      `toml:"name"`
 	Flow *FlowConfig `toml:"flow"`
 
-	// CHANGED: Legacy configs for backward compatibility
-	Sources []SourceConfig `toml:"sources,omitempty"`
-	Sinks   []SinkConfig   `toml:"sinks,omitempty"`
-
-	// CHANGED: New plugin-based configs
 	PluginSources []PluginSourceConfig `toml:"plugin_sources,omitempty"`
 	PluginSinks   []PluginSinkConfig   `toml:"plugin_sinks,omitempty"`
 }
@@ -110,34 +106,10 @@ type HeartbeatConfig struct {
 
 // FormatConfig is a polymorphic struct representing log entry formatting options
 type FormatConfig struct {
-	// Format configuration - polymorphic like sources/sinks
-	Type string `toml:"type"` // "json", "txt", "raw"
-
-	// Only one will be populated based on format type
-	JSONFormatOptions *JSONFormatterOptions `toml:"json,omitempty"`
-	TxtFormatOptions  *TxtFormatterOptions  `toml:"txt,omitempty"`
-	RawFormatOptions  *RawFormatterOptions  `toml:"raw,omitempty"`
-}
-
-// JSONFormatterOptions defines settings for the JSON formatter
-type JSONFormatterOptions struct {
-	Pretty         bool   `toml:"pretty"`
-	TimestampField string `toml:"timestamp_field"`
-	LevelField     string `toml:"level_field"`
-	MessageField   string `toml:"message_field"`
-	SourceField    string `toml:"source_field"`
-}
-
-// TxtFormatterOptions defines settings for the text template formatter
-type TxtFormatterOptions struct {
-	Template        string `toml:"template"`
+	Type            string `toml:"type"` // "json", "txt", "raw"
+	Flags           int64  `toml:"flags"`
 	TimestampFormat string `toml:"timestamp_format"`
-	Colorize        bool   `toml:"colorize"` // TODO: Implement
-}
-
-// RawFormatterOptions defines settings for the raw pass-through formatter
-type RawFormatterOptions struct {
-	AddNewLine bool `toml:"add_new_line"`
+	SanitizerPolicy string `toml:"sanitizer_policy"` // "raw", "json", "txt", "shell"
 }
 
 // --- Rate Limit Options ---
@@ -200,16 +172,28 @@ type PluginSourceConfig struct {
 	ID         string         `toml:"id"`
 	Type       string         `toml:"type"`
 	Config     map[string]any `toml:"config"`
-	ConfigFile string         `toml:"config_file,omitempty"`
+	ConfigFile string         `toml:"config_file,omitempty"` // TODO: support for include/source mechanism for nested config
 }
 
-// SourceConfig is a polymorphic struct representing a single data source
-type SourceConfig struct {
-	Type string `toml:"type"`
+// // SourceConfig is a polymorphic struct representing a single data source
+// type SourceConfig struct {
+// 	Type string `toml:"type"`
+//
+// 	// Polymorphic - only one populated based on type
+// 	File    *FileSourceOptions    `toml:"file,omitempty"`
+// 	Console *ConsoleSourceOptions `toml:"console,omitempty"`
+// }
 
-	// Polymorphic - only one populated based on type
-	File    *FileSourceOptions    `toml:"file,omitempty"`
-	Console *ConsoleSourceOptions `toml:"console,omitempty"`
+// NullSourceOptions defines settings for a null source (no configuration needed)
+type NullSourceOptions struct{}
+
+// RandomSourceOptions defines settings for a random log generator source
+type RandomSourceOptions struct {
+	IntervalMS int64  `toml:"interval_ms"`
+	JitterMS   int64  `toml:"jitter_ms"`
+	Format     string `toml:"format"`
+	Length     int64  `toml:"length"`
+	Special    bool   `toml:"special"`
 }
 
 // FileSourceOptions defines settings for a file-based source
@@ -232,17 +216,20 @@ type PluginSinkConfig struct {
 	ID         string         `toml:"id"`
 	Type       string         `toml:"type"`
 	Config     map[string]any `toml:"config"`
-	ConfigFile string         `toml:"config_file,omitempty"`
+	ConfigFile string         `toml:"config_file,omitempty"` // TODO: support for include/source mechanism for nested config
 }
 
-// SinkConfig is a polymorphic struct representing a single data sink
-type SinkConfig struct {
-	Type string `toml:"type"`
+// // SinkConfig is a polymorphic struct representing a single data sink
+// type SinkConfig struct {
+// 	Type string `toml:"type"`
+//
+// 	// Polymorphic - only one populated based on type
+// 	Console *ConsoleSinkOptions `toml:"console,omitempty"`
+// 	File    *FileSinkOptions    `toml:"file,omitempty"`
+// }
 
-	// Polymorphic - only one populated based on type
-	Console *ConsoleSinkOptions `toml:"console,omitempty"`
-	File    *FileSinkOptions    `toml:"file,omitempty"`
-}
+// NullSinkOptions defines settings for a null sink (no configuration needed)
+type NullSinkOptions struct{}
 
 // ConsoleSinkOptions defines settings for a console-based sink
 type ConsoleSinkOptions struct {

@@ -1,4 +1,3 @@
-// FILE: src/internal/flow/rate.go
 package flow
 
 import (
@@ -89,6 +88,8 @@ func (l *RateLimiter) GetStats() map[string]any {
 
 	stats := map[string]any{
 		"enabled":               true,
+		"rate":                  l.bucket.Rate(),
+		"burst":                 l.bucket.Capacity(),
 		"dropped_total":         l.droppedCount.Load(),
 		"dropped_by_size_total": l.droppedBySizeCount.Load(),
 		"policy":                policyString(l.policy),
@@ -96,7 +97,7 @@ func (l *RateLimiter) GetStats() map[string]any {
 	}
 
 	if l.bucket != nil {
-		stats["tokens"] = l.bucket.Tokens()
+		stats["available_tokens"] = l.bucket.Tokens()
 	}
 
 	return stats

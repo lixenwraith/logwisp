@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/sink/console.go
 package console
 
 import (
@@ -64,11 +63,7 @@ func NewConsoleSinkPlugin(
 	}
 
 	// Step 2: Use lconfig to scan map into struct (overriding defaults)
-	cfg := lconfig.New()
-	for path, value := range lconfig.FlattenMap(configMap, "") {
-		cfg.Set(path, value)
-	}
-	if err := cfg.Scan(opts); err != nil {
+	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
@@ -90,14 +85,13 @@ func NewConsoleSinkPlugin(
 
 	// Step 4: Create and return plugin instance
 	cs := &ConsoleSink{
-		id:        id,
-		proxy:     proxy,
-		config:    opts,
-		input:     make(chan core.TransportEvent, opts.BufferSize),
-		output:    output,
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
+		id:     id,
+		proxy:  proxy,
+		config: opts,
+		input:  make(chan core.TransportEvent, opts.BufferSize),
+		output: output,
+		done:   make(chan struct{}),
+		logger: logger,
 	}
 	cs.lastProcessed.Store(time.Time{})
 
@@ -134,6 +128,7 @@ func (cs *ConsoleSink) Input() chan<- core.TransportEvent {
 
 // Start begins the processing loop
 func (cs *ConsoleSink) Start(ctx context.Context) error {
+	cs.startTime = time.Now()
 	go cs.processLoop(ctx)
 	cs.logger.Info("msg", "Console sink started",
 		"component", "console_sink",

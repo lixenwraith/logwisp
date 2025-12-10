@@ -1,17 +1,14 @@
-// FILE: logwisp/src/internal/service/service.go
 package service
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"logwisp/src/internal/pipeline"
 	"sync"
 
 	"logwisp/src/internal/config"
-	// "logwisp/src/internal/core"
+	"logwisp/src/internal/pipeline"
 
-	// lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -57,12 +54,79 @@ func NewService(ctx context.Context, cfg *config.Config, logger *log.Logger) (*S
 	return svc, errs
 }
 
-// GetPipeline returns a pipeline by its name
-func (s *Service) GetPipeline(name string) (*pipeline.Pipeline, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// Start starts all or specific pipelines
+func (svc *Service) Start(names ...string) error {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
 
-	pipeline, exists := s.pipelines[name]
+	var errs error
+	// If no names are provided, start all pipelines
+	if len(names) == 0 {
+		svc.logger.Info("msg", "Starting all pipelines")
+		for name, p := range svc.pipelines {
+			if err := p.Start(); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("failed to start pipeline %s: %w", name, err))
+			}
+		}
+	} else {
+		// Start only the specified pipelines
+		svc.logger.Info("msg", "Starting specified pipelines", "pipelines", names)
+		for _, name := range names {
+			if p, exists := svc.pipelines[name]; exists {
+				if err := p.Start(); err != nil {
+					errs = errors.Join(errs, fmt.Errorf("failed to start pipeline %s: %w", name, err))
+				}
+			} else {
+				errs = errors.Join(errs, fmt.Errorf("pipeline %s not found", name))
+			}
+		}
+	}
+
+	svc.logger.Debug("msg", "Finished starting pipeline(s)", "pipelines", names)
+
+	return errs
+}
+
+// Stop stops all or specific pipeline
+func (svc *Service) Stop(names ...string) error {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+
+	var errs error
+
+	// If no names are provided, stop all pipelines
+	if len(names) == 0 {
+		svc.logger.Info("msg", "Stopping all pipelines")
+		for name, p := range svc.pipelines {
+			if err := p.Stop(); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("failed to stop pipeline %s: %w", name, err))
+			}
+		}
+	} else {
+		// Stop only the specified pipelines
+		svc.logger.Info("msg", "Stopping specified pipelines", "pipelines", names)
+		for _, name := range names {
+			if p, exists := svc.pipelines[name]; exists {
+				if err := p.Stop(); err != nil {
+					errs = errors.Join(errs, fmt.Errorf("failed to stop pipeline %s: %w", name, err))
+				}
+			} else {
+				errs = errors.Join(errs, fmt.Errorf("pipeline %s not found", name))
+			}
+		}
+	}
+
+	svc.logger.Debug("msg", "Finished stopping pipeline(s)", "pipelines", names)
+
+	return errs
+}
+
+// GetPipeline returns a pipeline by its name
+func (svc *Service) GetPipeline(name string) (*pipeline.Pipeline, error) {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+
+	pipeline, exists := svc.pipelines[name]
 	if !exists {
 		return nil, fmt.Errorf("pipeline '%s' not found", name)
 	}
@@ -70,48 +134,48 @@ func (s *Service) GetPipeline(name string) (*pipeline.Pipeline, error) {
 }
 
 // ListPipelines returns the names of all currently managed pipelines
-func (s *Service) ListPipelines() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (svc *Service) ListPipelines() []string {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
 
-	names := make([]string, 0, len(s.pipelines))
-	for name := range s.pipelines {
+	names := make([]string, 0, len(svc.pipelines))
+	for name := range svc.pipelines {
 		names = append(names, name)
 	}
 	return names
 }
 
 // RemovePipeline stops and removes a pipeline from the service
-func (s *Service) RemovePipeline(name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (svc *Service) RemovePipeline(name string) error {
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
 
-	pl, exists := s.pipelines[name]
+	pl, exists := svc.pipelines[name]
 	if !exists {
 		err := fmt.Errorf("pipeline '%s' not found", name)
-		s.logger.Warn("msg", "Cannot remove non-existent pipeline",
+		svc.logger.Warn("msg", "Cannot remove non-existent pipeline",
 			"component", "service",
 			"pipeline", name,
 			"error", err)
 		return err
 	}
 
-	s.logger.Info("msg", "Removing pipeline", "pipeline", name)
+	svc.logger.Info("msg", "Removing pipeline", "pipeline", name)
 	pl.Shutdown()
-	delete(s.pipelines, name)
+	delete(svc.pipelines, name)
 	return nil
 }
 
 // Shutdown gracefully stops all pipelines managed by the service
-func (s *Service) Shutdown() {
-	s.logger.Info("msg", "Service shutdown initiated")
+func (svc *Service) Shutdown() {
+	svc.logger.Info("msg", "Service shutdown initiated")
 
-	s.mu.Lock()
-	pipelines := make([]*pipeline.Pipeline, 0, len(s.pipelines))
-	for _, pl := range s.pipelines {
+	svc.mu.Lock()
+	pipelines := make([]*pipeline.Pipeline, 0, len(svc.pipelines))
+	for _, pl := range svc.pipelines {
 		pipelines = append(pipelines, pl)
 	}
-	s.mu.Unlock()
+	svc.mu.Unlock()
 
 	// Stop all pipelines concurrently
 	var wg sync.WaitGroup
@@ -124,23 +188,23 @@ func (s *Service) Shutdown() {
 	}
 	wg.Wait()
 
-	s.cancel()
-	s.wg.Wait()
+	svc.cancel()
+	svc.wg.Wait()
 
-	s.logger.Info("msg", "Service shutdown complete")
+	svc.logger.Info("msg", "Service shutdown complete")
 }
 
 // GetGlobalStats returns statistics for all pipelines
-func (s *Service) GetGlobalStats() map[string]any {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (svc *Service) GetGlobalStats() map[string]any {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
 
 	stats := map[string]any{
 		"pipelines":       make(map[string]any),
-		"total_pipelines": len(s.pipelines),
+		"total_pipelines": len(svc.pipelines),
 	}
 
-	for name, pl := range s.pipelines {
+	for name, pl := range svc.pipelines {
 		stats["pipelines"].(map[string]any)[name] = pl.GetStats()
 	}
 

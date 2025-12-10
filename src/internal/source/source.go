@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/source/source.go
 package source
 
 import (

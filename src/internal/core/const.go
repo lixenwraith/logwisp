@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/core/const.go
 package core
 
 import (

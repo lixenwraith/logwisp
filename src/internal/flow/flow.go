@@ -1,4 +1,3 @@
-// FILE: internal/flow/flow.go
 package flow
 
 import (
@@ -15,7 +14,7 @@ import (
 )
 
 // Flow manages the complete processing pipeline for log entries:
-// LogEntry -> Rate Limiter -> Filters -> Formatter -> TransportEvent
+// LogEntry -> Rate Limiter -> Filters -> Formatter (with Sanitizer) -> TransportEvent
 type Flow struct {
 	rateLimiter *RateLimiter
 	filterChain *filter.Chain
@@ -57,16 +56,16 @@ func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 		f.filterChain = chain
 	}
 
-	// Create formatter, if not configured falls back to raw '\n' delimited
-	formatter, err := format.NewFormatter(cfg.Format, logger)
+	// Create formatter with sanitizer integration
+	formatter, err := format.NewFormatter(cfg.Format)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create formatter: %w", err)
 	}
 	f.formatter = formatter
 
-	// Create heartbeat generator if configured
+	// Create heartbeat generator with the same formatter
 	if cfg.Heartbeat != nil && cfg.Heartbeat.Enabled {
-		f.heartbeat = NewHeartbeatGenerator(cfg.Heartbeat, logger)
+		f.heartbeat = NewHeartbeatGenerator(cfg.Heartbeat, formatter, logger)
 	}
 
 	logger.Info("msg", "Flow processor created",

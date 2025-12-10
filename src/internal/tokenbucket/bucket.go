@@ -1,4 +1,3 @@
-// FILE: src/internal/tokenbucket/bucket.go
 package tokenbucket
 
 import (
@@ -71,4 +70,18 @@ func (tb *TokenBucket) refill() {
 		tb.tokens = tb.capacity
 	}
 	tb.lastRefill = now
+}
+
+// Rate returns the refill rate in tokens per second
+func (tb *TokenBucket) Rate() float64 {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	return tb.refillRate
+}
+
+// Capacity returns the bucket capacity
+func (tb *TokenBucket) Capacity() float64 {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	return tb.capacity
 }

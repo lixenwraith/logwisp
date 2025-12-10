@@ -1,4 +1,3 @@
-// FILE: src/internal/core/capability.go
 package core
 
 // Capability represents a plugin feature

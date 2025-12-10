@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/pipeline/pipeline.go
 package pipeline
 
 import (
@@ -34,12 +33,13 @@ type Pipeline struct {
 	logger *log.Logger
 
 	// Runtime
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	running atomic.Bool
 }
 
-// PipelineStats contains runtime statistics for a pipeline.
+// PipelineStats contains runtime statistics for a pipeline
 type PipelineStats struct {
 	StartTime                      time.Time
 	TotalEntriesProcessed          atomic.Uint64
@@ -68,15 +68,18 @@ func NewPipeline(
 		Sessions: sessionManager,
 		Sources:  make(map[string]source.Source),
 		Sinks:    make(map[string]sink.Sink),
+		Stats:    &PipelineStats{},
+		logger:   logger,
 		ctx:      pipelineCtx,
 		cancel:   pipelineCancel,
-		logger:   logger,
 	}
 
 	// Create flow processor
+	// Create flow processor
 	flowProcessor, err := flow.NewFlow(cfg.Flow, logger)
 	if err != nil {
-		pipelineCancel()
+		// If flow fails, stop session manager
+		sessionManager.Stop()
 		return nil, fmt.Errorf("failed to create flow processor: %w", err)
 	}
 	pipeline.Flow = flowProcessor
@@ -194,45 +197,159 @@ func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig
 	return nil
 }
 
-// Shutdown gracefully stops the pipeline and all its components.
+// run is the central processing loop that connects sources, flow, and sinks
+func (p *Pipeline) run() {
+	defer p.wg.Done()
+	defer p.logger.Info("msg", "Pipeline processing loop stopped", "pipeline", p.Config.Name)
+
+	var componentWg sync.WaitGroup
+
+	// Start a goroutine for each source to fan-in data
+	for _, src := range p.Sources {
+		componentWg.Add(1)
+		go func(s source.Source) {
+			defer componentWg.Done()
+			ch := s.Subscribe()
+			for {
+				select {
+				case entry, ok := <-ch:
+					if !ok {
+						return
+					}
+					// Process and distribute the log entry
+					if event, passed := p.Flow.Process(entry); passed {
+						// Fan-out to all sinks
+						for _, snk := range p.Sinks {
+							snk.Input() <- event
+						}
+					}
+				case <-p.ctx.Done():
+					return
+				}
+			}
+		}(src)
+	}
+
+	// Start heartbeat generator if enabled
+	if heartbeatCh := p.Flow.StartHeartbeat(p.ctx); heartbeatCh != nil {
+		componentWg.Add(1)
+		go func() {
+			defer componentWg.Done()
+			for {
+				select {
+				case event, ok := <-heartbeatCh:
+					if !ok {
+						return
+					}
+					// Fan-out heartbeat to all sinks
+					for _, snk := range p.Sinks {
+						snk.Input() <- event
+					}
+				case <-p.ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	componentWg.Wait()
+}
+
+// Start starts the pipeline operation and all its components including flow, sources, and sinks
+func (p *Pipeline) Start() error {
+	if !p.running.CompareAndSwap(false, true) {
+		return fmt.Errorf("pipeline %s is already running", p.Config.Name)
+	}
+
+	p.logger.Info("msg", "Starting pipeline", "pipeline", p.Config.Name)
+	p.ctx, p.cancel = context.WithCancel(context.Background())
+
+	// Start all sinks
+	for id, s := range p.Sinks {
+		if err := s.Start(p.ctx); err != nil {
+			return fmt.Errorf("failed to start sink %s: %w", id, err)
+		}
+	}
+
+	// Start all sources
+	for id, src := range p.Sources {
+		if err := src.Start(); err != nil {
+			return fmt.Errorf("failed to start source %s: %w", id, err)
+		}
+	}
+
+	// Start the central processing loop
+	p.Stats.StartTime = time.Now()
+	p.wg.Add(1)
+	go p.run()
+
+	return nil
+}
+
+// Stop stops the pipeline operation and all its components including flow, sources, and sinks
+func (p *Pipeline) Stop() error {
+	if !p.running.CompareAndSwap(true, false) {
+		return fmt.Errorf("pipeline %s is not running", p.Config.Name)
+	}
+
+	p.logger.Info("msg", "Stopping pipeline", "pipeline", p.Config.Name)
+
+	// Signal all components and the run loop to stop
+	p.cancel()
+
+	// Stop all sources concurrently to halt new data ingress
+	var sourceWg sync.WaitGroup
+	for _, src := range p.Sources {
+		sourceWg.Add(1)
+		go func(s source.Source) {
+			defer sourceWg.Done()
+			s.Stop()
+		}(src)
+	}
+	sourceWg.Wait()
+
+	// Wait for the run loop to finish processing and sending all in-flight data
+	p.wg.Wait()
+
+	// Stop all sinks concurrently now that no new data will be sent
+	var sinkWg sync.WaitGroup
+	for _, s := range p.Sinks {
+		sinkWg.Add(1)
+		go func(snk sink.Sink) {
+			defer sinkWg.Done()
+			snk.Stop()
+		}(s)
+	}
+	sinkWg.Wait()
+
+	p.logger.Info("msg", "Pipeline stopped", "pipeline", p.Config.Name)
+	return nil
+}
+
+// Shutdown gracefully stops the pipeline and all its components, deinitializing them for app shutdown or complete pipeline removal by service
 func (p *Pipeline) Shutdown() {
 	p.logger.Info("msg", "Shutting down pipeline",
 		"component", "pipeline",
 		"pipeline", p.Config.Name)
 
-	// Cancel context to stop processing
-	p.cancel()
-
-	// Stop all sinks first
-	var wg sync.WaitGroup
-	for _, s := range p.Sinks {
-		wg.Add(1)
-		go func(sink sink.Sink) {
-			defer wg.Done()
-			sink.Stop()
-		}(s)
+	// Ensure the pipeline is stopped before shutting down
+	if p.running.Load() {
+		if err := p.Stop(); err != nil {
+			p.logger.Error("msg", "Error stopping pipeline during shutdown", "error", err)
+		}
 	}
-	wg.Wait()
 
-	// Stop all sources
-	for _, src := range p.Sources {
-		wg.Add(1)
-		go func(source source.Source) {
-			defer wg.Done()
-			source.Stop()
-		}(src)
+	// Stop long-running components
+	if p.Sessions != nil {
+		p.Sessions.Stop()
 	}
-	wg.Wait()
-
-	// Wait for processing goroutines
-	p.wg.Wait()
 
 	p.logger.Info("msg", "Pipeline shutdown complete",
 		"component", "pipeline",
 		"pipeline", p.Config.Name)
 }
 
-// GetStats returns a map of the pipeline's current statistics.
+// GetStats returns a map of pipeline statistics
 func (p *Pipeline) GetStats() map[string]any {
 	// Recovery to handle concurrent access during shutdown
 	// When service is shutting down, sources/sinks might be nil or partially stopped
@@ -284,14 +401,30 @@ func (p *Pipeline) GetStats() map[string]any {
 
 	// Get flow stats
 	var flowStats map[string]any
+	var totalFiltered uint64
 	if p.Flow != nil {
 		flowStats = p.Flow.GetStats()
+		// Extract total_filtered from flow for top-level visibility
+		if filters, ok := flowStats["filters"].(map[string]any); ok {
+			if totalPassed, ok := filters["total_passed"].(uint64); ok {
+				if totalProcessed, ok := filters["total_processed"].(uint64); ok {
+					totalFiltered = totalProcessed - totalPassed
+				}
+			}
+		}
+	}
+
+	var uptime int
+	if p.running.Load() && !p.Stats.StartTime.IsZero() {
+		uptime = int(time.Since(p.Stats.StartTime).Seconds())
 	}
 
 	return map[string]any{
 		"name":            p.Config.Name,
-		"uptime_seconds":  int(time.Since(p.Stats.StartTime).Seconds()),
+		"running":         p.running.Load(),
+		"uptime_seconds":  uptime,
 		"total_processed": p.Stats.TotalEntriesProcessed.Load(),
+		"total_filtered":  totalFiltered,
 		"source_count":    len(p.Sources),
 		"sources":         sourceStats,
 		"sink_count":      len(p.Sinks),
@@ -301,7 +434,7 @@ func (p *Pipeline) GetStats() map[string]any {
 }
 
 // TODO: incomplete implementation
-// startStatsUpdater runs a periodic stats updater.
+// startStatsUpdater runs a periodic stats updater
 func (p *Pipeline) startStatsUpdater(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(core.ServiceStatsUpdateInterval)

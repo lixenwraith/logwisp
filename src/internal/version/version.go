@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/version/version.go
 package version
 
 import "fmt"

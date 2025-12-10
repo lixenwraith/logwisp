@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/source/file.go
 package file
 
 import (
@@ -74,11 +73,7 @@ func NewFileSourcePlugin(
 	}
 
 	// Step 2: Use lconfig to scan map into struct (overriding defaults)
-	cfg := lconfig.New()
-	for path, value := range lconfig.FlattenMap(configMap, "") {
-		cfg.Set(path, value)
-	}
-	if err := cfg.Scan(opts); err != nil {
+	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
@@ -93,12 +88,12 @@ func NewFileSourcePlugin(
 
 	// Step 4: Create and return plugin instance
 	fs := &FileSource{
-		id:        id,
-		proxy:     proxy,
-		config:    opts,
-		watchers:  make(map[string]*fileWatcher),
-		startTime: time.Now(),
-		logger:    logger,
+		id:          id,
+		proxy:       proxy,
+		config:      opts,
+		subscribers: make([]chan core.LogEntry, 0),
+		watchers:    make(map[string]*fileWatcher),
+		logger:      logger,
 	}
 	fs.lastEntryTime.Store(time.Time{})
 
@@ -142,6 +137,7 @@ func (fs *FileSource) Subscribe() <-chan core.LogEntry {
 // Start begins the file monitoring loop
 func (fs *FileSource) Start() error {
 	fs.ctx, fs.cancel = context.WithCancel(context.Background())
+	fs.startTime = time.Now()
 	fs.wg.Add(1)
 	go fs.monitorLoop()
 

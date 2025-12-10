@@ -1,10 +1,9 @@
-// FILE: src/internal/flow/heartbeat.go
 package flow
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"logwisp/src/internal/format"
 	"sync/atomic"
 	"time"
 
@@ -12,21 +11,24 @@ import (
 	"logwisp/src/internal/core"
 
 	"github.com/lixenwraith/log"
+	"github.com/lixenwraith/log/formatter"
 )
 
 // HeartbeatGenerator produces periodic heartbeat events
 type HeartbeatGenerator struct {
 	config    *config.HeartbeatConfig
+	formatter format.Formatter // Use flow's formatter
 	logger    *log.Logger
 	beatCount atomic.Uint64
 	lastBeat  atomic.Value // time.Time
 }
 
 // NewHeartbeatGenerator creates a new heartbeat generator
-func NewHeartbeatGenerator(cfg *config.HeartbeatConfig, logger *log.Logger) *HeartbeatGenerator {
+func NewHeartbeatGenerator(cfg *config.HeartbeatConfig, formatter format.Formatter, logger *log.Logger) *HeartbeatGenerator {
 	hg := &HeartbeatGenerator{
-		config: cfg,
-		logger: logger,
+		config:    cfg,
+		formatter: formatter,
+		logger:    logger,
 	}
 	hg.lastBeat.Store(time.Time{})
 	return hg
@@ -64,38 +66,65 @@ func (hg *HeartbeatGenerator) Start(ctx context.Context) <-chan core.TransportEv
 
 // generateHeartbeat creates a heartbeat transport event
 func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent {
+	// Create heartbeat as LogEntry for consistent formatting
+	entry := core.LogEntry{
+		Time:    t,
+		Source:  "heartbeat",
+		Level:   "INFO",
+		Message: "heartbeat",
+	}
+
+	// Add stats if configured
+	if hg.config.IncludeStats {
+		fields := map[string]any{
+			"type":       "heartbeat",
+			"beat_count": hg.beatCount.Load(),
+		}
+
+		if last, ok := hg.lastBeat.Load().(time.Time); ok && !last.IsZero() {
+			fields["interval_ms"] = t.Sub(last).Milliseconds()
+		}
+
+		fieldsJSON, _ := json.Marshal(fields)
+		entry.Fields = fieldsJSON
+	}
+
+	// Use formatter to generate payload
 	var payload []byte
+	var err error
 
-	switch hg.config.Format {
-	case "json":
-		data := map[string]any{
-			"type":      "heartbeat",
-			"timestamp": t.Format(time.RFC3339Nano),
-		}
+	// Check if we need special formatting for heartbeat
+	if hg.config.Format == "comment" {
+		// SSE comment format - bypass formatter for this special case
 		if hg.config.IncludeStats {
-			data["beat_count"] = hg.beatCount.Load()
-			if last, ok := hg.lastBeat.Load().(time.Time); ok && !last.IsZero() {
-				data["interval_ms"] = t.Sub(last).Milliseconds()
+			beatNum := hg.beatCount.Load()
+			payload = []byte(": heartbeat " + t.Format(time.RFC3339) + " [#" + string(beatNum) + "]\n")
+		} else {
+			payload = []byte(": heartbeat " + t.Format(time.RFC3339) + "\n")
+		}
+	} else {
+		// Use flow's formatter for consistent formatting
+		if adapter, ok := hg.formatter.(*format.FormatterAdapter); ok {
+			// Customize flags for heartbeat if needed
+			customFlags := int64(0)
+			if !hg.config.IncludeTimestamp {
+				// Remove timestamp flag if not wanted
+				customFlags = formatter.FlagShowLevel
+			} else {
+				customFlags = formatter.FlagDefault
 			}
+			payload, err = adapter.FormatWithFlags(entry, customFlags)
+		} else {
+			// Fallback to standard format
+			payload, err = hg.formatter.Format(entry)
 		}
-		payload, _ = json.Marshal(data)
-		payload = append(payload, '\n')
 
-	case "comment":
-		// SSE-style comment for web streaming
-		msg := fmt.Sprintf(": heartbeat %s", t.Format(time.RFC3339))
-		if hg.config.IncludeStats {
-			msg = fmt.Sprintf("%s [#%d]", msg, hg.beatCount.Load())
+		if err != nil {
+			hg.logger.Error("msg", "Failed to format heartbeat",
+				"error", err)
+			// Fallback to simple text
+			payload = []byte("heartbeat: " + t.Format(time.RFC3339) + "\n")
 		}
-		payload = []byte(msg + "\n")
-
-	default:
-		// Plain text
-		msg := fmt.Sprintf("heartbeat: %s", t.Format(time.RFC3339))
-		if hg.config.IncludeStats {
-			msg = fmt.Sprintf("%s (#%d)", msg, hg.beatCount.Load())
-		}
-		payload = []byte(msg + "\n")
 	}
 
 	return core.TransportEvent{

@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/sink/file.go
 package file
 
 import (
@@ -68,11 +67,7 @@ func NewFileSinkPlugin(
 	}
 
 	// Step 2: Use lconfig to scan map into struct (overriding defaults)
-	cfg := lconfig.New()
-	for path, value := range lconfig.FlattenMap(configMap, "") {
-		cfg.Set(path, value)
-	}
-	if err := cfg.Scan(opts); err != nil {
+	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
@@ -129,14 +124,13 @@ func NewFileSinkPlugin(
 	}
 
 	fs := &FileSink{
-		id:        id,
-		proxy:     proxy,
-		config:    opts,
-		input:     make(chan core.TransportEvent, opts.BufferSize),
-		writer:    writer,
-		done:      make(chan struct{}),
-		startTime: time.Now(),
-		logger:    logger,
+		id:     id,
+		proxy:  proxy,
+		config: opts,
+		input:  make(chan core.TransportEvent, opts.BufferSize),
+		writer: writer,
+		done:   make(chan struct{}),
+		logger: logger,
 	}
 	fs.lastProcessed.Store(time.Time{})
 
@@ -179,6 +173,7 @@ func (fs *FileSink) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start file writer: %w", err)
 	}
 
+	fs.startTime = time.Now()
 	go fs.processLoop(ctx)
 
 	fs.logger.Info("msg", "File sink started",
@@ -252,7 +247,7 @@ func (fs *FileSink) processLoop(ctx context.Context) {
 
 			// Write the pre-formatted payload directly
 			// The writer handles rotation automatically based on configuration
-			fs.writer.Message(string(event.Payload))
+			fs.writer.Write(string(event.Payload))
 
 			fs.totalProcessed.Add(1)
 			fs.lastProcessed.Store(time.Now())

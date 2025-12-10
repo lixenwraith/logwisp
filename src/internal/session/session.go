@@ -1,4 +1,3 @@
-// FILE: src/internal/session/session.go
 package session
 
 import (
@@ -46,9 +45,10 @@ func NewManager(maxIdleTime time.Duration) *Manager {
 	}
 
 	m := &Manager{
-		sessions:    make(map[string]*Session),
-		maxIdleTime: maxIdleTime,
-		done:        make(chan struct{}),
+		sessions:        make(map[string]*Session),
+		maxIdleTime:     maxIdleTime,
+		done:            make(chan struct{}),
+		expiryCallbacks: make(map[string]func(sessionID, remoteAddr string)),
 	}
 
 	// Start cleanup routine

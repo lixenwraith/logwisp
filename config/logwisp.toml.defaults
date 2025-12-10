@@ -9,10 +9,9 @@
 ### Global Settings
 ###############################################################################
 
-background = false                      # Run as daemon
-quiet = false                           # Suppress console output
-disable_status_reporter = false         # Disable periodic status logging
-config_auto_reload = false              # Reload config on file change
+quiet = false                           # Enable quiet mode, suppress console output
+status_reporter = true                  # Enable periodic status logging
+auto_reload = false                     # Enable config auto-reload on file change
 
 ###############################################################################
 ### Logging Configuration (LogWisp's internal operational logging)

@@ -1,15 +1,22 @@
-// FILE: logwisp/src/cmd/logwisp/status.go
 package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
-	"logwisp/src/internal/config"
 	"logwisp/src/internal/service"
 )
 
-// statusReporter is a goroutine that periodically logs the health and statistics of the service
+// startStatusReporter starts a new status reporter for a service and returns its cancel function.
+func startStatusReporter(ctx context.Context, svc *service.Service) context.CancelFunc {
+	reporterCtx, cancel := context.WithCancel(ctx)
+	go statusReporter(svc, reporterCtx)
+	logger.Debug("msg", "Started status reporter")
+	return cancel
+}
+
+// statusReporter periodically logs the health and statistics of the service
 func statusReporter(service *service.Service, ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -17,7 +24,6 @@ func statusReporter(service *service.Service, ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Clean shutdown
 			return
 		case <-ticker.C:
 			if service == nil {
@@ -44,159 +50,99 @@ func statusReporter(service *service.Service, ctx context.Context) {
 					return
 				}
 
+				// Log service-level summary
 				logger.Debug("msg", "Status report",
 					"component", "status_reporter",
 					"active_pipelines", totalPipelines,
 					"time", time.Now().Format("15:04:05"))
 
-				// Log individual pipeline status
-				pipelines := stats["pipelines"].(map[string]any)
-				for name, pipelineStats := range pipelines {
-					logPipelineStatus(name, pipelineStats.(map[string]any))
+				// Log each pipeline's stats recursively
+				if pipelines, ok := stats["pipelines"].(map[string]any); ok {
+					for name, pipelineStats := range pipelines {
+						logStats("Pipeline status", name, pipelineStats)
+					}
 				}
 			}()
 		}
 	}
 }
 
-// displayPipelineEndpoints logs the configured source and sink endpoints for a pipeline at startup
-func displayPipelineEndpoints(cfg config.PipelineConfig) {
-	// Display sink endpoints
-	for i, sinkCfg := range cfg.Sinks {
-		switch sinkCfg.Type {
-		case "file":
-			if sinkCfg.File != nil {
-				logger.Info("msg", "File sink configured",
-					"pipeline", cfg.Name,
-					"sink_index", i,
-					"directory", sinkCfg.File.Directory,
-					"name", sinkCfg.File.Name)
-			}
-
-		case "console":
-			if sinkCfg.Console != nil {
-				logger.Info("msg", "Console sink configured",
-					"pipeline", cfg.Name,
-					"sink_index", i,
-					"target", sinkCfg.Console.Target)
-			}
-		}
+// logStats recursively logs statistics with automatic field extraction
+func logStats(msg string, name string, stats any) {
+	// Build base log fields
+	fields := []any{
+		"msg", msg,
+		"name", name,
 	}
 
-	// Display source endpoints with host support
-	for i, sourceCfg := range cfg.Sources {
-		switch sourceCfg.Type {
-		case "file":
-			if sourceCfg.File != nil {
-				logger.Info("msg", "File source configured",
-					"pipeline", cfg.Name,
-					"source_index", i,
-					"path", sourceCfg.File.Directory,
-					"pattern", sourceCfg.File.Pattern)
+	// Extract and flatten important metrics from stats map
+	if statsMap, ok := stats.(map[string]any); ok {
+		// Add scalar values directly
+		for key, value := range statsMap {
+			switch v := value.(type) {
+			case string, bool, int, int64, uint64, float64:
+				fields = append(fields, key, v)
+			case time.Time:
+				if !v.IsZero() {
+					fields = append(fields, key, v.Format(time.RFC3339))
+				}
+			case map[string]any:
+				// For nested maps, log summary counts if they contain arrays/maps
+				if count := getItemCount(v); count > 0 {
+					fields = append(fields, fmt.Sprintf("%s_count", key), count)
+				}
+			case []any, []map[string]any:
+				// For arrays, just log the count
+				fields = append(fields, fmt.Sprintf("%s_count", key), getArrayLength(value))
 			}
-
-		case "console":
-			logger.Info("msg", "Console source configured",
-				"pipeline", cfg.Name,
-				"source_index", i)
 		}
-	}
 
-	// Display filter information
-	if cfg.Flow != nil && len(cfg.Flow.Filters) > 0 {
-		logger.Info("msg", "Filters configured",
-			"pipeline", cfg.Name,
-			"filter_count", len(cfg.Flow.Filters))
+		// Log the flattened stats
+		logger.Debug(fields...)
+
+		// Recursively log nested structures with detail
+		for key, value := range statsMap {
+			switch v := value.(type) {
+			case map[string]any:
+				// Log nested component stats
+				if key == "flow" || key == "rate_limiter" || key == "filters" {
+					logStats(fmt.Sprintf("%s %s", name, key), key, v)
+				}
+			case []map[string]any:
+				// Log array items (sources, sinks, filters)
+				for i, item := range v {
+					if itemName, ok := item["id"].(string); ok {
+						logStats(fmt.Sprintf("%s %s", name, key), itemName, item)
+					} else {
+						logStats(fmt.Sprintf("%s %s", name, key), fmt.Sprintf("%s[%d]", key, i), item)
+					}
+				}
+			}
+		}
 	}
 }
 
-// logPipelineStatus logs the detailed status and statistics of an individual pipeline
-func logPipelineStatus(name string, stats map[string]any) {
-	statusFields := []any{
-		"msg", "Pipeline status",
-		"pipeline", name,
-	}
-
-	// Add processing statistics
-	if totalProcessed, ok := stats["total_processed"].(uint64); ok {
-		statusFields = append(statusFields, "entries_processed", totalProcessed)
-	}
-	if totalFiltered, ok := stats["total_filtered"].(uint64); ok {
-		statusFields = append(statusFields, "entries_filtered", totalFiltered)
-	}
-
-	// Add source count
-	if sourceCount, ok := stats["source_count"].(int); ok {
-		statusFields = append(statusFields, "sources", sourceCount)
-	}
-
-	// Add sink statistics
-	if sinks, ok := stats["sinks"].([]map[string]any); ok {
-		fileCount := 0
-		consoleCount := 0
-
-		for _, sink := range sinks {
-			sinkType := sink["type"].(string)
-			switch sinkType {
-			case "file":
-				fileCount++
-			case "console":
-				consoleCount++
-			}
-		}
-
-		if fileCount > 0 {
-			statusFields = append(statusFields, "file_sinks", fileCount)
-		}
-		if consoleCount > 0 {
-			statusFields = append(statusFields, "console_sinks", consoleCount)
-		}
-		statusFields = append(statusFields, "total_sinks", len(sinks))
-	}
-
-	// Add flow statistics if present
-	if flow, ok := stats["flow"].(map[string]any); ok {
-		// Add total from flow
-		if totalFormatted, ok := flow["total_formatted"].(uint64); ok {
-			statusFields = append(statusFields, "entries_formatted", totalFormatted)
-		}
-
-		// Check if filters are active
-		if filters, ok := flow["filters"].(map[string]any); ok {
-			if filterCount, ok := filters["filter_count"].(int); ok && filterCount > 0 {
-				statusFields = append(statusFields, "filters_active", filterCount)
-
-				// Add filter stats
-				if totalFiltered, ok := filters["total_passed"].(uint64); ok {
-					statusFields = append(statusFields, "entries_passed_filters", totalFiltered)
-				}
-			}
-		}
-
-		// Check if rate limiter is active
-		if rateLimiter, ok := flow["rate_limiter"].(map[string]any); ok {
-			if enabled, ok := rateLimiter["enabled"].(bool); ok && enabled {
-				statusFields = append(statusFields, "rate_limiter", "active")
-
-				// Add rate limit stats
-				if droppedTotal, ok := rateLimiter["dropped_total"].(uint64); ok {
-					statusFields = append(statusFields, "rate_limited", droppedTotal)
-				}
-			}
-		}
-
-		// Check formatter type
-		if formatter, ok := flow["formatter"].(string); ok {
-			statusFields = append(statusFields, "formatter", formatter)
-		}
-
-		// Check if heartbeat is enabled
-		if heartbeatEnabled, ok := flow["heartbeat_enabled"].(bool); ok && heartbeatEnabled {
-			if intervalMs, ok := flow["heartbeat_interval_ms"].(int64); ok {
-				statusFields = append(statusFields, "heartbeat_interval_ms", intervalMs)
-			}
+// getItemCount returns the count of items in a map (for nested structures)
+func getItemCount(m map[string]any) int {
+	for _, v := range m {
+		switch v.(type) {
+		case []any:
+			return len(v.([]any))
+		case []map[string]any:
+			return len(v.([]map[string]any))
 		}
 	}
+	return 0
+}
 
-	logger.Debug(statusFields...)
+// getArrayLength safely gets the length of various array types
+func getArrayLength(v any) int {
+	switch arr := v.(type) {
+	case []any:
+		return len(arr)
+	case []map[string]any:
+		return len(arr)
+	default:
+		return 0
+	}
 }

@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/filter/filter.go
 package filter
 
 import (

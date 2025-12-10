@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/core/flow.go
 package core
 
 import (

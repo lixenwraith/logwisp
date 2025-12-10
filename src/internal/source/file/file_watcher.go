@@ -1,4 +1,3 @@
-// FILE: logwisp/src/internal/source/file_watcher.go
 package file
 
 import (

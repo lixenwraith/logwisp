@@ -1,4 +1,3 @@
-// FILE: src/internal/plugin/factory.go
 package plugin
 
 import (
@@ -35,33 +34,61 @@ type PluginMetadata struct {
 	MaxInstances int // 0 = unlimited, 1 = single instance only
 }
 
-// global variables holding available source and sink plugins
-var (
+// // global variables holding available source and sink plugins
+// var (
+// 	sourceFactories map[string]SourceFactory
+// 	sinkFactories   map[string]SinkFactory
+// 	sourceMetadata  map[string]*PluginMetadata
+// 	sinkMetadata    map[string]*PluginMetadata
+// 	mu              sync.RWMutex
+// 	// once            sync.Once
+// )
+
+// registry encapsulates all plugin factories with lazy initialization
+type registry struct {
 	sourceFactories map[string]SourceFactory
 	sinkFactories   map[string]SinkFactory
 	sourceMetadata  map[string]*PluginMetadata
 	sinkMetadata    map[string]*PluginMetadata
 	mu              sync.RWMutex
-	// once            sync.Once
+}
+
+var (
+	globalRegistry *registry
+	once           sync.Once
 )
 
-func init() {
-	sourceFactories = make(map[string]SourceFactory)
-	sinkFactories = make(map[string]SinkFactory)
+// getRegistry returns the singleton registry, initializing on first access
+func getRegistry() *registry {
+	once.Do(func() {
+		globalRegistry = &registry{
+			sourceFactories: make(map[string]SourceFactory),
+			sinkFactories:   make(map[string]SinkFactory),
+			sourceMetadata:  make(map[string]*PluginMetadata),
+			sinkMetadata:    make(map[string]*PluginMetadata),
+		}
+	})
+	return globalRegistry
 }
+
+// func init() {
+// 	sourceFactories = make(map[string]SourceFactory)
+// 	sinkFactories = make(map[string]SinkFactory)
+// }
 
 // RegisterSource registers a source factory function
 func RegisterSource(name string, constructor SourceFactory) error {
-	mu.Lock()
-	defer mu.Unlock()
+	r := getRegistry()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	if _, exists := sourceFactories[name]; exists {
+	if _, exists := r.sourceFactories[name]; exists {
 		return fmt.Errorf("source type %s already registered", name)
 	}
-	sourceFactories[name] = constructor
+	r.sourceFactories[name] = constructor
 
 	// Set default metadata
-	sourceMetadata[name] = &PluginMetadata{
+	r.sourceMetadata[name] = &PluginMetadata{
 		MaxInstances: 0, // Unlimited by default
 	}
 
@@ -70,16 +97,17 @@ func RegisterSource(name string, constructor SourceFactory) error {
 
 // RegisterSink registers a sink factory function
 func RegisterSink(name string, constructor SinkFactory) error {
-	mu.Lock()
-	defer mu.Unlock()
+	r := getRegistry()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	if _, exists := sinkFactories[name]; exists {
+	if _, exists := r.sinkFactories[name]; exists {
 		return fmt.Errorf("sink type %s already registered", name)
 	}
-	sinkFactories[name] = constructor
+	r.sinkFactories[name] = constructor
 
 	// Set default metadata
-	sinkMetadata[name] = &PluginMetadata{
+	r.sinkMetadata[name] = &PluginMetadata{
 		MaxInstances: 0, // Unlimited by default
 	}
 
@@ -88,69 +116,75 @@ func RegisterSink(name string, constructor SinkFactory) error {
 
 // SetSourceMetadata sets metadata for a source type (call after RegisterSource)
 func SetSourceMetadata(name string, metadata *PluginMetadata) error {
-	mu.Lock()
+	r := getRegistry()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	defer mu.Unlock()
-
-	if _, exists := sourceFactories[name]; !exists {
+	if _, exists := r.sourceFactories[name]; !exists {
 		return fmt.Errorf("source type %s not registered", name)
 	}
-	sourceMetadata[name] = metadata
+	r.sourceMetadata[name] = metadata
 
 	return nil
 }
 
 // SetSinkMetadata sets metadata for a sink type (call after RegisterSink)
 func SetSinkMetadata(name string, metadata *PluginMetadata) error {
-	mu.Lock()
-	defer mu.Unlock()
+	r := getRegistry()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	if _, exists := sinkFactories[name]; !exists {
+	if _, exists := r.sinkFactories[name]; !exists {
 		return fmt.Errorf("sink type %s not registered", name)
 	}
-	sinkMetadata[name] = metadata
+	r.sinkMetadata[name] = metadata
 	return nil
 }
 
 // GetSource retrieves a source factory function
 func GetSource(name string) (SourceFactory, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	constructor, exists := sourceFactories[name]
+	r := getRegistry()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	constructor, exists := r.sourceFactories[name]
 	return constructor, exists
 }
 
 // GetSink retrieves a sink factory function
 func GetSink(name string) (SinkFactory, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	constructor, exists := sinkFactories[name]
+	r := getRegistry()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	constructor, exists := r.sinkFactories[name]
 	return constructor, exists
 }
 
 // GetSourceMetadata retrieves metadata for a source type
 func GetSourceMetadata(name string) (*PluginMetadata, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	meta, exists := sourceMetadata[name]
+	r := getRegistry()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	meta, exists := r.sourceMetadata[name]
 	return meta, exists
 }
 
 // GetSinkMetadata retrieves metadata for a sink type
 func GetSinkMetadata(name string) (*PluginMetadata, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	meta, exists := sinkMetadata[name]
+	r := getRegistry()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	meta, exists := r.sinkMetadata[name]
 	return meta, exists
 }
 
 // ListSources returns all registered source types
 func ListSources() []string {
-	mu.RLock()
-	defer mu.RUnlock()
+	r := getRegistry()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
-	types := make([]string, 0, len(sourceFactories))
-	for t := range sourceFactories {
+	types := make([]string, 0, len(r.sourceFactories))
+	for t := range r.sourceFactories {
 		types = append(types, t)
 	}
 	return types
@@ -158,11 +192,12 @@ func ListSources() []string {
 
 // ListSinks returns all registered sink types
 func ListSinks() []string {
-	mu.RLock()
-	defer mu.RUnlock()
+	r := getRegistry()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
-	types := make([]string, 0, len(sinkFactories))
-	for t := range sinkFactories {
+	types := make([]string, 0, len(r.sinkFactories))
+	for t := range r.sinkFactories {
 		types = append(types, t)
 	}
 	return types

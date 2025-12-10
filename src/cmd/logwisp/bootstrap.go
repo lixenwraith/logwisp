@@ -1,10 +1,17 @@
-// FILE: logwisp/src/cmd/logwisp/bootstrap.go
 package main
 
 import (
 	"context"
 	"fmt"
-	"strings"
+
+	_ "logwisp/src/internal/source/console"
+	_ "logwisp/src/internal/source/file"
+	_ "logwisp/src/internal/source/null"
+	_ "logwisp/src/internal/source/random"
+
+	_ "logwisp/src/internal/sink/console"
+	_ "logwisp/src/internal/sink/file"
+	_ "logwisp/src/internal/sink/null"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/service"
@@ -12,6 +19,78 @@ import (
 
 	"github.com/lixenwraith/log"
 )
+
+// bootstrapInitial handles initial service startup with status reporter
+func bootstrapInitial(ctx context.Context, cfg *config.Config) (*service.Service, context.CancelFunc, error) {
+	svc, err := bootstrapService(ctx, cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to bootstrap service: %w", err)
+	}
+
+	if err := svc.Start(); err != nil {
+		return nil, nil, fmt.Errorf("failed to start service pipelines: %w", err)
+	}
+
+	var statusCancel context.CancelFunc
+	if cfg.StatusReporter {
+		statusCancel = startStatusReporter(ctx, svc)
+	}
+
+	return svc, statusCancel, nil
+}
+
+// handleReload orchestrates the entire hot-reload process including status reporter lifecycle
+func handleReload(ctx context.Context, oldSvc *service.Service, statusCancel context.CancelFunc) (*service.Service, *config.Config, context.CancelFunc, error) {
+	logger.Info("msg", "Starting configuration hot reload")
+
+	// Get updated config from the lixenwraith/config manager
+	lcfg := config.GetConfigManager()
+	if lcfg == nil {
+		err := fmt.Errorf("config manager not available for reload")
+		logger.Error("msg", "Reload failed", "error", err)
+		return nil, nil, nil, err
+	}
+
+	updatedCfgStruct, err := lcfg.AsStruct()
+	if err != nil {
+		logger.Error("msg", "Failed to get updated config for reload", "error", err, "action", "keeping current configuration")
+		return nil, nil, nil, err
+	}
+	newCfg := updatedCfgStruct.(*config.Config)
+
+	// Bootstrap a new service to ensure it's valid before touching the old one
+	logger.Debug("msg", "Bootstrapping new service with updated config")
+	newService, err := bootstrapService(ctx, newCfg)
+	if err != nil {
+		logger.Error("msg", "Failed to bootstrap new service, keeping old service running", "error", err)
+		return nil, nil, nil, err
+	}
+
+	// Gracefully shut down the old service
+	if oldSvc != nil {
+		logger.Info("msg", "Shutting down old service before activating new one")
+		oldSvc.Shutdown()
+	}
+
+	// Start the new service
+	if err := newService.Start(); err != nil {
+		logger.Error("msg", "Failed to start new service pipelines after reload. The application may be in a non-functional state.", "error", err)
+		return nil, nil, nil, fmt.Errorf("failed to start new service: %w", err)
+	}
+
+	// Manage status reporter lifecycle
+	if statusCancel != nil {
+		statusCancel()
+	}
+
+	var newStatusCancel context.CancelFunc
+	if newCfg.StatusReporter {
+		newStatusCancel = startStatusReporter(ctx, newService)
+	}
+
+	logger.Info("msg", "Configuration hot reload completed successfully")
+	return newService, newCfg, newStatusCancel, nil
+}
 
 // bootstrapService creates and initializes the main log transport service and its pipelines
 func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, error) {
@@ -45,7 +124,7 @@ func initializeLogger(cfg *config.Config) error {
 	}
 
 	// Determine log level
-	levelValue, err := parseLogLevel(cfg.Logging.Level)
+	levelValue, err := log.Level(cfg.Logging.Level)
 	if err != nil {
 		return fmt.Errorf("invalid log level: %w", err)
 	}
@@ -81,11 +160,6 @@ func initializeLogger(cfg *config.Config) error {
 		return fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
 	}
 
-	// Apply format if specified
-	if cfg.Logging.Console != nil && cfg.Logging.Console.Format != "" {
-		logCfg.Format = cfg.Logging.Console.Format
-	}
-
 	return logger.ApplyConfig(logCfg)
 }
 
@@ -99,21 +173,5 @@ func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 		if cfg.Logging.File.RetentionHours > 0 {
 			logCfg.RetentionPeriodHrs = cfg.Logging.File.RetentionHours
 		}
-	}
-}
-
-// parseLogLevel converts a string log level to its corresponding integer value
-func parseLogLevel(level string) (int64, error) {
-	switch strings.ToLower(level) {
-	case "debug":
-		return log.LevelDebug, nil
-	case "info":
-		return log.LevelInfo, nil
-	case "warn", "warning":
-		return log.LevelWarn, nil
-	case "error":
-		return log.LevelError, nil
-	default:
-		return 0, fmt.Errorf("unknown log level: %s", level)
 	}
 }

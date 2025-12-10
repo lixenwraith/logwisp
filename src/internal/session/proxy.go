@@ -1,4 +1,3 @@
-// FILE: src/internal/session/proxy.go
 package session
 
 import (
