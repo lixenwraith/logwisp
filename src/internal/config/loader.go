@@ -95,9 +95,6 @@ func defaults() *Config {
 		StatusReporter:   true,
 		ConfigAutoReload: false,
 
-		// Child process indicator
-		BackgroundDaemon: false,
-
 		// Existing defaults
 		Logging: &LogConfig{
 			Output: "stdout",

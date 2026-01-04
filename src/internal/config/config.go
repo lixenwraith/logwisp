@@ -12,9 +12,6 @@ type Config struct {
 	StatusReporter   bool `toml:"status_reporter"`
 	ConfigAutoReload bool `toml:"auto_reload"`
 
-	// Internal flag indicating demonized child process (DO NOT SET IN CONFIG FILE)
-	BackgroundDaemon bool
-
 	// Configuration file path
 	ConfigFile string `toml:"config_file"`
 
@@ -247,4 +244,24 @@ type FileSinkOptions struct {
 	RetentionHours  float64 `toml:"retention_hours"`
 	BufferSize      int64   `toml:"buffer_size"`
 	FlushIntervalMs int64   `toml:"flush_interval_ms"`
+}
+
+// TCPSinkOptions defines settings for a TCP server sink
+type TCPSinkOptions struct {
+	Host            string `toml:"host"`
+	Port            int64  `toml:"port"`
+	BufferSize      int64  `toml:"buffer_size"`
+	WriteTimeout    int64  `toml:"write_timeout_ms"`
+	KeepAlive       bool   `toml:"keep_alive"`
+	KeepAlivePeriod int64  `toml:"keep_alive_period_ms"`
+}
+
+// HTTPSinkOptions defines settings for an HTTP SSE server sink
+type HTTPSinkOptions struct {
+	Host         string `toml:"host"`
+	Port         int64  `toml:"port"`
+	StreamPath   string `toml:"stream_path"`
+	StatusPath   string `toml:"status_path"`
+	BufferSize   int64  `toml:"buffer_size"`
+	WriteTimeout int64  `toml:"write_timeout_ms"`
 }

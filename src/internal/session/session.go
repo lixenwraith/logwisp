@@ -252,12 +252,10 @@ func (m *Manager) startCleanup() {
 
 // cleanupIdleSessions removes sessions that have exceeded the maximum idle time.
 func (m *Manager) cleanupIdleSessions() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	now := time.Now()
 	expiredSessions := make([]*Session, 0)
 
+	m.mu.Lock()
 	for id, session := range m.sessions {
 		idleTime := now.Sub(session.LastActivity)
 
@@ -268,13 +266,16 @@ func (m *Manager) cleanupIdleSessions() {
 	}
 	m.mu.Unlock()
 
-	// Call callbacks outside of lock
 	if len(expiredSessions) > 0 {
 		m.callbacksMu.RLock()
-		defer m.callbacksMu.RUnlock()
+		callbacks := make(map[string]func(sessionID, remoteAddr string))
+		for k, v := range m.expiryCallbacks {
+			callbacks[k] = v
+		}
+		m.callbacksMu.RUnlock()
 
 		for _, session := range expiredSessions {
-			if callback, exists := m.expiryCallbacks[session.Source]; exists {
+			if callback, exists := callbacks[session.Source]; exists {
 				// Call callback to notify owner
 				go callback(session.ID, session.RemoteAddr)
 			}

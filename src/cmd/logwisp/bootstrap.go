@@ -11,7 +11,9 @@ import (
 
 	_ "logwisp/src/internal/sink/console"
 	_ "logwisp/src/internal/sink/file"
+	_ "logwisp/src/internal/sink/http"
 	_ "logwisp/src/internal/sink/null"
+	_ "logwisp/src/internal/sink/tcp"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/service"
