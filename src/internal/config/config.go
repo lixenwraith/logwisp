@@ -198,7 +198,6 @@ type FileSourceOptions struct {
 	Directory       string `toml:"directory"`
 	Pattern         string `toml:"pattern"` // glob pattern
 	CheckIntervalMS int64  `toml:"check_interval_ms"`
-	Recursive       bool   `toml:"recursive"` // TODO: implement logic
 }
 
 // ConsoleSourceOptions defines settings for a stdin-based source

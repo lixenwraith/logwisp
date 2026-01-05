@@ -70,12 +70,9 @@ func NewTCPSinkPlugin(
 ) (sink.Sink, error) {
 	// Create config struct with defaults
 	opts := &config.TCPSinkOptions{
-		Host:            "0.0.0.0",
-		Port:            0, // Required
-		BufferSize:      1000,
-		WriteTimeout:    5000,
-		KeepAlive:       true,
-		KeepAlivePeriod: 30000,
+		Host:      DefaultTCPHost,
+		Port:      0,
+		KeepAlive: true,
 	}
 
 	// Parse config map into struct
@@ -84,11 +81,18 @@ func NewTCPSinkPlugin(
 	}
 
 	// Validate required fields
-	if opts.Port <= 0 || opts.Port > 65535 {
-		return nil, fmt.Errorf("port must be between 1 and 65535")
+	// Validate and apply defaults
+	if opts.Port <= 0 || opts.Port > TCPMaxPort {
+		return nil, fmt.Errorf("port must be between 1 and %d", TCPMaxPort)
 	}
 	if opts.BufferSize <= 0 {
-		opts.BufferSize = 1000
+		opts.BufferSize = DefaultTCPBufferSize
+	}
+	if opts.WriteTimeout <= 0 {
+		opts.WriteTimeout = DefaultTCPWriteTimeoutMS
+	}
+	if opts.KeepAlivePeriod <= 0 {
+		opts.KeepAlivePeriod = DefaultTCPKeepAlivePeriod
 	}
 
 	t := &TCPSink{
@@ -150,6 +154,13 @@ func (t *TCPSink) Start(ctx context.Context) error {
 		gnet.WithReusePort(true),
 	}
 
+	// Apply TCP keep-alive settings from config
+	if t.config.KeepAlive {
+		opts = append(opts,
+			gnet.WithTCPKeepAlive(time.Duration(t.config.KeepAlivePeriod)*time.Millisecond),
+		)
+	}
+
 	// Start gnet server
 	errChan := make(chan error, 1)
 	go func() {
@@ -185,7 +196,7 @@ func (t *TCPSink) Start(ctx context.Context) error {
 		close(t.done)
 		t.wg.Wait()
 		return err
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(TCPServerStartTimeout):
 		t.logger.Info("msg", "TCP server started",
 			"component", "tcp_sink",
 			"instance_id", t.id,
@@ -208,7 +219,7 @@ func (t *TCPSink) Stop() {
 	t.engineMu.Unlock()
 
 	if engine != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), TCPServerShutdownTimeout)
 		defer cancel()
 		(*engine).Stop(ctx)
 	}
@@ -306,6 +317,11 @@ func (s *tcpServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		}
 	}
 
+	// Apply write timeout from config
+	if s.sink.config.WriteTimeout > 0 {
+		c.SetWriteDeadline(time.Now().Add(time.Duration(s.sink.config.WriteTimeout) * time.Millisecond))
+	}
+
 	// Create session via proxy
 	sess := s.sink.proxy.CreateSession(remoteAddrStr, map[string]any{
 		"type":        "tcp_client",
@@ -392,6 +408,11 @@ func (t *TCPSink) broadcastData(data []byte) {
 			t.proxy.UpdateActivity(client.sessionID)
 		}
 
+		// Refresh write deadline on each write if configured
+		if t.config.WriteTimeout > 0 {
+			conn.SetWriteDeadline(time.Now().Add(time.Duration(t.config.WriteTimeout) * time.Millisecond))
+		}
+
 		conn.AsyncWrite(data, func(c gnet.Conn, err error) error {
 			if err != nil {
 				t.writeErrors.Add(1)
@@ -422,8 +443,8 @@ func (t *TCPSink) handleWriteError(c gnet.Conn, err error) {
 		"error", err,
 		"consecutive_errors", errorCount)
 
-	// Close connection after 3 consecutive write errors
-	if errorCount >= 3 {
+	// Close connection max consecutive write errors
+	if errorCount >= TCPMaxConsecutiveWriteErrors {
 		t.logger.Warn("msg", "Closing connection due to repeated write errors",
 			"component", "tcp_sink",
 			"remote_addr", remoteAddrStr,

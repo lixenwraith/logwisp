@@ -1,6 +1,6 @@
 # LogWisp
 
-A high-performance, pipeline-based log transport and processing system built in Go. LogWisp provides flexible log collection, filtering, formatting, and distribution with security and reliability features.
+A pipeline-based log transport and processing system built in Go. LogWisp provides flexible log collection, filtering, formatting, and distribution with security and reliability features.
 
 ## Features
 

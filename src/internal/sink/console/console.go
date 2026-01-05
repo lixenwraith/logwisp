@@ -56,19 +56,17 @@ func NewConsoleSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	// Step 1: Create empty config struct with defaults
+	// Create empty config struct with defaults
 	opts := &config.ConsoleSinkOptions{
-		Target:     "stdout", // Default target
-		BufferSize: 1000,     // Default buffer size
+		Target: DefaultConsoleTarget,
 	}
 
-	// Step 2: Use lconfig to scan map into struct (overriding defaults)
+	// Scan config map into struct
 	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Step 3: Validate required fields
-	// Target validation
+	// Validate and apply defaults
 	var output io.Writer
 	switch opts.Target {
 	case "stdout":
@@ -80,7 +78,7 @@ func NewConsoleSinkPlugin(
 	}
 
 	if opts.BufferSize <= 0 {
-		opts.BufferSize = 1000
+		opts.BufferSize = DefaultConsoleBufferSize
 	}
 
 	// Step 4: Create and return plugin instance

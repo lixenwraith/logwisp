@@ -66,10 +66,9 @@ func NewFileSourcePlugin(
 ) (source.Source, error) {
 	// Step 1: Create empty config struct with defaults
 	opts := &config.FileSourceOptions{
-		Directory:       "",    // Required field - no default
-		Pattern:         "*",   // Default pattern
-		CheckIntervalMS: 100,   // Default check interval
-		Recursive:       false, // Default recursive
+		Directory:       "",  // Required field - no default
+		Pattern:         "*", // Default pattern
+		CheckIntervalMS: 100, // Default check interval
 	}
 
 	// Step 2: Use lconfig to scan map into struct (overriding defaults)

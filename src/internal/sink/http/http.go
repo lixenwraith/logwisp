@@ -74,11 +74,8 @@ func NewHTTPSinkPlugin(
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
 	opts := &config.HTTPSinkOptions{
-		Host:         "0.0.0.0",
+		Host:         DefaultHTTPHost,
 		Port:         0,
-		StreamPath:   "/stream",
-		StatusPath:   "/status",
-		BufferSize:   1000,
 		WriteTimeout: 0, // SSE indefinite streaming
 	}
 
@@ -86,17 +83,18 @@ func NewHTTPSinkPlugin(
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	if opts.Port <= 0 || opts.Port > 65535 {
-		return nil, fmt.Errorf("port must be between 1 and 65535")
+	// Validate and apply defaults
+	if opts.Port <= 0 || opts.Port > HTTPMaxPort {
+		return nil, fmt.Errorf("port must be between 1 and %d", HTTPMaxPort)
 	}
 	if opts.BufferSize <= 0 {
-		opts.BufferSize = 1000
+		opts.BufferSize = DefaultHTTPBufferSize
 	}
 	if opts.StreamPath == "" {
-		opts.StreamPath = "/stream"
+		opts.StreamPath = DefaultHTTPStreamPath
 	}
 	if opts.StatusPath == "" {
-		opts.StatusPath = "/status"
+		opts.StatusPath = DefaultHTTPStatusPath
 	}
 
 	h := &HTTPSink{

@@ -54,49 +54,38 @@ func NewFileSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	// Step 1: Create empty config struct with defaults
-	opts := &config.FileSinkOptions{
-		Directory:       "",   // Required field - no default
-		Name:            "",   // Required field - no default
-		MaxSizeMB:       100,  // Default max file size
-		MaxTotalSizeMB:  1000, // Default max total size
-		MinDiskFreeMB:   100,  // Default min disk free
-		RetentionHours:  168,  // Default retention (7 days)
-		BufferSize:      1000, // Default buffer size
-		FlushIntervalMs: 100,  // Default flush interval
-	}
+	// Create empty config struct
+	opts := &config.FileSinkOptions{}
 
-	// Step 2: Use lconfig to scan map into struct (overriding defaults)
+	// Scan config map into struct
 	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Step 3: Validate required fields
+	// Validate required fields and apply defaults
 	if opts.Directory == "" {
-		return nil, fmt.Errorf("directory is mandatory")
+		return nil, fmt.Errorf("directory is required")
 	}
 	if opts.Name == "" {
-		return nil, fmt.Errorf("name is mandatory")
+		return nil, fmt.Errorf("name is required")
 	}
-
-	// Validate sizes
 	if opts.MaxSizeMB <= 0 {
-		return nil, fmt.Errorf("max_size_mb must be positive")
+		opts.MaxSizeMB = DefaultFileMaxSizeMB
 	}
 	if opts.MaxTotalSizeMB <= 0 {
-		return nil, fmt.Errorf("max_total_size_mb must be positive")
+		opts.MaxTotalSizeMB = DefaultFileMaxTotalSizeMB
 	}
 	if opts.MinDiskFreeMB < 0 {
-		return nil, fmt.Errorf("min_disk_free_mb cannot be negative")
+		opts.MinDiskFreeMB = DefaultFileMinDiskFreeMB
 	}
 	if opts.RetentionHours <= 0 {
-		return nil, fmt.Errorf("retention_hours must be positive")
+		opts.RetentionHours = DefaultFileRetentionHours
 	}
 	if opts.BufferSize <= 0 {
-		return nil, fmt.Errorf("buffer_size must be positive")
+		opts.BufferSize = DefaultFileBufferSize
 	}
 	if opts.FlushIntervalMs <= 0 {
-		return nil, fmt.Errorf("flush_interval_ms must be positive")
+		opts.FlushIntervalMs = DefaultFileFlushIntervalMs
 	}
 
 	// Step 4: Create and return plugin instance
@@ -209,7 +198,7 @@ func (fs *FileSink) Stop() {
 	}
 
 	// Shutdown the writer with timeout
-	if err := fs.writer.Shutdown(2 * time.Second); err != nil {
+	if err := fs.writer.Shutdown(core.LoggerShutdownTimeout); err != nil {
 		fs.logger.Error("msg", "Error shutting down file writer",
 			"component", "file_sink",
 			"error", err)
