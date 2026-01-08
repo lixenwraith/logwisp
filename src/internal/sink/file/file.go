@@ -47,6 +47,16 @@ type FileSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
+const (
+	// Defaults
+	DefaultFileMaxSizeMB       = 100
+	DefaultFileMaxTotalSizeMB  = 1000
+	DefaultFileMinDiskFreeMB   = 100
+	DefaultFileRetentionHours  = 168 // 7 days
+	DefaultFileBufferSize      = 1000
+	DefaultFileFlushIntervalMs = 100
+)
+
 // NewFileSinkPlugin creates a file sink through plugin factory
 func NewFileSinkPlugin(
 	id string,
@@ -62,13 +72,15 @@ func NewFileSinkPlugin(
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Validate required fields and apply defaults
-	if opts.Directory == "" {
-		return nil, fmt.Errorf("directory is required")
+	// Validate
+	if err := lconfig.NonEmpty(opts.Directory); err != nil {
+		return nil, fmt.Errorf("directory: %w", err)
 	}
-	if opts.Name == "" {
-		return nil, fmt.Errorf("name is required")
+	if err := lconfig.NonEmpty(opts.Name); err != nil {
+		return nil, fmt.Errorf("name: %w", err)
 	}
+
+	// Defaults
 	if opts.MaxSizeMB <= 0 {
 		opts.MaxSizeMB = DefaultFileMaxSizeMB
 	}
@@ -88,7 +100,6 @@ func NewFileSinkPlugin(
 		opts.FlushIntervalMs = DefaultFileFlushIntervalMs
 	}
 
-	// Step 4: Create and return plugin instance
 	// Create configuration for the internal log writer
 	writerConfig := log.DefaultConfig()
 	writerConfig.Directory = opts.Directory

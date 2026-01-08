@@ -63,9 +63,13 @@ func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 	}
 	f.formatter = formatter
 
-	// Create heartbeat generator with the same formatter
-	if cfg.Heartbeat != nil && cfg.Heartbeat.Enabled {
-		f.heartbeat = NewHeartbeatGenerator(cfg.Heartbeat, formatter, logger)
+	// Create heartbeat generator with the same formatter if configured
+	if cfg.Heartbeat != nil {
+		hb, err := NewHeartbeatGenerator(cfg.Heartbeat, formatter, logger)
+		if err != nil {
+			return nil, fmt.Errorf("heartbeat: %w", err)
+		}
+		f.heartbeat = hb
 	}
 
 	logger.Info("msg", "Flow processor created",

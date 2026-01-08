@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"fmt"
 	"strings"
 	"sync/atomic"
 
@@ -8,6 +9,7 @@ import (
 	"logwisp/src/internal/core"
 	"logwisp/src/internal/tokenbucket"
 
+	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -25,21 +27,36 @@ type RateLimiter struct {
 
 // NewRateLimiter creates a new pipeline-level rate limiter from configuration
 func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimiter, error) {
+	// Rate <= 0 means disabled
 	if cfg.Rate <= 0 {
 		return nil, nil // No rate limit
 	}
 
+	// Validate
+	if err := lconfig.NonNegative(cfg.Rate); err != nil {
+		return nil, fmt.Errorf("rate: %w", err)
+	}
+	if err := lconfig.NonNegative(cfg.Burst); err != nil {
+		return nil, fmt.Errorf("burst: %w", err)
+	}
+	if err := lconfig.NonNegative(cfg.MaxEntrySizeBytes); err != nil {
+		return nil, fmt.Errorf("max_entry_size_bytes: %w", err)
+	}
+
+	// Defaults
 	burst := cfg.Burst
 	if burst <= 0 {
-		burst = cfg.Rate // Default burst to rate
+		burst = cfg.Rate
 	}
 
 	var policy config.RateLimitPolicy
 	switch strings.ToLower(cfg.Policy) {
 	case "drop":
 		policy = config.PolicyDrop
-	default:
+	case "pass", "":
 		policy = config.PolicyPass
+	default:
+		return nil, fmt.Errorf("policy: must be one of [drop, pass], got %s", cfg.Policy)
 	}
 
 	l := &RateLimiter{

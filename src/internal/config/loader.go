@@ -113,7 +113,18 @@ func defaults() *Config {
 		Pipelines: []PipelineConfig{
 			{
 				Name: "default_pipeline",
-				Flow: &FlowConfig{},
+				Flow: &FlowConfig{
+					RateLimit: &RateLimitConfig{
+						Rate:              5,
+						Burst:             10,
+						Policy:            "drop",
+						MaxEntrySizeBytes: 65536,
+					},
+					Format: &FormatConfig{
+						Type:            "json",
+						SanitizerPolicy: "json",
+					},
+				},
 				PluginSources: []PluginSourceConfig{
 					{
 						ID:   "default_source",

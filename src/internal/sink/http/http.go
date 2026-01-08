@@ -66,6 +66,19 @@ type HTTPSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
+const (
+	// Server lifecycle
+	HttpServerStartTimeout    = 100 * time.Millisecond
+	HttpServerShutdownTimeout = 2 * time.Second
+
+	// Defaults
+	DefaultHTTPHost       = "0.0.0.0"
+	DefaultHTTPBufferSize = 1000
+	DefaultHTTPStreamPath = "/stream"
+	DefaultHTTPStatusPath = "/status"
+	HTTPMaxPort           = 65535
+)
+
 // NewHTTPSinkPlugin creates an HTTP sink through plugin factory
 func NewHTTPSinkPlugin(
 	id string,
@@ -83,10 +96,12 @@ func NewHTTPSinkPlugin(
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Validate and apply defaults
+	// Validate
 	if opts.Port <= 0 || opts.Port > HTTPMaxPort {
 		return nil, fmt.Errorf("port must be between 1 and %d", HTTPMaxPort)
 	}
+
+	// Defaults
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultHTTPBufferSize
 	}

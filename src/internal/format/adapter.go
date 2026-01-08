@@ -2,11 +2,18 @@ package format
 
 import (
 	"encoding/json"
+	"fmt"
+
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 
+	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log/formatter"
 	"github.com/lixenwraith/log/sanitizer"
+)
+
+const (
+	DefaultFormatType = "raw"
 )
 
 // FormatterAdapter wraps log/formatter for logwisp compatibility
@@ -18,6 +25,26 @@ type FormatterAdapter struct {
 
 // NewFormatterAdapter creates adapter from config
 func NewFormatterAdapter(cfg *config.FormatConfig) (*FormatterAdapter, error) {
+	// Validate
+	if cfg.Type != "" {
+		validateType := lconfig.OneOf("json", "txt", "text", "raw")
+		if err := validateType(cfg.Type); err != nil {
+			return nil, fmt.Errorf("type: %w", err)
+		}
+	}
+
+	if cfg.SanitizerPolicy != "" {
+		validatePolicy := lconfig.OneOf("raw", "json", "txt", "shell")
+		if err := validatePolicy(cfg.SanitizerPolicy); err != nil {
+			return nil, fmt.Errorf("sanitizer_policy: %w", err)
+		}
+	}
+
+	// Defaults
+	if cfg.Type == "" {
+		cfg.Type = DefaultFormatType
+	}
+
 	// Create sanitizer based on policy
 	var s *sanitizer.Sanitizer
 	if cfg.SanitizerPolicy != "" {
@@ -44,7 +71,6 @@ func NewFormatterAdapter(cfg *config.FormatConfig) (*FormatterAdapter, error) {
 	// Build flags from config
 	flags := cfg.Flags
 	if flags == 0 {
-		// Set default flags based on format type
 		if cfg.Type == "raw" {
 			flags = formatter.FlagRaw
 		} else {

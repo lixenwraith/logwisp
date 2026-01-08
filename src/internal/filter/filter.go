@@ -9,6 +9,7 @@ import (
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
 
+	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -27,6 +28,20 @@ type Filter struct {
 
 // NewFilter creates a new filter from a configuration
 func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
+	// Validate enums before setting defaults
+	if cfg.Type != "" {
+		validateType := lconfig.OneOf(config.FilterTypeInclude, config.FilterTypeExclude)
+		if err := validateType(cfg.Type); err != nil {
+			return nil, fmt.Errorf("type: %w", err)
+		}
+	}
+	if cfg.Logic != "" {
+		validateLogic := lconfig.OneOf(config.FilterLogicOr, config.FilterLogicAnd)
+		if err := validateLogic(cfg.Logic); err != nil {
+			return nil, fmt.Errorf("logic: %w", err)
+		}
+	}
+
 	// Set defaults
 	if cfg.Type == "" {
 		cfg.Type = config.FilterTypeInclude
@@ -45,7 +60,7 @@ func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 	for i, pattern := range cfg.Patterns {
 		re, err := regexp.Compile(pattern)
 		if err != nil {
-			return nil, fmt.Errorf("invalid regex pattern[%d] '%s': %w", i, pattern, err)
+			return nil, fmt.Errorf("pattern[%d] '%s': %w", i, pattern, err)
 		}
 		f.patterns = append(f.patterns, re)
 	}

@@ -57,6 +57,12 @@ type FileSource struct {
 	lastEntryTime  atomic.Value // time.Time
 }
 
+const (
+	DefaultFileSourcePattern         = "*"
+	DefaultFileSourceCheckIntervalMS = 100
+	MinFileSourceCheckIntervalMS     = 10
+)
+
 // NewFileSourcePlugin creates a file source through plugin factory
 func NewFileSourcePlugin(
 	id string,
@@ -64,28 +70,28 @@ func NewFileSourcePlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
-	// Step 1: Create empty config struct with defaults
-	opts := &config.FileSourceOptions{
-		Directory:       "",  // Required field - no default
-		Pattern:         "*", // Default pattern
-		CheckIntervalMS: 100, // Default check interval
-	}
+	opts := &config.FileSourceOptions{}
 
-	// Step 2: Use lconfig to scan map into struct (overriding defaults)
+	// Use lconfig to scan map into struct (overriding defaults)
 	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Step 3: Validate required fields
-	if opts.Directory == "" {
-		return nil, fmt.Errorf("directory is mandatory")
+	// Validate and apply defaults
+	if err := lconfig.NonEmpty(opts.Directory); err != nil {
+		return nil, fmt.Errorf("directory: %w", err)
 	}
 
-	if opts.CheckIntervalMS < 10 {
-		return nil, fmt.Errorf("check_interval_ms must be at least 10ms")
+	if opts.Pattern == "" {
+		opts.Pattern = DefaultFileSourcePattern
+	}
+	if opts.CheckIntervalMS <= 0 {
+		opts.CheckIntervalMS = DefaultFileSourceCheckIntervalMS
+	} else if opts.CheckIntervalMS < MinFileSourceCheckIntervalMS {
+		return nil, fmt.Errorf("check_interval_ms: must be >= %d", MinFileSourceCheckIntervalMS)
 	}
 
-	// Step 4: Create and return plugin instance
+	// Create and return plugin instance
 	fs := &FileSource{
 		id:          id,
 		proxy:       proxy,

@@ -61,6 +61,22 @@ type TCPSink struct {
 	errorMu                sync.Mutex
 }
 
+const (
+	// Server lifecycle
+	TCPServerStartTimeout    = 100 * time.Millisecond
+	TCPServerShutdownTimeout = 2 * time.Second
+
+	// Connection management
+	TCPMaxConsecutiveWriteErrors = 3
+	TCPMaxPort                   = 65535
+
+	// Defaults
+	DefaultTCPHost            = "0.0.0.0"
+	DefaultTCPBufferSize      = 1000
+	DefaultTCPWriteTimeoutMS  = 5000
+	DefaultTCPKeepAlivePeriod = 30000
+)
+
 // NewTCPSinkPlugin creates a TCP sink through plugin factory
 func NewTCPSinkPlugin(
 	id string,
@@ -80,11 +96,12 @@ func NewTCPSinkPlugin(
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Validate required fields
-	// Validate and apply defaults
-	if opts.Port <= 0 || opts.Port > TCPMaxPort {
-		return nil, fmt.Errorf("port must be between 1 and %d", TCPMaxPort)
+	// Validate
+	if err := lconfig.Port(opts.Port); err != nil {
+		return nil, fmt.Errorf("port: %w", err)
 	}
+
+	// Defaults
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultTCPBufferSize
 	}

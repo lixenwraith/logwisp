@@ -3,15 +3,23 @@ package flow
 import (
 	"context"
 	"encoding/json"
-	"logwisp/src/internal/format"
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
+	"logwisp/src/internal/format"
 
+	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/formatter"
+)
+
+const (
+	MinHeartbeatIntervalMS     = 100
+	DefaultHeartbeatIntervalMS = 1000
+	DefaultHeartbeatFormat     = "txt"
 )
 
 // HeartbeatGenerator produces periodic heartbeat events
@@ -24,14 +32,35 @@ type HeartbeatGenerator struct {
 }
 
 // NewHeartbeatGenerator creates a new heartbeat generator
-func NewHeartbeatGenerator(cfg *config.HeartbeatConfig, formatter format.Formatter, logger *log.Logger) *HeartbeatGenerator {
+func NewHeartbeatGenerator(cfg *config.HeartbeatConfig, formatter format.Formatter, logger *log.Logger) (*HeartbeatGenerator, error) {
+	if cfg == nil || !cfg.Enabled {
+		return nil, nil
+	}
+
+	// Validate
+	if cfg.IntervalMS == 0 {
+		cfg.IntervalMS = DefaultHeartbeatIntervalMS
+	} else if cfg.IntervalMS < MinHeartbeatIntervalMS {
+		return nil, fmt.Errorf("interval_ms: must be >= %d, got %d", MinHeartbeatIntervalMS, cfg.IntervalMS)
+	}
+
+	validateFormat := lconfig.OneOf("txt", "json", "raw", "")
+	if err := validateFormat(cfg.Format); err != nil {
+		return nil, fmt.Errorf("format: %w", err)
+	}
+
+	// Defaults
+	if cfg.Format == "" {
+		cfg.Format = DefaultHeartbeatFormat
+	}
+
 	hg := &HeartbeatGenerator{
 		config:    cfg,
 		formatter: formatter,
 		logger:    logger,
 	}
 	hg.lastBeat.Store(time.Time{})
-	return hg
+	return hg, nil
 }
 
 // Start begins generating heartbeat events

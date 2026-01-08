@@ -49,6 +49,12 @@ type ConsoleSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
+const (
+	// Defaults
+	DefaultConsoleTarget     = "stdout"
+	DefaultConsoleBufferSize = 1000
+)
+
 // NewConsoleSinkPlugin creates a console sink through plugin factory
 func NewConsoleSinkPlugin(
 	id string,
@@ -56,10 +62,7 @@ func NewConsoleSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	// Create empty config struct with defaults
-	opts := &config.ConsoleSinkOptions{
-		Target: DefaultConsoleTarget,
-	}
+	opts := &config.ConsoleSinkOptions{}
 
 	// Scan config map into struct
 	if err := lconfig.ScanMap(configMap, opts); err != nil {
@@ -67,21 +70,28 @@ func NewConsoleSinkPlugin(
 	}
 
 	// Validate and apply defaults
+	if opts.Target == "" {
+		opts.Target = DefaultConsoleTarget
+	} else {
+		validateTarget := lconfig.OneOf("stdout", "stderr")
+		if err := validateTarget(opts.Target); err != nil {
+			return nil, fmt.Errorf("target: %w", err)
+		}
+	}
+
 	var output io.Writer
 	switch opts.Target {
 	case "stdout":
 		output = os.Stdout
 	case "stderr":
 		output = os.Stderr
-	default:
-		return nil, fmt.Errorf("invalid console target: %s (must be 'stdout' or 'stderr')", opts.Target)
 	}
 
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultConsoleBufferSize
 	}
 
-	// Step 4: Create and return plugin instance
+	// Create and return plugin instance
 	cs := &ConsoleSink{
 		id:     id,
 		proxy:  proxy,

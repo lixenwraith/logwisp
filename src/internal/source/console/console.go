@@ -56,6 +56,10 @@ type ConsoleSource struct {
 	lastEntryTime  atomic.Value // time.Time
 }
 
+const (
+	DefaultConsoleSourceBufferSize = 1000
+)
+
 // NewConsoleSourcePlugin creates a console source through plugin factory
 func NewConsoleSourcePlugin(
 	id string,
@@ -63,22 +67,19 @@ func NewConsoleSourcePlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
-	// Step 1: Create empty config struct with defaults
-	opts := &config.ConsoleSourceOptions{
-		BufferSize: 1000, // Default buffer size
-	}
+	opts := &config.ConsoleSourceOptions{}
 
-	// Step 2: Use lconfig to scan map into struct (overriding defaults)
+	// Scan config map
 	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Step 3: Validate required fields
+	// Validate and apply defaults
 	if opts.BufferSize <= 0 {
-		opts.BufferSize = 1000
+		opts.BufferSize = DefaultConsoleSourceBufferSize
 	}
 
-	// Step 4: Create and return plugin instance
+	// Create and return plugin instance
 	cs := &ConsoleSource{
 		id:          id,
 		proxy:       proxy,
@@ -89,7 +90,7 @@ func NewConsoleSourcePlugin(
 	}
 	cs.lastEntryTime.Store(time.Time{})
 
-	// Create session for console
+	// Create session
 	cs.session = proxy.CreateSession(
 		"console_stdin",
 		map[string]any{

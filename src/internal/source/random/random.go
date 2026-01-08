@@ -53,6 +53,12 @@ type RandomSource struct {
 	lastEntryTime  atomic.Value // time.Time
 }
 
+const (
+	DefaultRandomSourceIntervalMS = 500
+	DefaultRandomSourceFormat     = "txt"
+	DefaultRandomSourceLength     = 20
+)
+
 // NewRandomSourcePlugin creates a random source through plugin factory
 func NewRandomSourcePlugin(
 	id string,
@@ -69,26 +75,33 @@ func NewRandomSourcePlugin(
 		Special:    false,
 	}
 
-	// Step 2: Use lconfig to scan map into struct (overriding defaults)
+	// Scan config map
 	if err := lconfig.ScanMap(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Step 3: Validate
+	// Defaults
 	if opts.IntervalMS <= 0 {
-		return nil, fmt.Errorf("interval_ms must be positive")
+		opts.IntervalMS = DefaultRandomSourceIntervalMS
 	}
+	if opts.Format == "" {
+		opts.Format = DefaultRandomSourceFormat
+	}
+	if opts.Length <= 0 {
+		opts.Length = DefaultRandomSourceLength
+	}
+
+	// Validate
 	if opts.JitterMS < 0 {
 		return nil, fmt.Errorf("jitter_ms cannot be negative")
 	}
 	if opts.JitterMS > opts.IntervalMS {
 		opts.JitterMS = opts.IntervalMS
 	}
-	if opts.Length <= 0 {
-		return nil, fmt.Errorf("length must be positive")
-	}
-	if opts.Format != "raw" && opts.Format != "txt" && opts.Format != "json" {
-		return nil, fmt.Errorf("format must be 'raw', 'txt', or 'json'")
+
+	validateFormat := lconfig.OneOf("raw", "txt", "json")
+	if err := validateFormat(opts.Format); err != nil {
+		return nil, fmt.Errorf("format: %w", err)
 	}
 
 	rs := &RandomSource{
