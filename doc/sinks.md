@@ -81,7 +81,9 @@ port = 8080
 stream_path = "/stream"
 status_path = "/status"
 buffer_size = 1000
-write_timeout_ms = 10000
+client_buffer_size = 256
+write_timeout_ms = 0
+max_connections = 0
 ```
 
 **Configuration Options:**
@@ -92,12 +94,14 @@ write_timeout_ms = 10000
 | `port` | int | Required | Listen port |
 | `stream_path` | string | "/stream" | SSE stream endpoint |
 | `status_path` | string | "/status" | Status endpoint |
-| `buffer_size` | int | 1000 | Internal buffer size |
-| `write_timeout_ms` | int | 10000 | Write timeout |
+| `buffer_size` | int | 1000 | Sink input queue size |
+| `client_buffer_size` | int | 256 | Per-client send queue size |
+| `write_timeout_ms` | int | 0 | Write deadline per event (0 = none) |
+| `max_connections` | int | 0 | Concurrent connection cap (0 = unlimited) |
 
 ### TCP Sink
 
-TCP streaming server for debugging.
+TCP streaming server for debugging and raw client forwarding.
 
 ```toml
 [[pipelines.plugin_sinks]]
@@ -107,8 +111,11 @@ type = "tcp"
 host = "0.0.0.0"
 port = 9090
 buffer_size = 1000
+client_buffer_size = 256
+write_timeout_ms = 5000
 keep_alive = true
 keep_alive_period_ms = 30000
+max_connections = 0
 ```
 
 **Configuration Options:**
@@ -117,10 +124,13 @@ keep_alive_period_ms = 30000
 |--------|------|---------|-------------|
 | `host` | string | "0.0.0.0" | Bind address |
 | `port` | int | Required | Listen port |
-| `buffer_size` | int | 1000 | Internal buffer size |
+| `buffer_size` | int | 1000 | Sink input queue size |
+| `client_buffer_size` | int | 256 | Per-client send queue size |
+| `write_timeout_ms` | int | 5000 | Write timeout |
 | `keep_alive` | bool | true | Enable TCP keep-alive |
 | `keep_alive_period_ms` | int | 30000 | Keep-alive interval |
-| `write_timeout_ms` | int | 10000 | Write timeout |
+| `max_connections` | int | 0 | Concurrent connection cap (0 = unlimited) |
+```
 
 ### Null Sink
 

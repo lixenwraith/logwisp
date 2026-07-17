@@ -75,6 +75,7 @@ func main() {
 	svc, statusReporterCancel, err := bootstrapInitial(ctx, cfg)
 	if err != nil {
 		logger.Error("msg", "Failed to initialize service", "error", err)
+		shutdownLogger()
 		os.Exit(1)
 	}
 

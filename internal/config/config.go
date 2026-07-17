@@ -273,27 +273,6 @@ type FileSinkOptions struct {
 
 // TCPSinkOptions defines settings for a TCP server sink
 type TCPSinkOptions struct {
-	Host            string `toml:"host"`
-	Port            int64  `toml:"port"`
-	BufferSize      int64  `toml:"buffer_size"`
-	WriteTimeout    int64  `toml:"write_timeout_ms"`
-	KeepAlivePeriod int64  `toml:"keep_alive_period_ms"`
-	KeepAlive       bool   `toml:"keep_alive"`
-}
-
-// HTTPSinkOptions defines settings for an HTTP SSE server sink
-type HTTPSinkOptions struct {
-	StreamPath   string `toml:"stream_path"`
-	StatusPath   string `toml:"status_path"`
-	Host         string `toml:"host"`
-	Port         int64  `toml:"port"`
-	BufferSize   int64  `toml:"buffer_size"`
-	WriteTimeout int64  `toml:"write_timeout_ms"`
-}
-
-// StdTCPSinkOptions defines settings for a stdlib TCP streaming server sink.
-// TOML keys mirror TCPSinkOptions for drop-in type swap ("tcp" -> "stdtcp").
-type StdTCPSinkOptions struct {
 	Host              string `toml:"host"`
 	Port              int64  `toml:"port"`
 	BufferSize        int64  `toml:"buffer_size"`        // sink input queue
@@ -305,9 +284,8 @@ type StdTCPSinkOptions struct {
 	// Future: TLS (cert_file/key_file/client_ca), auth (token/mTLS) blocks
 }
 
-// StdHTTPSinkOptions defines settings for a stdlib HTTP SSE streaming sink.
-// TOML keys mirror HTTPSinkOptions for drop-in type swap ("http" -> "stdhttp").
-type StdHTTPSinkOptions struct {
+// HTTPSinkOptions defines settings for an HTTP SSE server sink
+type HTTPSinkOptions struct {
 	Host             string `toml:"host"`
 	Port             int64  `toml:"port"`
 	StreamPath       string `toml:"stream_path"`

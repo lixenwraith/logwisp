@@ -223,7 +223,8 @@ check() { # label condition_result
 
 # 1. TCP chain: edge-tcp -> relay -> tcp sink
 tcp_out="$(tcp_read "$PORT_TCP_SINK" 4)"
-n=$(grep -c '"node":"edge-tcp"' <<< "$tcp_out")
+#n=$(grep -c '"node":"edge-tcp"' <<< "$tcp_out")
+n=$(grep -c '"source":"edge-tcp/' <<< "$tcp_out")
 check "tcp path: entries on :$PORT_TCP_SINK with node=edge-tcp ($n lines)" $(( n >= 1 ))
 
 # 2. HTTP chain: edge-http -> relay -> SSE sink
@@ -233,7 +234,7 @@ check "http path: SSE events on :$PORT_HTTP_SINK with node=edge-http ($n events)
 
 # 3. HTTP sink status endpoint
 status="$(curl -s --max-time 3 "http://127.0.0.1:$PORT_HTTP_SINK/status" || true)"
-proc=$(grep -o '"total_processed":[0-9]*' <<< "$status" | grep -o '[0-9]*' || echo 0)
+proc=$(grep -o '"total_processed"[ :] *[0-9]*' <<< "$status" | grep -o '[0-9]*' || echo 0)
 check "status endpoint: total_processed=$proc > 0" $(( proc > 0 ))
 
 echo "================================================================"

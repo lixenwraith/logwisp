@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # logwisp chain topology test
 #
-#   random --> tcp_chain sink  --> :15801 tcp_chain src  --> :15803 stdtcp sink
-#   random --> http_chain sink --> :15802 http_chain src --> :15804 stdhttp sink (SSE)
+#   random --> tcp_chain sink  --> :15801 tcp_chain src  --> :15803 tcp sink
+#   random --> http_chain sink --> :15802 http_chain src --> :15804 http sink (SSE)
 #
 # Usage:
 #   ./chain_aggregate_test.sh            manual mode: 2 edge daemons + relay foreground
@@ -163,14 +163,14 @@ port = $PORT_HTTP_CHAIN
 
 [[pipelines.plugin_sinks]]
 id = "out_tcp"
-type = "stdtcp"
+type = "tcp"
 [pipelines.plugin_sinks.config]
 host = "127.0.0.1"
 port = $PORT_TCP_SINK
 
 [[pipelines.plugin_sinks]]
 id = "out_http"
-type = "stdhttp"
+type = "http"
 [pipelines.plugin_sinks.config]
 host = "127.0.0.1"
 port = $PORT_HTTP_SINK
@@ -220,8 +220,10 @@ check() { # label condition_result
 
 # 1. TCP chain: edge-tcp -> relay -> tcp sink
 tcp_out="$(tcp_read "$PORT_TCP_SINK" 4)"
-nt=$(grep -c '"node":"edge-tcp"'  <<< "$tcp_out")
-nh=$(grep -c '"node":"edge-http"' <<< "$tcp_out")
+#nt=$(grep -c '"node":"edge-tcp"'  <<< "$tcp_out")
+#nh=$(grep -c '"node":"edge-http"' <<< "$tcp_out")
+nt=$(grep -c '"source":"edge-tcp/'  <<< "$tcp_out")
+nh=$(grep -c '"source":"edge-http/' <<< "$tcp_out")
 check "tcp sink: aggregated edge-tcp ($nt) + edge-http ($nh)" $(( nt >= 1 && nh >= 1 ))
 
 # 2. HTTP chain: edge-http -> relay -> SSE sink
@@ -232,7 +234,7 @@ check "http sink: aggregated edge-tcp ($nt) + edge-http ($nh)" $(( nt >= 1 && nh
 
 # 3. HTTP sink status endpoint
 status="$(curl -s --max-time 3 "http://127.0.0.1:$PORT_HTTP_SINK/status" || true)"
-proc=$(grep -o '"total_processed":[0-9]*' <<< "$status" | grep -o '[0-9]*' || echo 0)
+proc=$(grep -o '"total_processed"[ :] *[0-9]*' <<< "$status" | grep -o '[0-9]*' || echo 0)
 check "status endpoint: total_processed=$proc > 0" $(( proc > 0 ))
 
 echo "================================================================"

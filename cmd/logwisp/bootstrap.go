@@ -16,8 +16,6 @@ import (
 	_ "logwisp/internal/sink/http"
 	_ "logwisp/internal/sink/httpchain"
 	_ "logwisp/internal/sink/null"
-	_ "logwisp/internal/sink/stdhttp"
-	_ "logwisp/internal/sink/stdtcp"
 	_ "logwisp/internal/sink/tcp"
 	_ "logwisp/internal/sink/tcpchain"
 
