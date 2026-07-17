@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 # logwisp chain topology test
 #
-#   random --> tcp_chain sink  --> :15801 tcp_chain src  --> :15803 tcp sink
-#   random --> http_chain sink --> :15802 http_chain src --> :15804 http sink (SSE)
+#   random --> tcp_chain sink  --> :15801 tcp_chain src  --> :15803 stdtcp sink
+#   random --> http_chain sink --> :15802 http_chain src --> :15804 stdhttp sink (SSE)
 #
 # Usage:
-#   ./chain_test.sh            manual mode: 2 edge daemons + relay foreground
-#   ./chain_test.sh --auto     all daemonized, automated curl//dev/tcp checks, teardown
-#   ./chain_test.sh --keep     (with --auto) skip teardown on success
+#   ./chain_aggregate_test.sh            manual mode: 2 edge daemons + relay foreground
+#   ./chain_aggregate_test.sh --auto     all daemonized, automated curl//dev/tcp checks, teardown
+#   ./chain_aggregate_test.sh --keep     (with --auto) skip teardown on success
 #
-#   relay runs TWO independent pipelines; no cross-path aggregation:
-#     relay_tcp:  tcp_chain src :15801  -> tcp sink  :15803  (edge-tcp only)
-#     relay_http: http_chain src :15802 -> http sink :15804  (edge-http only)
-#   For fan-in aggregation (both edges -> both sinks) see chain_agg_test.sh.
+# The relay aggregates both sinks and fans out aggregated streams into both http and tcp sinks
 #
 # Requires: bash 5+, coreutils (timeout), curl. Linux dev host only.
 
@@ -143,38 +140,37 @@ status_reporter = false
 output = "stdout"
 level = "info"
 
+# Single pipeline: fan-in both chain sources, fan-out to both sinks
 [[pipelines]]
-name = "relay_tcp"
+name = "aggregate"
 [pipelines.flow.format]
 type = "json"
 sanitizer_policy = "json"
+
 [[pipelines.plugin_sources]]
 id = "in_tcp"
 type = "tcp_chain"
 [pipelines.plugin_sources.config]
 host = "127.0.0.1"
 port = $PORT_TCP_CHAIN
-[[pipelines.plugin_sinks]]
-id = "out_tcp"
-type = "tcp"
-[pipelines.plugin_sinks.config]
-host = "127.0.0.1"
-port = $PORT_TCP_SINK
 
-[[pipelines]]
-name = "relay_http"
-[pipelines.flow.format]
-type = "json"
-sanitizer_policy = "json"
 [[pipelines.plugin_sources]]
 id = "in_http"
 type = "http_chain"
 [pipelines.plugin_sources.config]
 host = "127.0.0.1"
 port = $PORT_HTTP_CHAIN
+
+[[pipelines.plugin_sinks]]
+id = "out_tcp"
+type = "stdtcp"
+[pipelines.plugin_sinks.config]
+host = "127.0.0.1"
+port = $PORT_TCP_SINK
+
 [[pipelines.plugin_sinks]]
 id = "out_http"
-type = "http"
+type = "stdhttp"
 [pipelines.plugin_sinks.config]
 host = "127.0.0.1"
 port = $PORT_HTTP_SINK
@@ -191,7 +187,8 @@ cat <<EOF
                      http://127.0.0.1:$PORT_HTTP_SINK/stream   (SSE)
                      http://127.0.0.1:$PORT_HTTP_SINK/status   (JSON stats)
  Use 127.0.0.1, not localhost — sinks reject IPv6.
- Expected: json entries, node "edge-tcp" on :$PORT_TCP_SINK, "edge-http" on :$PORT_HTTP_SINK.
+ Expected: json entries from BOTH nodes ("edge-tcp", "edge-http")
+           interleaved on :$PORT_TCP_SINK and :$PORT_HTTP_SINK.
  Logs: $LOG/
 ================================================================
 EOF
@@ -223,13 +220,15 @@ check() { # label condition_result
 
 # 1. TCP chain: edge-tcp -> relay -> tcp sink
 tcp_out="$(tcp_read "$PORT_TCP_SINK" 4)"
-n=$(grep -c '"node":"edge-tcp"' <<< "$tcp_out")
-check "tcp path: entries on :$PORT_TCP_SINK with node=edge-tcp ($n lines)" $(( n >= 1 ))
+nt=$(grep -c '"node":"edge-tcp"'  <<< "$tcp_out")
+nh=$(grep -c '"node":"edge-http"' <<< "$tcp_out")
+check "tcp sink: aggregated edge-tcp ($nt) + edge-http ($nh)" $(( nt >= 1 && nh >= 1 ))
 
 # 2. HTTP chain: edge-http -> relay -> SSE sink
 sse_out="$(curl -sN --max-time 4 "http://127.0.0.1:$PORT_HTTP_SINK/stream" || true)"
-n=$(grep -c '^data:.*"node":"edge-http"' <<< "$sse_out")
-check "http path: SSE events on :$PORT_HTTP_SINK with node=edge-http ($n events)" $(( n >= 1 ))
+nt=$(grep -c '^data:.*"node":"edge-tcp"'  <<< "$sse_out")
+nh=$(grep -c '^data:.*"node":"edge-http"' <<< "$sse_out")
+check "http sink: aggregated edge-tcp ($nt) + edge-http ($nh)" $(( nt >= 1 && nh >= 1 ))
 
 # 3. HTTP sink status endpoint
 status="$(curl -s --max-time 3 "http://127.0.0.1:$PORT_HTTP_SINK/status" || true)"

@@ -291,6 +291,34 @@ type HTTPSinkOptions struct {
 	WriteTimeout int64  `toml:"write_timeout_ms"`
 }
 
+// StdTCPSinkOptions defines settings for a stdlib TCP streaming server sink.
+// TOML keys mirror TCPSinkOptions for drop-in type swap ("tcp" -> "stdtcp").
+type StdTCPSinkOptions struct {
+	Host              string `toml:"host"`
+	Port              int64  `toml:"port"`
+	BufferSize        int64  `toml:"buffer_size"`        // sink input queue
+	ClientBufferSize  int64  `toml:"client_buffer_size"` // per-client send queue
+	WriteTimeoutMS    int64  `toml:"write_timeout_ms"`   // per-write deadline
+	KeepAlive         bool   `toml:"keep_alive"`
+	KeepAlivePeriodMS int64  `toml:"keep_alive_period_ms"`
+	MaxConnections    int64  `toml:"max_connections"` // 0 = unlimited
+	// Future: TLS (cert_file/key_file/client_ca), auth (token/mTLS) blocks
+}
+
+// StdHTTPSinkOptions defines settings for a stdlib HTTP SSE streaming sink.
+// TOML keys mirror HTTPSinkOptions for drop-in type swap ("http" -> "stdhttp").
+type StdHTTPSinkOptions struct {
+	Host             string `toml:"host"`
+	Port             int64  `toml:"port"`
+	StreamPath       string `toml:"stream_path"`
+	StatusPath       string `toml:"status_path"`
+	BufferSize       int64  `toml:"buffer_size"`        // sink input queue
+	ClientBufferSize int64  `toml:"client_buffer_size"` // per-client send queue
+	WriteTimeoutMS   int64  `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
+	MaxConnections   int64  `toml:"max_connections"`    // 0 = unlimited
+	// Future: TLS (server.TLSConfig), auth middleware options
+}
+
 // TCPChainSinkOptions defines settings for a stdlib TCP client forwarding
 // entries to a downstream logwisp tcp_chain source
 type TCPChainSinkOptions struct {

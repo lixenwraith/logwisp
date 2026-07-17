@@ -12,6 +12,8 @@ github.com/lixenwraith/config v0.1.1-0.20260712172228-ccd280ba6a98 h1:VEFo2WsYgM
 github.com/lixenwraith/config v0.1.1-0.20260712172228-ccd280ba6a98/go.mod h1:J9ydxY7he4Dz+S59xKs/kDQ2YAv+zOLF05b3Rr2/ogE=
 github.com/lixenwraith/log v0.1.1-0.20251117213308-9ae1b6669bf3 h1:brSUhER7EZ28aMRFTSovZskiIoobUiAWlx+DYXYvWXQ=
 github.com/lixenwraith/log v0.1.1-0.20251117213308-9ae1b6669bf3/go.mod h1:MY59N65ltw/9uTqJKwCRKjxO6w3CApXsLXCVuaekbu0=
+github.com/lixenwraith/log v0.1.1-0.20260717175128-82eea9846ccd h1:06Rk4DLvJW1kdeclH5HwywizgtMI64PHNE/2sBeuiwA=
+github.com/lixenwraith/log v0.1.1-0.20260717175128-82eea9846ccd/go.mod h1:2+qURSVdWcX7REFH+3jUtIbtc+NtsAPecSvXLeGyK6U=
 github.com/panjf2000/ants/v2 v2.12.1 h1:BWvU2wHpyXWxhhNXsGB6JXLCNbshyLd1QxvoAmZnu10=
 github.com/panjf2000/ants/v2 v2.12.1/go.mod h1:tSQuaNQ6r6NRhPt+IZVUevvDyFMTs+eS4ztZc52uJTY=
 github.com/panjf2000/gnet/v2 v2.10.0 h1:rC4jNF+jtXj/FH+8JOIQ3XxjD+yBunYBLKg9TE3dc4g=

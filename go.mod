@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/lixenwraith/config v0.1.1-0.20260712172228-ccd280ba6a98
-	github.com/lixenwraith/log v0.1.1-0.20251117213308-9ae1b6669bf3
+	github.com/lixenwraith/log v0.1.1-0.20260717175128-82eea9846ccd
 	github.com/panjf2000/gnet/v2 v2.10.0
 	github.com/valyala/fasthttp v1.72.0
 )
