@@ -17,6 +17,15 @@ func ValidateConfig(cfg *Config) error {
 		return fmt.Errorf("no pipelines configured")
 	}
 
+	// Reject duplicate pipeline names (service map is keyed by name)
+	names := make(map[string]struct{}, len(cfg.Pipelines))
+	for i, p := range cfg.Pipelines {
+		if _, dup := names[p.Name]; dup {
+			return fmt.Errorf("pipeline[%d]: duplicate name %q", i, p.Name)
+		}
+		names[p.Name] = struct{}{}
+	}
+
 	if err := validateLogConfig(cfg.Logging); err != nil {
 		return fmt.Errorf("logging: %w", err)
 	}
@@ -50,6 +59,17 @@ func validateLogConfig(cfg *LogConfig) error {
 	validateLevel := lconfig.OneOf("debug", "info", "warn", "error")
 	if err := validateLevel(cfg.Level); err != nil {
 		return fmt.Errorf("level: %w", err)
+	}
+
+	if cfg.Format != "" {
+		if err := lconfig.OneOf("raw", "txt", "json")(cfg.Format); err != nil {
+			return fmt.Errorf("format: %w", err)
+		}
+	}
+	if cfg.Sanitization != "" {
+		if err := lconfig.OneOf("raw", "json", "txt", "shell")(cfg.Sanitization); err != nil {
+			return fmt.Errorf("sanitization: %w", err)
+		}
 	}
 
 	if cfg.Console != nil {

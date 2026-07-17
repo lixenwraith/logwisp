@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/core"
@@ -24,6 +23,10 @@ func main() {
 	// --- 1. Initial setup ---
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
+
+	// Help handled before config parsing; loader has no help flag.
+	// Also the future dispatch point for subcommands (tls, etc.)
+	handleHelp(os.Args[1:])
 
 	// Load configuration with automatic CLI parsing
 	cfg, err := config.Load(os.Args[1:])
@@ -63,8 +66,6 @@ func main() {
 		"log_output", cfg.Logging.Output,
 		"status_reporter", cfg.StatusReporter,
 		"auto_reload", cfg.ConfigAutoReload)
-
-	time.Sleep(time.Second)
 
 	// Create context for shutdown
 	ctx, cancel := context.WithCancel(context.Background())

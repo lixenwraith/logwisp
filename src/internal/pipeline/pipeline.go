@@ -41,13 +41,11 @@ type Pipeline struct {
 
 // PipelineStats contains runtime statistics for a pipeline
 type PipelineStats struct {
-	StartTime                      time.Time
-	TotalEntriesProcessed          atomic.Uint64
-	TotalEntriesDroppedByRateLimit atomic.Uint64
-	TotalEntriesFiltered           atomic.Uint64
-	SourceStats                    []source.SourceStats
-	SinkStats                      []sink.SinkStats
-	FlowStats                      map[string]any
+	StartTime                 time.Time
+	TotalEntriesDroppedBySink atomic.Uint64
+	SourceStats               []source.SourceStats
+	SinkStats                 []sink.SinkStats
+	FlowStats                 map[string]any
 }
 
 // NewPipeline creates a new pipeline with registry support
@@ -74,7 +72,6 @@ func NewPipeline(
 		cancel:   pipelineCancel,
 	}
 
-	// Create flow processor
 	// Create flow processor
 	flowProcessor, err := flow.NewFlow(cfg.Flow, logger)
 	if err != nil {
@@ -177,7 +174,7 @@ func (p *Pipeline) initSourceCapabilities(s source.Source, cfg config.PluginSour
 
 // initSinkCapabilities checks and injects optional capabilities
 func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig) error {
-	// Initiate and activate source capabilities
+	// Initiate and activate sink capabilities
 	for _, c := range s.Capabilities() {
 		switch c {
 		// Network capabilities
@@ -203,48 +200,36 @@ func (p *Pipeline) run() {
 	defer p.logger.Info("msg", "Pipeline processing loop stopped", "pipeline", p.Config.Name)
 
 	var componentWg sync.WaitGroup
-
 	// Start a goroutine for each source to fan-in data
 	for _, src := range p.Sources {
 		componentWg.Add(1)
 		go func(s source.Source) {
 			defer componentWg.Done()
 			ch := s.Subscribe()
-			for {
-				select {
-				case entry, ok := <-ch:
-					if !ok {
-						return
-					}
-					// Process and distribute the log entry
-					if event, passed := p.Flow.Process(entry); passed {
-						// Fan-out to all sinks
-						for _, snk := range p.Sinks {
-							snk.Input() <- event
-						}
-					}
-				case <-p.ctx.Done():
-					return
+			// Range allows in-flight data to drain cleanly once Source.Stop() closes the channel
+			for entry := range ch {
+				if event, passed := p.Flow.Process(entry); passed {
+					// Use non-blocking dispatcher
+					p.dispatch(event)
 				}
 			}
 		}(src)
 	}
 
+	var hbWg sync.WaitGroup
 	// Start heartbeat generator if enabled
 	if heartbeatCh := p.Flow.StartHeartbeat(p.ctx); heartbeatCh != nil {
-		componentWg.Add(1)
+		hbWg.Add(1)
 		go func() {
-			defer componentWg.Done()
+			defer hbWg.Done()
 			for {
 				select {
 				case event, ok := <-heartbeatCh:
 					if !ok {
 						return
 					}
-					// Fan-out heartbeat to all sinks
-					for _, snk := range p.Sinks {
-						snk.Input() <- event
-					}
+					// Use non-blocking dispatcher
+					p.dispatch(event)
 				case <-p.ctx.Done():
 					return
 				}
@@ -253,6 +238,23 @@ func (p *Pipeline) run() {
 	}
 
 	componentWg.Wait()
+
+	// Terminate internal contexts (heartbeat) once flow is complete
+	p.cancel()
+	hbWg.Wait()
+}
+
+// dispatch performs a non-blocking send to all sinks.
+// A full/stalled sink must never block the run loop or starve sibling sinks.
+func (p *Pipeline) dispatch(event core.TransportEvent) {
+	for _, snk := range p.Sinks {
+		select {
+		case snk.Input() <- event:
+		default:
+			// Buffer full - drop to avoid deadlocking the pipeline
+			p.Stats.TotalEntriesDroppedBySink.Add(1)
+		}
+	}
 }
 
 // Start starts the pipeline operation and all its components including flow, sources, and sinks
@@ -294,10 +296,7 @@ func (p *Pipeline) Stop() error {
 
 	p.logger.Info("msg", "Stopping pipeline", "pipeline", p.Config.Name)
 
-	// Signal all components and the run loop to stop
-	p.cancel()
-
-	// Stop all sources concurrently to halt new data ingress
+	// 1. Stop all sources concurrently to halt new data ingress and close their channels
 	var sourceWg sync.WaitGroup
 	for _, src := range p.Sources {
 		sourceWg.Add(1)
@@ -308,10 +307,11 @@ func (p *Pipeline) Stop() error {
 	}
 	sourceWg.Wait()
 
-	// Wait for the run loop to finish processing and sending all in-flight data
+	// 2. Wait for the run loop to finish processing and sending all in-flight data
+	// run() inherently calls p.cancel() when the source channels are empty
 	p.wg.Wait()
 
-	// Stop all sinks concurrently now that no new data will be sent
+	// 3. Stop all sinks concurrently now that no new data will be sent
 	var sinkWg sync.WaitGroup
 	for _, s := range p.Sinks {
 		sinkWg.Add(1)
@@ -361,92 +361,82 @@ func (p *Pipeline) GetStats() map[string]any {
 		}
 	}()
 
-	// Collect source stats
-	sourceStats := make([]map[string]any, 0, len(p.Sources))
+	// 1. Live collect source stats
+	sources := make([]map[string]any, 0, len(p.Sources))
 	for _, src := range p.Sources {
 		if src == nil {
-			continue // Skip nil sources
+			continue
 		}
-
-		stats := src.GetStats()
-		sourceStats = append(sourceStats, map[string]any{
-			"id":              stats.ID,
-			"type":            stats.Type,
-			"total_entries":   stats.TotalEntries,
-			"dropped_entries": stats.DroppedEntries,
-			"start_time":      stats.StartTime,
-			"last_entry_time": stats.LastEntryTime,
-			"details":         stats.Details,
+		s := src.GetStats()
+		sources = append(sources, map[string]any{
+			"id":              s.ID,
+			"type":            s.Type,
+			"total_entries":   s.TotalEntries,
+			"dropped_entries": s.DroppedEntries,
+			"start_time":      s.StartTime,
+			"last_entry_time": s.LastEntryTime,
+			"details":         s.Details,
 		})
 	}
 
-	// Collect sink stats
-	sinkStats := make([]map[string]any, 0, len(p.Sinks))
-	for _, s := range p.Sinks {
-		if s == nil {
-			continue // Skip nil sinks
+	// 2. Live collect sink stats
+	sinks := make([]map[string]any, 0, len(p.Sinks))
+	for _, snk := range p.Sinks {
+		if snk == nil {
+			continue
 		}
-
-		stats := s.GetStats()
-		sinkStats = append(sinkStats, map[string]any{
-			"id":                 stats.ID,
-			"type":               stats.Type,
-			"total_processed":    stats.TotalProcessed,
-			"active_connections": stats.ActiveConnections,
-			"start_time":         stats.StartTime,
-			"last_processed":     stats.LastProcessed,
-			"details":            stats.Details,
+		s := snk.GetStats()
+		sinks = append(sinks, map[string]any{
+			"id":                 s.ID,
+			"type":               s.Type,
+			"total_processed":    s.TotalProcessed,
+			"active_connections": s.ActiveConnections,
+			"start_time":         s.StartTime,
+			"last_processed":     s.LastProcessed,
+			"details":            s.Details,
 		})
 	}
 
-	// Get flow stats
+	// 3. Collect flow stats and calculate filtered total
 	var flowStats map[string]any
 	var totalFiltered uint64
+	var totalProcessed uint64
+
 	if p.Flow != nil {
 		flowStats = p.Flow.GetStats()
-		// Extract total_filtered from flow for top-level visibility
+
+		// Map the top-level processed counter directly from Flow's source of truth
+		if tp, ok := flowStats["total_processed"].(uint64); ok {
+			totalProcessed = tp
+		}
+
+		// Calculate total dropped specifically by the filter chain
 		if filters, ok := flowStats["filters"].(map[string]any); ok {
 			if totalPassed, ok := filters["total_passed"].(uint64); ok {
-				if totalProcessed, ok := filters["total_processed"].(uint64); ok {
-					totalFiltered = totalProcessed - totalPassed
+				if tProc, ok := filters["total_processed"].(uint64); ok {
+					totalFiltered = tProc - totalPassed
 				}
 			}
 		}
 	}
 
+	// 4. Calculate Uptime
 	var uptime int
 	if p.running.Load() && !p.Stats.StartTime.IsZero() {
 		uptime = int(time.Since(p.Stats.StartTime).Seconds())
 	}
 
 	return map[string]any{
-		"name":            p.Config.Name,
-		"running":         p.running.Load(),
-		"uptime_seconds":  uptime,
-		"total_processed": p.Stats.TotalEntriesProcessed.Load(),
-		"total_filtered":  totalFiltered,
-		"source_count":    len(p.Sources),
-		"sources":         sourceStats,
-		"sink_count":      len(p.Sinks),
-		"sinks":           sinkStats,
-		"flow":            flowStats,
+		"name":                  p.Config.Name,
+		"running":               p.running.Load(),
+		"uptime_seconds":        uptime,
+		"total_processed":       totalProcessed,
+		"total_filtered":        totalFiltered,
+		"total_dropped_by_sink": p.Stats.TotalEntriesDroppedBySink.Load(),
+		"source_count":          len(p.Sources),
+		"sources":               sources,
+		"sink_count":            len(p.Sinks),
+		"sinks":                 sinks,
+		"flow":                  flowStats,
 	}
-}
-
-// TODO: incomplete implementation
-// startStatsUpdater runs a periodic stats updater
-func (p *Pipeline) startStatsUpdater(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(core.ServiceStatsUpdateInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// Periodic stats updates if needed
-			}
-		}
-	}()
 }

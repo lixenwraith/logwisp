@@ -34,16 +34,6 @@ type PluginMetadata struct {
 	MaxInstances int // 0 = unlimited, 1 = single instance only
 }
 
-// // global variables holding available source and sink plugins
-// var (
-// 	sourceFactories map[string]SourceFactory
-// 	sinkFactories   map[string]SinkFactory
-// 	sourceMetadata  map[string]*PluginMetadata
-// 	sinkMetadata    map[string]*PluginMetadata
-// 	mu              sync.RWMutex
-// 	// once            sync.Once
-// )
-
 // registry encapsulates all plugin factories with lazy initialization
 type registry struct {
 	sourceFactories map[string]SourceFactory
@@ -70,11 +60,6 @@ func getRegistry() *registry {
 	})
 	return globalRegistry
 }
-
-// func init() {
-// 	sourceFactories = make(map[string]SourceFactory)
-// 	sinkFactories = make(map[string]SinkFactory)
-// }
 
 // RegisterSource registers a source factory function
 func RegisterSource(name string, constructor SourceFactory) error {

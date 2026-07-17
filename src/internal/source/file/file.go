@@ -161,7 +161,7 @@ func (fs *FileSource) Stop() {
 	}
 	fs.wg.Wait()
 
-	fs.proxy.RemoveSession(fs.id)
+	fs.proxy.RemoveSession(fs.session.ID)
 
 	fs.mu.Lock()
 	for _, w := range fs.watchers {
@@ -361,3 +361,4 @@ func globToRegex(glob string) string {
 	regex = strings.ReplaceAll(regex, `\?`, `.`)
 	return "^" + regex + "$"
 }
+

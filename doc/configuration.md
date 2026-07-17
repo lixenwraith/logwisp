@@ -24,10 +24,9 @@ Top-level configuration options:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `background` | bool | false | Run as daemon process |
 | `quiet` | bool | false | Suppress console output |
-| `disable_status_reporter` | bool | false | Disable periodic status logging |
-| `config_auto_reload` | bool | false | Enable file watch for auto-reload |
+| `status_reporter` | bool | true | Periodic status logging |
+| `auto_reload` | bool | false | Enable file watch for auto-reload |
 
 ## Logging Configuration
 
@@ -47,7 +46,6 @@ retention_hours = 168.0
 
 [logging.console]
 target = "stdout"  # stdout|stderr|split
-format = "txt"     # txt|json
 ```
 
 ### Output Modes
@@ -68,30 +66,34 @@ Each `[[pipelines]]` section defines an independent processing pipeline:
 name = "pipeline-name"
 
 # Rate limiting (optional)
-[pipelines.rate_limit]
+[pipelines.flow.rate_limit]
 rate = 1000.0
 burst = 2000.0
 policy = "drop"  # pass|drop
 max_entry_size_bytes = 0  # 0=unlimited
 
 # Format configuration (optional)
-[pipelines.format]
+[pipelines.flow.format]
 type = "json"  # raw|json|txt
+sanitizer_policy = "json"
 
-# Sources (required, 1+)
-[[pipelines.sources]]
-type = "directory"
+[[pipelines.plugin_sources]]
+id = "my_source"
+type = "file"
+[pipelines.plugin_sources.config]
 # ... source-specific config
 
 # Filters (optional)
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "include"
 logic = "or"
 patterns = ["ERROR", "WARN"]
 
 # Sinks (required, 1+)
-[[pipelines.sinks]]
+[[pipelines.plugin_sinks]]
+id = "my_sink"
 type = "http"
+[pipelines.plugin_sinks.config]
 # ... sink-specific config
 ```
 
@@ -113,7 +115,7 @@ All configuration options support environment variable overrides:
 | `quiet` | `LOGWISP_QUIET` |
 | `logging.level` | `LOGWISP_LOGGING_LEVEL` |
 | `pipelines[0].name` | `LOGWISP_PIPELINES_0_NAME` |
-| `pipelines[0].sources[0].type` | `LOGWISP_PIPELINES_0_SOURCES_0_TYPE` |
+| `pipelines[0].plugin_sources[0].type` | `LOGWISP_PIPELINES_0_PLUGIN_SOURCES_0_TYPE` |
 
 ## Command-Line Overrides
 
@@ -123,13 +125,15 @@ All configuration options can be overridden via CLI flags:
 logwisp --quiet \
   --logging.level=debug \
   --pipelines.0.name=myapp \
-  --pipelines.0.sources.0.type=stdin
+  --pipelines.0.plugin_sources.0.type=console
 ```
 
 ## Configuration Validation
 
 LogWisp validates configuration at startup:
-- Required fields presence
+- Rpipelines non-empty, name non-empty, ≥1 source, ≥1 sink, logging enum values.equired fields presence
+
+Partial check in plugin constructor:
 - Type correctness
 - Port conflicts
 - Path accessibility
@@ -141,12 +145,12 @@ LogWisp validates configuration at startup:
 Enable configuration hot reload:
 
 ```toml
-config_auto_reload = true
+auto_reload = true
 ```
 
 Or via command line:
 ```bash
-logwisp --config-auto-reload
+logwisp --auto-reload
 ```
 
 Reload triggers:
@@ -161,7 +165,6 @@ Reloadable items:
 
 Non-reloadable (requires restart):
 - Logging configuration
-- Background mode
 - Global settings
 
 ## Default Configuration
@@ -172,15 +175,17 @@ Minimal working configuration:
 [[pipelines]]
 name = "default"
 
-[[pipelines.sources]]
-type = "directory"
-[pipelines.sources.directory]
-path = "./"
+[[pipelines.plugin_sources]]
+id = "default_source"
+type = "file"
+[pipelines.plugin_sources.config]
+directory = "./"
 pattern = "*.log"
 
-[[pipelines.sinks]]
+[[pipelines.plugin_sinks]]
+id = "default_sink"
 type = "console"
-[pipelines.sinks.console]
+[pipelines.plugin_sinks.config]
 target = "stdout"
 ```
 

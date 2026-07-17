@@ -9,11 +9,10 @@ LogWisp formatters transform log entries before output to sinks.
 Outputs the log message as-is with optional newline.
 
 ```toml
-[pipelines.format]
+[pipelines.flow.format]
 type = "raw"
-
-[pipelines.format.raw]
-add_new_line = true
+sanitizer_policy = "raw"
+flags = 1
 ```
 
 **Configuration Options:**
@@ -21,6 +20,9 @@ add_new_line = true
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `add_new_line` | bool | true | Append newline to messages |
+| `type` | string | "raw" | raw, json, or txt |
+| `flags` | int64 | 0 | log/formatter flags override |
+| `sanitizer_policy` | string | | Sanitizer policy (e.g. "json", "raw", "txt", "shell") |
 
 ### JSON Formatter
 
@@ -30,23 +32,10 @@ Produces structured JSON output.
 [pipelines.format]
 type = "json"
 
-[pipelines.format.json]
-pretty = false
-timestamp_field = "timestamp"
-level_field = "level"
-message_field = "message"
-source_field = "source"
++[pipelines.flow.format]
+ type = "json"
+sanitizer_policy = "json"
 ```
-
-**Configuration Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `pretty` | bool | false | Pretty print JSON |
-| `timestamp_field` | string | "timestamp" | Field name for timestamp |
-| `level_field` | string | "level" | Field name for log level |
-| `message_field` | string | "message" | Field name for message |
-| `source_field` | string | "source" | Field name for source |
 
 **Output Structure:**
 ```json
@@ -63,11 +52,9 @@ source_field = "source"
 Template-based text formatting.
 
 ```toml
-[pipelines.format]
+[pipelines.flow.format]
 type = "txt"
-
-[pipelines.format.txt]
-template = "[{{.Timestamp | FmtTime}}] [{{.Level | ToUpper}}] {{.Source}} - {{.Message}}"
+sanitizer_policy = "txt"
 timestamp_format = "2006-01-02T15:04:05.000Z07:00"
 ```
 
@@ -75,8 +62,7 @@ timestamp_format = "2006-01-02T15:04:05.000Z07:00"
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `template` | string | See below | Go template string |
-| `timestamp_format` | string | RFC3339 | Go time format string |
+| `timestamp_format` | string | "" | Time format override |
 
 **Default Template:**
 ```
@@ -134,12 +120,12 @@ Each pipeline can have its own formatter:
 ```toml
 [[pipelines]]
 name = "json-pipeline"
-[pipelines.format]
+[pipelines.flow.format]
 type = "json"
 
 [[pipelines]]
 name = "text-pipeline"
-[pipelines.format]
+[pipelines.flow.format]
 type = "txt"
 ```
 
@@ -182,34 +168,13 @@ Relative performance (fastest to slowest):
 
 ### Structured Logging
 ```toml
-[pipelines.format]
+[pipelines.flow.format]
 type = "json"
-[pipelines.format.json]
-pretty = false
 ```
 
 ### Human-Readable Logs
 ```toml
-[pipelines.format]
+[pipelines.flow.format]
 type = "txt"
-[pipelines.format.txt]
-template = "{{.Timestamp | FmtTime}} [{{.Level}}] {{.Message}}"
 timestamp_format = "15:04:05"
-```
-
-### Syslog Format
-```toml
-[pipelines.format]
-type = "txt"
-[pipelines.format.txt]
-template = "{{.Timestamp | FmtTime}} {{.Source}} {{.Level}}: {{.Message}}"
-timestamp_format = "Jan 2 15:04:05"
-```
-
-### Minimal Output
-```toml
-[pipelines.format]
-type = "txt"
-[pipelines.format.txt]
-template = "{{.Message}}"
 ```

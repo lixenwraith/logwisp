@@ -6,20 +6,25 @@ import (
 
 	_ "logwisp/src/internal/source/console"
 	_ "logwisp/src/internal/source/file"
+	_ "logwisp/src/internal/source/httpchain"
 	_ "logwisp/src/internal/source/null"
 	_ "logwisp/src/internal/source/random"
+	_ "logwisp/src/internal/source/tcpchain"
 
 	_ "logwisp/src/internal/sink/console"
 	_ "logwisp/src/internal/sink/file"
 	_ "logwisp/src/internal/sink/http"
+	_ "logwisp/src/internal/sink/httpchain"
 	_ "logwisp/src/internal/sink/null"
 	_ "logwisp/src/internal/sink/tcp"
+	_ "logwisp/src/internal/sink/tcpchain"
 
 	"logwisp/src/internal/config"
 	"logwisp/src/internal/service"
 	"logwisp/src/internal/version"
 
 	"github.com/lixenwraith/log"
+	"github.com/lixenwraith/log/sanitizer"
 )
 
 // bootstrapInitial handles initial service startup with status reporter
@@ -131,6 +136,14 @@ func initializeLogger(cfg *config.Config) error {
 		return fmt.Errorf("invalid log level: %w", err)
 	}
 	logCfg.Level = levelValue
+
+	// Configure log format
+	if cfg.Logging.Format != "" {
+		logCfg.Format = cfg.Logging.Format
+	}
+	if cfg.Logging.Sanitization != "" {
+		logCfg.Sanitization = sanitizer.PolicyPreset(cfg.Logging.Sanitization)
+	}
 
 	// Configure based on output mode
 	switch cfg.Logging.Output {

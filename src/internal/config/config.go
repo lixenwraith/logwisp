@@ -205,6 +205,32 @@ type ConsoleSourceOptions struct {
 	BufferSize int64 `toml:"buffer_size"`
 }
 
+// TCPChainSourceOptions defines settings for a stdlib TCP listener ingesting
+// NDJSON entries from upstream logwisp tcp_chain sinks
+type TCPChainSourceOptions struct {
+	Host           string `toml:"host"`
+	Port           int64  `toml:"port"`
+	BufferSize     int64  `toml:"buffer_size"`
+	MaxConnections int64  `toml:"max_connections"`  // 0 = unlimited
+	ReadTimeoutMS  int64  `toml:"read_timeout_ms"`  // per-connection idle deadline, 0 = none
+	HelloTimeoutMS int64  `toml:"hello_timeout_ms"` // preamble deadline
+	TrustNode      bool   `toml:"trust_node"`       // false: force node label from remote address
+	// Future: TLS/auth options
+}
+
+// HTTPChainSourceOptions defines settings for a stdlib HTTP listener ingesting
+// NDJSON batches from upstream logwisp http_chain sinks
+type HTTPChainSourceOptions struct {
+	Host          string `toml:"host"`
+	Port          int64  `toml:"port"`
+	IngestPath    string `toml:"ingest_path"`
+	BufferSize    int64  `toml:"buffer_size"`
+	MaxBodyBytes  int64  `toml:"max_body_bytes"`  // per-request cap
+	ReadTimeoutMS int64  `toml:"read_timeout_ms"` // full request read deadline
+	TrustNode     bool   `toml:"trust_node"`      // false: force node label from remote address
+	// Future: TLS/auth options
+}
+
 // --- Sink Options ---
 
 // PluginSinkConfig represents a sink plugin instance configuration
@@ -251,16 +277,49 @@ type TCPSinkOptions struct {
 	Port            int64  `toml:"port"`
 	BufferSize      int64  `toml:"buffer_size"`
 	WriteTimeout    int64  `toml:"write_timeout_ms"`
-	KeepAlive       bool   `toml:"keep_alive"`
 	KeepAlivePeriod int64  `toml:"keep_alive_period_ms"`
+	KeepAlive       bool   `toml:"keep_alive"`
 }
 
 // HTTPSinkOptions defines settings for an HTTP SSE server sink
 type HTTPSinkOptions struct {
-	Host         string `toml:"host"`
-	Port         int64  `toml:"port"`
 	StreamPath   string `toml:"stream_path"`
 	StatusPath   string `toml:"status_path"`
+	Host         string `toml:"host"`
+	Port         int64  `toml:"port"`
 	BufferSize   int64  `toml:"buffer_size"`
 	WriteTimeout int64  `toml:"write_timeout_ms"`
+}
+
+// TCPChainSinkOptions defines settings for a stdlib TCP client forwarding
+// entries to a downstream logwisp tcp_chain source
+type TCPChainSinkOptions struct {
+	Node              string `toml:"node"` // origin label, default: os.Hostname()
+	Host              string `toml:"host"`
+	Port              int64  `toml:"port"`
+	BufferSize        int64  `toml:"buffer_size"`
+	DialTimeoutMS     int64  `toml:"dial_timeout_ms"`
+	WriteTimeoutMS    int64  `toml:"write_timeout_ms"`
+	BackoffMinMS      int64  `toml:"backoff_min_ms"`
+	BackoffMaxMS      int64  `toml:"backoff_max_ms"`
+	KeepAlivePeriodMS int64  `toml:"keep_alive_period_ms"`
+	KeepAlive         bool   `toml:"keep_alive"`
+	// Future: TLS/auth options
+}
+
+// HTTPChainSinkOptions defines settings for a stdlib HTTP client posting
+// NDJSON batches to a downstream logwisp http_chain source
+type HTTPChainSinkOptions struct {
+	Node             string `toml:"node"` // origin label, default: os.Hostname()
+	Host             string `toml:"host"`
+	Port             int64  `toml:"port"`
+	IngestPath       string `toml:"ingest_path"`
+	BufferSize       int64  `toml:"buffer_size"`
+	MaxBatchCount    int64  `toml:"max_batch_count"`
+	MaxBatchBytes    int64  `toml:"max_batch_bytes"`
+	FlushIntervalMS  int64  `toml:"flush_interval_ms"`
+	RequestTimeoutMS int64  `toml:"request_timeout_ms"` // covers dial + write + response
+	BackoffMinMS     int64  `toml:"backoff_min_ms"`
+	BackoffMaxMS     int64  `toml:"backoff_max_ms"`
+	// Future: TLS/auth options
 }

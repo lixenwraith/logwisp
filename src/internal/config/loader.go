@@ -65,6 +65,12 @@ func Load(args []string) (*Config, error) {
 	// Store the manager for hot reload
 	configManager = cfg
 
+	// Surface typo'd flags (e.g. --status-reporter vs --status_reporter);
+	// pre-logger phase, stderr only, suppressed in quiet mode
+	if unknown := cfg.UnknownCLIKeys(); len(unknown) > 0 && !finalConfig.Quiet {
+		fmt.Fprintf(os.Stderr, "Warning: unrecognized flags ignored: %v\n", unknown)
+	}
+
 	// Start watcher if auto-reload is enabled
 	if finalConfig.ConfigAutoReload {
 		watchOpts := lconfig.WatchOptions{
@@ -99,6 +105,7 @@ func defaults() *Config {
 		Logging: &LogConfig{
 			Output: "stdout",
 			Level:  "info",
+			Format: "txt",
 			File: &LogFileConfig{
 				Directory:      "./log",
 				Name:           "logwisp",

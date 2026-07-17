@@ -6,31 +6,29 @@ LogWisp sources monitor various inputs and generate log entries for pipeline pro
 
 ### Directory Source
 
-Monitors a directory for log files matching a pattern.
+Monitors a directory for log files matching a pattern. (type: `file`)
 
 ```toml
-[[pipelines.sources]]
-type = "directory"
-
-[pipelines.sources.directory]
-path = "/var/log/myapp"
+[[pipelines.plugin_sources]]
+id = "file_in"
+type = "file"
+[pipelines.plugin_sources.config]
+directory = "/var/log/myapp"
 pattern = "*.log"          # Glob pattern
 check_interval_ms = 100    # Poll interval
-recursive = false           # Scan subdirectories
 ```
 
 **Configuration Options:**
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `path` | string | Required | Directory to monitor |
+| `directory` | string | Required | Directory to monitor |
 | `pattern` | string | "*" | File pattern (glob) |
 | `check_interval_ms` | int | 100 | File check interval in milliseconds |
-| `recursive` | bool | false | Include subdirectories |
 
 **Features:**
-- Automatic file rotation detection
-- Position tracking (resume after restart)
+- Automatic rotation detection (inode + size tracking)
+- In-memory position tracking; on restart, monitoring resumes from the current end of each file (offsets are not persisted)
 - Concurrent file monitoring
 - Pattern-based file selection
 
@@ -39,10 +37,10 @@ recursive = false           # Scan subdirectories
 Reads log entries from standard input.
 
 ```toml
-[[pipelines.sources]]
+[[pipelines.plugin_sources]]
+id = "console_in"
 type = "console"
-
-[pipelines.sources.stdin]
+[pipelines.plugin_sources.config]
 buffer_size = 1000
 ```
 
@@ -57,107 +55,30 @@ buffer_size = 1000
 - Automatic level detection
 - Non-blocking reads
 
-### HTTP Source
-
-REST endpoint for log ingestion.
+### Random Source
 
 ```toml
-[[pipelines.sources]]
-type = "http"
-
-[pipelines.sources.http]
-host = "0.0.0.0"
-port = 8081
-ingest_path = "/ingest"
-buffer_size = 1000
-max_body_size = 1048576  # 1MB
-read_timeout_ms = 10000
-write_timeout_ms = 10000
+[[pipelines.plugin_sources]]
+id = "random_in"
+type = "random"
+[pipelines.plugin_sources.config]
+interval_ms = 500
+jitter_ms = 0
+format = "txt"
+length = 20
+special = false
 ```
 
-**Configuration Options:**
-
+ **Configuration Options:**
+ 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `host` | string | "0.0.0.0" | Bind address |
-| `port` | int | Required | Listen port |
-| `ingest_path` | string | "/ingest" | Ingestion endpoint path |
-| `buffer_size` | int | 1000 | Internal buffer size |
-| `max_body_size` | int | 1048576 | Maximum request body size |
-| `read_timeout_ms` | int | 10000 | Read timeout |
-| `write_timeout_ms` | int | 10000 | Write timeout |
-
-**Input Formats:**
-- Single JSON object
-- JSON array
-- Newline-delimited JSON (NDJSON)
-- Plain text (one entry per line)
-
-### TCP Source
-
-Raw TCP socket listener for log ingestion.
-
-```toml
-[[pipelines.sources]]
-type = "tcp"
-
-[pipelines.sources.tcp]
-host = "0.0.0.0"
-port = 9091
-buffer_size = 1000
-read_timeout_ms = 10000
-keep_alive = true
-keep_alive_period_ms = 30000
-```
-
-**Configuration Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `host` | string | "0.0.0.0" | Bind address |
-| `port` | int | Required | Listen port |
-| `buffer_size` | int | 1000 | Internal buffer size |
-| `read_timeout_ms` | int | 10000 | Read timeout |
-| `keep_alive` | bool | true | Enable TCP keep-alive |
-| `keep_alive_period_ms` | int | 30000 | Keep-alive interval |
-
-**Protocol:**
-- Newline-delimited JSON
-- One log entry per line
-- UTF-8 encoding
-
-## Network Source Features
-
-### Network Rate Limiting
-
-Available for HTTP and TCP sources:
-
-```toml
-[pipelines.sources.http.net_limit]
-enabled = true
-max_connections_per_ip = 10
-max_connections_total = 100
-requests_per_second = 100.0
-burst_size = 200
-response_code = 429
-response_message = "Rate limit exceeded"
-ip_whitelist = ["192.168.1.0/24"]
-ip_blacklist = ["10.0.0.0/8"]
-```
-
-### TLS Configuration (HTTP Only)
-
-```toml
-[pipelines.sources.http.tls]
-enabled = true
-cert_file = "/path/to/cert.pem"
-key_file = "/path/to/key.pem"
-min_version = "TLS1.2"
-client_auth = true
-client_ca_file = "/path/to/client-ca.pem"
-verify_client_cert = true
-```
-
+| `interval_ms` | int | 500 | Generation interval |
+| `jitter_ms` | int | 0 | Random jitter interval |
+| `format` | string | "txt" | "txt", "json", "raw" |
+| `length` | int | 20 | Log length |
+| `special` | bool | false | Include special characters |
+ 
 ## Source Statistics
 
 All sources track:
@@ -167,6 +88,15 @@ All sources track:
 - Last entry timestamp
 - Active connections (network sources)
 - Source-specific metrics
+
+### Null Source
+
+```toml
+[[pipelines.plugin_sources]]
+id = "null_in"
+type = "null"
+[pipelines.plugin_sources.config]
+```
 
 ## Buffer Management
 

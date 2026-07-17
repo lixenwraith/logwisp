@@ -119,6 +119,7 @@ func (f *Flow) Process(entry core.LogEntry) (core.TransportEvent, bool) {
 	event := core.TransportEvent{
 		Time:    entry.Time,
 		Payload: formatted,
+		Entry:   entry, // Carry structured entry so chain sinks are format-independent
 	}
 
 	return event, true
@@ -160,3 +161,4 @@ func (f *Flow) GetStats() map[string]any {
 
 	return stats
 }
+

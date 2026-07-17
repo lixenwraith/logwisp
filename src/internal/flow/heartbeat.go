@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -127,7 +128,8 @@ func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent
 		// SSE comment format - bypass formatter for this special case
 		if hg.config.IncludeStats {
 			beatNum := hg.beatCount.Load()
-			payload = []byte(": heartbeat " + t.Format(time.RFC3339) + " [#" + string(beatNum) + "]\n")
+			payload = []byte(": heartbeat " + t.Format(time.RFC3339) +
+				" [#" + strconv.FormatUint(beatNum, 10) + "]\n")
 		} else {
 			payload = []byte(": heartbeat " + t.Format(time.RFC3339) + "\n")
 		}
@@ -159,6 +161,7 @@ func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent
 	return core.TransportEvent{
 		Time:    t,
 		Payload: payload,
+		Entry:   entry, // heartbeats traverse chain links as structured entries
 	}
 }
 

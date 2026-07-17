@@ -6,24 +6,20 @@ A pipeline-based log transport and processing system built in Go. LogWisp provid
 
 ### Core Capabilities
 - **Pipeline Architecture**: Independent processing pipelines with source(s) → filter → format → sink(s) flow
-- **Multiple Input Sources**: Directory monitoring, stdin, HTTP, TCP
-- **Flexible Output Sinks**: Console, file, HTTP SSE, TCP streaming, HTTP/TCP forwarding
+- **Multiple Input Sources**: File monitoring, console (stdin), random log generation, null
+- **Flexible Output Sinks**: Console, file, HTTP SSE, TCP streaming, null
 - **Real-time Processing**: Sub-millisecond latency with configurable buffering
 - **Hot Configuration Reload**: Update pipelines without service restart
+- **Session Management**: Built-in session tracking for multiple client connections
 
 ### Data Processing
 - **Pattern-based Filtering**: Chainable include/exclude filters with regex support
-- **Multiple Formatters**: Raw, JSON, and template-based text formatting
+- **Multiple Formatters**: Raw, JSON, and text formatting with integrated sanitizer policies
 - **Rate Limiting**: Pipeline rate controls
+- **Heartbeat Generation**: Flow-level heartbeat events for keep-alives
 
 ### Security & Reliability  
-- **Authentication**: mTLS support
-- **Access Control**: IP whitelisting/blacklisting, connection limits
-- **TLS Encryption**: Full TLS 1.2/1.3 support for HTTP connections
-- **Automatic Reconnection**: Resilient client connections with exponential backoff
 - **File Rotation**: Size-based rotation with retention policies
-
-### Operational Features
 - **Status Monitoring**: Real-time statistics and health endpoints
 - **Signal Handling**: Graceful shutdown and configuration reload via signals
 - **Background Mode**: Daemon operation with proper signal handling
@@ -38,8 +34,7 @@ A pipeline-based log transport and processing system built in Go. LogWisp provid
 - [Output Sinks](sinks.md) - Sink types and output options
 - [Filters](filters.md) - Pattern-based log filtering
 - [Formatters](formatters.md) - Log formatting and transformation
-- [Security](security.md) - IP-based access control configuration and mTLS
-- [Networking](networking.md) - TLS, rate limiting, and network features
+- [Networking & Security](networking.md) - Network features (Note: TLS and Auth are currently placeholders in the new architecture)
 - [Command Line Interface](cli.md) - CLI flags and subcommands
 - [Operations Guide](operations.md) - Running and maintaining LogWisp
 
@@ -51,15 +46,17 @@ Install LogWisp and create a basic configuration:
 [[pipelines]]
 name = "default"
 
-[[pipelines.sources]]
-type = "directory"
-[pipelines.sources.directory]
-path = "./"
+[[pipelines.plugin_sources]]
+id = "default_source"
+type = "file"
+[pipelines.plugin_sources.config]
+directory = "./"
 pattern = "*.log"
 
-[[pipelines.sinks]]
+[[pipelines.plugin_sinks]]
+id = "default_sink"
 type = "console"
-[pipelines.sinks.console]
+[pipelines.plugin_sinks.config]
 target = "stdout"
 ```
 

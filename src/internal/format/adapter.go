@@ -89,6 +89,8 @@ func NewFormatterAdapter(cfg *config.FormatConfig) (*FormatterAdapter, error) {
 func (a *FormatterAdapter) Format(entry core.LogEntry) ([]byte, error) {
 	// Map logwisp LogEntry to formatter args
 	level := mapLevel(entry.Level)
+	// syslog-style origin prefix for chained entries
+	src := sourceLabel(entry)
 
 	// Build args based on whether we have structured fields
 	var args []any
@@ -101,18 +103,19 @@ func (a *FormatterAdapter) Format(entry core.LogEntry) ([]byte, error) {
 			args = []any{entry.Message, fields}
 			// Add structured flag to properly format fields as JSON object
 			effectiveFlags := a.flags | formatter.FlagStructuredJSON
-			return a.formatter.Format(effectiveFlags, entry.Time, level, entry.Source, args), nil
+			return a.formatter.Format(effectiveFlags, entry.Time, level, src, args), nil
 		}
 	}
 
 	// Simple message without fields
 	args = []any{entry.Message}
-	return a.formatter.Format(a.flags, entry.Time, level, entry.Source, args), nil
+	return a.formatter.Format(a.flags, entry.Time, level, src, args), nil
 }
 
 // FormatWithFlags allows custom flags for specific formatting needs
 func (a *FormatterAdapter) FormatWithFlags(entry core.LogEntry, customFlags int64) ([]byte, error) {
 	level := mapLevel(entry.Level)
+	src := sourceLabel(entry)
 
 	var args []any
 	if len(entry.Fields) > 0 {
@@ -127,7 +130,7 @@ func (a *FormatterAdapter) FormatWithFlags(entry core.LogEntry, customFlags int6
 		args = []any{entry.Message}
 	}
 
-	return a.formatter.Format(customFlags, entry.Time, level, entry.Source, args), nil
+	return a.formatter.Format(customFlags, entry.Time, level, src, args), nil
 }
 
 // Name returns formatter type
@@ -150,3 +153,12 @@ func mapLevel(level string) int64 {
 		return 0
 	}
 }
+
+// sourceLabel prefixes origin node onto source (syslog HOSTNAME + TAG convention)
+func sourceLabel(entry core.LogEntry) string {
+	if entry.Node == "" {
+		return entry.Source
+	}
+	return entry.Node + "/" + entry.Source
+}
+

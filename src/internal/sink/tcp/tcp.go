@@ -40,6 +40,7 @@ type TCPSink struct {
 	server   *tcpServer
 	engine   *gnet.Engine
 	engineMu sync.Mutex
+	booted   chan struct{}
 
 	// Application
 	input  chan core.TransportEvent
@@ -63,7 +64,7 @@ type TCPSink struct {
 
 const (
 	// Server lifecycle
-	TCPServerStartTimeout    = 100 * time.Millisecond
+	TCPServerStartTimeout    = 2 * time.Second
 	TCPServerShutdownTimeout = 2 * time.Second
 
 	// Connection management
@@ -151,6 +152,8 @@ func (t *TCPSink) Start(ctx context.Context) error {
 		sink:    t,
 		clients: make(map[gnet.Conn]*tcpClient),
 	}
+	// Fresh channel per Start
+	t.booted = make(chan struct{})
 
 	t.startTime = time.Now()
 
@@ -213,12 +216,25 @@ func (t *TCPSink) Start(ctx context.Context) error {
 		close(t.done)
 		t.wg.Wait()
 		return err
-	case <-time.After(TCPServerStartTimeout):
+	// Bind confirmation via OnBoot
+	case <-t.booted:
 		t.logger.Info("msg", "TCP server started",
 			"component", "tcp_sink",
 			"instance_id", t.id,
 			"port", t.config.Port)
 		return nil
+	// Timeout failure
+	case <-time.After(TCPServerStartTimeout):
+		t.engineMu.Lock()
+		if t.engine != nil {
+			stopCtx, cancel := context.WithTimeout(context.Background(), TCPServerShutdownTimeout)
+			(*t.engine).Stop(stopCtx)
+			cancel()
+		}
+		t.engineMu.Unlock()
+		close(t.done)
+		t.wg.Wait()
+		return fmt.Errorf("tcp sink start timeout on %s", addr)
 	}
 }
 
@@ -308,6 +324,9 @@ func (s *tcpServer) OnBoot(eng gnet.Engine) gnet.Action {
 	s.sink.engineMu.Lock()
 	s.sink.engine = &eng
 	s.sink.engineMu.Unlock()
+
+	// Listener is bound at this point; unblock Start
+	close(s.sink.booted)
 
 	s.sink.logger.Debug("msg", "TCP server booted",
 		"component", "tcp_sink",
@@ -409,8 +428,10 @@ func (s *tcpServer) OnTraffic(c gnet.Conn) gnet.Action {
 		s.sink.proxy.UpdateActivity(client.sessionID)
 	}
 
-	// TCP sink doesn't expect data from clients, discard
-	c.Discard(-1)
+	// TCP sink doesn't expect data from clients, discard safely
+	if bufLen := c.InboundBuffered(); bufLen > 0 {
+		c.Next(bufLen)
+	}
 	return gnet.None
 }
 

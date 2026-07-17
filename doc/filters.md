@@ -9,7 +9,7 @@ LogWisp filters control which log entries pass through the pipeline using patter
 Only entries matching patterns pass through.
 
 ```toml
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "include"
 logic = "or"  # or|and
 patterns = [
@@ -24,7 +24,7 @@ patterns = [
 Entries matching patterns are dropped.
 
 ```toml
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "exclude"
 patterns = [
     "DEBUG",
@@ -89,12 +89,12 @@ Multiple filters execute sequentially:
 
 ```toml
 # First filter: Include errors and warnings
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "include"
 patterns = ["ERROR", "WARN"]
 
 # Second filter: Exclude test environments
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "exclude"
 patterns = ["test-env", "staging"]
 ```
@@ -137,14 +137,14 @@ patterns = ["ERROR", "WARN", "FATAL", "CRITICAL"]
 
 ### Application Filtering
 ```toml
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "include"
 patterns = ["app1", "app2", "app3"]
 ```
 
 ### Noise Reduction
 ```toml
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "exclude"
 patterns = [
     "health-check",
@@ -156,7 +156,7 @@ patterns = [
 
 ### Security Filtering
 ```toml
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "exclude"
 patterns = [
     "password",
@@ -169,17 +169,17 @@ patterns = [
 ### Multi-stage Filtering
 ```toml
 # Include production logs
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "include"
 patterns = ["prod-", "production"]
 
 # Include only errors
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "include"
 patterns = ["ERROR", "EXCEPTION", "FATAL"]
 
 # Exclude known issues
-[[pipelines.filters]]
+[[pipelines.flow.filters]]
 type = "exclude"
 patterns = ["ECONNRESET", "broken pipe"]
 ```

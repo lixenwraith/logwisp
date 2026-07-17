@@ -15,30 +15,8 @@ logwisp [options]
 
 | Command | Description |
 |---------|-------------|
-| `tls` | Generate TLS certificates |
-| `version` | Display version information |
-| `help` | Show help information |
-
-### tls Command
-
-Generate TLS certificates.
-
-```bash
-logwisp tls [options]
-```
-
-**Options:**
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `-ca` | Generate CA certificate | - |
-| `-server` | Generate server certificate | - |
-| `-client` | Generate client certificate | - |
-| `-host` | Comma-separated hosts/IPs | localhost |
-| `-o` | Output file prefix | Required |
-| `-ca-cert` | CA certificate file | Required for server/client |
-| `-ca-key` | CA key file | Required for server/client |
-| `-days` | Certificate validity days | 365 |
+| `--version` | Display version information |
+| `--help` | Show help information |
 
 ### version Command
 
@@ -63,10 +41,9 @@ Output includes:
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-c, --config` | Configuration file path | `./logwisp.toml` |
-| `-b, --background` | Run as daemon | false |
 | `-q, --quiet` | Suppress console output | false |
-| `--disable-status-reporter` | Disable status logging | false |
-| `--config-auto-reload` | Enable config hot reload | false |
+| `--status-reporter` | Status logging | true |
+| `--auto-reload` | Enable config hot reload | false |
 
 ### Logging Options
 
@@ -91,9 +68,9 @@ Configure pipelines via CLI (N = array index, 0-based).
 | Flag | Description |
 |------|-------------|
 | `--pipelines.N.name` | Pipeline name |
-| `--pipelines.N.sources.N.type` | Source type |
-| `--pipelines.N.filters.N.type` | Filter type |
-| `--pipelines.N.sinks.N.type` | Sink type |
+| `--pipelines.N.plugin_sources.N.type` | Source type |
+| `--pipelines.N.flow.filters.N.type` | Filter type |
+| `--pipelines.N.plugin_sinks.N.type` | Sink type |
 
 ## Flag Formats
 
@@ -102,7 +79,7 @@ Configure pipelines via CLI (N = array index, 0-based).
 ```bash
 logwisp --quiet
 logwisp --quiet=true
-logwisp --quiet=false
+logwisp --pipelines.0.plugin_sources.0.type=console
 ```
 
 ### String Flags
@@ -117,13 +94,13 @@ logwisp -c config.toml
 ```bash
 logwisp --logging.level=debug
 logwisp --pipelines.0.name=myapp
-logwisp --pipelines.0.sources.0.type=stdin
+logwisp --pipelines.0.sources.0.type=console
 ```
 
 ### Array Values (JSON)
 
 ```bash
-logwisp --pipelines.0.filters.0.patterns='["ERROR","WARN"]'
+logwisp --pipelines.0.flow.filters.0.patterns='["ERROR","WARN"]'
 ```
 
 ## Environment Variables
@@ -171,7 +148,7 @@ export LOGWISP_PIPELINES_0_NAME=myapp
 logwisp --logging.output=stderr --logging.level=debug
 
 # Quick test with stdin
-logwisp --pipelines.0.sources.0.type=stdin --pipelines.0.sinks.0.type=console
+logwisp --pipelines.0.plugin_sources.0.type=console --pipelines.0.plugin_sinks.0.type=console
 ```
 
 ### Production Deployment
@@ -194,19 +171,6 @@ logwisp --config test.toml --logging.level=debug --disable-status-reporter
 logwisp --config test.toml --quiet
 ```
 
-### Quick Commands
-
-```bash
-# Generate admin password
-logwisp auth -u admin -b
-
-# Create self-signed certs
-logwisp tls -server -host localhost -o server
-
-# Check version
-logwisp version
-```
-
 ## Help System
 
 ### General Help
@@ -215,14 +179,6 @@ logwisp version
 logwisp --help
 logwisp -h
 logwisp help
-```
-
-### Command Help
-
-```bash
-logwisp auth --help
-logwisp tls --help
-logwisp help auth
 ```
 
 ## Special Flags
@@ -235,6 +191,6 @@ These flags are for internal use:
 
 ### Hidden Behaviors
 
-- SIGHUP ignored by default (nohup behavior)
+- SIGHUP ignored ignored during startup (after startup triggers config reload)
 - Automatic panic recovery in pipelines
 - Resource cleanup on shutdown

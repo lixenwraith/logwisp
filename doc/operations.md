@@ -2,6 +2,8 @@
 
 Running, monitoring, and maintaining LogWisp in production.
 
+*Note: TLS, acccess control under redesign*
+
 ## Starting LogWisp
 
 ### Manual Start
@@ -60,7 +62,7 @@ kill -USR1 $(pidof logwisp)
 
 Test configuration without starting:
 ```bash
-logwisp --config test.toml --quiet --disable-status-reporter
+logwisp --config test.toml --quiet --status-reporter=false
 ```
 
 Check for errors:
@@ -168,18 +170,10 @@ Production recommendation: `info` or `warn`
 Adjust buffers based on load:
 
 ```toml
-# High-volume source
-[[pipelines.sources]]
-type = "http"
-[pipelines.sources.http]
-buffer_size = 5000  # Increase for burst traffic
-
-# Slow consumer sink
-[[pipelines.sinks]]
-type = "http_client"
-[pipelines.sinks.http_client]
-buffer_size = 10000  # Larger buffer for slow endpoints
-batch_size = 500     # Larger batches
+[[pipelines.plugin_sources]]
+id = "file_in"
+type = "file"
+[pipelines.plugin_sources.config]
 ```
 
 ### Rate Limiting
@@ -187,20 +181,10 @@ batch_size = 500     # Larger batches
 Protect against overload:
 
 ```toml
-[pipelines.rate_limit]
+[pipelines.flow.rate_limit]
 rate = 1000.0        # Entries per second
 burst = 2000.0       # Burst capacity
 policy = "drop"      # Drop excess entries
-```
-
-### Connection Limits
-
-Prevent resource exhaustion:
-
-```toml
-[pipelines.sources.http.net_limit]
-max_connections_total = 1000
-max_connections_per_ip = 50
 ```
 
 ## Troubleshooting

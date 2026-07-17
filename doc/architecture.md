@@ -13,13 +13,15 @@ Each pipeline operates independently with a source → filter → format → sin
 ```
 Service (Main Process)
 ├── Pipeline 1
-│   ├── Sources (1 or more)
-│   ├── Rate Limiter (optional)
-│   ├── Filter Chain (optional)
-│   ├── Formatter (optional)
-│   └── Sinks (1 or more)
+│   ├── Plugin Sources (1 or more)
+│   ├── Flow
+│   │   ├── Heartbeat Generator (optional)
+│   │   ├── Rate Limiter (optional)
+│   │   ├── Filter Chain (optional)
+│   │   └── Formatter (optional)
+│   └── Plugin Sinks (1 or more)
 ├── Pipeline 2
-│   └── [Same structure]
+│   └── [Similar structure]
 └── Status Reporter (optional)
 ```
 
@@ -27,11 +29,11 @@ Service (Main Process)
 
 ### Processing Stages
 
-1. **Source Stage**: Sources monitor inputs and generate log entries
-2. **Rate Limiting**: Optional pipeline-level rate control
-3. **Filtering**: Pattern-based inclusion/exclusion
-4. **Formatting**: Transform entries to desired output format
-5. **Distribution**: Fan-out to multiple sinks
+1. **Source Stage**: Plugin sources monitor inputs and generate log entries
+2. **Flow - Rate Limiting**: Optional pipeline-level rate control
+3. **Flow - Filtering**: Pattern-based inclusion/exclusion
+4. **Flow - Formatting**: Transform entries to desired output format with sanitization
+5. **Distribution**: Fan-out to multiple plugin sinks
 
 ### Entry Lifecycle
 
@@ -50,14 +52,16 @@ Each component maintains internal buffers to handle burst traffic:
 - Sinks: Independent buffers per sink
 - Network components: Additional TCP/HTTP buffers
 
+*"Sink dispatch uses non-blocking sends. When a sink's input buffer is full, the event is dropped for that sink only and counted in pipeline statistics (`total_dropped_by_sink`). The policy is uniform and not configurable; a slow sink does not stall the pipeline or other sinks."*
+
 ## Component Types
 
 ### Sources (Input)
 
-- **Directory Source**: File system monitoring with rotation detection
-- **Stdin Source**: Standard input processing
-- **HTTP Source**: REST endpoint for log ingestion
-- **TCP Source**: Raw TCP socket listener
+- **File Source**: File system directory monitoring with rotation detection
+- **Console Source**: Standard input processing (stdin)
+- **Random Source**: Generates random log entries for testing
+- **Null Source**: Discards logs, used for testing
 
 ### Sinks (Output)
 
@@ -65,14 +69,13 @@ Each component maintains internal buffers to handle burst traffic:
 - **File Sink**: Rotating file writer
 - **HTTP Sink**: Server-Sent Events (SSE) streaming
 - **TCP Sink**: TCP server for client connections
-- **HTTP Client Sink**: Forward to remote HTTP endpoints
-- **TCP Client Sink**: Forward to remote TCP servers
+- **Null Sink**: Discards all received events
 
 ### Processing Components
 
 - **Rate Limiter**: Token bucket algorithm for flow control
 - **Filter Chain**: Sequential pattern matching
-- **Formatters**: Raw, JSON, or template-based text transformation
+- **Formatters**: Raw, JSON, or text transformation with sanitizer policies
 
 ## Concurrency Model
 
@@ -95,8 +98,7 @@ Each component maintains internal buffers to handle burst traffic:
 ### Connection Patterns
 
 **Chaining Design**:
-- TCP Client Sink → TCP Source: Direct TCP forwarding
-- HTTP Client Sink → HTTP Source: HTTP-based forwarding
+- Future plan
 
 **Monitoring Design**:
 - TCP Sink: Debugging interface
@@ -106,8 +108,6 @@ Each component maintains internal buffers to handle burst traffic:
 
 - HTTP/1.1 and HTTP/2 for HTTP connections
 - Raw TCP connections
-- TLS 1.2/1.3 for HTTPS connections (HTTP only)
-- Server-Sent Events for real-time streaming
 
 ## Resource Management
 
@@ -125,6 +125,10 @@ Each component maintains internal buffers to handle burst traffic:
 
 ### Connection Management
 
+- HTTP sink silenty drops IPv6 connections (deliberate IPv4-only enforcement)
+
+*Note:* Placeholder; below features are removed in restructuring and will be added in the future release.
+
 - Per-IP connection limits
 - Global connection caps
 - Automatic reconnection with exponential backoff
@@ -136,7 +140,6 @@ Each component maintains internal buffers to handle burst traffic:
 
 - Panic recovery in pipeline processing
 - Independent pipeline operation
-- Automatic source restart on failure
 - Sink failure isolation
 
 ### Data Integrity

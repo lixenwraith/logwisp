@@ -170,16 +170,16 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 
 	addr := fmt.Sprintf("%s:%d", h.config.Host, h.config.Port)
 
-	errChan := make(chan error, 1)
+	ln, err := net.Listen("tcp4", addr)
+	if err != nil {
+		return fmt.Errorf("http sink bind %s: %w", addr, err)
+	}
 	go func() {
-		h.logger.Info("msg", "HTTP server starting",
-			"component", "http_sink",
-			"instance_id", h.id,
-			"address", addr)
-
-		err := h.server.ListenAndServe(addr)
-		if err != nil {
-			errChan <- err
+		if err := h.server.Serve(ln); err != nil {
+			h.logger.Error("msg", "HTTP server terminated",
+				"component", "http_sink",
+				"instance_id", h.id,
+				"error", err)
 		}
 	}()
 
@@ -193,18 +193,12 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 		}
 	}()
 
-	// Check if server started
-	select {
-	case err := <-errChan:
-		return err
-	case <-time.After(HttpServerStartTimeout):
-		h.logger.Info("msg", "HTTP server started",
-			"component", "http_sink",
-			"instance_id", h.id,
-			"host", h.config.Host,
-			"port", h.config.Port)
-		return nil
-	}
+	h.logger.Info("msg", "HTTP server started",
+		"component", "http_sink",
+		"instance_id", h.id,
+		"host", h.config.Host,
+		"port", h.config.Port)
+	return nil
 }
 
 // Stop gracefully shuts down the HTTP server and all client connections
@@ -356,6 +350,8 @@ func (h *HTTPSink) requestHandler(ctx *fasthttp.RequestCtx) {
 	remoteAddr := ctx.RemoteAddr()
 	if tcpAddr, ok := remoteAddr.(*net.TCPAddr); ok {
 		if tcpAddr.IP.To4() == nil {
+			h.logger.Debug("msg", "IPv6 connection rejected",
+				"component", "http_sink", "remote_addr", remoteAddr.String())
 			ctx.SetConnectionClose()
 			return
 		}
@@ -414,8 +410,6 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 			"client_id", clientID,
 			"active_clients", connectCount)
 
-		h.wg.Add(1)
-
 		defer func() {
 			disconnectCount := h.activeClients.Add(-1)
 			h.logger.Debug("msg", "HTTP client disconnected",
@@ -431,7 +425,6 @@ func (h *HTTPSink) handleStream(ctx *fasthttp.RequestCtx) {
 			}
 
 			h.proxy.RemoveSession(sess.ID)
-			h.wg.Done()
 		}()
 
 		// Send connected event with metadata
