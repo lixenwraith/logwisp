@@ -11,9 +11,9 @@ BUILD_TIME != date -u '+%Y-%m-%d_%H:%M:%S'
 # Go build variables
 GO = go
 GOFLAGS =
-LDFLAGS = -X 'logwisp/src/internal/version.Version=$(VERSION)' \
-          -X 'logwisp/src/internal/version.GitCommit=$(GIT_COMMIT)' \
-          -X 'logwisp/src/internal/version.BuildTime=$(BUILD_TIME)'
+LDFLAGS = -X 'logwisp/internal/version.Version=$(VERSION)' \
+          -X 'logwisp/internal/version.GitCommit=$(GIT_COMMIT)' \
+          -X 'logwisp/internal/version.BuildTime=$(BUILD_TIME)'
 
 # Installation directories
 PREFIX ?= /usr/local
@@ -25,7 +25,7 @@ all: build
 # Build the binary
 build:
 	mkdir -p $(BUILD_DIR)
-	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./src/cmd/logwisp
+	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./cmd/logwisp
 
 # Install the binary
 install: build
@@ -41,7 +41,7 @@ clean:
 
 # Development build with race detector
 dev:
-	$(GO) build $(GOFLAGS) -race -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./src/cmd/logwisp
+	$(GO) build $(GOFLAGS) -race -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./cmd/logwisp
 
 # Show current version
 version:

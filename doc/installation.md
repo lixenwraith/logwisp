@@ -36,7 +36,7 @@ sudo install -m 755 logwisp /usr/local/bin/
 Install directly using Go (version information will not be embedded):
 
 ```bash
-go install github.com/yourusername/logwisp/src/cmd/logwisp@latest
+go install github.com/yourusername/logwisp/cmd/logwisp@latest
 ```
 
 ## Service Configuration

@@ -12,3 +12,4 @@ build/
 build.sh
 catalog.txt
 combined.txt
+test/run/
