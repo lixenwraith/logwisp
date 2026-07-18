@@ -3,6 +3,7 @@ package httpchain
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"logwisp/internal/plugin"
 	"logwisp/internal/session"
 	"logwisp/internal/source"
+	"logwisp/internal/tlsx"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
@@ -48,6 +50,9 @@ type HTTPChainSource struct {
 	subscribers []chan core.LogEntry
 	server      *http.Server
 	logger      *log.Logger
+
+	// TLS
+	tlsConfig *tls.Config
 
 	// Session cache: one session per remote host + declared node
 	sessions   map[string]string // key -> sessionID
@@ -95,6 +100,10 @@ func NewHTTPChainSourcePlugin(
 	if opts.ReadTimeoutMS <= 0 {
 		opts.ReadTimeoutMS = DefaultHTTPChainSourceReadTimeoutMS
 	}
+	tlsCfg, err := tlsx.Server(opts.TLS)
+	if err != nil {
+		return nil, err
+	}
 
 	s := &HTTPChainSource{
 		id:          id,
@@ -103,6 +112,7 @@ func NewHTTPChainSourcePlugin(
 		subscribers: make([]chan core.LogEntry, 0),
 		sessions:    make(map[string]string),
 		logger:      logger,
+		tlsConfig:   tlsCfg,
 	}
 	s.lastEntryTime.Store(time.Time{})
 
@@ -111,17 +121,22 @@ func NewHTTPChainSourcePlugin(
 		"instance_id", id,
 		"host", opts.Host,
 		"port", opts.Port,
-		"ingest_path", opts.IngestPath)
+		"ingest_path", opts.IngestPath,
+		"tls", tlsCfg != nil,
+		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert)
 	return s, nil
 }
 
 // Capabilities returns supported capabilities
 func (s *HTTPChainSource) Capabilities() []core.Capability {
-	// CapTLS/CapAuth added when transport security lands
-	return []core.Capability{
-		core.CapSessionAware,
-		core.CapMultiSession,
+	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
+	if s.tlsConfig != nil {
+		caps = append(caps, core.CapTLS)
+		if s.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
+			caps = append(caps, core.CapAuth) // mTLS is authentication
+		}
 	}
+	return caps
 }
 
 // Subscribe returns a channel for receiving log entries
@@ -150,12 +165,19 @@ func (s *HTTPChainSource) Start() error {
 		Handler:           mux,
 		ReadTimeout:       time.Duration(s.config.ReadTimeoutMS) * time.Millisecond,
 		ReadHeaderTimeout: HTTPChainReadHeaderTimeout,
-		// Future: TLSConfig for transport security
+		// TLS handshake bounded by min(ReadTimeout, ReadHeaderTimeout)
+		ErrorLog: tlsx.HTTPErrorLog(s.logger, "http_chain_source"),
 	}
 	s.startTime = time.Now()
 
+	serve := s.server.Serve
+	if s.tlsConfig != nil {
+		s.server.TLSConfig = s.tlsConfig
+		serve = func(l net.Listener) error { return s.server.ServeTLS(l, "", "") }
+	}
+
 	go func() {
-		if err := s.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.logger.Error("msg", "HTTP chain server terminated",
 				"component", "http_chain_source",
 				"instance_id", s.id,
@@ -215,6 +237,7 @@ func (s *HTTPChainSource) GetStats() source.SourceStats {
 			"host":              s.config.Host,
 			"port":              s.config.Port,
 			"ingest_path":       s.config.IngestPath,
+			"tls":               s.tlsConfig != nil,
 			"total_requests":    s.totalRequests.Load(),
 			"rejected_requests": s.rejectedRequests.Load(),
 			"parse_errors":      s.parseErrors.Load(),
@@ -281,14 +304,14 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range entries {
 		s.publish(entry)
 	}
-	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode))
+	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode, r.TLS))
 
 	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(len(entries)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // sessionFor returns the cached session for a remote+node, recreating after idle expiry
-func (s *HTTPChainSource) sessionFor(remoteHost, node string) string {
+func (s *HTTPChainSource) sessionFor(remoteHost, node string, cs *tls.ConnectionState) string {
 	key := remoteHost + "|" + node
 	s.sessionsMu.Lock()
 	defer s.sessionsMu.Unlock()
@@ -298,10 +321,17 @@ func (s *HTTPChainSource) sessionFor(remoteHost, node string) string {
 			return id
 		}
 	}
-	sess := s.proxy.CreateSession(remoteHost, map[string]any{
+	meta := map[string]any{
 		"type": "http_chain",
 		"node": node,
-	})
+	}
+	if cs != nil {
+		meta["tls"] = true
+		if cn := tlsx.PeerCN(*cs); cn != "" {
+			meta["tls_peer_cn"] = cn
+		}
+	}
+	sess := s.proxy.CreateSession(remoteHost, meta)
 	s.sessions[key] = sess.ID
 	return sess.ID
 }

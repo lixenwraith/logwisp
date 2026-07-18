@@ -2,6 +2,7 @@ package tcpchain
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
@@ -18,6 +19,7 @@ import (
 	"logwisp/internal/plugin"
 	"logwisp/internal/session"
 	"logwisp/internal/sink"
+	"logwisp/internal/tlsx"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
@@ -48,6 +50,7 @@ type TCPChainSink struct {
 	node      string
 	addr      string
 	helloLine []byte
+	tlsConfig *tls.Config
 
 	input  chan core.TransportEvent
 	logger *log.Logger
@@ -122,6 +125,10 @@ func NewTCPChainSinkPlugin(
 	if err != nil {
 		return nil, fmt.Errorf("hello: %w", err)
 	}
+	tlsCfg, err := tlsx.Client(opts.TLS, opts.Host)
+	if err != nil {
+		return nil, err
+	}
 
 	t := &TCPChainSink{
 		id:           id,
@@ -130,6 +137,7 @@ func NewTCPChainSinkPlugin(
 		node:         node,
 		addr:         net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10)),
 		helloLine:    helloLine,
+		tlsConfig:    tlsCfg,
 		input:        make(chan core.TransportEvent, opts.BufferSize),
 		done:         make(chan struct{}),
 		logger:       logger,
@@ -152,16 +160,22 @@ func NewTCPChainSinkPlugin(
 		"component", "tcp_chain_sink",
 		"instance_id", id,
 		"target", t.addr,
-		"node", node)
+		"node", node,
+		"tls", tlsCfg != nil,
+		"mtls", tlsCfg != nil && len(tlsCfg.Certificates) > 0)
 	return t, nil
 }
 
 // Capabilities returns supported capabilities
 func (t *TCPChainSink) Capabilities() []core.Capability {
-	// CapTLS/CapAuth added when transport security lands
-	return []core.Capability{
-		core.CapSessionAware,
+	caps := []core.Capability{core.CapSessionAware}
+	if t.tlsConfig != nil {
+		caps = append(caps, core.CapTLS)
+		if len(t.tlsConfig.Certificates) > 0 {
+			caps = append(caps, core.CapAuth) // presents client identity (mTLS)
+		}
 	}
+	return caps
 }
 
 // Input returns the channel for sending transport events
@@ -220,6 +234,7 @@ func (t *TCPChainSink) GetStats() sink.SinkStats {
 		Details: map[string]any{
 			"target":       t.addr,
 			"node":         t.node,
+			"tls":          t.tlsConfig != nil,
 			"connected":    t.connected.Load(),
 			"reconnects":   t.reconnects.Load(),
 			"write_errors": t.writeErrors.Load(),
@@ -321,18 +336,28 @@ func (t *TCPChainSink) deliver(ctx context.Context, line []byte) bool {
 	}
 }
 
-// connect performs a single dial + hello attempt
+// connect performs a single dial (+ TLS handshake) + hello attempt
 func (t *TCPChainSink) connect(ctx context.Context) error {
-	d := net.Dialer{Timeout: t.dialTimeout}
+	nd := net.Dialer{Timeout: t.dialTimeout}
 	if t.config.KeepAlive {
-		d.KeepAliveConfig = net.KeepAliveConfig{
+		nd.KeepAliveConfig = net.KeepAliveConfig{
 			Enable: true,
 			Idle:   time.Duration(t.config.KeepAlivePeriodMS) * time.Millisecond,
 		}
 	}
 
-	// IPv4-only
-	conn, err := d.DialContext(ctx, "tcp4", t.addr)
+	var conn net.Conn
+	var err error
+	if t.tlsConfig != nil {
+		// nd.Timeout only bounds the TCP connect; tls.Dialer runs the
+		// handshake under ctx, so bound dial + handshake together here
+		dctx, cancel := context.WithTimeout(ctx, t.dialTimeout+tlsx.HandshakeTimeout)
+		td := tls.Dialer{NetDialer: &nd, Config: t.tlsConfig}
+		conn, err = td.DialContext(dctx, "tcp4", t.addr) // IPv4-only
+		cancel()
+	} else {
+		conn, err = nd.DialContext(ctx, "tcp4", t.addr) // IPv4-only
+	}
 	if err != nil {
 		return err
 	}
@@ -353,7 +378,8 @@ func (t *TCPChainSink) connect(ctx context.Context) error {
 	t.logger.Info("msg", "Chain link established",
 		"component", "tcp_chain_sink",
 		"target", t.addr,
-		"node", t.node)
+		"node", t.node,
+		"tls", t.tlsConfig != nil)
 	return nil
 }
 

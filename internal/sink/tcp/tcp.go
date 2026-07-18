@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"logwisp/internal/plugin"
 	"logwisp/internal/session"
 	"logwisp/internal/sink"
+	"logwisp/internal/tlsx"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
@@ -58,14 +60,17 @@ type TCPSink struct {
 	clients      map[uint64]*tcpClient
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
+	writeTimeout time.Duration
+
+	// TLS
+	tlsConfig          *tls.Config
+	tlsHandshakeErrors atomic.Uint64
 
 	// Runtime
 	done      chan struct{}
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
 	startTime time.Time
-
-	writeTimeout time.Duration
 
 	// Statistics
 	activeConns    atomic.Int64
@@ -115,6 +120,10 @@ func NewTCPSinkPlugin(
 	if opts.KeepAlivePeriodMS <= 0 {
 		opts.KeepAlivePeriodMS = DefaultTCPKeepAlivePeriodMS
 	}
+	tlsCfg, err := tlsx.Server(opts.TLS)
+	if err != nil {
+		return nil, err
+	}
 
 	t := &TCPSink{
 		id:           id,
@@ -126,6 +135,7 @@ func NewTCPSinkPlugin(
 		logger:       logger,
 		clients:      make(map[uint64]*tcpClient),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
+		tlsConfig:    tlsCfg,
 	}
 	t.lastProcessed.Store(time.Time{})
 
@@ -133,17 +143,22 @@ func NewTCPSinkPlugin(
 		"component", "tcp_sink",
 		"instance_id", id,
 		"host", opts.Host,
-		"port", opts.Port)
+		"port", opts.Port,
+		"tls", tlsCfg != nil,
+		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert)
 	return t, nil
 }
 
 // Capabilities returns supported capabilities
 func (t *TCPSink) Capabilities() []core.Capability {
-	// CapTLS/CapAuth appended when transport security lands
-	return []core.Capability{
-		core.CapSessionAware,
-		core.CapMultiSession,
+	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
+	if t.tlsConfig != nil {
+		caps = append(caps, core.CapTLS)
+		if t.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
+			caps = append(caps, core.CapAuth) // mTLS is authentication
+		}
 	}
+	return caps
 }
 
 // Input returns the channel for sending transport events
@@ -151,10 +166,9 @@ func (t *TCPSink) Input() chan<- core.TransportEvent {
 	return t.input
 }
 
-// listen creates the server listener.
-// TLS extension point: wrap the returned listener with tls.NewListener here
-// once cert config lands; no other code path changes. mTLS peer identity is
-// then available via conn.(*tls.Conn).ConnectionState() in the auth hook.
+// listen creates the server listener, TLS-wrapped when configured.
+// Handshake is deferred: tls.NewListener conns handshake explicitly in
+// handleConn under tlsx.HandshakeTimeout, post max_connections admission.
 func (t *TCPSink) listen() (net.Listener, error) {
 	lc := net.ListenConfig{}
 	if t.config.KeepAlive {
@@ -164,7 +178,14 @@ func (t *TCPSink) listen() (net.Listener, error) {
 		}
 	}
 	// IPv4-only, parity with existing network sinks
-	return lc.Listen(context.Background(), "tcp4", t.addr)
+	ln, err := lc.Listen(context.Background(), "tcp4", t.addr)
+	if err != nil {
+		return nil, err
+	}
+	if t.tlsConfig != nil {
+		ln = tls.NewListener(ln, t.tlsConfig)
+	}
+	return ln, nil
 }
 
 // Start binds the listener and launches accept and broadcast loops
@@ -249,8 +270,8 @@ func (t *TCPSink) acceptLoop() {
 			continue
 		}
 
-		// Auth extension point: credential/peer verification runs here,
-		// pre-registration (password preamble read or TLS peer cert check)
+		// Password-auth extension point: preamble verification runs in
+		// handleConn post-handshake, pre-registration
 
 		t.wg.Add(1)
 		go t.handleConn(conn)
@@ -263,11 +284,40 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 	defer t.wg.Done()
 	remote := conn.RemoteAddr().String()
 
-	sess := t.proxy.CreateSession(remote, map[string]any{
+	// Counted from accept: max_connections bounds concurrent handshakes too
+	count := t.activeConns.Add(1)
+	defer func() {
+		newCount := t.activeConns.Add(-1)
+		t.logger.Debug("msg", "TCP connection closed",
+			"component", "tcp_sink",
+			"remote_addr", remote,
+			"active_connections", newCount)
+	}()
+
+	meta := map[string]any{
 		"type":        "tcp_client",
 		"remote_addr": remote,
-	})
+	}
+	if tc, ok := conn.(*tls.Conn); ok {
+		hctx, cancel := context.WithTimeout(context.Background(), tlsx.HandshakeTimeout)
+		err := tc.HandshakeContext(hctx)
+		cancel()
+		if err != nil {
+			t.tlsHandshakeErrors.Add(1)
+			t.logger.Debug("msg", "TLS handshake failed",
+				"component", "tcp_sink",
+				"remote_addr", remote,
+				"error", err)
+			conn.Close()
+			return
+		}
+		meta["tls"] = true
+		if cn := tlsx.PeerCN(tc.ConnectionState()); cn != "" {
+			meta["tls_peer_cn"] = cn
+		}
+	}
 
+	sess := t.proxy.CreateSession(remote, meta)
 	c := &tcpClient{
 		conn:      conn,
 		send:      make(chan []byte, t.config.ClientBufferSize),
@@ -280,7 +330,6 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 	t.clients[id] = c
 	t.clientsMu.Unlock()
 
-	count := t.activeConns.Add(1)
 	t.logger.Debug("msg", "TCP connection opened",
 		"component", "tcp_sink",
 		"remote_addr", remote,
@@ -294,11 +343,6 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		conn.Close()
 		<-c.closed // reader has exited
 		t.proxy.RemoveSession(sess.ID)
-		newCount := t.activeConns.Add(-1)
-		t.logger.Debug("msg", "TCP connection closed",
-			"component", "tcp_sink",
-			"remote_addr", remote,
-			"active_connections", newCount)
 	}()
 
 	// Reader: sink is write-only; drain and discard inbound bytes to detect
@@ -385,12 +429,14 @@ func (t *TCPSink) GetStats() sink.SinkStats {
 		StartTime:         t.startTime,
 		LastProcessed:     lastProc,
 		Details: map[string]any{
-			"host":           t.config.Host,
-			"port":           t.config.Port,
-			"buffer_size":    t.config.BufferSize,
-			"write_errors":   t.writeErrors.Load(),
-			"dropped_writes": t.droppedWrites.Load(),
-			"rejected_conns": t.rejectedConns.Load(),
+			"host":                 t.config.Host,
+			"port":                 t.config.Port,
+			"buffer_size":          t.config.BufferSize,
+			"write_errors":         t.writeErrors.Load(),
+			"dropped_writes":       t.droppedWrites.Load(),
+			"rejected_conns":       t.rejectedConns.Load(),
+			"tls":                  t.tlsConfig != nil,
+			"tls_handshake_errors": t.tlsHandshakeErrors.Load(),
 		},
 	}
 }

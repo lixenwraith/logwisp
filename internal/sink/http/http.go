@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"logwisp/internal/plugin"
 	"logwisp/internal/session"
 	"logwisp/internal/sink"
+	"logwisp/internal/tlsx"
 	"logwisp/internal/version"
 
 	lconfig "github.com/lixenwraith/config"
@@ -63,14 +65,16 @@ type HTTPSink struct {
 	clients      map[uint64]*sseClient
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
+	writeTimeout time.Duration
+
+	// TLS
+	tlsConfig *tls.Config
 
 	// Runtime
 	done      chan struct{}
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
 	startTime time.Time
-
-	writeTimeout time.Duration
 
 	// Statistics
 	activeClients   atomic.Int64
@@ -122,6 +126,10 @@ func NewHTTPSinkPlugin(
 	if opts.ClientBufferSize <= 0 {
 		opts.ClientBufferSize = DefaultHTTPClientBufferSize
 	}
+	tlsCfg, err := tlsx.Server(opts.TLS)
+	if err != nil {
+		return nil, err
+	}
 
 	h := &HTTPSink{
 		id:           id,
@@ -133,6 +141,7 @@ func NewHTTPSinkPlugin(
 		logger:       logger,
 		clients:      make(map[uint64]*sseClient),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
+		tlsConfig:    tlsCfg,
 	}
 	h.lastProcessed.Store(time.Time{})
 
@@ -142,17 +151,22 @@ func NewHTTPSinkPlugin(
 		"host", opts.Host,
 		"port", opts.Port,
 		"stream_path", opts.StreamPath,
-		"status_path", opts.StatusPath)
+		"status_path", opts.StatusPath,
+		"tls", tlsCfg != nil,
+		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert)
 	return h, nil
 }
 
 // Capabilities returns supported capabilities
 func (h *HTTPSink) Capabilities() []core.Capability {
-	// CapTLS/CapAuth appended when transport security lands
-	return []core.Capability{
-		core.CapSessionAware,
-		core.CapMultiSession,
+	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
+	if h.tlsConfig != nil {
+		caps = append(caps, core.CapTLS)
+		if h.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
+			caps = append(caps, core.CapAuth) // mTLS is authentication
+		}
 	}
+	return caps
 }
 
 // Input returns the channel for sending transport events
@@ -163,8 +177,8 @@ func (h *HTTPSink) Input() chan<- core.TransportEvent {
 // Start binds the listener and serves stream/status endpoints
 func (h *HTTPSink) Start(ctx context.Context) error {
 	// IPv4-only, parity with existing network sinks.
-	// TLS extension point: wrap ln with tls.NewListener (or set
-	// server.TLSConfig and use ServeTLS); single seam, handlers unchanged.
+	// TLS is applied via server.TLSConfig + ServeTLS below, not by wrapping
+	// ln; net/http then owns handshake, ALPN (h2), and per-conn errors.
 	ln, err := net.Listen("tcp4", h.addr)
 	if err != nil {
 		return fmt.Errorf("http sink bind %s: %w", h.addr, err)
@@ -183,15 +197,23 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 		Handler:           handler,
 		ReadHeaderTimeout: HTTPReadHeaderTimeout,
 		// WriteTimeout unset by design: SSE responses are long-lived.
-		// Per-write deadlines via ResponseController in handleStream.
+		// net/http bounds the TLS handshake by min(ReadHeaderTimeout,
+		// ReadTimeout, WriteTimeout), so ReadHeaderTimeout covers it here.
+		ErrorLog: tlsx.HTTPErrorLog(h.logger, "http_sink"),
 	}
 	h.startTime = time.Now()
 
 	h.wg.Add(1)
 	go h.brokerLoop(ctx)
 
+	serve := h.server.Serve
+	if h.tlsConfig != nil {
+		h.server.TLSConfig = h.tlsConfig
+		serve = func(l net.Listener) error { return h.server.ServeTLS(l, "", "") }
+	}
+
 	go func() {
-		if err := h.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			h.logger.Error("msg", "HTTP server terminated",
 				"component", "http_sink",
 				"instance_id", h.id,
@@ -312,9 +334,16 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	remote := r.RemoteAddr
 
-	sess := h.proxy.CreateSession(remote, map[string]any{
+	meta := map[string]any{
 		"type": "http_client",
-	})
+	}
+	if r.TLS != nil {
+		meta["tls"] = true
+		if cn := tlsx.PeerCN(*r.TLS); cn != "" {
+			meta["tls_peer_cn"] = cn
+		}
+	}
+	sess := h.proxy.CreateSession(remote, meta)
 
 	c := &sseClient{
 		send:      make(chan []byte, h.config.ClientBufferSize),
@@ -402,6 +431,7 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"type":           "http",
 			"host":           h.config.Host,
 			"port":           h.config.Port,
+			"tls":            h.tlsConfig != nil,
 			"active_clients": h.activeClients.Load(),
 			"buffer_size":    h.config.BufferSize,
 			"uptime_seconds": int(time.Since(h.startTime).Seconds()),
@@ -435,6 +465,7 @@ func (h *HTTPSink) GetStats() sink.SinkStats {
 			"host":             h.config.Host,
 			"port":             h.config.Port,
 			"buffer_size":      h.config.BufferSize,
+			"tls":              h.tlsConfig != nil,
 			"dropped_writes":   h.droppedWrites.Load(),
 			"rejected_clients": h.rejectedClients.Load(),
 			"endpoints": map[string]string{

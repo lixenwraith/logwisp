@@ -208,27 +208,29 @@ type ConsoleSourceOptions struct {
 // TCPChainSourceOptions defines settings for a stdlib TCP listener ingesting
 // NDJSON entries from upstream logwisp tcp_chain sinks
 type TCPChainSourceOptions struct {
-	Host           string `toml:"host"`
-	Port           int64  `toml:"port"`
-	BufferSize     int64  `toml:"buffer_size"`
-	MaxConnections int64  `toml:"max_connections"`  // 0 = unlimited
-	ReadTimeoutMS  int64  `toml:"read_timeout_ms"`  // per-connection idle deadline, 0 = none
-	HelloTimeoutMS int64  `toml:"hello_timeout_ms"` // preamble deadline
-	TrustNode      bool   `toml:"trust_node"`       // false: force node label from remote address
-	// Future: TLS/auth options
+	TLS            *TLSOptions `toml:"tls"`
+	Host           string      `toml:"host"`
+	Port           int64       `toml:"port"`
+	BufferSize     int64       `toml:"buffer_size"`
+	MaxConnections int64       `toml:"max_connections"`  // 0 = unlimited
+	ReadTimeoutMS  int64       `toml:"read_timeout_ms"`  // per-connection idle deadline, 0 = none
+	HelloTimeoutMS int64       `toml:"hello_timeout_ms"` // preamble deadline
+	TrustNode      bool        `toml:"trust_node"`       // false: force node label from remote address
+	// Future: password auth block
 }
 
 // HTTPChainSourceOptions defines settings for a stdlib HTTP listener ingesting
 // NDJSON batches from upstream logwisp http_chain sinks
 type HTTPChainSourceOptions struct {
-	Host          string `toml:"host"`
-	Port          int64  `toml:"port"`
-	IngestPath    string `toml:"ingest_path"`
-	BufferSize    int64  `toml:"buffer_size"`
-	MaxBodyBytes  int64  `toml:"max_body_bytes"`  // per-request cap
-	ReadTimeoutMS int64  `toml:"read_timeout_ms"` // full request read deadline
-	TrustNode     bool   `toml:"trust_node"`      // false: force node label from remote address
-	// Future: TLS/auth options
+	TLS           *TLSOptions `toml:"tls"`
+	Host          string      `toml:"host"`
+	Port          int64       `toml:"port"`
+	IngestPath    string      `toml:"ingest_path"`
+	BufferSize    int64       `toml:"buffer_size"`
+	MaxBodyBytes  int64       `toml:"max_body_bytes"`  // per-request cap
+	ReadTimeoutMS int64       `toml:"read_timeout_ms"` // full request read deadline
+	TrustNode     bool        `toml:"trust_node"`      // false: force node label from remote address
+	// Future: password auth block
 }
 
 // --- Sink Options ---
@@ -273,59 +275,92 @@ type FileSinkOptions struct {
 
 // TCPSinkOptions defines settings for a TCP server sink
 type TCPSinkOptions struct {
-	Host              string `toml:"host"`
-	Port              int64  `toml:"port"`
-	BufferSize        int64  `toml:"buffer_size"`        // sink input queue
-	ClientBufferSize  int64  `toml:"client_buffer_size"` // per-client send queue
-	WriteTimeoutMS    int64  `toml:"write_timeout_ms"`   // per-write deadline
-	KeepAlive         bool   `toml:"keep_alive"`
-	KeepAlivePeriodMS int64  `toml:"keep_alive_period_ms"`
-	MaxConnections    int64  `toml:"max_connections"` // 0 = unlimited
-	// Future: TLS (cert_file/key_file/client_ca), auth (token/mTLS) blocks
+	TLS               *TLSOptions `toml:"tls"`
+	Host              string      `toml:"host"`
+	Port              int64       `toml:"port"`
+	BufferSize        int64       `toml:"buffer_size"`        // sink input queue
+	ClientBufferSize  int64       `toml:"client_buffer_size"` // per-client send queue
+	WriteTimeoutMS    int64       `toml:"write_timeout_ms"`   // per-write deadline
+	KeepAlive         bool        `toml:"keep_alive"`
+	KeepAlivePeriodMS int64       `toml:"keep_alive_period_ms"`
+	MaxConnections    int64       `toml:"max_connections"` // 0 = unlimited
+	// Future: password auth block
 }
 
 // HTTPSinkOptions defines settings for an HTTP SSE server sink
 type HTTPSinkOptions struct {
-	Host             string `toml:"host"`
-	Port             int64  `toml:"port"`
-	StreamPath       string `toml:"stream_path"`
-	StatusPath       string `toml:"status_path"`
-	BufferSize       int64  `toml:"buffer_size"`        // sink input queue
-	ClientBufferSize int64  `toml:"client_buffer_size"` // per-client send queue
-	WriteTimeoutMS   int64  `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
-	MaxConnections   int64  `toml:"max_connections"`    // 0 = unlimited
-	// Future: TLS (server.TLSConfig), auth middleware options
+	TLS              *TLSOptions `toml:"tls"`
+	Host             string      `toml:"host"`
+	Port             int64       `toml:"port"`
+	StreamPath       string      `toml:"stream_path"`
+	StatusPath       string      `toml:"status_path"`
+	BufferSize       int64       `toml:"buffer_size"`        // sink input queue
+	ClientBufferSize int64       `toml:"client_buffer_size"` // per-client send queue
+	WriteTimeoutMS   int64       `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
+	MaxConnections   int64       `toml:"max_connections"`    // 0 = unlimited
+	// Future: password auth block
 }
 
 // TCPChainSinkOptions defines settings for a stdlib TCP client forwarding
 // entries to a downstream logwisp tcp_chain source
 type TCPChainSinkOptions struct {
-	Node              string `toml:"node"` // origin label, default: os.Hostname()
-	Host              string `toml:"host"`
-	Port              int64  `toml:"port"`
-	BufferSize        int64  `toml:"buffer_size"`
-	DialTimeoutMS     int64  `toml:"dial_timeout_ms"`
-	WriteTimeoutMS    int64  `toml:"write_timeout_ms"`
-	BackoffMinMS      int64  `toml:"backoff_min_ms"`
-	BackoffMaxMS      int64  `toml:"backoff_max_ms"`
-	KeepAlivePeriodMS int64  `toml:"keep_alive_period_ms"`
-	KeepAlive         bool   `toml:"keep_alive"`
-	// Future: TLS/auth options
+	TLS               *TLSOptions `toml:"tls"`
+	Node              string      `toml:"node"` // origin label, default: os.Hostname()
+	Host              string      `toml:"host"`
+	Port              int64       `toml:"port"`
+	BufferSize        int64       `toml:"buffer_size"`
+	DialTimeoutMS     int64       `toml:"dial_timeout_ms"`
+	WriteTimeoutMS    int64       `toml:"write_timeout_ms"`
+	BackoffMinMS      int64       `toml:"backoff_min_ms"`
+	BackoffMaxMS      int64       `toml:"backoff_max_ms"`
+	KeepAlivePeriodMS int64       `toml:"keep_alive_period_ms"`
+	KeepAlive         bool        `toml:"keep_alive"`
+	// Future: password auth block
 }
 
 // HTTPChainSinkOptions defines settings for a stdlib HTTP client posting
 // NDJSON batches to a downstream logwisp http_chain source
 type HTTPChainSinkOptions struct {
-	Node             string `toml:"node"` // origin label, default: os.Hostname()
-	Host             string `toml:"host"`
-	Port             int64  `toml:"port"`
-	IngestPath       string `toml:"ingest_path"`
-	BufferSize       int64  `toml:"buffer_size"`
-	MaxBatchCount    int64  `toml:"max_batch_count"`
-	MaxBatchBytes    int64  `toml:"max_batch_bytes"`
-	FlushIntervalMS  int64  `toml:"flush_interval_ms"`
-	RequestTimeoutMS int64  `toml:"request_timeout_ms"` // covers dial + write + response
-	BackoffMinMS     int64  `toml:"backoff_min_ms"`
-	BackoffMaxMS     int64  `toml:"backoff_max_ms"`
-	// Future: TLS/auth options
+	TLS              *TLSOptions `toml:"tls"`
+	Node             string      `toml:"node"` // origin label, default: os.Hostname()
+	Host             string      `toml:"host"`
+	Port             int64       `toml:"port"`
+	IngestPath       string      `toml:"ingest_path"`
+	BufferSize       int64       `toml:"buffer_size"`
+	MaxBatchCount    int64       `toml:"max_batch_count"`
+	MaxBatchBytes    int64       `toml:"max_batch_bytes"`
+	FlushIntervalMS  int64       `toml:"flush_interval_ms"`
+	RequestTimeoutMS int64       `toml:"request_timeout_ms"` // covers dial + write + response
+	BackoffMinMS     int64       `toml:"backoff_min_ms"`
+	BackoffMaxMS     int64       `toml:"backoff_max_ms"`
+	// Future: password auth block
+}
+
+// --- TLS Options ---
+
+// TLSOptions defines transport security for network sources and sinks.
+// One shape serves both roles so the config block is uniform:
+//   - Listeners (tcp/http sinks, tcp_chain/http_chain sources) use
+//     cert_file/key_file as server identity; client_auth/client_ca_file
+//     require and verify peer certificates (mTLS).
+//   - Dialers (tcp_chain/http_chain sinks) use ca_file/server_name to verify
+//     the server; cert_file/key_file present a client identity (mTLS).
+type TLSOptions struct {
+	Enabled bool `toml:"enabled"`
+
+	// Local identity: required for listeners, optional for dialers (mTLS)
+	CertFile string `toml:"cert_file"`
+	KeyFile  string `toml:"key_file"`
+
+	// Listener-side peer verification (mTLS)
+	ClientAuth   bool   `toml:"client_auth"`
+	ClientCAFile string `toml:"client_ca_file"`
+
+	// Dialer-side peer verification
+	CAFile             string `toml:"ca_file"`     // empty = system trust store
+	ServerName         string `toml:"server_name"` // default: config host
+	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+
+	// Minimum protocol version: "1.2" | "1.3" (default "1.3")
+	MinVersion string `toml:"min_version"`
 }

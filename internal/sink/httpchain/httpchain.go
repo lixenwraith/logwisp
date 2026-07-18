@@ -21,6 +21,7 @@ import (
 	"logwisp/internal/plugin"
 	"logwisp/internal/session"
 	"logwisp/internal/sink"
+	"logwisp/internal/tlsx"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
@@ -53,6 +54,9 @@ type HTTPChainSink struct {
 
 	node string
 	url  string
+
+	tlsEnabled bool
+	mtls       bool
 
 	client *http.Client
 	input  chan core.TransportEvent
@@ -128,6 +132,11 @@ func NewHTTPChainSinkPlugin(
 		}
 	}
 
+	tlsCfg, err := tlsx.Client(opts.TLS, opts.Host)
+	if err != nil {
+		return nil, err
+	}
+
 	addr := net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10))
 
 	transport := &http.Transport{
@@ -139,16 +148,25 @@ func NewHTTPChainSinkPlugin(
 		MaxIdleConnsPerHost: 2,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  true,
-		// Future: TLSClientConfig; HTTP/2 via ALPN once TLS lands
+		TLSClientConfig:     tlsCfg, // nil = plaintext
+		TLSHandshakeTimeout: tlsx.HandshakeTimeout,
+		// h2 stays off: custom DialContext disables auto-ALPN and batched
+		// NDJSON POSTs gain nothing from it
+	}
+
+	scheme := "http"
+	if tlsCfg != nil {
+		scheme = "https"
 	}
 
 	t := &HTTPChainSink{
-		id:     id,
-		proxy:  proxy,
-		config: opts,
-		node:   node,
-		// Future: "https" scheme with TLS
-		url:        "http://" + addr + opts.IngestPath,
+		id:         id,
+		proxy:      proxy,
+		config:     opts,
+		node:       node,
+		tlsEnabled: tlsCfg != nil,
+		mtls:       tlsCfg != nil && len(tlsCfg.Certificates) > 0,
+		url:        scheme + "://" + addr + opts.IngestPath,
 		client:     &http.Client{Transport: transport},
 		input:      make(chan core.TransportEvent, opts.BufferSize),
 		done:       make(chan struct{}),
@@ -171,16 +189,22 @@ func NewHTTPChainSinkPlugin(
 		"component", "http_chain_sink",
 		"instance_id", id,
 		"target", t.url,
-		"node", node)
+		"node", node,
+		"tls", t.tlsEnabled,
+		"mtls", t.mtls)
 	return t, nil
 }
 
 // Capabilities returns supported capabilities
 func (t *HTTPChainSink) Capabilities() []core.Capability {
-	// CapTLS/CapAuth added when transport security lands
-	return []core.Capability{
-		core.CapSessionAware,
+	caps := []core.Capability{core.CapSessionAware}
+	if t.tlsEnabled {
+		caps = append(caps, core.CapTLS)
+		if t.mtls {
+			caps = append(caps, core.CapAuth) // presents client identity (mTLS)
+		}
 	}
+	return caps
 }
 
 // Input returns the channel for sending transport events
@@ -234,6 +258,7 @@ func (t *HTTPChainSink) GetStats() sink.SinkStats {
 		Details: map[string]any{
 			"target":          t.url,
 			"node":            t.node,
+			"tls":             t.tlsEnabled,
 			"batches_sent":    t.batchesSent.Load(),
 			"request_errors":  t.requestErrors.Load(),
 			"dropped_batches": t.droppedBatches.Load(),

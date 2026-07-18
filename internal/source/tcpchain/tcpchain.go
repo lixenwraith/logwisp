@@ -3,7 +3,7 @@ package tcpchain
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -18,6 +18,7 @@ import (
 	"logwisp/internal/plugin"
 	"logwisp/internal/session"
 	"logwisp/internal/source"
+	"logwisp/internal/tlsx"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
@@ -44,6 +45,10 @@ type TCPChainSource struct {
 	listener    net.Listener
 	conns       map[net.Conn]struct{}
 	logger      *log.Logger
+
+	// TLS
+	tlsConfig          *tls.Config
+	tlsHandshakeErrors atomic.Uint64
 
 	mu     sync.RWMutex
 	ctx    context.Context
@@ -82,6 +87,10 @@ func NewTCPChainSourcePlugin(
 	if opts.HelloTimeoutMS <= 0 {
 		opts.HelloTimeoutMS = DefaultChainSourceHelloTimeoutMS
 	}
+	tlsCfg, err := tlsx.Server(opts.TLS)
+	if err != nil {
+		return nil, err
+	}
 
 	s := &TCPChainSource{
 		id:          id,
@@ -90,6 +99,7 @@ func NewTCPChainSourcePlugin(
 		subscribers: make([]chan core.LogEntry, 0),
 		conns:       make(map[net.Conn]struct{}),
 		logger:      logger,
+		tlsConfig:   tlsCfg,
 	}
 	s.lastEntryTime.Store(time.Time{})
 
@@ -97,17 +107,22 @@ func NewTCPChainSourcePlugin(
 		"component", "tcp_chain_source",
 		"instance_id", id,
 		"host", opts.Host,
-		"port", opts.Port)
+		"port", opts.Port,
+		"tls", tlsCfg != nil,
+		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert)
 	return s, nil
 }
 
 // Capabilities returns supported capabilities
 func (s *TCPChainSource) Capabilities() []core.Capability {
-	// CapTLS/CapAuth added when transport security lands
-	return []core.Capability{
-		core.CapSessionAware,
-		core.CapMultiSession,
+	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
+	if s.tlsConfig != nil {
+		caps = append(caps, core.CapTLS)
+		if s.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
+			caps = append(caps, core.CapAuth) // mTLS is authentication
+		}
 	}
+	return caps
 }
 
 // Subscribe returns a channel for receiving log entries
@@ -122,10 +137,14 @@ func (s *TCPChainSource) Subscribe() <-chan core.LogEntry {
 // Start binds the listener and begins accepting connections
 func (s *TCPChainSource) Start() error {
 	addr := net.JoinHostPort(s.config.Host, strconv.FormatInt(s.config.Port, 10))
-	// IPv4-only
+	// IPv4-only. TLS-wrapped when configured; handshake runs explicitly in
+	// handleConn under tlsx.HandshakeTimeout, pre-hello.
 	ln, err := net.Listen("tcp4", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+	if s.tlsConfig != nil {
+		ln = tls.NewListener(ln, s.tlsConfig)
 	}
 	s.listener = ln
 	s.ctx, s.cancel = context.WithCancel(context.Background())
@@ -180,12 +199,14 @@ func (s *TCPChainSource) GetStats() source.SourceStats {
 		StartTime:      s.startTime,
 		LastEntryTime:  lastEntry,
 		Details: map[string]any{
-			"host":               s.config.Host,
-			"port":               s.config.Port,
-			"active_connections": s.activeConns.Load(),
-			"rejected_conns":     s.rejectedConns.Load(),
-			"parse_errors":       s.parseErrors.Load(),
-			"trust_node":         s.config.TrustNode,
+			"host":                 s.config.Host,
+			"port":                 s.config.Port,
+			"tls":                  s.tlsConfig != nil,
+			"tls_handshake_errors": s.tlsHandshakeErrors.Load(),
+			"active_connections":   s.activeConns.Load(),
+			"rejected_conns":       s.rejectedConns.Load(),
+			"parse_errors":         s.parseErrors.Load(),
+			"trust_node":           s.config.TrustNode,
 		},
 	}
 }
@@ -238,6 +259,23 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		s.activeConns.Add(-1)
 	}()
 
+	var tlsState *tls.ConnectionState
+	if tc, ok := conn.(*tls.Conn); ok {
+		hctx, cancel := context.WithTimeout(s.ctx, tlsx.HandshakeTimeout)
+		err := tc.HandshakeContext(hctx)
+		cancel()
+		if err != nil {
+			s.tlsHandshakeErrors.Add(1)
+			s.logger.Warn("msg", "TLS handshake failed",
+				"component", "tcp_chain_source",
+				"remote_addr", remote,
+				"error", err)
+			return // deferred cleanup closes conn
+		}
+		cs := tc.ConnectionState()
+		tlsState = &cs
+	}
+
 	scanner := bufio.NewScanner(conn)
 	// Oversized line (> MaxLogEntryBytes) is a protocol violation; scanner is
 	// unrecoverable after ErrTooLong, connection terminates
@@ -270,10 +308,17 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		}
 	}
 
-	sess := s.proxy.CreateSession(remote, map[string]any{
+	meta := map[string]any{
 		"type": "tcp_chain",
 		"node": connNode,
-	})
+	}
+	if tlsState != nil {
+		meta["tls"] = true
+		if cn := tlsx.PeerCN(*tlsState); cn != "" {
+			meta["tls_peer_cn"] = cn
+		}
+	}
+	sess := s.proxy.CreateSession(remote, meta)
 	sessID = sess.ID
 
 	s.logger.Info("msg", "Chain connection established",
@@ -313,26 +358,6 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		}
 		s.publish(entry)
 	}
-}
-
-// parseEntry decodes a canonical LogEntry line and applies the node policy
-func (s *TCPChainSource) parseEntry(line []byte, connNode string) (core.LogEntry, bool) {
-	var entry core.LogEntry
-	if err := json.Unmarshal(line, &entry); err != nil {
-		s.parseErrors.Add(1)
-		s.logger.Debug("msg", "Dropped malformed chain entry",
-			"component", "tcp_chain_source",
-			"error", err)
-		return core.LogEntry{}, false
-	}
-	if entry.Time.IsZero() {
-		entry.Time = time.Now()
-	}
-	if entry.Node == "" || !s.config.TrustNode {
-		entry.Node = connNode
-	}
-	entry.RawSize = int64(len(line))
-	return entry, true
 }
 
 // publish sends a log entry to all subscribers
