@@ -1,0 +1,305 @@
+###############################################################################
+### LogWisp Configuration
+### Default location: ~/.config/logwisp/logwisp.toml
+### Precedence: CLI flags > Environment > File > Defaults
+###
+### Commented values are the built-in defaults unless marked "example".
+### Uncommenting a default is a no-op.
+###
+### NOTE: authentication (password/token/SCRAM), network access control (ACL),
+### http/tcp ingest sources, and http_client/tcp_client sinks were removed in
+### the restructure and are not available in this version. TLS and mTLS ARE
+### available on every network source and sink; see the [...tls] blocks below.
+###
+### Environment overrides are currently read WITHOUT the LOGWISP_ prefix
+### (QUIET, LOGGING_LEVEL, ...). LOGWISP_CONFIG_FILE and LOGWISP_CONFIG_DIR
+### are the exceptions and do carry it. Array-indexed paths such as
+### pipelines.0.name cannot be set from the CLI or environment at all.
+###############################################################################
+
+###############################################################################
+### Global Settings
+###############################################################################
+
+quiet = false                           # Suppress console output
+status_reporter = true                  # Periodic status logging (30s, DEBUG level)
+auto_reload = false                     # Config auto-reload on file change
+
+###############################################################################
+### Logging (LogWisp's internal operational logging)
+###############################################################################
+
+[logging]
+output = "stdout"                       # file|stdout|stderr|split|all|none
+level = "info"                          # debug|info|warn|error
+# format = "txt"                        # raw|txt|json
+# sanitization = ""                     # raw|json|txt|shell (empty = logger default)
+
+# [logging.file]                        # Used when output is "file" or "all"
+# directory = "./log"
+# name = "logwisp"
+# max_size_mb = 100
+# max_total_size_mb = 1000
+# retention_hours = 168.0               # 7 days
+
+## Validated but NOT applied: the console destination comes from `output` above.
+# [logging.console]
+# target = "stdout"                     # stdout|stderr|split
+
+###############################################################################
+### Pipelines
+### Each pipeline: plugin_sources -> flow (rate_limit|filters|format) -> plugin_sinks
+### Names must be unique. 1+ source and 1+ sink required.
+###############################################################################
+
+[[pipelines]]
+name = "default"
+
+###============================================================================
+### Flow (processing between sources and sinks)
+###============================================================================
+
+## policy="pass" short-circuits the size check too: enforcing a size cap needs
+## rate > 0 AND policy = "drop".
+# [pipelines.flow.rate_limit]
+# rate = 0.0                            # Entries/second (0 = limiter disabled)
+# burst = 0.0                           # Burst capacity (defaults to rate)
+# policy = "pass"                       # pass|drop
+# max_entry_size_bytes = 0              # 0 = unlimited
+
+## Filters: sequential include/exclude chain, matched against "<source> <level> <message>"
+# [[pipelines.flow.filters]]
+# type = "include"                      # include|exclude
+# logic = "or"                          # or|and
+# patterns = [".*ERROR.*", ".*WARN.*"]  # example; RE2 syntax
+
+# [pipelines.flow.format]
+# type = "raw"                          # raw|json|txt
+# flags = 0                             # Formatter flags (0 = defaults per type)
+# timestamp_format = ""                 # Go time layout (formatter default if empty)
+# sanitizer_policy = ""                 # raw|json|txt|shell (defaults per type)
+
+## Flow-level heartbeat (fan-out to all sinks, traverses chain links)
+# [pipelines.flow.heartbeat]
+# enabled = false
+# interval_ms = 1000                    # Minimum 100
+# include_timestamp = false
+# include_stats = false
+# format = "txt"                        # txt|json|raw ("comment" is rejected)
+
+###============================================================================
+### TLS (shared shape; applies to every network source and sink)
+###
+### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
+###   cert_file + key_file are REQUIRED; client_auth + client_ca_file enable mTLS.
+### Dialers    (tcp_chain/http_chain sinks):
+###   ca_file + server_name verify the server; cert_file + key_file present a
+###   client identity for mTLS.
+###
+### enabled = false      Master switch
+### cert_file = ""       Local certificate
+### key_file = ""        Private key for cert_file (set together)
+### client_auth = false  Listener: require and verify a client certificate
+### client_ca_file = ""  Listener: CA bundle verifying client certs
+### ca_file = ""         Dialer: CA bundle verifying the server (empty = system)
+### server_name = ""     Dialer: SNI / name to verify (empty = configured host)
+### insecure_skip_verify = false   Dialer: disable verification (never in prod)
+### min_version = "1.3"  "1.2" or "1.3". No max_version, no cipher_suites.
+###
+### Any certificate signed by client_ca_file is accepted; the peer CN is
+### recorded but not used for authorization. See doc/security.md.
+###============================================================================
+
+###============================================================================
+### Sources (1+ required)
+###============================================================================
+
+## Null source (testing)
+# [[pipelines.plugin_sources]]
+# id = "null_in"
+# type = "null"
+
+[[pipelines.plugin_sources]]
+id = "default_source"
+type = "file"
+[pipelines.plugin_sources.config]
+directory = "./"                        # Directory to monitor (required, not recursive)
+pattern = "*.log"                       # Glob pattern (* and ? only)
+## Tailing an already-open file polls at a fixed 100ms, regardless of this value.
+check_interval_ms = 100                 # Directory rescan interval (min 10)
+
+## Console source (stdin, single instance per pipeline)
+# [[pipelines.plugin_sources]]
+# id = "console_in"
+# type = "console"
+# [pipelines.plugin_sources.config]
+# buffer_size = 1000
+
+## Random source (testing; special=true exercises sanitizer policies)
+# [[pipelines.plugin_sources]]
+# id = "random_in"
+# type = "random"
+# [pipelines.plugin_sources.config]
+# interval_ms = 500
+# jitter_ms = 0                         # Clamped to interval_ms
+# format = "txt"                        # raw|txt|json
+# length = 20
+# special = false
+
+## TCP chain source (stdlib listener; receives NDJSON from upstream tcp_chain sinks)
+## Topology: jail [file source -> tcp_chain sink] -> host [tcp_chain source -> aggregate sink]
+# [[pipelines.plugin_sources]]
+# id = "chain_in"
+# type = "tcp_chain"
+# [pipelines.plugin_sources.config]
+# host = "0.0.0.0"                      # IPv4 only
+# port = 9440                           # Required
+# buffer_size = 1000
+# max_connections = 0                   # 0 = unlimited
+# read_timeout_ms = 0                   # idle deadline, 0 = none
+# hello_timeout_ms = 10000              # Protocol preamble deadline
+# trust_node = true                     # false: label entries by remote address
+# [pipelines.plugin_sources.config.tls]
+# enabled = true                        # example: mTLS listener
+# cert_file = "/etc/logwisp/tls/server.crt"
+# key_file = "/etc/logwisp/tls/server.key"
+# client_auth = true
+# client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+# min_version = "1.3"
+
+## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
+# [[pipelines.plugin_sources]]
+# id = "hchain_in"
+# type = "http_chain"
+# [pipelines.plugin_sources.config]
+# host = "0.0.0.0"
+# port = 9441                           # Required
+# ingest_path = "/ingest"               # Must start with "/"
+# buffer_size = 1000
+# max_body_bytes = 8388608              # per-request cap (8 MiB)
+# read_timeout_ms = 30000
+# trust_node = true                     # false: label entries by remote address
+# [pipelines.plugin_sources.config.tls]
+# enabled = true                        # example: mTLS listener
+# cert_file = "/etc/logwisp/tls/server.crt"
+# key_file = "/etc/logwisp/tls/server.key"
+# client_auth = true
+# client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+
+###============================================================================
+### Sinks (1+ required, fan-out)
+###============================================================================
+
+## Null sink (testing)
+# [[pipelines.plugin_sinks]]
+# id = "null_out"
+# type = "null"
+
+[[pipelines.plugin_sinks]]
+id = "default_sink"
+type = "console"
+[pipelines.plugin_sinks.config]
+target = "stdout"                       # stdout|stderr ("split" NOT supported)
+# buffer_size = 1000
+
+## File sink (rotating)
+# [[pipelines.plugin_sinks]]
+# id = "file_out"
+# type = "file"
+# [pipelines.plugin_sinks.config]
+# directory = "./logs"                  # Required
+# name = "output"                       # Required
+# max_size_mb = 100
+# max_total_size_mb = 1000
+# min_disk_free_mb = 0                  # 0 = no floor (only negatives become 100)
+# retention_hours = 168.0
+# buffer_size = 1000
+# flush_interval_ms = 100
+
+## HTTP sink (SSE streaming server + JSON status endpoint; IPv4 clients only)
+## Both endpoints are UNAUTHENTICATED and the stream sends
+## Access-Control-Allow-Origin: *. Bind to a trusted interface.
+# [[pipelines.plugin_sinks]]
+# id = "http_out"
+# type = "http"
+# [pipelines.plugin_sinks.config]
+# host = "0.0.0.0"
+# port = 8081                           # Required
+# stream_path = "/stream"               # Must start with "/"
+# status_path = "/status"               # Must differ from stream_path
+# buffer_size = 1000                    # Sink input queue
+# client_buffer_size = 256              # Per-client send queue
+# write_timeout_ms = 0                  # Per-event deadline, 0 = none
+# max_connections = 0                   # 0 = unlimited
+# [pipelines.plugin_sinks.config.tls]
+# enabled = true                        # example
+# cert_file = "/etc/logwisp/tls/server.crt"
+# key_file = "/etc/logwisp/tls/server.key"
+# client_auth = false
+# client_ca_file = ""
+
+## TCP sink (streaming server, IPv4 clients only)
+# [[pipelines.plugin_sinks]]
+# id = "tcp_out"
+# type = "tcp"
+# [pipelines.plugin_sinks.config]
+# host = "0.0.0.0"
+# port = 9090                           # Required
+# buffer_size = 1000
+# client_buffer_size = 256
+# write_timeout_ms = 5000               # Missed deadline disconnects the client
+# keep_alive = true
+# keep_alive_period_ms = 30000
+# max_connections = 0
+# [pipelines.plugin_sinks.config.tls]
+# enabled = true                        # example
+# cert_file = "/etc/logwisp/tls/server.crt"
+# key_file = "/etc/logwisp/tls/server.key"
+
+## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
+## Do NOT point a chain sink at a chain source in the SAME pipeline: entries
+## loop back in and amplify without bound.
+# [[pipelines.plugin_sinks]]
+# id = "chain_out"
+# type = "tcp_chain"
+# [pipelines.plugin_sinks.config]
+# host = "10.0.0.1"                     # Required
+# port = 9440                           # Required
+# node = ""                             # origin label, default hostname; preserved across hops
+# buffer_size = 1000
+# dial_timeout_ms = 5000
+# write_timeout_ms = 5000
+# backoff_min_ms = 500
+# backoff_max_ms = 30000
+# keep_alive = true
+# keep_alive_period_ms = 30000
+# [pipelines.plugin_sinks.config.tls]
+# enabled = true                        # example: mTLS dialer
+# ca_file = "/etc/logwisp/tls/ca.crt"
+# server_name = ""
+# insecure_skip_verify = false
+# cert_file = "/etc/logwisp/tls/client.crt"
+# key_file = "/etc/logwisp/tls/client.key"
+# min_version = "1.3"
+
+## HTTP chain sink (stdlib client; batched NDJSON POST to downstream http_chain source)
+# [[pipelines.plugin_sinks]]
+# id = "hchain_out"
+# type = "http_chain"
+# [pipelines.plugin_sinks.config]
+# host = "10.0.0.1"                     # Required
+# port = 9441                           # Required
+# ingest_path = "/ingest"
+# node = ""                             # origin label, default hostname; preserved across hops
+# buffer_size = 1000
+# max_batch_count = 100
+# max_batch_bytes = 1048576
+# flush_interval_ms = 1000
+# request_timeout_ms = 10000            # Covers dial + write + response
+# backoff_min_ms = 500
+# backoff_max_ms = 30000
+# [pipelines.plugin_sinks.config.tls]
+# enabled = true                        # example: mTLS dialer
+# ca_file = "/etc/logwisp/tls/ca.crt"
+# cert_file = "/etc/logwisp/tls/client.crt"
+# key_file = "/etc/logwisp/tls/client.key"

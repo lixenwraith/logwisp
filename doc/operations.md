@@ -1,327 +1,305 @@
 # Operations Guide
 
-Running, monitoring, and maintaining LogWisp in production.
+Running, monitoring, and maintaining LogWisp.
 
-*Note: TLS, acccess control under redesign*
-
-## Starting LogWisp
-
-### Manual Start
+## Starting
 
 ```bash
-# Foreground with default config
+# foreground, explicit config
+logwisp -c /etc/logwisp/logwisp.toml
+
+# no config: built-in demo pipeline (random source -> stdout)
 logwisp
-
-# Background mode
-logwisp --background
-
-# With specific configuration
-logwisp --config /etc/logwisp/production.toml
 ```
 
-### Service Management
+There is no built-in daemon mode. Run LogWisp in the foreground under a
+supervisor — systemd, rc.d, or a container runtime — which is where restart,
+log capture, and resource limits belong. See [Installation](installation.md).
 
-**Linux (systemd):**
+**systemd**
+
 ```bash
 sudo systemctl start logwisp
-sudo systemctl stop logwisp
-sudo systemctl restart logwisp
 sudo systemctl status logwisp
+sudo journalctl -u logwisp -f
 ```
 
-**FreeBSD (rc.d):**
+**FreeBSD rc.d**
+
 ```bash
 sudo service logwisp start
-sudo service logwisp stop
-sudo service logwisp restart
 sudo service logwisp status
 ```
 
-## Configuration Management
+## Configuration Changes
 
-### Hot Reload
+### Hot reload
 
-Enable automatic configuration reload:
 ```toml
-config_auto_reload = true
+auto_reload = true
 ```
 
-Or via command line:
-```bash
-logwisp --config-auto-reload
-```
+or send a signal:
 
-Trigger manual reload:
 ```bash
 kill -HUP $(pidof logwisp)
-# or
-kill -USR1 $(pidof logwisp)
 ```
 
-### Configuration Validation
+Reload constructs a new service from the new configuration **before** tearing
+the old one down, so a broken configuration leaves the running service intact
+and logs the failure:
 
-Test configuration without starting:
+```
+ERROR msg="Failed to bootstrap new service, keeping old service running" error=...
+```
+
+What reload does *not* do:
+
+- Re-apply `logging.*`; application logging is configured once at startup.
+- Preserve connections. Listeners close and reopen, and every SSE, TCP, and
+  chain client is disconnected. Chain sinks reconnect on their own backoff;
+  browsers reconnect SSE automatically; raw TCP consumers must retry themselves.
+- Reload certificates without a reload — certificate files are read at plugin
+  construction, so rotation requires `SIGHUP`.
+
+Plan reloads on a busy relay the way you would plan a restart.
+
+### Checking a configuration
+
+There is no validate-only mode. To check a file, start it with debug logging and
+watch for pipeline startup:
+
 ```bash
-logwisp --config test.toml --quiet --status-reporter=false
+logwisp -c candidate.toml --logging.level=debug --logging.output=stderr
 ```
 
-Check for errors:
-- Port conflicts
-- Invalid patterns
-- Missing required fields
-- File permissions
+Success looks like `Created source instance`, `Created sink instance`, and
+`Starting pipeline` for each pipeline. Failures name the pipeline and the
+offending key:
+
+```
+ERROR msg="Failed to create pipeline" pipeline=app error="failed to create sink out: port: must be 1-65535, got 0"
+```
+
+Remember that most validation lives in plugin constructors, so a config only
+proves itself when the pipeline is actually built.
 
 ## Monitoring
 
-### Status Reporter
+### Status reporter
 
-Built-in periodic status logging (30-second intervals):
+Enabled by default, every 30 seconds. It logs at **DEBUG**, so it produces
+nothing unless `logging.level = "debug"` — a common surprise.
 
-```
-[INFO] Status report active_pipelines=2 time=15:04:05
-[INFO] Pipeline status pipeline=app entries_processed=10523
-[INFO] Pipeline status pipeline=system entries_processed=5231
-```
-
-Disable if not needed:
 ```toml
-disable_status_reporter = true
+status_reporter = true
+
+[logging]
+level = "debug"
 ```
 
-### HTTP Status Endpoint
+It emits a service summary and then walks each pipeline, flattening scalar
+statistics into log fields and recursing into flow, rate limiter, filter,
+source, and sink stats.
 
-When using HTTP sink:
+Disable with `status_reporter = false`.
+
+### HTTP status endpoint
+
+When a pipeline has an `http` sink:
+
 ```bash
-curl http://localhost:8080/status | jq .
+curl -s http://127.0.0.1:8080/status | jq .
 ```
 
-Response structure:
 ```json
 {
-  "uptime": "2h15m30s",
-  "pipelines": {
-    "default": {
-      "sources": 1,
-      "sinks": 2,
-      "processed": 15234,
-      "filtered": 523,
-      "dropped": 12
-    }
+  "service": "LogWisp",
+  "version": "v0.16.0",
+  "instance_id": "sse",
+  "server": {
+    "type": "http",
+    "host": "0.0.0.0",
+    "port": 8080,
+    "tls": false,
+    "active_clients": 3,
+    "buffer_size": 1000,
+    "uptime_seconds": 8130
+  },
+  "endpoints": { "stream": "/stream", "status": "/status" },
+  "statistics": {
+    "total_processed": 15234,
+    "dropped_writes": 12,
+    "rejected_clients": 0
   }
 }
 ```
 
-### Metrics Collection
+This endpoint is scoped to one sink, not to the whole process, and it is
+**unauthenticated**. Bind it to a trusted interface.
 
-Track via logs:
-- Total entries processed
-- Entries filtered
-- Entries dropped
-- Active connections
-- Buffer utilization
+### Metrics worth watching
+
+| Metric | Where | Meaning if rising |
+|--------|-------|-------------------|
+| `dropped_entries` | source | Downstream cannot keep up with the source |
+| `total_dropped` | flow | Rate limit or filters are discarding entries (often intended) |
+| `total_dropped_by_sink` | pipeline | A sink's input queue is full |
+| `dropped_writes` | tcp/http sink | A specific client is too slow |
+| `rejected_conns` / `rejected_clients` | tcp/http sink, tcp_chain source | `max_connections` is being hit |
+| `tls_handshake_errors` | tcp sink, tcp_chain source | Certificate or version mismatch, or scanning |
+| `parse_errors` | chain source | Protocol or version skew upstream |
+| `reconnects` | chain sink | Unstable link or a flapping downstream |
+| `dropped_batches` | http_chain sink | Downstream rejecting batches permanently |
+| `synthesized` | chain sink | Events reaching the sink without structure |
 
 ## Log Management
 
-### LogWisp's Operational Logs
-
-Configuration for LogWisp's own logs:
+LogWisp's own operational log:
 
 ```toml
 [logging]
 output = "file"
-level = "info"
+level  = "info"
 
 [logging.file]
-directory = "/var/log/logwisp"
-name = "logwisp"
-max_size_mb = 100
-retention_hours = 168
+directory         = "/var/log/logwisp"
+name              = "logwisp"
+max_size_mb       = 100
+max_total_size_mb = 1000
+retention_hours   = 168.0
 ```
 
-### Log Rotation
+Rotation is automatic on size, with a total-size cap and a retention window.
+There is no signal to reopen log files, so do not move files out from under
+LogWisp and expect it to reattach — let it rotate, or restart it.
 
-Automatic rotation based on:
-- File size threshold
-- Total size limit
-- Retention period
-
-Manual rotation:
-```bash
-# Move current log
-mv /var/log/logwisp/logwisp.log /var/log/logwisp/logwisp.log.1
-# Send signal to reopen
-kill -USR1 $(pidof logwisp)
-```
-
-### Log Levels
-
-Operational log levels:
-- **debug**: Detailed debugging information
-- **info**: General operational messages
-- **warn**: Warning conditions
-- **error**: Error conditions
-
-Production recommendation: `info` or `warn`
+Production level: `info`, or `warn` on a busy relay. Avoid `debug` under load:
+the filter stage logs several lines per entry evaluated.
 
 ## Performance Tuning
 
-### Buffer Sizing
+### Buffers
 
-Adjust buffers based on load:
+Raise `buffer_size` when `total_dropped_by_sink` is climbing but the sink itself
+is healthy — that is a burst-absorption problem. Raise `client_buffer_size` when
+`dropped_writes` is climbing for network sinks; that is a slow-consumer problem,
+and a bigger buffer only buys time.
 
 ```toml
-[[pipelines.plugin_sources]]
-id = "file_in"
-type = "file"
-[pipelines.plugin_sources.config]
+[pipelines.plugin_sinks.config]
+buffer_size        = 5000
+client_buffer_size = 1024
 ```
 
-### Rate Limiting
-
-Protect against overload:
+### Rate limiting
 
 ```toml
 [pipelines.flow.rate_limit]
-rate = 1000.0        # Entries per second
-burst = 2000.0       # Burst capacity
-policy = "drop"      # Drop excess entries
+rate                 = 1000.0
+burst                = 2000.0
+policy               = "drop"
+max_entry_size_bytes = 65536
 ```
+
+Two behaviours to keep in mind: the limiter does not exist at all when
+`rate <= 0`, and `policy = "pass"` short-circuits the size cap as well as the
+rate check. Enforcing `max_entry_size_bytes` therefore requires `rate > 0` and
+`policy = "drop"`.
+
+### Formatting
+
+`raw` is the cheapest and skips sanitization; `json` costs the most. The
+formatter serializes on a mutex, so it is the one shared bottleneck in a
+pipeline — splitting work across pipelines parallelizes it.
+
+### Chain batching
+
+`http_chain` trades latency for efficiency. Lower `flush_interval_ms` for
+freshness, raise `max_batch_count` and `max_batch_bytes` for throughput. Use
+`tcp_chain` when per-entry latency matters.
 
 ## Troubleshooting
 
-### Common Issues
+**Nothing appears at the sink**
 
-**High Memory Usage**
-- Check buffer sizes
-- Monitor goroutine count
-- Review retention settings
+Walk the pipeline in order and read the counters: source `total_entries` (is
+anything being produced?), flow `total_dropped` (filters or rate limit?),
+pipeline `total_dropped_by_sink` (sink backed up?), sink `total_processed`.
 
-**Dropped Entries**
-- Increase buffer sizes
-- Add rate limiting
-- Check sink performance
+**File source reads nothing**
 
-**Connection Errors**
-- Verify network connectivity
-- Check firewall rules
-- Review TLS certificates
+- The watcher seeks to end-of-file on start; only content appended afterwards is
+  read. Positions are in memory, so a restart re-seeks to end and anything
+  written during the downtime is lost.
+- `pattern` is a filename glob with `*` and `?` only, and matching is not
+  recursive.
+- `check_interval_ms` governs how quickly a *new file* is noticed; tailing an
+  open file polls at a fixed 100 ms.
 
-### Debug Mode
+**High memory use**
 
-Enable detailed logging:
-```bash
-logwisp --logging.level=debug --logging.output=stderr
-```
+Buffers are bounded, so unbounded growth almost always means many buffers:
+count sinks × `buffer_size`, plus clients × `client_buffer_size`. A `tcp_chain`
+sink blocked on an unreachable downstream also holds its full input queue.
 
-### Health Checks
+**Chain link not delivering**
 
-Implement external monitoring:
-```bash
-#!/bin/bash
-# Health check script
-if ! curl -sf http://localhost:8080/status > /dev/null; then
-  echo "LogWisp health check failed"
-  exit 1
-fi
-```
+Check `connected` and `reconnects` on the sink, `parse_errors` on the source,
+and remember `http_chain` waits up to `flush_interval_ms`. For TLS problems see
+[Networking](networking.md#troubleshooting).
 
-## Backup and Recovery
+**Environment variable override has no effect**
 
-### Configuration Backup
-
-```bash
-# Backup configuration
-cp /etc/logwisp/logwisp.toml /backup/logwisp-$(date +%Y%m%d).toml
-
-# Version control
-git add /etc/logwisp/
-git commit -m "LogWisp config update"
-```
-
-### State Recovery
-
-LogWisp maintains minimal state:
-- File read positions (automatic)
-- Connection state (automatic)
-
-Recovery after crash:
-1. Service automatically restarts (systemd/rc.d)
-2. File sources resume from last position
-3. Network sources accept new connections
-4. Clients reconnect automatically
+LogWisp currently reads these **without** the `LOGWISP_` prefix — `QUIET`,
+`LOGGING_LEVEL`, and so on. Array-indexed paths cannot be set from the
+environment or the command line at all.
 
 ## Security Operations
 
-### Certificate Management
+**Certificate rotation**
 
-Monitor certificate expiration:
 ```bash
-openssl x509 -in /path/to/cert.pem -noout -enddate
+openssl x509 -in /etc/logwisp/tls/relay.crt -noout -enddate
 ```
 
-Rotate certificates:
-1. Generate new certificates
-2. Update configuration
-3. Reload service (SIGHUP)
+Certificates load at plugin construction, so rotation is: write the new files,
+then `kill -HUP`. Automate the expiry check; nothing in LogWisp warns you.
 
-### Access Auditing
+**Access review**
 
-Monitor access patterns:
-- Review connection logs
-- Monitor rate limit hits
+With mTLS, any certificate signed by the configured `client_ca_file` is
+accepted — there is no per-identity allow-list, so "access review" means
+reviewing what your CA has issued. Peer Common Names are recorded in session
+metadata but are not surfaced in statistics and are not used for authorization.
+See [Security](security.md) and the
+[mTLS authentication plan](mtls-auth-plan.md).
+
+**Secret leakage**
+
+Filters are the only redaction mechanism, and they drop whole entries rather
+than masking parts of them. See [Filters](filters.md#common-recipes).
 
 ## Maintenance
 
-### Planned Maintenance
+**Upgrades**
 
-1. Notify users of maintenance window
-2. Stop accepting new connections
-3. Drain existing connections
-4. Perform maintenance
-5. Restart service
+1. Read the changelog for configuration-schema changes.
+2. Start the new binary against the current configuration in a scratch
+   environment.
+3. Stop the old process, install the new binary, start it.
+4. Confirm each pipeline started and that counters are advancing.
 
-### Upgrade Process
+**Backup**
 
-1. Download new version
-2. Test with current configuration
-3. Stop old version
-4. Install new version
-5. Start service
-6. Verify operation
+Configuration files and TLS material are the only durable state worth backing
+up. LogWisp keeps no persistent runtime state: file read positions live in
+memory, connections are re-established on restart, and in-flight entries are
+lost.
 
-### Cleanup Tasks
+**Redundancy**
 
-Regular maintenance:
-- Remove old log files
-- Clean temporary files
-- Verify disk space
-- Update documentation
-
-## Disaster Recovery
-
-### Backup Strategy
-
-- Configuration files: Daily
-- TLS certificates: After generation
-- Authentication credentials: Secure storage
-
-### Recovery Procedures
-
-Service failure:
-1. Check service status
-2. Review error logs
-3. Verify configuration
-4. Restart service
-
-Data loss:
-1. Restore configuration from backup
-2. Regenerate certificates if needed
-3. Recreate authentication credentials
-4. Restart service
-
-### Business Continuity
-
-- Run multiple instances for redundancy
-- Use load balancer for distribution
-- Implement monitoring alerts
-- Document recovery procedures
+Because there is no persistence, availability comes from topology, not from
+LogWisp itself. Give each edge two chain sinks pointing at two relays if you
+need to survive a relay outage, and accept that this duplicates entries
+downstream.

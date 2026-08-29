@@ -1,10 +1,10 @@
 module logwisp
 
-go 1.26.0
+go 1.26.5
 
 require (
 	github.com/lixenwraith/config v0.1.1-0.20260712172228-ccd280ba6a98
-	github.com/lixenwraith/log v0.1.1-0.20260717175128-82eea9846ccd
+	github.com/lixenwraith/log v0.1.1-0.20260801090951-2c40643523b3
 )
 
 require (
