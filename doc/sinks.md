@@ -114,9 +114,15 @@ write_timeout_ms   = 0
 max_connections    = 0
 
 [pipelines.plugin_sinks.config.tls]
-enabled   = true
-cert_file = "/etc/logwisp/tls/server.crt"
-key_file  = "/etc/logwisp/tls/server.key"
+enabled        = true
+cert_file      = "/etc/logwisp/tls/server.crt"
+key_file       = "/etc/logwisp/tls/server.key"
+client_auth    = true
+client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+
+[pipelines.plugin_sinks.config.auth]
+type  = "mtls"
+allow = ["viewer-01"]
 ```
 
 | Option | Type | Default | Description |
@@ -130,10 +136,15 @@ key_file  = "/etc/logwisp/tls/server.key"
 | `write_timeout_ms` | int | `0` | Per-event write deadline; `0` = none |
 | `max_connections` | int | `0` | Concurrent stream cap; `0` = unlimited |
 | `tls` | table | — | Listener TLS; see [Security](security.md) |
+| `auth` | table | — | Client authorization; see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
 - Only `GET` is routed to either path; anything else gets `405`.
+- With an `auth` block, one middleware gates **both** endpoints: an
+  unauthorized client gets `403` with no body detail, and the rejection is
+  logged at WARN and counted in `auth_rejected`. The authorized identity is
+  recorded in the client's session as `auth_method` / `auth_identity`.
 - On connect the client receives an `event: connected` frame carrying its
   client id, session id, sink instance id, endpoint paths, and buffer size.
 - Payloads are framed per the SSE spec, one `data:` line per newline in the
@@ -149,11 +160,13 @@ key_file  = "/etc/logwisp/tls/server.key"
 - HTTP/2 is negotiated via ALPN when TLS is enabled; plaintext is HTTP/1.1.
 
 **Status endpoint** returns service and version identity, host, port, TLS flag,
-active client count, buffer size, uptime, endpoint paths, and the
-`total_processed` / `dropped_writes` / `rejected_clients` counters.
+the compiled auth policy, active client count, buffer size, uptime, endpoint
+paths, and the `total_processed` / `dropped_writes` / `rejected_clients` /
+`auth_rejected` counters.
 
-> Both endpoints are unauthenticated, and the stream response carries
-> `Access-Control-Allow-Origin: *`, so any web origin can read it. Bind to a
+> Without an `auth` block both endpoints are unauthenticated, and the stream
+> response carries `Access-Control-Allow-Origin: *`, so any web origin can read
+> it. Set `auth.type = "mtls"` (which requires `tls.client_auth`), bind to a
 > trusted interface, or put an authenticating reverse proxy in front.
 
 ---
@@ -177,9 +190,15 @@ keep_alive_period_ms = 30000
 max_connections      = 0
 
 [pipelines.plugin_sinks.config.tls]
-enabled   = true
-cert_file = "/etc/logwisp/tls/server.crt"
-key_file  = "/etc/logwisp/tls/server.key"
+enabled        = true
+cert_file      = "/etc/logwisp/tls/server.crt"
+key_file       = "/etc/logwisp/tls/server.key"
+client_auth    = true
+client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+
+[pipelines.plugin_sinks.config.auth]
+type  = "mtls"
+allow = ["viewer-01"]
 ```
 
 | Option | Type | Default | Description |
@@ -193,6 +212,7 @@ key_file  = "/etc/logwisp/tls/server.key"
 | `keep_alive_period_ms` | int | `30000` | Keep-alive idle period |
 | `max_connections` | int | `0` | Concurrent connection cap; `0` = unlimited |
 | `tls` | table | — | Listener TLS |
+| `auth` | table | — | Client authorization; see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
@@ -205,6 +225,10 @@ key_file  = "/etc/logwisp/tls/server.key"
   and stays connected.
 - With TLS enabled the handshake runs under a 10 s bound *after* the
   `max_connections` check, so concurrent handshakes are bounded too.
+- With an `auth` block, authorization runs after that handshake and *before*
+  registration, so an unauthorized client never enters the client map and never
+  receives a broadcast. Its connection is closed, the rejection logged at WARN,
+  and `rejected_conns` incremented.
 
 ---
 
@@ -249,6 +273,7 @@ key_file  = "/etc/logwisp/tls/client.key"
 | `keep_alive` | bool | `true` | Enable TCP keep-alive |
 | `keep_alive_period_ms` | int | `30000` | Keep-alive idle period |
 | `tls` | table | — | Dialer TLS; `cert_file`/`key_file` present a client identity |
+| `auth` | table | — | Server identity pinning; see [Security](security.md#dialer-side-pinning) |
 
 **Behaviour**
 
@@ -265,7 +290,11 @@ key_file  = "/etc/logwisp/tls/client.key"
 - Events arriving without a structured entry are wrapped from the formatted
   payload and counted in `synthesized`.
 
-**Statistics**: `target`, `node`, `tls`, `connected`, `reconnects`,
+An `auth` block on a dialer pins the server's identity: the policy runs as part
+of the handshake, so a server it rejects is treated like any other connect
+failure and retried under the normal backoff.
+
+**Statistics**: `target`, `node`, `tls`, `auth`, `connected`, `reconnects`,
 `write_errors`, `synthesized`.
 
 ---
@@ -313,6 +342,7 @@ key_file  = "/etc/logwisp/tls/client.key"
 | `backoff_min_ms` | int | `500` | Retry backoff floor |
 | `backoff_max_ms` | int | `30000` | Retry backoff ceiling |
 | `tls` | table | — | Dialer TLS; `cert_file`/`key_file` present a client identity |
+| `auth` | table | — | Server identity pinning; see [Security](security.md#dialer-side-pinning) |
 
 **Behaviour**
 
@@ -324,8 +354,8 @@ key_file  = "/etc/logwisp/tls/client.key"
 - HTTP/2 is off by design; batched NDJSON POSTs gain nothing from it.
 - On shutdown a single best-effort flush of the pending batch is attempted.
 
-**Statistics**: `target`, `node`, `tls`, `batches_sent`, `request_errors`,
-`dropped_batches`, `synthesized`.
+**Statistics**: `target`, `node`, `tls`, `auth`, `batches_sent`,
+`request_errors`, `dropped_batches`, `synthesized`.
 
 ---
 

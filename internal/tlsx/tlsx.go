@@ -94,12 +94,46 @@ func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 	return cfg, nil
 }
 
+// Identity modes for PeerIdentity, mirroring the auth.identity config values.
+// Validity is enforced at policy construction in internal/authz.
+const (
+	IdentityCN       = "cn"
+	IdentitySANDNS   = "san_dns"
+	IdentitySANURI   = "san_uri"
+	IdentitySANEmail = "san_email"
+)
+
 // PeerCN returns the subject CN of the verified peer leaf, "" if none
 func PeerCN(cs tls.ConnectionState) string {
+	return PeerIdentity(cs, IdentityCN)
+}
+
+// PeerIdentity returns the field named by mode from the verified peer leaf,
+// "" when the certificate does not carry it or mode is unknown. The chain,
+// signature, and validity window are already checked by the handshake, so
+// this is pure field selection.
+func PeerIdentity(cs tls.ConnectionState, mode string) string {
 	if len(cs.PeerCertificates) == 0 {
 		return ""
 	}
-	return cs.PeerCertificates[0].Subject.CommonName
+	leaf := cs.PeerCertificates[0]
+	switch mode {
+	case "", IdentityCN:
+		return leaf.Subject.CommonName
+	case IdentitySANDNS:
+		if len(leaf.DNSNames) > 0 {
+			return leaf.DNSNames[0]
+		}
+	case IdentitySANURI:
+		if len(leaf.URIs) > 0 {
+			return leaf.URIs[0].String()
+		}
+	case IdentitySANEmail:
+		if len(leaf.EmailAddresses) > 0 {
+			return leaf.EmailAddresses[0]
+		}
+	}
+	return ""
 }
 
 // HTTPErrorLog adapts the structured logger for http.Server.ErrorLog so TLS

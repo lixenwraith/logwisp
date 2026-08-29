@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/internal/authz"
 	"logwisp/internal/chain"
 	"logwisp/internal/config"
 	"logwisp/internal/core"
@@ -51,6 +53,9 @@ type TCPChainSink struct {
 	addr      string
 	helloLine []byte
 	tlsConfig *tls.Config
+
+	// Authorization: pins the downstream server's identity
+	auth *authz.Policy
 
 	input  chan core.TransportEvent
 	logger *log.Logger
@@ -129,6 +134,15 @@ func NewTCPChainSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
+	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleDialer)
+	if err != nil {
+		return nil, err
+	}
+	if authPolicy.Enabled() {
+		// Runs after the standard chain and hostname checks, so a server the
+		// policy rejects fails the handshake instead of the first write
+		tlsCfg.VerifyConnection = authPolicy.VerifyConnection
+	}
 
 	t := &TCPChainSink{
 		id:           id,
@@ -138,6 +152,7 @@ func NewTCPChainSinkPlugin(
 		addr:         net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10)),
 		helloLine:    helloLine,
 		tlsConfig:    tlsCfg,
+		auth:         authPolicy,
 		input:        make(chan core.TransportEvent, opts.BufferSize),
 		done:         make(chan struct{}),
 		logger:       logger,
@@ -162,7 +177,8 @@ func NewTCPChainSinkPlugin(
 		"target", t.addr,
 		"node", node,
 		"tls", tlsCfg != nil,
-		"mtls", tlsCfg != nil && len(tlsCfg.Certificates) > 0)
+		"mtls", tlsCfg != nil && len(tlsCfg.Certificates) > 0,
+		"auth", authPolicy.Describe())
 	return t, nil
 }
 
@@ -171,9 +187,9 @@ func (t *TCPChainSink) Capabilities() []core.Capability {
 	caps := []core.Capability{core.CapSessionAware}
 	if t.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
-		if len(t.tlsConfig.Certificates) > 0 {
-			caps = append(caps, core.CapAuth) // presents client identity (mTLS)
-		}
+	}
+	if t.auth.Enabled() {
+		caps = append(caps, core.CapAuth) // pins the server identity
 	}
 	return caps
 }
@@ -224,6 +240,17 @@ func (t *TCPChainSink) GetStats() sink.SinkStats {
 	if t.connected.Load() {
 		active = 1
 	}
+	details := map[string]any{
+		"target":       t.addr,
+		"node":         t.node,
+		"tls":          t.tlsConfig != nil,
+		"connected":    t.connected.Load(),
+		"reconnects":   t.reconnects.Load(),
+		"write_errors": t.writeErrors.Load(),
+		"synthesized":  t.synthesized.Load(),
+	}
+	maps.Copy(details, t.auth.Stats())
+
 	return sink.SinkStats{
 		ID:                t.id,
 		Type:              "tcp_chain",
@@ -231,15 +258,7 @@ func (t *TCPChainSink) GetStats() sink.SinkStats {
 		ActiveConnections: active,
 		StartTime:         t.startTime,
 		LastProcessed:     lastProc,
-		Details: map[string]any{
-			"target":       t.addr,
-			"node":         t.node,
-			"tls":          t.tlsConfig != nil,
-			"connected":    t.connected.Load(),
-			"reconnects":   t.reconnects.Load(),
-			"write_errors": t.writeErrors.Load(),
-			"synthesized":  t.synthesized.Load(),
-		},
+		Details:           details,
 	}
 }
 

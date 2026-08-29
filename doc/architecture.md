@@ -147,15 +147,18 @@ TLS is built in exactly one place, `internal/tlsx`, which exposes
 Each pipeline owns a `session.Manager`. Plugins receive a `session.Proxy`
 scoped to their instance id, so one plugin cannot see or remove another's
 sessions. A session records the remote address, creation and last-activity
-timestamps, and metadata — including `tls` and `tls_peer_cn` for TLS peers.
+timestamps, and metadata — including `tls` and `tls_peer_cn` for TLS peers, and
+`auth_method` / `auth_identity` for authorized ones.
 
 Idle sessions are reaped every 5 minutes against a 30-minute idle limit. The
 HTTP sink's broker treats a vanished session as an eviction signal and closes
 the corresponding SSE client.
 
-Session metadata is currently bookkeeping only: nothing in the pipeline makes
-an authorization decision from it. Closing that gap is the subject of the
-[mTLS authentication plan](mtls-auth-plan.md).
+Authorization decisions do not read session metadata — they are made from the
+handshake by `internal/authz`, at the point of connection or request, and their
+outcome is *recorded* in the session. That ordering matters: a session exists
+only for a peer that was already admitted. See the
+[mTLS authentication design](mtls-auth-plan.md).
 
 ## Configuration Reload
 

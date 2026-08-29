@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/internal/authz"
 	"logwisp/internal/config"
 	"logwisp/internal/core"
 	"logwisp/internal/plugin"
@@ -69,6 +71,9 @@ type HTTPSink struct {
 
 	// TLS
 	tlsConfig *tls.Config
+
+	// Authorization
+	auth *authz.Policy
 
 	// Runtime
 	done      chan struct{}
@@ -130,6 +135,10 @@ func NewHTTPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
+	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleListener)
+	if err != nil {
+		return nil, err
+	}
 
 	h := &HTTPSink{
 		id:           id,
@@ -142,6 +151,7 @@ func NewHTTPSinkPlugin(
 		clients:      make(map[uint64]*sseClient),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
 		tlsConfig:    tlsCfg,
+		auth:         authPolicy,
 	}
 	h.lastProcessed.Store(time.Time{})
 
@@ -153,7 +163,14 @@ func NewHTTPSinkPlugin(
 		"stream_path", opts.StreamPath,
 		"status_path", opts.StatusPath,
 		"tls", tlsCfg != nil,
-		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert)
+		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
+		"auth", authPolicy.Describe())
+	if authPolicy.Unrestricted() {
+		logger.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
+			"component", "http_sink",
+			"instance_id", id,
+			"hint", "set auth.allow or auth.allow_patterns to authorize named clients")
+	}
 	return h, nil
 }
 
@@ -162,9 +179,9 @@ func (h *HTTPSink) Capabilities() []core.Capability {
 	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
 	if h.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
-		if h.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
-			caps = append(caps, core.CapAuth) // mTLS is authentication
-		}
+	}
+	if h.auth.Enabled() {
+		caps = append(caps, core.CapAuth) // authorizes clients, not just the CA
 	}
 	return caps
 }
@@ -189,9 +206,12 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	mux.HandleFunc(http.MethodGet+" "+h.config.StreamPath, h.handleStream)
 	mux.HandleFunc(http.MethodGet+" "+h.config.StatusPath, h.handleStatus)
 
-	// Auth extension point: wrap mux with auth middleware once credentials
-	// land, e.g. handler = authMiddleware(cfg)(handler)
+	// One wrapper covers stream and status, and keeps the handlers themselves
+	// unaware of authorization
 	var handler http.Handler = mux
+	if h.auth.Enabled() {
+		handler = h.authMiddleware(handler)
+	}
 
 	h.server = &http.Server{
 		Handler:           handler,
@@ -343,6 +363,9 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			meta["tls_peer_cn"] = cn
 		}
 	}
+	// Set by authMiddleware; absent when auth is disabled
+	ident, _ := r.Context().Value(identityKey{}).(authz.Identity)
+	ident.Apply(meta)
 	sess := h.proxy.CreateSession(remote, meta)
 
 	c := &sseClient{
@@ -361,6 +384,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 		"remote_addr", remote,
 		"session_id", sess.ID,
 		"client_id", id,
+		"auth_identity", ident.Name,
 		"active_clients", count)
 
 	defer func() {
@@ -432,6 +456,7 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"host":           h.config.Host,
 			"port":           h.config.Port,
 			"tls":            h.tlsConfig != nil,
+			"auth":           h.auth.Describe(),
 			"active_clients": h.activeClients.Load(),
 			"buffer_size":    h.config.BufferSize,
 			"uptime_seconds": int(time.Since(h.startTime).Seconds()),
@@ -444,6 +469,7 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"total_processed":  h.totalProcessed.Load(),
 			"dropped_writes":   h.droppedWrites.Load(),
 			"rejected_clients": h.rejectedClients.Load(),
+			"auth_rejected":    h.auth.Rejected(),
 		},
 	}
 
@@ -454,6 +480,20 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 // GetStats returns sink statistics
 func (h *HTTPSink) GetStats() sink.SinkStats {
 	lastProc, _ := h.lastProcessed.Load().(time.Time)
+	details := map[string]any{
+		"host":             h.config.Host,
+		"port":             h.config.Port,
+		"buffer_size":      h.config.BufferSize,
+		"tls":              h.tlsConfig != nil,
+		"dropped_writes":   h.droppedWrites.Load(),
+		"rejected_clients": h.rejectedClients.Load(),
+		"endpoints": map[string]string{
+			"stream": h.config.StreamPath,
+			"status": h.config.StatusPath,
+		},
+	}
+	maps.Copy(details, h.auth.Stats())
+
 	return sink.SinkStats{
 		ID:                h.id,
 		Type:              "http",
@@ -461,19 +501,33 @@ func (h *HTTPSink) GetStats() sink.SinkStats {
 		ActiveConnections: h.activeClients.Load(),
 		StartTime:         h.startTime,
 		LastProcessed:     lastProc,
-		Details: map[string]any{
-			"host":             h.config.Host,
-			"port":             h.config.Port,
-			"buffer_size":      h.config.BufferSize,
-			"tls":              h.tlsConfig != nil,
-			"dropped_writes":   h.droppedWrites.Load(),
-			"rejected_clients": h.rejectedClients.Load(),
-			"endpoints": map[string]string{
-				"stream": h.config.StreamPath,
-				"status": h.config.StatusPath,
-			},
-		},
+		Details:           details,
 	}
+}
+
+// identityKey carries the authorized identity from the middleware to the
+// handlers; absent when auth is disabled
+type identityKey struct{}
+
+// authMiddleware gates every endpoint on the client certificate policy.
+// The rejection carries no detail: the status endpoint already exposes host,
+// port, and throughput counters, so a 403 should not add the shape of the
+// policy on top of that.
+func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ident, err := h.auth.Authorize(r.TLS)
+		if err != nil {
+			h.logger.Warn("msg", "Request rejected by auth policy",
+				"component", "http_sink",
+				"instance_id", h.id,
+				"remote_addr", r.RemoteAddr,
+				"path", r.URL.Path,
+				"error", err)
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, ident)))
+	})
 }
 
 // writeSSE frames a payload per the W3C SSE spec (multi-line safe)

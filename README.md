@@ -60,18 +60,21 @@ as if the entries were local. Entries keep a `node` label identifying their
 origin across any number of hops. Chain sinks reconnect automatically with
 exponential backoff and jitter.
 
-### Transport security
+### Transport security and authentication
 
 - TLS 1.2/1.3 on every network source and sink, listener and dialer alike
 - Mutual TLS: listeners can require and verify client certificates; dialers can
   present a client identity
+- Authorization by certificate identity: an `auth` block admits named peers
+  (exact or RE2) rather than everything the CA issued, gates the `http` sink's
+  stream and status endpoints, and lets a dialer pin the server it talks to
+- Node binding: a chain source can label entries from the sender's certificate
+  instead of from what the sender claims, so origin attribution is not forgeable
 
-mTLS is currently a CA-wide membership check — any certificate the configured CA
-issued is accepted, and the peer's Common Name is recorded but not used for
-authorization. See [Security](doc/security.md) for the exact boundary and
-[the mTLS authentication plan](doc/mtls-auth-plan.md) for the proposed work.
-Password, token, and SCRAM authentication were removed during the restructure
-and are not currently available.
+See [Security](doc/security.md) for configuration and the exact boundary, and
+the [mTLS authentication design](doc/mtls-auth-plan.md) for the rationale and
+what is deliberately left out. Password, token, and SCRAM authentication were
+removed during the restructure and are not currently available.
 
 ## Documentation
 
@@ -86,8 +89,8 @@ and are not currently available.
 | [Formatters](doc/formatters.md) | Output shaping and sanitization |
 | [Chaining](doc/chaining.md) | Multi-node topologies and the chain wire protocol |
 | [Networking](doc/networking.md) | Listeners, dialers, timeouts, connection limits |
-| [Security](doc/security.md) | TLS and mTLS configuration, threat model, current limits |
-| [mTLS Authentication Plan](doc/mtls-auth-plan.md) | Design for certificate-based authorization |
+| [Security](doc/security.md) | TLS, mTLS, and peer authorization; threat model and current limits |
+| [mTLS Authentication](doc/mtls-auth-plan.md) | Design and rationale for certificate-based authorization |
 | [CLI](doc/cli.md) | Flags, signals, exit codes |
 | [Operations](doc/operations.md) | Running, monitoring, tuning, troubleshooting |
 

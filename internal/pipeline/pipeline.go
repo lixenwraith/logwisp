@@ -153,11 +153,16 @@ func (p *Pipeline) initializeComponents() error {
 // initSourceCapabilities checks and injects optional capabilities
 func (p *Pipeline) initSourceCapabilities(s source.Source, cfg config.PluginSourceConfig) error {
 	// Initiate and activate source capabilities
+	var hasTLS, hasAuth bool
 	for _, c := range s.Capabilities() {
 		switch c {
 		// Network capabilities
-		case core.CapNetLimit, core.CapTLS, core.CapAuth:
+		case core.CapNetLimit:
 			continue // No-op for now, placeholder
+		case core.CapTLS:
+			hasTLS = true
+		case core.CapAuth:
+			hasAuth = true
 
 		// Session capabilities
 		case core.CapSessionAware:
@@ -169,17 +174,36 @@ func (p *Pipeline) initSourceCapabilities(s source.Source, cfg config.PluginSour
 		}
 	}
 
+	if err := checkAuthCapability(hasTLS, hasAuth); err != nil {
+		return fmt.Errorf("source %s: %w", cfg.ID, err)
+	}
+
+	return nil
+}
+
+// checkAuthCapability rejects a plugin that decides on peer identity without a
+// transport that verifies one - the decision would rest on an unauthenticated
+// claim
+func checkAuthCapability(hasTLS, hasAuth bool) error {
+	if hasAuth && !hasTLS {
+		return fmt.Errorf("capability %q requires %q", core.CapAuth, core.CapTLS)
+	}
 	return nil
 }
 
 // initSinkCapabilities checks and injects optional capabilities
 func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig) error {
 	// Initiate and activate sink capabilities
+	var hasTLS, hasAuth bool
 	for _, c := range s.Capabilities() {
 		switch c {
 		// Network capabilities
-		case core.CapNetLimit, core.CapTLS, core.CapAuth:
+		case core.CapNetLimit:
 			continue // No-op for now, placeholder
+		case core.CapTLS:
+			hasTLS = true
+		case core.CapAuth:
+			hasAuth = true
 
 		// Session capabilities
 		case core.CapSessionAware:
@@ -189,6 +213,10 @@ func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig
 		default:
 			return fmt.Errorf("unknown capability type: %s", c)
 		}
+	}
+
+	if err := checkAuthCapability(hasTLS, hasAuth); err != nil {
+		return fmt.Errorf("sink %s: %w", cfg.ID, err)
 	}
 
 	return nil

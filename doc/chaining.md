@@ -45,15 +45,29 @@ Chained entries carry a `node` label identifying where they originated.
 Relays preserve `node`, so a label survives any number of hops and identifies
 the original producer rather than the last relay.
 
+Under mTLS the source can instead bind the label to the sender's certificate,
+which overrides `trust_node` entirely:
+
+| `auth.node_binding` | Connection label | Per-entry `node` field |
+|---------------------|------------------|------------------------|
+| `none` | `trust_node` governs | `trust_node` governs |
+| `assert` | Must equal the certificate identity, or the peer is rejected | `trust_node` governs |
+| `force` (default under `mtls`) | The certificate identity | Overwritten with the identity |
+
+Pick `force` at an ingest boundary you do not trust — it is the only setting
+where a compromised edge cannot mislabel its entries, including through the
+per-entry `node` field. Pick `assert` on a relay-to-relay hop, where the relay
+should prove its own identity but the origin labels it forwards must survive.
+See [Security](security.md#node-binding).
+
 Formatters render node identity as a syslog-style prefix on the source field:
 `edge-01/app.log`. In JSON output the node therefore appears inside the source
 field, not as a separate top-level key.
 
-> `trust_node = true` means an authenticated peer can claim **any** node label,
-> including one belonging to another host. On an untrusted network use
-> `trust_node = false`, or read the
-> [mTLS authentication plan](mtls-auth-plan.md), which proposes binding the
-> label to the peer's certificate identity.
+> `trust_node = true` with no `auth` block means any peer the CA vouches for can
+> claim **any** node label, including one belonging to another host. On an
+> untrusted network set `auth.type = "mtls"` with `node_binding = "force"`;
+> `trust_node = false` is the fallback when certificates are not an option.
 
 ## Wire Protocol
 
@@ -150,6 +164,9 @@ enabled   = true
 ca_file   = "/etc/logwisp/tls/ca.crt"
 cert_file = "/etc/logwisp/tls/edge-01.crt"
 key_file  = "/etc/logwisp/tls/edge-01.key"
+[pipelines.plugin_sinks.config.auth]
+type  = "mtls"
+allow = ["relay.internal"]      # pin the relay, not just its hostname
 ```
 
 **Relay** — ingest, keep errors only, archive and stream:
@@ -172,13 +189,16 @@ type = "tcp_chain"
 [pipelines.plugin_sources.config]
 host = "0.0.0.0"
 port = 15801
-trust_node = true
 [pipelines.plugin_sources.config.tls]
 enabled        = true
 cert_file      = "/etc/logwisp/tls/relay.crt"
 key_file       = "/etc/logwisp/tls/relay.key"
 client_auth    = true
 client_ca_file = "/etc/logwisp/tls/ca.crt"
+[pipelines.plugin_sources.config.auth]
+type         = "mtls"
+allow        = ["edge-01", "edge-02"]
+node_binding = "force"          # entries are labelled from the certificate
 
 [[pipelines.plugin_sinks]]
 id = "archive"
@@ -194,6 +214,10 @@ type = "http"
 host = "127.0.0.1"
 port = 8080
 ```
+
+Entries arriving on this relay are labelled `edge-01` or `edge-02` because that
+is what their certificates say, regardless of the `node` each edge configured.
+`test/mtls-chain-test.sh` builds exactly this shape against a throwaway PKI.
 
 ## Operational Notes
 

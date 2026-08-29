@@ -5,12 +5,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"logwisp/internal/authz"
 	"logwisp/internal/config"
 	"logwisp/internal/core"
 	"logwisp/internal/plugin"
@@ -65,6 +67,9 @@ type TCPSink struct {
 	// TLS
 	tlsConfig          *tls.Config
 	tlsHandshakeErrors atomic.Uint64
+
+	// Authorization
+	auth *authz.Policy
 
 	// Runtime
 	done      chan struct{}
@@ -124,6 +129,10 @@ func NewTCPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
+	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleListener)
+	if err != nil {
+		return nil, err
+	}
 
 	t := &TCPSink{
 		id:           id,
@@ -136,6 +145,7 @@ func NewTCPSinkPlugin(
 		clients:      make(map[uint64]*tcpClient),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
 		tlsConfig:    tlsCfg,
+		auth:         authPolicy,
 	}
 	t.lastProcessed.Store(time.Time{})
 
@@ -145,7 +155,14 @@ func NewTCPSinkPlugin(
 		"host", opts.Host,
 		"port", opts.Port,
 		"tls", tlsCfg != nil,
-		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert)
+		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
+		"auth", authPolicy.Describe())
+	if authPolicy.Unrestricted() {
+		logger.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
+			"component", "tcp_sink",
+			"instance_id", id,
+			"hint", "set auth.allow or auth.allow_patterns to authorize named clients")
+	}
 	return t, nil
 }
 
@@ -154,9 +171,9 @@ func (t *TCPSink) Capabilities() []core.Capability {
 	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
 	if t.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
-		if t.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
-			caps = append(caps, core.CapAuth) // mTLS is authentication
-		}
+	}
+	if t.auth.Enabled() {
+		caps = append(caps, core.CapAuth) // authorizes clients, not just the CA
 	}
 	return caps
 }
@@ -270,8 +287,9 @@ func (t *TCPSink) acceptLoop() {
 			continue
 		}
 
-		// Password-auth extension point: preamble verification runs in
-		// handleConn post-handshake, pre-registration
+		// Certificate authorization runs in handleConn post-handshake,
+		// pre-registration. Password-auth extension point: preamble
+		// verification belongs at the same place.
 
 		t.wg.Add(1)
 		go t.handleConn(conn)
@@ -298,6 +316,7 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		"type":        "tcp_client",
 		"remote_addr": remote,
 	}
+	var tlsState *tls.ConnectionState
 	if tc, ok := conn.(*tls.Conn); ok {
 		hctx, cancel := context.WithTimeout(context.Background(), tlsx.HandshakeTimeout)
 		err := tc.HandshakeContext(hctx)
@@ -311,11 +330,28 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 			conn.Close()
 			return
 		}
+		cs := tc.ConnectionState()
+		tlsState = &cs
 		meta["tls"] = true
-		if cn := tlsx.PeerCN(tc.ConnectionState()); cn != "" {
+		if cn := tlsx.PeerCN(cs); cn != "" {
 			meta["tls_peer_cn"] = cn
 		}
 	}
+
+	// Authorize before registration, so an unauthorized peer never enters the
+	// client map and never receives a broadcast
+	ident, err := t.auth.Authorize(tlsState)
+	if err != nil {
+		t.rejectedConns.Add(1)
+		t.logger.Warn("msg", "Connection rejected by auth policy",
+			"component", "tcp_sink",
+			"instance_id", t.id,
+			"remote_addr", remote,
+			"error", err)
+		conn.Close()
+		return
+	}
+	ident.Apply(meta)
 
 	sess := t.proxy.CreateSession(remote, meta)
 	c := &tcpClient{
@@ -334,6 +370,7 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		"component", "tcp_sink",
 		"remote_addr", remote,
 		"session_id", sess.ID,
+		"auth_identity", ident.Name,
 		"active_connections", count)
 
 	defer func() {
@@ -421,6 +458,18 @@ func (t *TCPSink) broadcastLoop(ctx context.Context) {
 // GetStats returns sink statistics
 func (t *TCPSink) GetStats() sink.SinkStats {
 	lastProc, _ := t.lastProcessed.Load().(time.Time)
+	details := map[string]any{
+		"host":                 t.config.Host,
+		"port":                 t.config.Port,
+		"buffer_size":          t.config.BufferSize,
+		"write_errors":         t.writeErrors.Load(),
+		"dropped_writes":       t.droppedWrites.Load(),
+		"rejected_conns":       t.rejectedConns.Load(),
+		"tls":                  t.tlsConfig != nil,
+		"tls_handshake_errors": t.tlsHandshakeErrors.Load(),
+	}
+	maps.Copy(details, t.auth.Stats())
+
 	return sink.SinkStats{
 		ID:                t.id,
 		Type:              "tcp",
@@ -428,15 +477,6 @@ func (t *TCPSink) GetStats() sink.SinkStats {
 		ActiveConnections: t.activeConns.Load(),
 		StartTime:         t.startTime,
 		LastProcessed:     lastProc,
-		Details: map[string]any{
-			"host":                 t.config.Host,
-			"port":                 t.config.Port,
-			"buffer_size":          t.config.BufferSize,
-			"write_errors":         t.writeErrors.Load(),
-			"dropped_writes":       t.droppedWrites.Load(),
-			"rejected_conns":       t.rejectedConns.Load(),
-			"tls":                  t.tlsConfig != nil,
-			"tls_handshake_errors": t.tlsHandshakeErrors.Load(),
-		},
+		Details:           details,
 	}
 }
