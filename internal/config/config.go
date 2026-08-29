@@ -208,28 +208,30 @@ type ConsoleSourceOptions struct {
 // TCPChainSourceOptions defines settings for a stdlib TCP listener ingesting
 // NDJSON entries from upstream logwisp tcp_chain sinks
 type TCPChainSourceOptions struct {
-	TLS            *TLSOptions `toml:"tls"`
-	Host           string      `toml:"host"`
-	Port           int64       `toml:"port"`
-	BufferSize     int64       `toml:"buffer_size"`
-	MaxConnections int64       `toml:"max_connections"`  // 0 = unlimited
-	ReadTimeoutMS  int64       `toml:"read_timeout_ms"`  // per-connection idle deadline, 0 = none
-	HelloTimeoutMS int64       `toml:"hello_timeout_ms"` // preamble deadline
-	TrustNode      bool        `toml:"trust_node"`       // false: force node label from remote address
+	TLS            *TLSOptions  `toml:"tls"`
+	Host           string       `toml:"host"`
+	Port           int64        `toml:"port"`
+	BufferSize     int64        `toml:"buffer_size"`
+	MaxConnections int64        `toml:"max_connections"`  // 0 = unlimited
+	ReadTimeoutMS  int64        `toml:"read_timeout_ms"`  // per-connection idle deadline, 0 = none
+	HelloTimeoutMS int64        `toml:"hello_timeout_ms"` // preamble deadline
+	TrustNode      bool         `toml:"trust_node"`       // false: force node label from remote address
+	Auth           *AuthOptions `toml:"auth"`
 	// Future: password auth block
 }
 
 // HTTPChainSourceOptions defines settings for a stdlib HTTP listener ingesting
 // NDJSON batches from upstream logwisp http_chain sinks
 type HTTPChainSourceOptions struct {
-	TLS           *TLSOptions `toml:"tls"`
-	Host          string      `toml:"host"`
-	Port          int64       `toml:"port"`
-	IngestPath    string      `toml:"ingest_path"`
-	BufferSize    int64       `toml:"buffer_size"`
-	MaxBodyBytes  int64       `toml:"max_body_bytes"`  // per-request cap
-	ReadTimeoutMS int64       `toml:"read_timeout_ms"` // full request read deadline
-	TrustNode     bool        `toml:"trust_node"`      // false: force node label from remote address
+	TLS           *TLSOptions  `toml:"tls"`
+	Host          string       `toml:"host"`
+	Port          int64        `toml:"port"`
+	IngestPath    string       `toml:"ingest_path"`
+	BufferSize    int64        `toml:"buffer_size"`
+	MaxBodyBytes  int64        `toml:"max_body_bytes"`  // per-request cap
+	ReadTimeoutMS int64        `toml:"read_timeout_ms"` // full request read deadline
+	TrustNode     bool         `toml:"trust_node"`      // false: force node label from remote address
+	Auth          *AuthOptions `toml:"auth"`
 	// Future: password auth block
 }
 
@@ -275,65 +277,100 @@ type FileSinkOptions struct {
 
 // TCPSinkOptions defines settings for a TCP server sink
 type TCPSinkOptions struct {
-	TLS               *TLSOptions `toml:"tls"`
-	Host              string      `toml:"host"`
-	Port              int64       `toml:"port"`
-	BufferSize        int64       `toml:"buffer_size"`        // sink input queue
-	ClientBufferSize  int64       `toml:"client_buffer_size"` // per-client send queue
-	WriteTimeoutMS    int64       `toml:"write_timeout_ms"`   // per-write deadline
-	KeepAlive         bool        `toml:"keep_alive"`
-	KeepAlivePeriodMS int64       `toml:"keep_alive_period_ms"`
-	MaxConnections    int64       `toml:"max_connections"` // 0 = unlimited
+	TLS               *TLSOptions  `toml:"tls"`
+	Host              string       `toml:"host"`
+	Port              int64        `toml:"port"`
+	BufferSize        int64        `toml:"buffer_size"`        // sink input queue
+	ClientBufferSize  int64        `toml:"client_buffer_size"` // per-client send queue
+	WriteTimeoutMS    int64        `toml:"write_timeout_ms"`   // per-write deadline
+	KeepAlive         bool         `toml:"keep_alive"`
+	KeepAlivePeriodMS int64        `toml:"keep_alive_period_ms"`
+	MaxConnections    int64        `toml:"max_connections"` // 0 = unlimited
+	Auth              *AuthOptions `toml:"auth"`
 	// Future: password auth block
 }
 
 // HTTPSinkOptions defines settings for an HTTP SSE server sink
 type HTTPSinkOptions struct {
-	TLS              *TLSOptions `toml:"tls"`
-	Host             string      `toml:"host"`
-	Port             int64       `toml:"port"`
-	StreamPath       string      `toml:"stream_path"`
-	StatusPath       string      `toml:"status_path"`
-	BufferSize       int64       `toml:"buffer_size"`        // sink input queue
-	ClientBufferSize int64       `toml:"client_buffer_size"` // per-client send queue
-	WriteTimeoutMS   int64       `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
-	MaxConnections   int64       `toml:"max_connections"`    // 0 = unlimited
+	TLS              *TLSOptions  `toml:"tls"`
+	Host             string       `toml:"host"`
+	Port             int64        `toml:"port"`
+	StreamPath       string       `toml:"stream_path"`
+	StatusPath       string       `toml:"status_path"`
+	BufferSize       int64        `toml:"buffer_size"`        // sink input queue
+	ClientBufferSize int64        `toml:"client_buffer_size"` // per-client send queue
+	WriteTimeoutMS   int64        `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
+	MaxConnections   int64        `toml:"max_connections"`    // 0 = unlimited
+	Auth             *AuthOptions `toml:"auth"`
 	// Future: password auth block
 }
 
 // TCPChainSinkOptions defines settings for a stdlib TCP client forwarding
 // entries to a downstream logwisp tcp_chain source
 type TCPChainSinkOptions struct {
-	TLS               *TLSOptions `toml:"tls"`
-	Node              string      `toml:"node"` // origin label, default: os.Hostname()
-	Host              string      `toml:"host"`
-	Port              int64       `toml:"port"`
-	BufferSize        int64       `toml:"buffer_size"`
-	DialTimeoutMS     int64       `toml:"dial_timeout_ms"`
-	WriteTimeoutMS    int64       `toml:"write_timeout_ms"`
-	BackoffMinMS      int64       `toml:"backoff_min_ms"`
-	BackoffMaxMS      int64       `toml:"backoff_max_ms"`
-	KeepAlivePeriodMS int64       `toml:"keep_alive_period_ms"`
-	KeepAlive         bool        `toml:"keep_alive"`
+	TLS               *TLSOptions  `toml:"tls"`
+	Node              string       `toml:"node"` // origin label, default: os.Hostname()
+	Host              string       `toml:"host"`
+	Port              int64        `toml:"port"`
+	BufferSize        int64        `toml:"buffer_size"`
+	DialTimeoutMS     int64        `toml:"dial_timeout_ms"`
+	WriteTimeoutMS    int64        `toml:"write_timeout_ms"`
+	BackoffMinMS      int64        `toml:"backoff_min_ms"`
+	BackoffMaxMS      int64        `toml:"backoff_max_ms"`
+	KeepAlivePeriodMS int64        `toml:"keep_alive_period_ms"`
+	KeepAlive         bool         `toml:"keep_alive"`
+	Auth              *AuthOptions `toml:"auth"`
 	// Future: password auth block
 }
 
 // HTTPChainSinkOptions defines settings for a stdlib HTTP client posting
 // NDJSON batches to a downstream logwisp http_chain source
 type HTTPChainSinkOptions struct {
-	TLS              *TLSOptions `toml:"tls"`
-	Node             string      `toml:"node"` // origin label, default: os.Hostname()
-	Host             string      `toml:"host"`
-	Port             int64       `toml:"port"`
-	IngestPath       string      `toml:"ingest_path"`
-	BufferSize       int64       `toml:"buffer_size"`
-	MaxBatchCount    int64       `toml:"max_batch_count"`
-	MaxBatchBytes    int64       `toml:"max_batch_bytes"`
-	FlushIntervalMS  int64       `toml:"flush_interval_ms"`
-	RequestTimeoutMS int64       `toml:"request_timeout_ms"` // covers dial + write + response
-	BackoffMinMS     int64       `toml:"backoff_min_ms"`
-	BackoffMaxMS     int64       `toml:"backoff_max_ms"`
+	TLS              *TLSOptions  `toml:"tls"`
+	Node             string       `toml:"node"` // origin label, default: os.Hostname()
+	Host             string       `toml:"host"`
+	Port             int64        `toml:"port"`
+	IngestPath       string       `toml:"ingest_path"`
+	BufferSize       int64        `toml:"buffer_size"`
+	MaxBatchCount    int64        `toml:"max_batch_count"`
+	MaxBatchBytes    int64        `toml:"max_batch_bytes"`
+	FlushIntervalMS  int64        `toml:"flush_interval_ms"`
+	RequestTimeoutMS int64        `toml:"request_timeout_ms"` // covers dial + write + response
+	BackoffMinMS     int64        `toml:"backoff_min_ms"`
+	BackoffMaxMS     int64        `toml:"backoff_max_ms"`
+	Auth             *AuthOptions `toml:"auth"`
 	// Future: password auth block
+}
+
+// --- Auth Options ---
+
+// AuthOptions defines certificate-based authorization for network plugins.
+// It sits beside `tls` rather than inside it: TLS answers "is this channel
+// private and does the peer chain to a CA", auth answers "may *this* peer do
+// *this*". One shape serves both roles:
+//   - Listeners (tcp/http sinks, tcp_chain/http_chain sources) authorize the
+//     peer's client certificate; type "mtls" requires tls.client_auth.
+//   - Dialers (tcp_chain/http_chain sinks) pin the server's identity beyond
+//     hostname verification.
+type AuthOptions struct {
+	// Method: "none" (default, preserves pre-auth behavior) | "mtls"
+	Type string `toml:"type"`
+
+	// Certificate field carrying the identity:
+	// "cn" (default) | "san_dns" | "san_uri" | "san_email"
+	Identity string `toml:"identity"`
+
+	// Exact identity matches. Empty Allow *and* AllowPatterns means "any
+	// identity the CA vouches for" - today's behavior, but with the identity
+	// recorded and node binding available.
+	Allow []string `toml:"allow"`
+
+	// RE2 patterns matched against the identity; anchor them yourself
+	AllowPatterns []string `toml:"allow_patterns"`
+
+	// Chain sources only: "none" | "assert" | "force" (default "force" when
+	// Type is "mtls"). Overrides trust_node.
+	NodeBinding string `toml:"node_binding"`
 }
 
 // --- TLS Options ---

@@ -6,12 +6,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"logwisp/internal/authz"
 	"logwisp/internal/chain"
 	"logwisp/internal/config"
 	"logwisp/internal/core"
@@ -49,6 +51,9 @@ type TCPChainSource struct {
 	// TLS
 	tlsConfig          *tls.Config
 	tlsHandshakeErrors atomic.Uint64
+
+	// Authorization
+	auth *authz.Policy
 
 	mu     sync.RWMutex
 	ctx    context.Context
@@ -91,6 +96,10 @@ func NewTCPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
+	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleChainListener)
+	if err != nil {
+		return nil, err
+	}
 
 	s := &TCPChainSource{
 		id:          id,
@@ -100,6 +109,7 @@ func NewTCPChainSourcePlugin(
 		conns:       make(map[net.Conn]struct{}),
 		logger:      logger,
 		tlsConfig:   tlsCfg,
+		auth:        authPolicy,
 	}
 	s.lastEntryTime.Store(time.Time{})
 
@@ -109,7 +119,21 @@ func NewTCPChainSourcePlugin(
 		"host", opts.Host,
 		"port", opts.Port,
 		"tls", tlsCfg != nil,
-		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert)
+		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
+		"auth", authPolicy.Describe())
+	if authPolicy.Unrestricted() {
+		logger.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
+			"component", "tcp_chain_source",
+			"instance_id", id,
+			"hint", "set auth.allow or auth.allow_patterns to authorize named peers")
+	}
+	if authPolicy.BindsNode() {
+		logger.Info("msg", "Node labels bound to peer identity; trust_node is ignored",
+			"component", "tcp_chain_source",
+			"instance_id", id,
+			"node_binding", authPolicy.NodeBinding(),
+			"trust_node", opts.TrustNode)
+	}
 	return s, nil
 }
 
@@ -118,9 +142,9 @@ func (s *TCPChainSource) Capabilities() []core.Capability {
 	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
 	if s.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
-		if s.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
-			caps = append(caps, core.CapAuth) // mTLS is authentication
-		}
+	}
+	if s.auth.Enabled() {
+		caps = append(caps, core.CapAuth) // authorizes peers, not just the CA
 	}
 	return caps
 }
@@ -191,6 +215,18 @@ func (s *TCPChainSource) Stop() {
 // GetStats returns the source's statistics
 func (s *TCPChainSource) GetStats() source.SourceStats {
 	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
+	details := map[string]any{
+		"host":                 s.config.Host,
+		"port":                 s.config.Port,
+		"tls":                  s.tlsConfig != nil,
+		"tls_handshake_errors": s.tlsHandshakeErrors.Load(),
+		"active_connections":   s.activeConns.Load(),
+		"rejected_conns":       s.rejectedConns.Load(),
+		"parse_errors":         s.parseErrors.Load(),
+		"trust_node":           s.config.TrustNode,
+	}
+	maps.Copy(details, s.auth.Stats())
+
 	return source.SourceStats{
 		ID:             s.id,
 		Type:           "tcp_chain",
@@ -198,16 +234,7 @@ func (s *TCPChainSource) GetStats() source.SourceStats {
 		DroppedEntries: s.droppedEntries.Load(),
 		StartTime:      s.startTime,
 		LastEntryTime:  lastEntry,
-		Details: map[string]any{
-			"host":                 s.config.Host,
-			"port":                 s.config.Port,
-			"tls":                  s.tlsConfig != nil,
-			"tls_handshake_errors": s.tlsHandshakeErrors.Load(),
-			"active_connections":   s.activeConns.Load(),
-			"rejected_conns":       s.rejectedConns.Load(),
-			"parse_errors":         s.parseErrors.Load(),
-			"trust_node":           s.config.TrustNode,
-		},
+		Details:        details,
 	}
 }
 
@@ -276,6 +303,18 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		tlsState = &cs
 	}
 
+	// Authorize before a preamble is parsed on an unauthorized peer's behalf
+	ident, err := s.auth.Authorize(tlsState)
+	if err != nil {
+		s.rejectedConns.Add(1)
+		s.logger.Warn("msg", "Connection rejected by auth policy",
+			"component", "tcp_chain_source",
+			"instance_id", s.id,
+			"remote_addr", remote,
+			"error", err)
+		return // deferred cleanup closes conn
+	}
+
 	scanner := bufio.NewScanner(conn)
 	// Oversized line (> MaxLogEntryBytes) is a protocol violation; scanner is
 	// unrecoverable after ErrTooLong, connection terminates
@@ -299,14 +338,24 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		return
 	}
 
-	connNode := hello.Node
-	if connNode == "" || !s.config.TrustNode {
-		if host, _, splitErr := net.SplitHostPort(remote); splitErr == nil {
-			connNode = host
-		} else {
-			connNode = remote
-		}
+	fallbackNode := remote
+	if host, _, splitErr := net.SplitHostPort(remote); splitErr == nil {
+		fallbackNode = host
 	}
+	connNode, err := s.auth.ResolveNode(hello.Node, fallbackNode, s.config.TrustNode, ident)
+	if err != nil {
+		s.rejectedConns.Add(1)
+		s.logger.Warn("msg", "Connection rejected by node binding",
+			"component", "tcp_chain_source",
+			"instance_id", s.id,
+			"remote_addr", remote,
+			"declared_node", hello.Node,
+			"error", err)
+		return
+	}
+	// force relabels every entry, so an edge cannot smuggle a foreign origin
+	// through the per-entry node field either
+	trustEntryNode := s.auth.TrustsEntryNode(s.config.TrustNode)
 
 	meta := map[string]any{
 		"type": "tcp_chain",
@@ -318,13 +367,15 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 			meta["tls_peer_cn"] = cn
 		}
 	}
+	ident.Apply(meta)
 	sess := s.proxy.CreateSession(remote, meta)
 	sessID = sess.ID
 
 	s.logger.Info("msg", "Chain connection established",
 		"component", "tcp_chain_source",
 		"remote_addr", remote,
-		"node", connNode)
+		"node", connNode,
+		"auth_identity", ident.Name)
 
 	idle := time.Duration(s.config.ReadTimeoutMS) * time.Millisecond
 	for {
@@ -348,7 +399,7 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		}
 		s.proxy.UpdateActivity(sessID)
 
-		entry, err := chain.DecodeEntry(line, connNode, s.config.TrustNode)
+		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
 		if err != nil {
 			s.parseErrors.Add(1)
 			s.logger.Debug("msg", "Dropped malformed chain entry",

@@ -14,3 +14,4 @@ build.sh
 catalog.txt
 combined.txt
 test/run/
+test/run-mtls/

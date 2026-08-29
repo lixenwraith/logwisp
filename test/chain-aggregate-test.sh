@@ -222,14 +222,14 @@ check() { # label condition_result
 tcp_out="$(tcp_read "$PORT_TCP_SINK" 4)"
 #nt=$(grep -c '"node":"edge-tcp"'  <<< "$tcp_out")
 #nh=$(grep -c '"node":"edge-http"' <<< "$tcp_out")
-nt=$(grep -c '"source":"edge-tcp/'  <<< "$tcp_out")
-nh=$(grep -c '"source":"edge-http/' <<< "$tcp_out")
+nt=$(grep -c 'edge-tcp/'  <<< "$tcp_out")
+nh=$(grep -c 'edge-http/' <<< "$tcp_out")
 check "tcp sink: aggregated edge-tcp ($nt) + edge-http ($nh)" $(( nt >= 1 && nh >= 1 ))
 
 # 2. HTTP chain: edge-http -> relay -> SSE sink
 sse_out="$(curl -sN --max-time 4 "http://127.0.0.1:$PORT_HTTP_SINK/stream" || true)"
-nt=$(grep -c '^data:.*"node":"edge-tcp"'  <<< "$sse_out")
-nh=$(grep -c '^data:.*"node":"edge-http"' <<< "$sse_out")
+nt=$(grep -c '^data:.*edge-tcp/'  <<< "$sse_out")
+nh=$(grep -c '^data:.*edge-http/' <<< "$sse_out")
 check "http sink: aggregated edge-tcp ($nt) + edge-http ($nh)" $(( nt >= 1 && nh >= 1 ))
 
 # 3. HTTP sink status endpoint

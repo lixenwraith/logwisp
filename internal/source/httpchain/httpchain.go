@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/internal/authz"
 	"logwisp/internal/chain"
 	"logwisp/internal/config"
 	"logwisp/internal/core"
@@ -53,6 +55,9 @@ type HTTPChainSource struct {
 
 	// TLS
 	tlsConfig *tls.Config
+
+	// Authorization
+	auth *authz.Policy
 
 	// Session cache: one session per remote host + declared node
 	sessions   map[string]string // key -> sessionID
@@ -104,6 +109,10 @@ func NewHTTPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
+	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleChainListener)
+	if err != nil {
+		return nil, err
+	}
 
 	s := &HTTPChainSource{
 		id:          id,
@@ -113,6 +122,7 @@ func NewHTTPChainSourcePlugin(
 		sessions:    make(map[string]string),
 		logger:      logger,
 		tlsConfig:   tlsCfg,
+		auth:        authPolicy,
 	}
 	s.lastEntryTime.Store(time.Time{})
 
@@ -123,7 +133,21 @@ func NewHTTPChainSourcePlugin(
 		"port", opts.Port,
 		"ingest_path", opts.IngestPath,
 		"tls", tlsCfg != nil,
-		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert)
+		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
+		"auth", authPolicy.Describe())
+	if authPolicy.Unrestricted() {
+		logger.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
+			"component", "http_chain_source",
+			"instance_id", id,
+			"hint", "set auth.allow or auth.allow_patterns to authorize named peers")
+	}
+	if authPolicy.BindsNode() {
+		logger.Info("msg", "Node labels bound to peer identity; trust_node is ignored",
+			"component", "http_chain_source",
+			"instance_id", id,
+			"node_binding", authPolicy.NodeBinding(),
+			"trust_node", opts.TrustNode)
+	}
 	return s, nil
 }
 
@@ -132,9 +156,9 @@ func (s *HTTPChainSource) Capabilities() []core.Capability {
 	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
 	if s.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
-		if s.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
-			caps = append(caps, core.CapAuth) // mTLS is authentication
-		}
+	}
+	if s.auth.Enabled() {
+		caps = append(caps, core.CapAuth) // authorizes peers, not just the CA
 	}
 	return caps
 }
@@ -226,6 +250,19 @@ func (s *HTTPChainSource) GetStats() source.SourceStats {
 	cachedSessions := len(s.sessions)
 	s.sessionsMu.Unlock()
 
+	details := map[string]any{
+		"host":              s.config.Host,
+		"port":              s.config.Port,
+		"ingest_path":       s.config.IngestPath,
+		"tls":               s.tlsConfig != nil,
+		"total_requests":    s.totalRequests.Load(),
+		"rejected_requests": s.rejectedRequests.Load(),
+		"parse_errors":      s.parseErrors.Load(),
+		"cached_sessions":   cachedSessions,
+		"trust_node":        s.config.TrustNode,
+	}
+	maps.Copy(details, s.auth.Stats())
+
 	return source.SourceStats{
 		ID:             s.id,
 		Type:           "http_chain",
@@ -233,17 +270,7 @@ func (s *HTTPChainSource) GetStats() source.SourceStats {
 		DroppedEntries: s.droppedEntries.Load(),
 		StartTime:      s.startTime,
 		LastEntryTime:  lastEntry,
-		Details: map[string]any{
-			"host":              s.config.Host,
-			"port":              s.config.Port,
-			"ingest_path":       s.config.IngestPath,
-			"tls":               s.tlsConfig != nil,
-			"total_requests":    s.totalRequests.Load(),
-			"rejected_requests": s.rejectedRequests.Load(),
-			"parse_errors":      s.parseErrors.Load(),
-			"cached_sessions":   cachedSessions,
-			"trust_node":        s.config.TrustNode,
-		},
+		Details:        details,
 	}
 }
 
@@ -251,6 +278,22 @@ func (s *HTTPChainSource) GetStats() source.SourceStats {
 // Batch acceptance is atomic: entries publish only after a clean full read.
 func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	s.totalRequests.Add(1)
+
+	// Authorize before the body is read: an unauthorized sender should not get
+	// to stream max_body_bytes into the process. 403 is distinct from the 400
+	// used for protocol errors, so a sender can tell "not allowed" from
+	// "malformed batch".
+	ident, err := s.auth.Authorize(r.TLS)
+	if err != nil {
+		s.rejectedRequests.Add(1)
+		s.logger.Warn("msg", "Request rejected by auth policy",
+			"component", "http_chain_source",
+			"instance_id", s.id,
+			"remote_addr", r.RemoteAddr,
+			"error", err)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 
 	if r.Header.Get(chain.HeaderProtocol) != strconv.Itoa(chain.ProtocolVersion) {
 		s.rejectedRequests.Add(1)
@@ -262,10 +305,22 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		remoteHost = host
 	}
-	connNode := r.Header.Get(chain.HeaderNode)
-	if connNode == "" || !s.config.TrustNode {
-		connNode = remoteHost
+	declaredNode := r.Header.Get(chain.HeaderNode)
+	connNode, err := s.auth.ResolveNode(declaredNode, remoteHost, s.config.TrustNode, ident)
+	if err != nil {
+		s.rejectedRequests.Add(1)
+		s.logger.Warn("msg", "Request rejected by node binding",
+			"component", "http_chain_source",
+			"instance_id", s.id,
+			"remote_addr", r.RemoteAddr,
+			"declared_node", declaredNode,
+			"error", err)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
+	// force relabels every entry, so a sender cannot smuggle a foreign origin
+	// through the per-entry node field either
+	trustEntryNode := s.auth.TrustsEntryNode(s.config.TrustNode)
 
 	body := http.MaxBytesReader(w, r.Body, s.config.MaxBodyBytes)
 	scanner := bufio.NewScanner(body)
@@ -277,7 +332,7 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if len(line) == 0 {
 			continue
 		}
-		entry, err := chain.DecodeEntry(line, connNode, s.config.TrustNode)
+		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
 		if err != nil {
 			// Content error within a clean transfer: skip line, keep batch
 			s.parseErrors.Add(1)
@@ -304,15 +359,17 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range entries {
 		s.publish(entry)
 	}
-	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode, r.TLS))
+	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode, r.TLS, ident))
 
 	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(len(entries)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// sessionFor returns the cached session for a remote+node, recreating after idle expiry
-func (s *HTTPChainSource) sessionFor(remoteHost, node string, cs *tls.ConnectionState) string {
-	key := remoteHost + "|" + node
+// sessionFor returns the cached session for a remote+node+identity,
+// recreating after idle expiry. Identity is part of the key so two peers
+// sharing a remote address never share a session.
+func (s *HTTPChainSource) sessionFor(remoteHost, node string, cs *tls.ConnectionState, ident authz.Identity) string {
+	key := remoteHost + "|" + node + "|" + ident.Name
 	s.sessionsMu.Lock()
 	defer s.sessionsMu.Unlock()
 
@@ -331,6 +388,7 @@ func (s *HTTPChainSource) sessionFor(remoteHost, node string, cs *tls.Connection
 			meta["tls_peer_cn"] = cn
 		}
 	}
+	ident.Apply(meta)
 	sess := s.proxy.CreateSession(remoteHost, meta)
 	s.sessions[key] = sess.ID
 	return sess.ID

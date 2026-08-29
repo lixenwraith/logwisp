@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/internal/authz"
 	"logwisp/internal/chain"
 	"logwisp/internal/config"
 	"logwisp/internal/core"
@@ -57,6 +59,9 @@ type HTTPChainSink struct {
 
 	tlsEnabled bool
 	mtls       bool
+
+	// Authorization: pins the downstream server's identity
+	auth *authz.Policy
 
 	client *http.Client
 	input  chan core.TransportEvent
@@ -136,6 +141,15 @@ func NewHTTPChainSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
+	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleDialer)
+	if err != nil {
+		return nil, err
+	}
+	if authPolicy.Enabled() {
+		// Runs after the standard chain and hostname checks, so a server the
+		// policy rejects fails the handshake instead of the first request
+		tlsCfg.VerifyConnection = authPolicy.VerifyConnection
+	}
 
 	addr := net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10))
 
@@ -166,6 +180,7 @@ func NewHTTPChainSinkPlugin(
 		node:       node,
 		tlsEnabled: tlsCfg != nil,
 		mtls:       tlsCfg != nil && len(tlsCfg.Certificates) > 0,
+		auth:       authPolicy,
 		url:        scheme + "://" + addr + opts.IngestPath,
 		client:     &http.Client{Transport: transport},
 		input:      make(chan core.TransportEvent, opts.BufferSize),
@@ -191,7 +206,8 @@ func NewHTTPChainSinkPlugin(
 		"target", t.url,
 		"node", node,
 		"tls", t.tlsEnabled,
-		"mtls", t.mtls)
+		"mtls", t.mtls,
+		"auth", authPolicy.Describe())
 	return t, nil
 }
 
@@ -200,9 +216,9 @@ func (t *HTTPChainSink) Capabilities() []core.Capability {
 	caps := []core.Capability{core.CapSessionAware}
 	if t.tlsEnabled {
 		caps = append(caps, core.CapTLS)
-		if t.mtls {
-			caps = append(caps, core.CapAuth) // presents client identity (mTLS)
-		}
+	}
+	if t.auth.Enabled() {
+		caps = append(caps, core.CapAuth) // pins the server identity
 	}
 	return caps
 }
@@ -249,21 +265,24 @@ func (t *HTTPChainSink) Stop() {
 // GetStats returns sink statistics
 func (t *HTTPChainSink) GetStats() sink.SinkStats {
 	lastProc, _ := t.lastProcessed.Load().(time.Time)
+	details := map[string]any{
+		"target":          t.url,
+		"node":            t.node,
+		"tls":             t.tlsEnabled,
+		"batches_sent":    t.batchesSent.Load(),
+		"request_errors":  t.requestErrors.Load(),
+		"dropped_batches": t.droppedBatches.Load(),
+		"synthesized":     t.synthesized.Load(),
+	}
+	maps.Copy(details, t.auth.Stats())
+
 	return sink.SinkStats{
 		ID:             t.id,
 		Type:           "http_chain",
 		TotalProcessed: t.totalProcessed.Load(),
 		StartTime:      t.startTime,
 		LastProcessed:  lastProc,
-		Details: map[string]any{
-			"target":          t.url,
-			"node":            t.node,
-			"tls":             t.tlsEnabled,
-			"batches_sent":    t.batchesSent.Load(),
-			"request_errors":  t.requestErrors.Load(),
-			"dropped_batches": t.droppedBatches.Load(),
-			"synthesized":     t.synthesized.Load(),
-		},
+		Details:        details,
 	}
 }
 
