@@ -1,0 +1,359 @@
+###############################################################################
+### LogWisp Configuration Reference
+###
+### Default search order for this file:
+###   1. -c <path>  or  --config=<path>
+###   2. $LOGWISP_CONFIG_DIR/$LOGWISP_CONFIG_FILE
+###   3. ~/.config/logwisp/logwisp.toml
+###   4. ./logwisp.toml
+###
+### Precedence: CLI flags > environment > this file > built-in defaults.
+###
+### Uncommented lines below are an active, runnable configuration.
+### Commented lines show every remaining option with its built-in default.
+### See doc/configuration.md for the full reference.
+###############################################################################
+
+###############################################################################
+### Global settings
+###############################################################################
+
+quiet           = false   # Suppress application logging and console diagnostics
+status_reporter = true    # Periodic status report at DEBUG level, every 30s
+auto_reload     = false   # Watch this file and hot-reload pipelines on change
+
+###############################################################################
+### Application logging
+### LogWisp's own operational log. Unrelated to the log data it transports.
+###############################################################################
+
+[logging]
+output = "stdout"      # file | stdout | stderr | split | all | none
+level  = "info"        # debug | info | warn | error
+# format       = "txt"   # raw | txt | json
+# sanitization = ""      # raw | json | txt | shell  (empty = logger default)
+
+# File output, used when output is "file" or "all".
+# [logging.file]
+# directory         = "./log"
+# name              = "logwisp"
+# max_size_mb       = 100      # Rotate when a file reaches this size
+# max_total_size_mb = 1000     # Cap for all rotated files combined
+# retention_hours   = 168.0    # Delete rotated files older than this (7 days)
+
+# NOTE: target is validated but not applied. The console destination is
+# derived from `output` above ("stdout", "stderr", "split"/"all" -> split).
+# [logging.console]
+# target = "stdout"
+
+###############################################################################
+### Pipelines
+###
+### Each [[pipelines]] is an independent flow:
+###   plugin_sources -> flow (rate limit -> filters -> format) -> plugin_sinks
+###
+### Every pipeline needs a unique name, at least one source, and at least
+### one sink. Sources fan in; sinks fan out.
+###############################################################################
+
+[[pipelines]]
+name = "default"
+
+###=============================================================================
+### Flow: rate limiting
+### Omit the block to disable. Disabled unless rate > 0.
+### policy = "pass" short-circuits both the rate and the size check.
+###=============================================================================
+
+# [pipelines.flow.rate_limit]
+# rate                 = 0.0    # Entries per second; <= 0 disables the limiter
+# burst                = 0.0    # Bucket capacity; <= 0 defaults to `rate`
+# policy               = "pass" # pass (allow all) | drop (discard over-limit)
+# max_entry_size_bytes = 0      # Per-entry byte cap; 0 = unlimited.
+#                               # Only enforced while the limiter is active.
+
+###=============================================================================
+### Flow: filters
+### Applied in order; an entry must pass every filter. Patterns are Go RE2
+### regexes matched against "<source> <level> <message>".
+###=============================================================================
+
+# Keep only errors and warnings:
+# [[pipelines.flow.filters]]
+# type     = "include"            # include (whitelist) | exclude (blacklist)
+# logic    = "or"                 # or (any pattern) | and (every pattern)
+# patterns = ["ERROR", "WARN"]
+
+# Then drop health-check noise:
+# [[pipelines.flow.filters]]
+# type     = "exclude"
+# patterns = ["/healthz", "heartbeat"]
+
+###=============================================================================
+### Flow: format
+### Omit the block for "raw" passthrough.
+###=============================================================================
+
+[pipelines.flow.format]
+type             = "json"   # raw | txt | json  ("text" is an alias of "txt")
+sanitizer_policy = "json"   # raw | json | txt | shell
+# flags            = 0      # log/formatter bitmask; 0 selects a per-type
+#                           # default (raw -> 1, otherwise timestamp+level = 6).
+#                           # 1 raw  2 timestamp  4 level  8 structured-json
+#                           # 16 no-timestamp  32 no-level
+# timestamp_format = ""     # Go reference layout, e.g. "2006-01-02T15:04:05Z07:00"
+
+###=============================================================================
+### Flow: heartbeat
+### Periodic synthetic entry injected into the pipeline. Useful to keep idle
+### SSE/TCP client connections and chain links warm.
+###=============================================================================
+
+# [pipelines.flow.heartbeat]
+# enabled           = false
+# interval_ms       = 1000    # Minimum 100
+# include_timestamp = false   # false emits level only, no timestamp
+# include_stats     = false   # Attach beat_count / interval_ms as fields
+# format            = "txt"   # txt | json | raw
+
+###############################################################################
+### Sources
+###############################################################################
+
+###-----------------------------------------------------------------------------
+### random - synthetic entry generator (development and smoke tests)
+[[pipelines.plugin_sources]]
+id   = "generator"
+type = "random"
+[pipelines.plugin_sources.config]
+interval_ms = 500     # Emission period
+# jitter_ms = 0       # +/- jitter, clamped to interval_ms
+# format    = "txt"   # raw | txt | json
+# length    = 20      # Message length in characters
+# special   = false   # Inject control and non-ASCII characters (sanitizer test)
+
+###-----------------------------------------------------------------------------
+### file - tail every file in a directory matching a glob
+# [[pipelines.plugin_sources]]
+# id   = "app_logs"
+# type = "file"
+# [pipelines.plugin_sources.config]
+# directory         = "/var/log/myapp"   # Required, non-recursive
+# pattern           = "*"                # Glob: * and ? only
+# check_interval_ms = 100                # Directory rescan period, minimum 10.
+#                                        # Tailing of an open file polls at a
+#                                        # fixed 100 ms regardless of this value.
+
+###-----------------------------------------------------------------------------
+### console - read newline-delimited entries from stdin
+### At most one instance per pipeline.
+# [[pipelines.plugin_sources]]
+# id   = "stdin"
+# type = "console"
+# [pipelines.plugin_sources.config]
+# buffer_size = 1000
+
+###-----------------------------------------------------------------------------
+### null - produces nothing; placeholder for sink-only pipelines
+# [[pipelines.plugin_sources]]
+# id   = "void"
+# type = "null"
+
+###-----------------------------------------------------------------------------
+### tcp_chain - accept a persistent NDJSON stream from upstream logwisp nodes
+# [[pipelines.plugin_sources]]
+# id   = "ingest_tcp"
+# type = "tcp_chain"
+# [pipelines.plugin_sources.config]
+# host             = "0.0.0.0"   # IPv4 only
+# port             = 15801       # Required, 1-65535
+# buffer_size      = 1000
+# max_connections  = 0           # 0 = unlimited
+# read_timeout_ms  = 0           # Per-connection idle deadline; 0 = none
+# hello_timeout_ms = 10000       # Deadline for the protocol preamble
+# trust_node       = true        # false overwrites the sender's declared node
+#                                # label with its remote address
+#
+# [pipelines.plugin_sources.config.tls]
+# enabled        = true
+# cert_file      = "/etc/logwisp/tls/server.crt"
+# key_file       = "/etc/logwisp/tls/server.key"
+# client_auth    = true                          # Require and verify client certs
+# client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+# min_version    = "1.3"                         # "1.2" | "1.3"
+
+###-----------------------------------------------------------------------------
+### http_chain - accept NDJSON batches POSTed by upstream logwisp nodes
+# [[pipelines.plugin_sources]]
+# id   = "ingest_http"
+# type = "http_chain"
+# [pipelines.plugin_sources.config]
+# host            = "0.0.0.0"
+# port            = 15802        # Required
+# ingest_path     = "/ingest"    # Must start with "/"
+# buffer_size     = 1000
+# max_body_bytes  = 8388608      # Per-request cap (8 MiB)
+# read_timeout_ms = 30000        # Full request read deadline
+# trust_node      = true
+#
+# [pipelines.plugin_sources.config.tls]
+# enabled        = true
+# cert_file      = "/etc/logwisp/tls/server.crt"
+# key_file       = "/etc/logwisp/tls/server.key"
+# client_auth    = true
+# client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+# min_version    = "1.3"
+
+###############################################################################
+### Sinks
+###############################################################################
+
+###-----------------------------------------------------------------------------
+### console - write formatted payloads to stdout or stderr
+[[pipelines.plugin_sinks]]
+id   = "stdout"
+type = "console"
+[pipelines.plugin_sinks.config]
+target = "stdout"       # stdout | stderr  ("split" is NOT supported here)
+# buffer_size = 1000
+
+###-----------------------------------------------------------------------------
+### file - rotating file writer
+# [[pipelines.plugin_sinks]]
+# id   = "archive"
+# type = "file"
+# [pipelines.plugin_sinks.config]
+# directory         = "/var/log/logwisp"   # Required
+# name              = "output"             # Required, base filename
+# max_size_mb       = 100
+# max_total_size_mb = 1000
+# min_disk_free_mb  = 0        # 0 = no free-space floor
+# retention_hours   = 168.0
+# buffer_size       = 1000
+# flush_interval_ms = 100
+
+###-----------------------------------------------------------------------------
+### null - discard everything; counts bytes and entries only
+# [[pipelines.plugin_sinks]]
+# id   = "discard"
+# type = "null"
+
+###-----------------------------------------------------------------------------
+### http - Server-Sent Events stream plus a JSON status endpoint
+# [[pipelines.plugin_sinks]]
+# id   = "sse"
+# type = "http"
+# [pipelines.plugin_sinks.config]
+# host               = "0.0.0.0"   # IPv4 only
+# port               = 8080        # Required
+# stream_path        = "/stream"   # SSE endpoint, must start with "/"
+# status_path        = "/status"   # JSON stats endpoint, must differ from stream_path
+# buffer_size        = 1000        # Sink input queue
+# client_buffer_size = 256         # Per-client send queue
+# write_timeout_ms   = 0           # Per-event write deadline; 0 = none
+# max_connections    = 0           # 0 = unlimited
+#
+# NOTE: both endpoints are unauthenticated. status_path exposes host, port,
+# uptime and counters. Bind to a trusted interface or front it with a proxy.
+#
+# [pipelines.plugin_sinks.config.tls]
+# enabled        = true
+# cert_file      = "/etc/logwisp/tls/server.crt"
+# key_file       = "/etc/logwisp/tls/server.key"
+# client_auth    = false
+# client_ca_file = ""
+# min_version    = "1.3"
+
+###-----------------------------------------------------------------------------
+### tcp - broadcast formatted payloads to connected TCP clients
+# [[pipelines.plugin_sinks]]
+# id   = "tap"
+# type = "tcp"
+# [pipelines.plugin_sinks.config]
+# host                 = "0.0.0.0"
+# port                 = 9090       # Required
+# buffer_size          = 1000
+# client_buffer_size   = 256
+# write_timeout_ms     = 5000       # A write that misses this deadline drops the client
+# keep_alive           = true
+# keep_alive_period_ms = 30000
+# max_connections      = 0
+#
+# [pipelines.plugin_sinks.config.tls]
+# enabled     = true
+# cert_file   = "/etc/logwisp/tls/server.crt"
+# key_file    = "/etc/logwisp/tls/server.key"
+# min_version = "1.3"
+
+###-----------------------------------------------------------------------------
+### tcp_chain - forward entries to a downstream logwisp tcp_chain source
+# [[pipelines.plugin_sinks]]
+# id   = "to_relay"
+# type = "tcp_chain"
+# [pipelines.plugin_sinks.config]
+# host                 = "relay.internal"   # Required
+# port                 = 15801              # Required
+# node                 = ""                 # Origin label; empty = os.Hostname()
+# buffer_size          = 1000
+# dial_timeout_ms      = 5000
+# write_timeout_ms     = 5000
+# backoff_min_ms       = 500                # Reconnect backoff floor
+# backoff_max_ms       = 30000              # Reconnect backoff ceiling
+# keep_alive           = true
+# keep_alive_period_ms = 30000
+#
+# [pipelines.plugin_sinks.config.tls]
+# enabled              = true
+# ca_file              = "/etc/logwisp/tls/ca.crt"   # empty = system trust store
+# server_name          = ""                          # empty = `host` above
+# insecure_skip_verify = false                       # Never enable in production
+# cert_file            = "/etc/logwisp/tls/client.crt"  # Client identity (mTLS)
+# key_file             = "/etc/logwisp/tls/client.key"
+# min_version          = "1.3"
+
+###-----------------------------------------------------------------------------
+### http_chain - batch entries as NDJSON to a downstream http_chain source
+# [[pipelines.plugin_sinks]]
+# id   = "to_collector"
+# type = "http_chain"
+# [pipelines.plugin_sinks.config]
+# host               = "collector.internal"   # Required
+# port               = 15802                  # Required
+# ingest_path        = "/ingest"
+# node               = ""                     # empty = os.Hostname()
+# buffer_size        = 1000
+# max_batch_count    = 100                    # Flush after this many entries
+# max_batch_bytes    = 1048576                # ...or this many bytes (1 MiB)
+# flush_interval_ms  = 1000                   # ...or after this long
+# request_timeout_ms = 10000                  # Covers dial + write + response
+# backoff_min_ms     = 500
+# backoff_max_ms     = 30000
+#
+# [pipelines.plugin_sinks.config.tls]
+# enabled              = true
+# ca_file              = "/etc/logwisp/tls/ca.crt"
+# server_name          = ""
+# insecure_skip_verify = false
+# cert_file            = "/etc/logwisp/tls/client.crt"
+# key_file             = "/etc/logwisp/tls/client.key"
+# min_version          = "1.3"
+
+###############################################################################
+### Additional pipelines
+###
+### Repeat [[pipelines]] for independent flows. Names must be unique.
+###
+# [[pipelines]]
+# name = "audit"
+# [[pipelines.plugin_sources]]
+# id   = "audit_files"
+# type = "file"
+# [pipelines.plugin_sources.config]
+# directory = "/var/log/audit"
+# [[pipelines.plugin_sinks]]
+# id   = "audit_archive"
+# type = "file"
+# [pipelines.plugin_sinks.config]
+# directory = "/var/log/logwisp"
+# name      = "audit"
+###############################################################################
