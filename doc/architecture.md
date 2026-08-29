@@ -1,171 +1,195 @@
 # Architecture Overview
 
-LogWisp implements a pipeline-based architecture for flexible log processing and distribution.
+LogWisp moves log entries through independent pipelines. Everything else —
+plugins, sessions, TLS, statistics — hangs off that spine.
 
-## Core Concepts
-
-### Pipeline Model
-
-Each pipeline operates independently with a source → filter → format → sink flow. Multiple pipelines can run concurrently within a single LogWisp instance, each processing different log streams with unique configurations.
-
-### Component Hierarchy
+## Component Hierarchy
 
 ```
-Service (Main Process)
-├── Pipeline 1
-│   ├── Plugin Sources (1 or more)
-│   ├── Flow
-│   │   ├── Heartbeat Generator (optional)
-│   │   ├── Rate Limiter (optional)
-│   │   ├── Filter Chain (optional)
-│   │   └── Formatter (optional)
-│   └── Plugin Sinks (1 or more)
-├── Pipeline 2
-│   └── [Similar structure]
-└── Status Reporter (optional)
+main
+└── Service
+    ├── Pipeline "app"
+    │   ├── Registry           instance tracking, single-instance enforcement
+    │   ├── Session Manager    per-pipeline connection/session bookkeeping
+    │   ├── Sources[]          plugin instances, keyed by id
+    │   ├── Flow
+    │   │   ├── Rate Limiter   optional, token bucket
+    │   │   ├── Filter Chain   optional, ordered
+    │   │   ├── Formatter      raw | txt | json, with sanitizer
+    │   │   └── Heartbeat      optional generator
+    │   └── Sinks[]            plugin instances, keyed by id
+    ├── Pipeline "audit"
+    │   └── ...
+    └── Status Reporter        optional, 30s interval
 ```
+
+Package map:
+
+| Package | Responsibility |
+|---------|----------------|
+| `cmd/logwisp` | Entry point, help, logger bootstrap, signal loop, status reporter |
+| `internal/config` | Typed config schema, loading, top-level validation |
+| `internal/service` | Owns the pipeline set; start, stop, shutdown, global stats |
+| `internal/pipeline` | Pipeline runtime and per-pipeline plugin registry |
+| `internal/flow` | Rate limiter, filter chain invocation, formatting, heartbeat |
+| `internal/filter` | Regex filter and filter chain |
+| `internal/format` | Adapter over `lixenwraith/log` formatter + sanitizer |
+| `internal/source/*` | Source plugins |
+| `internal/sink/*` | Sink plugins |
+| `internal/plugin` | Global factory registry populated by plugin `init()` |
+| `internal/chain` | Chain wire protocol: hello preamble, entry codec, backoff |
+| `internal/tlsx` | The single seam between `TLSOptions` and `crypto/tls` |
+| `internal/session` | Session manager and per-instance proxy |
+| `internal/core` | Shared types (`LogEntry`, `TransportEvent`), capabilities, constants |
+| `internal/tokenbucket` | Rate limiter primitive |
+| `internal/sanitize` | Standalone hex-escaping helpers |
+
+## Plugin Registration
+
+Every plugin registers itself in an `init()` function, and
+`cmd/logwisp/bootstrap.go` blank-imports each package to trigger those
+`init()`s. Adding a plugin therefore means writing the package, calling
+`plugin.RegisterSource` / `plugin.RegisterSink`, and adding one blank import.
+
+Registration may attach metadata. The `console` source declares
+`MaxInstances: 1`, because a process has only one stdin; the per-pipeline
+registry rejects a second instance of any such type.
 
 ## Data Flow
 
-### Processing Stages
+### Entry lifecycle
 
-1. **Source Stage**: Plugin sources monitor inputs and generate log entries
-2. **Flow - Rate Limiting**: Optional pipeline-level rate control
-3. **Flow - Filtering**: Pattern-based inclusion/exclusion
-4. **Flow - Formatting**: Transform entries to desired output format with sanitization
-5. **Distribution**: Fan-out to multiple plugin sinks
+1. **Source** produces a `core.LogEntry` and publishes it to every subscriber
+   channel it has handed out. Publication is non-blocking: a full subscriber
+   channel increments the source's `dropped_entries` counter.
+2. **Flow** applies, in order: rate limit → filter chain → formatter. A drop at
+   any stage ends the entry's life and increments `flow.total_dropped`.
+3. The formatter output becomes a `core.TransportEvent`, which carries both the
+   formatted `Payload` and the original structured `Entry`.
+4. **Dispatch** sends the event to every sink's input channel with a
+   non-blocking send.
 
-### Entry Lifecycle
+`LogEntry` fields:
 
-Log entries flow through the pipeline as `core.LogEntry` structures containing:
-- **Time**: Entry timestamp
-- **Level**: Log level (DEBUG, INFO, WARN, ERROR)
-- **Source**: Origin identifier
-- **Message**: Log content
-- **Fields**: Additional metadata (JSON)
-- **RawSize**: Original entry size
+| Field | Purpose |
+|-------|---------|
+| `Time` | Entry timestamp |
+| `Node` | Origin node label for chained topologies; stamped at the first hop, preserved by relays |
+| `Source` | Origin identifier within the node (filename, plugin id, …) |
+| `Level` | `DEBUG`/`INFO`/`WARN`/`ERROR`/`TRACE`, when detected |
+| `Message` | Log content |
+| `Fields` | Optional structured metadata as raw JSON |
+| `RawSize` | Original byte size, used by the entry-size cap |
 
-### Buffering Strategy
+Carrying `Entry` alongside `Payload` is what makes chain sinks
+format-independent: a `tcp_chain` or `http_chain` sink re-serializes the
+structured entry rather than shipping whatever text the local formatter chose.
 
-Each component maintains internal buffers to handle burst traffic:
-- Sources: Configurable buffer size (default 1000 entries)
-- Sinks: Independent buffers per sink
-- Network components: Additional TCP/HTTP buffers
+### Back-pressure and drops
 
-*"Sink dispatch uses non-blocking sends. When a sink's input buffer is full, the event is dropped for that sink only and counted in pipeline statistics (`total_dropped_by_sink`). The policy is uniform and not configurable; a slow sink does not stall the pipeline or other sinks."*
+There is exactly one drop policy and it is not configurable: **never block**.
 
-## Component Types
+| Stage | Full-buffer behaviour | Counter |
+|-------|----------------------|---------|
+| Source → subscriber | Drop the entry | source `dropped_entries` |
+| Flow | Drop on rate limit, filter, or format error | `flow.total_dropped` |
+| Pipeline → sink | Drop for that sink only | pipeline `total_dropped_by_sink` |
+| TCP/HTTP sink → client queue | Drop for that client only | sink `dropped_writes` |
 
-### Sources (Input)
-
-- **File Source**: File system directory monitoring with rotation detection
-- **Console Source**: Standard input processing (stdin)
-- **Random Source**: Generates random log entries for testing
-- **Null Source**: Discards logs, used for testing
-
-### Sinks (Output)
-
-- **Console Sink**: stdout/stderr output
-- **File Sink**: Rotating file writer
-- **HTTP Sink**: Server-Sent Events (SSE) streaming
-- **TCP Sink**: TCP server for client connections
-- **Null Sink**: Discards all received events
-
-### Processing Components
-
-- **Rate Limiter**: Token bucket algorithm for flow control
-- **Filter Chain**: Sequential pattern matching
-- **Formatters**: Raw, JSON, or text transformation with sanitizer policies
+The `tcp_chain` sink is the one deliberate exception. It holds a line across
+reconnects until it is written or the process shuts down, so a downstream
+outage propagates backwards as a full input buffer and surfaces as
+`total_dropped_by_sink` on the pipeline rather than as silent data loss inside
+the sink. The `http_chain` sink retries a batch with backoff, and drops it only
+on a non-retryable response or on shutdown (`dropped_batches`).
 
 ## Concurrency Model
 
-### Goroutine Architecture
+- One goroutine per source drains that source's subscription and feeds the flow.
+- The flow's formatter holds a mutex; the underlying formatter reuses an
+  internal buffer and is not goroutine-safe.
+- Each network sink runs one broadcast/broker goroutine plus, per connection, a
+  writer goroutine (and for TCP, a reader goroutine that exists only to detect
+  disconnects and refresh session activity).
+- Chain sinks run a single run-loop goroutine that exclusively owns the
+  connection or the pending batch, so no locking is needed around either.
+- Statistics are atomics; configuration and registries use RW mutexes;
+  shutdown is context cancellation plus wait groups.
 
-- Each source runs in dedicated goroutines for monitoring
-- Sinks operate independently with their own processing loops
-- Network listeners use optimized event loops (gnet for TCP)
-- Pipeline processing uses channel-based communication
+### Shutdown ordering
 
-### Synchronization
+`Pipeline.Stop` is deliberately ordered so in-flight data drains:
 
-- Atomic counters for statistics
-- Read-write mutexes for configuration access
-- Context-based cancellation for graceful shutdown
-- Wait groups for coordinated startup/shutdown
+1. Stop all sources concurrently; each closes its subscriber channels.
+2. Wait for the run loop, which ends when every subscription channel closes.
+3. Stop all sinks concurrently.
 
 ## Network Architecture
 
-### Connection Patterns
+All listeners bind `tcp4` and all dialers dial `tcp4`. IPv6 clients cannot
+connect; this is deliberate, not an oversight.
 
-**Chaining Design**:
-- Future plan
+| Plugin | Role | Protocol |
+|--------|------|----------|
+| `tcp` sink | Listener | Raw broadcast of formatted payloads |
+| `http` sink | Listener | HTTP/1.1 SSE; HTTP/2 negotiated via ALPN when TLS is on |
+| `tcp_chain` source | Listener | Chain protocol, persistent NDJSON stream |
+| `http_chain` source | Listener | Chain protocol, NDJSON batches over POST |
+| `tcp_chain` sink | Dialer | Chain protocol, persistent stream, auto-reconnect |
+| `http_chain` sink | Dialer | Chain protocol, batched POST with retry |
 
-**Monitoring Design**:
-- TCP Sink: Debugging interface
-- HTTP Sink: Browser-based live monitoring
+TLS is built in exactly one place, `internal/tlsx`, which exposes
+`Server(opts)` for listeners and `Client(opts, host)` for dialers. See
+[Security](security.md).
 
-### Protocol Support
+## Sessions
 
-- HTTP/1.1 and HTTP/2 for HTTP connections
-- Raw TCP connections
+Each pipeline owns a `session.Manager`. Plugins receive a `session.Proxy`
+scoped to their instance id, so one plugin cannot see or remove another's
+sessions. A session records the remote address, creation and last-activity
+timestamps, and metadata — including `tls` and `tls_peer_cn` for TLS peers.
+
+Idle sessions are reaped every 5 minutes against a 30-minute idle limit. The
+HTTP sink's broker treats a vanished session as an eviction signal and closes
+the corresponding SSE client.
+
+Session metadata is currently bookkeeping only: nothing in the pipeline makes
+an authorization decision from it. Closing that gap is the subject of the
+[mTLS authentication plan](mtls-auth-plan.md).
+
+## Configuration Reload
+
+Reload (signal or file watch) rebuilds the entire service:
+
+1. Re-read the config through the config manager.
+2. Build a **new** service from it. If construction fails, the old service keeps
+   running untouched.
+3. Shut the old service down, start the new one, and restart the status
+   reporter if it is enabled.
+
+Because this is a full rebuild, listening sockets close and reopen and all
+clients are disconnected. Application logging is configured once at startup and
+is **not** re-applied on reload.
 
 ## Resource Management
 
-### Memory Management
+- Every buffer is bounded; the drop-not-block policy keeps memory flat under
+  load.
+- Network sinks and chain sources accept a `max_connections` cap. Admission is
+  a load-then-check, so a burst can over-admit by roughly one connection.
+- Chain listeners bound a single line at `core.MaxLogEntryBytes` (1 MiB); an
+  oversized line is a protocol violation and terminates the connection.
+- The `http_chain` source caps each request body at `max_body_bytes`.
+- File sinks rotate on size, cap total rotated size, and honour a retention
+  window.
 
-- Bounded buffers prevent unbounded growth
-- Automatic garbage collection via Go runtime
-- Connection limits prevent resource exhaustion
+## Performance Notes
 
-### File Management
-
-- Automatic rotation based on size thresholds
-- Retention policies for old log files
-- Minimum disk space checks before writing
-
-### Connection Management
-
-- HTTP sink silenty drops IPv6 connections (deliberate IPv4-only enforcement)
-
-*Note:* Placeholder; below features are removed in restructuring and will be added in the future release.
-
-- Per-IP connection limits
-- Global connection caps
-- Automatic reconnection with exponential backoff
-- Keep-alive for persistent connections
-
-## Reliability Features
-
-### Fault Tolerance
-
-- Panic recovery in pipeline processing
-- Independent pipeline operation
-- Sink failure isolation
-
-### Data Integrity
-
-- Entry validation at ingestion
-- Size limits for entries and batches
-- Duplicate detection in file monitoring
-- Position tracking for file reads
-
-## Performance Characteristics
-
-### Throughput
-
-- Pipeline rate limiting: Configurable (default 1000 entries/second)
-- Network throughput: Limited by network and sink capacity
-- File monitoring: Sub-second detection (default 100ms interval)
-
-### Latency
-
-- Entry processing: Sub-millisecond in-memory
-- Network forwarding: Depends on batch configuration
-- File detection: Configurable check interval
-
-### Scalability
-
-- Horizontal: Multiple LogWisp instances with different configurations
-- Vertical: Multiple pipelines per instance
-- Fan-out: Multiple sinks per pipeline
-- Fan-in: Multiple sources per pipeline
+- In-memory entry processing is sub-millisecond; the formatter mutex is the
+  only shared serialization point in the hot path.
+- File tailing detects new content within roughly 100 ms (fixed poll), while
+  `check_interval_ms` governs how quickly a *newly created* file is noticed.
+- `http_chain` trades latency for efficiency: entries wait up to
+  `flush_interval_ms` (default 1 s) before a batch is sent.
+- Scale out with more pipelines per process, more sinks per pipeline, or more
+  nodes chained together.

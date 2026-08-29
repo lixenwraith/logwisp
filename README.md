@@ -6,7 +6,7 @@
     <td>
       <h1>LogWisp</h1>
       <p>
-        <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat&logo=go" alt="Go"></a>
+        <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat&logo=go" alt="Go"></a>
         <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License"></a>
         <a href="doc/"><img src="https://img.shields.io/badge/Docs-Available-green.svg" alt="Documentation"></a>
       </p>
@@ -16,78 +16,127 @@
 
 # LogWisp
 
-A high-performance, pipeline-based log transport and processing system built in Go. LogWisp provides flexible log collection, filtering, formatting, and distribution with enterprise-grade security and reliability features.
+A pipeline-based log transport and processing system written in Go. LogWisp
+collects log entries from files, stdin, or other LogWisp nodes; rate-limits,
+filters, and formats them; and distributes them to files, consoles, live network
+streams, or downstream LogWisp nodes.
 
 ## Features
 
-### Core Capabilities
-- **Pipeline Architecture**: Independent processing pipelines with source(s) → filter → format → sink(s) flow
-- **Multiple Input Sources**: Directory monitoring, stdin, HTTP, TCP
-- **Flexible Output Sinks**: Console, file, HTTP SSE, TCP streaming, HTTP/TCP forwarding
-- **Real-time Processing**: Sub-millisecond latency with configurable buffering
-- **Hot Configuration Reload**: Update pipelines without service restart
+### Pipeline
 
-### Data Processing
-- **Pattern-based Filtering**: Chainable include/exclude filters with regex support
-- **Multiple Formatters**: Raw, JSON, and template-based text formatting
-- **Rate Limiting**: Pipeline rate control
+- **Independent pipelines**, each `sources → flow → sinks`, running concurrently
+  in one process
+- **Fan-in and fan-out**: many sources and many sinks per pipeline
+- **Never blocks**: a stalled sink drops its own events and is counted, rather
+  than stalling the pipeline or its sibling sinks
+- **Hot reload** via `SIGHUP`/`SIGUSR1` or a config file watch, with the new
+  configuration validated before the old service is torn down
 
-### Security & Reliability
-- **Authentication**: mTLS support for HTTPS
-- **TLS Encryption**: TLS 1.2/1.3 support for HTTP connections
-- **Access Control**: IP whitelisting/blacklisting, connection limits
-- **Automatic Reconnection**: Resilient client connections with exponential backoff
-- **File Rotation**: Size-based rotation with retention policies
+### Inputs
 
-### Operational Features
-- **Status Monitoring**: Real-time statistics and health endpoints
-- **Signal Handling**: Graceful shutdown and configuration reload via signals
-- **Background Mode**: Daemon operation with proper signal handling
-- **Quiet Mode**: Silent operation for automated deployments
+`file` (directory tail with rotation detection and JSON line parsing),
+`console` (stdin), `random` (synthetic generator), `null`, and the chain ingest
+listeners `tcp_chain` and `http_chain`.
+
+### Outputs
+
+`console`, `file` (rotating with retention), `http` (Server-Sent Events plus a
+JSON status endpoint), `tcp` (broadcast server), `null`, and the chain
+forwarders `tcp_chain` and `http_chain`.
+
+### Processing
+
+- **Filters**: chainable include/exclude RE2 patterns with `or`/`and` logic
+- **Formatters**: `raw`, `txt`, and `json` with selectable sanitizer policies
+- **Rate limiting**: token bucket with an optional per-entry size cap
+- **Heartbeats**: flow-level keep-alive entries that reach every sink
+
+### Chaining
+
+Multi-node topologies over a versioned protocol. Chain links carry the
+**structured entry**, not the formatted text, so a relay can filter and reformat
+as if the entries were local. Entries keep a `node` label identifying their
+origin across any number of hops. Chain sinks reconnect automatically with
+exponential backoff and jitter.
+
+### Transport security
+
+- TLS 1.2/1.3 on every network source and sink, listener and dialer alike
+- Mutual TLS: listeners can require and verify client certificates; dialers can
+  present a client identity
+
+mTLS is currently a CA-wide membership check — any certificate the configured CA
+issued is accepted, and the peer's Common Name is recorded but not used for
+authorization. See [Security](doc/security.md) for the exact boundary and
+[the mTLS authentication plan](doc/mtls-auth-plan.md) for the proposed work.
+Password, token, and SCRAM authentication were removed during the restructure
+and are not currently available.
 
 ## Documentation
 
-Available in `doc/` directory.
+| Document | Contents |
+|----------|----------|
+| [Installation](doc/installation.md) | Building, installing, running as a service |
+| [Architecture](doc/architecture.md) | Component model, data flow, concurrency, back-pressure |
+| [Configuration](doc/configuration.md) | TOML structure, precedence, environment and CLI overrides |
+| [Sources](doc/sources.md) | Every input plugin and its options |
+| [Sinks](doc/sinks.md) | Every output plugin and its options |
+| [Filters](doc/filters.md) | Pattern-based inclusion and exclusion |
+| [Formatters](doc/formatters.md) | Output shaping and sanitization |
+| [Chaining](doc/chaining.md) | Multi-node topologies and the chain wire protocol |
+| [Networking](doc/networking.md) | Listeners, dialers, timeouts, connection limits |
+| [Security](doc/security.md) | TLS and mTLS configuration, threat model, current limits |
+| [mTLS Authentication Plan](doc/mtls-auth-plan.md) | Design for certificate-based authorization |
+| [CLI](doc/cli.md) | Flags, signals, exit codes |
+| [Operations](doc/operations.md) | Running, monitoring, tuning, troubleshooting |
 
-- [Installation Guide](doc/installation.md) - Platform setup and service configuration
-- [Architecture Overview](doc/architecture.md) - System design and component interaction
-- [Configuration Reference](doc/configuration.md) - TOML structure and configuration methods
-- [Input Sources](doc/sources.md) - Available source types and configurations
-- [Output Sinks](doc/sinks.md) - Sink types and output options
-- [Filters](doc/filters.md) - Pattern-based log filtering
-- [Formatters](doc/formatters.md) - Log formatting and transformation
-- [Security](doc/security.md) - mTLS configurations and access control
-- [Networking](doc/networking.md) - TLS, rate limiting, and network features
-- [Command Line Interface](doc/cli.md) - CLI flags and subcommands
-- [Operations Guide](doc/operations.md) - Running and maintaining LogWisp
+A fully annotated configuration covering every option ships as
+[`config/logwisp.toml`](config/logwisp.toml).
 
 ## Quick Start
 
-Install LogWisp and create a basic configuration:
+```bash
+make
+```
 
 ```toml
+# logwisp.toml
 [[pipelines]]
 name = "default"
 
-[[pipelines.sources]]
-type = "directory"
-[pipelines.sources.directory]
-path = "./"
+[pipelines.flow.format]
+type = "json"
+sanitizer_policy = "json"
+
+[[pipelines.plugin_sources]]
+id = "app_logs"
+type = "file"
+[pipelines.plugin_sources.config]
+directory = "/var/log/myapp"
 pattern = "*.log"
 
-[[pipelines.sinks]]
+[[pipelines.plugin_sinks]]
+id = "stdout"
 type = "console"
-[pipelines.sinks.console]
+[pipelines.plugin_sinks.config]
 target = "stdout"
 ```
 
-Run with: `logwisp -c config.toml`
+```bash
+logwisp -c logwisp.toml
+```
+
+Running with no configuration file starts a self-demonstrating pipeline: a
+synthetic generator writing JSON to stdout.
 
 ## System Requirements
 
-- **Operating Systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
+- **Operating systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
 - **Architecture**: amd64
-- **Go Version**: 1.25+ (for building from source)
+- **Go**: 1.26+ to build from source
+
+Network sources and sinks bind and dial over IPv4 only.
 
 ## License
 

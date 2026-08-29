@@ -9,6 +9,7 @@ script/
 build/
 *.log
 *.toml
+!config/*.toml
 build.sh
 catalog.txt
 combined.txt

@@ -1,196 +1,184 @@
 # Command Line Interface
 
-LogWisp CLI reference for commands and options.
-
-## Synopsis
-
-```bash
-logwisp [command] [options]
-logwisp [options]
 ```
-
-## Commands
-
-### Main Commands
-
-| Command | Description |
-|---------|-------------|
-| `--version` | Display version information |
-| `--help` | Show help information |
-
-### version Command
-
-Display version information.
-
-```bash
-logwisp version
-logwisp -v
+logwisp [options]
+logwisp help | -h | --help
 logwisp --version
 ```
 
-Output includes:
-- Version number
-- Build date
-- Git commit hash
-- Go version
+LogWisp has no subcommands. Earlier releases shipped `logwisp auth` and
+`logwisp tls` for credential and certificate generation; both were removed
+during the restructure. Use `openssl` or your PKI tooling instead — see
+[Security](security.md).
 
-## Global Options
+## Options
 
-### Configuration Options
+Any scalar configuration key is settable as a flag using its TOML path:
+
+```
+--<path>=<value>        e.g. --logging.level=debug
+--<path> <value>        e.g. --logging.level debug
+--<path>                bare flag, means true
+```
+
+### Common
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-c, --config` | Configuration file path | `./logwisp.toml` |
-| `-q, --quiet` | Suppress console output | false |
-| `--status-reporter` | Status logging | true |
-| `--auto-reload` | Enable config hot reload | false |
+| `-c <path>` | Configuration file | `./logwisp.toml` |
+| `--config=<path>` | Configuration file (equals form only) | `./logwisp.toml` |
+| `--quiet` | Suppress all application output | `false` |
+| `--status_reporter=<bool>` | Periodic status logging | `true` |
+| `--auto_reload=<bool>` | Reload config when the file changes | `false` |
+| `--version` | Print version and exit | — |
+| `-h`, `--help`, `help` | Print usage and exit | — |
 
-### Logging Options
+> `--config <path>` with a space is not recognized. The path resolver
+> understands `-c <path>` and `--config=<path>` only; the space form is treated
+> as an unknown flag, warned about, and ignored, after which LogWisp silently
+> falls back to `./logwisp.toml`.
+>
+> `-c` as the final argument, with no path after it, crashes with an index
+> panic rather than reporting a usage error.
 
-| Flag | Description | Values |
-|------|-------------|--------|
-| `--logging.output` | Log output mode | file, stdout, stderr, split, all, none |
-| `--logging.level` | Log level | debug, info, warn, error |
-| `--logging.file.directory` | Log directory | Path |
-| `--logging.file.name` | Log filename | String |
-| `--logging.file.max_size_mb` | Max file size | Integer |
-| `--logging.file.max_total_size_mb` | Total size limit | Integer |
-| `--logging.file.retention_hours` | Retention period | Float |
-| `--logging.console.target` | Console target | stdout, stderr, split |
-| `--logging.console.format` | Output format | txt, json |
+### Logging
 
-### Pipeline Options
+| Flag | Values |
+|------|--------|
+| `--logging.output` | `file`, `stdout`, `stderr`, `split`, `all`, `none` |
+| `--logging.level` | `debug`, `info`, `warn`, `error` |
+| `--logging.format` | `raw`, `txt`, `json` |
+| `--logging.sanitization` | `raw`, `json`, `txt`, `shell` |
+| `--logging.file.directory` | path |
+| `--logging.file.name` | string |
+| `--logging.file.max_size_mb` | integer |
+| `--logging.file.max_total_size_mb` | integer |
+| `--logging.file.retention_hours` | float |
 
-Configure pipelines via CLI (N = array index, 0-based).
+`--logging.console.target` is accepted but has no effect; the console
+destination is derived from `--logging.output`.
 
-**Pipeline Configuration:**
+### Pipelines
 
-| Flag | Description |
-|------|-------------|
-| `--pipelines.N.name` | Pipeline name |
-| `--pipelines.N.plugin_sources.N.type` | Source type |
-| `--pipelines.N.flow.filters.N.type` | Filter type |
-| `--pipelines.N.plugin_sinks.N.type` | Sink type |
+Pipelines, sources, sinks, and filters **cannot** be configured from the command
+line. Array-indexed paths such as `--pipelines.0.name=app` or
+`--pipelines.0.plugin_sinks.0.type=null` are reported as unrecognized and
+ignored:
 
-## Flag Formats
-
-### Boolean Flags
-
-```bash
-logwisp --quiet
-logwisp --quiet=true
-logwisp --pipelines.0.plugin_sources.0.type=console
+```
+Warning: unrecognized flags ignored: [pipelines.0.name]
 ```
 
-### String Flags
-
-```bash
-logwisp --config /etc/logwisp/config.toml
-logwisp -c config.toml
-```
-
-### Nested Configuration
-
-```bash
-logwisp --logging.level=debug
-logwisp --pipelines.0.name=myapp
-logwisp --pipelines.0.sources.0.type=console
-```
-
-### Array Values (JSON)
-
-```bash
-logwisp --pipelines.0.flow.filters.0.patterns='["ERROR","WARN"]'
-```
+Use a configuration file. Older documentation described CLI pipeline overrides
+that the current loader does not implement.
 
 ## Environment Variables
 
-All flags can be set via environment:
+Configuration paths map to environment variables by replacing `.` with `_` and
+uppercasing:
 
 ```bash
-export LOGWISP_QUIET=true
-export LOGWISP_LOGGING_LEVEL=debug
-export LOGWISP_PIPELINES_0_NAME=myapp
+export QUIET=true
+export LOGGING_LEVEL=debug
+export LOGGING_FILE_DIRECTORY=/var/log/logwisp
 ```
 
-## Configuration Precedence
+> The `LOGWISP_` prefix is **not** currently applied to these — see
+> [Configuration](configuration.md#environment-variables). Bare names like
+> `QUIET` are what LogWisp actually reads, which is worth knowing both to make
+> overrides work and to avoid accidental collisions.
 
-1. Command-line flags (highest)
+The two variables that do carry the prefix are read directly by the path
+resolver:
+
+| Variable | Effect |
+|----------|--------|
+| `LOGWISP_CONFIG_FILE` | Configuration file path; joined onto `LOGWISP_CONFIG_DIR` when both are set |
+| `LOGWISP_CONFIG_DIR` | Configuration directory; alone, implies `<dir>/logwisp.toml` |
+
+As with flags, array elements cannot be set this way.
+
+## Precedence
+
+1. Command-line flags
 2. Environment variables
 3. Configuration file
-4. Built-in defaults (lowest)
+4. Built-in defaults
 
-## Exit Codes
-
-| Code | Description |
-|------|-------------|
-| 0 | Success |
-| 1 | General error |
-| 2 | Configuration file not found |
-| 137 | SIGKILL received |
-
-## Signal Handling
+## Signals
 
 | Signal | Action |
 |--------|--------|
-| SIGINT (Ctrl+C) | Graceful shutdown |
-| SIGTERM | Graceful shutdown |
-| SIGHUP | Reload configuration |
-| SIGUSR1 | Reload configuration |
-| SIGKILL | Immediate termination |
+| `SIGINT` | Graceful shutdown |
+| `SIGTERM` | Graceful shutdown |
+| `SIGHUP` | Reload configuration |
+| `SIGUSR1` | Reload configuration |
+
+`SIGHUP` is ignored during startup, before the signal handler is installed, so
+LogWisp survives a terminal hang-up like `nohup`. Once running, it triggers a
+reload rather than terminating.
+
+Reload rebuilds the whole service. A configuration error leaves the running
+service untouched; see [Configuration](configuration.md#hot-reload).
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Clean shutdown, or `--version` / `--help` |
+| `1` | General error: config load or validation failure, logger init failure, service bootstrap failure |
+| `2` | Explicitly requested configuration file not found |
+
+Exit code 2 applies only when the file was named explicitly (`-c`,
+`--config=`, or the `LOGWISP_CONFIG_*` variables). A missing discovered default
+is not an error, and LogWisp starts on built-in defaults.
+
+## Built-in Defaults
+
+With no configuration file present, LogWisp runs one pipeline named
+`default_pipeline`: a `random` source with `special = true`, JSON formatting,
+a rate limit of 5 entries/second with a burst of 10 and `policy = "drop"`, and a
+`console` sink on stdout. It is a self-demonstrating idle mode, not a useful
+production configuration.
+
+Note that as soon as your file defines `[[pipelines]]`, that entire default
+pipeline — rate limit included — is replaced rather than merged.
 
 ## Usage Patterns
 
-### Development Mode
+**Development**
 
 ```bash
-# Verbose logging to console
-logwisp --logging.output=stderr --logging.level=debug
+# verbose, everything to stderr
+logwisp -c dev.toml --logging.output=stderr --logging.level=debug
 
-# Quick test with stdin
-logwisp --pipelines.0.plugin_sources.0.type=console --pipelines.0.plugin_sinks.0.type=console
+# no config at all: synthetic generator to stdout
+logwisp
 ```
 
-### Production Deployment
+**Configuration check**
 
 ```bash
-# Background with file logging
-logwisp --background --config /etc/logwisp/prod.toml --logging.output=file
-
-# Systemd service
-ExecStart=/usr/local/bin/logwisp --config /etc/logwisp/config.toml
+# starts the service; a config error exits non-zero before any pipeline runs
+logwisp -c /etc/logwisp/logwisp.toml --logging.level=debug
 ```
 
-### Debugging
+There is no dry-run or validate-only mode. The closest approximation is starting
+with debug logging and stopping once the pipelines report as started.
+
+**Production**
 
 ```bash
-# Check configuration
-logwisp --config test.toml --logging.level=debug --disable-status-reporter
-
-# Dry run (verify config only)
-logwisp --config test.toml --quiet
+logwisp -c /etc/logwisp/logwisp.toml --logging.output=file
 ```
 
-## Help System
+Run under a supervisor (systemd, rc.d) rather than backgrounding it — there is
+no `--background` flag; earlier releases had one and it was removed. See
+[Installation](installation.md).
 
-### General Help
+**Reload**
 
 ```bash
-logwisp --help
-logwisp -h
-logwisp help
+kill -HUP  $(pidof logwisp)
+kill -USR1 $(pidof logwisp)
 ```
-
-## Special Flags
-
-### Internal Flags
-
-These flags are for internal use:
-- `--background-daemon`: Child process indicator
-- `--config-save-on-exit`: Save config on shutdown
-
-### Hidden Behaviors
-
-- SIGHUP ignored ignored during startup (after startup triggers config reload)
-- Automatic panic recovery in pipelines
-- Resource cleanup on shutdown

@@ -1,107 +1,249 @@
 # Input Sources
 
-LogWisp sources monitor various inputs and generate log entries for pipeline processing.
-
-## Source Types
-
-### Directory Source
-
-Monitors a directory for log files matching a pattern. (type: `file`)
+Sources produce `core.LogEntry` values for a pipeline. Every source is declared
+as a `[[pipelines.plugin_sources]]` entry with an `id`, a `type`, and a
+type-specific `config` table.
 
 ```toml
 [[pipelines.plugin_sources]]
-id = "file_in"
+id   = "app_logs"
 type = "file"
 [pipelines.plugin_sources.config]
 directory = "/var/log/myapp"
-pattern = "*.log"          # Glob pattern
-check_interval_ms = 100    # Poll interval
 ```
 
-**Configuration Options:**
+Registered types: `file`, `console`, `random`, `null`, `tcp_chain`,
+`http_chain`.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `directory` | string | Required | Directory to monitor |
-| `pattern` | string | "*" | File pattern (glob) |
-| `check_interval_ms` | int | 100 | File check interval in milliseconds |
+Publication from any source is non-blocking. When a subscriber channel is full
+the entry is dropped and counted in `dropped_entries`.
 
-**Features:**
-- Automatic rotation detection (inode + size tracking)
-- In-memory position tracking; on restart, monitoring resumes from the current end of each file (offsets are not persisted)
-- Concurrent file monitoring
-- Pattern-based file selection
+---
 
-### Stdin Source
+## file
 
-Reads log entries from standard input.
+Tails every file in a directory whose name matches a glob.
 
 ```toml
 [[pipelines.plugin_sources]]
-id = "console_in"
+id   = "app_logs"
+type = "file"
+[pipelines.plugin_sources.config]
+directory         = "/var/log/myapp"
+pattern           = "*.log"
+check_interval_ms = 100
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `directory` | string | **required** | Directory to scan; not recursive |
+| `pattern` | string | `*` | Glob over filenames; `*` and `?` only |
+| `check_interval_ms` | int | `100` | Directory rescan interval; minimum `10` |
+
+**Behaviour**
+
+- `check_interval_ms` governs how often the directory is rescanned for new or
+  removed files. Tailing an already-open file polls on a **fixed 100 ms**
+  interval that this option does not change.
+- Each matched file gets its own watcher. Watchers for files that disappear are
+  stopped and removed on the next scan.
+- A new watcher seeks to end-of-file. Positions live in memory only, so a
+  restart resumes from the current end of each file and content written while
+  LogWisp was down is not read.
+- Rotation is detected from size decrease, modification-time reset, a position
+  beyond end-of-file, or an inode change. An inode change where the new file is
+  already larger than the recorded position is treated as an atomic save, not a
+  rotation, and the position is preserved.
+- Lines are parsed as JSON when they contain `time`, `level`, `msg`, and
+  `fields` keys; `time` is read as RFC3339Nano. Anything else is kept as plain
+  text with the level inferred from common markers (`[ERROR]`, `WARN:`, and so
+  on).
+- `Source` is set to the file's base name.
+
+**Statistics**: per-watcher size, position, entries read, rotation count, and
+last read time, plus `active_watchers`.
+
+---
+
+## console
+
+Reads newline-delimited entries from standard input.
+
+```toml
+[[pipelines.plugin_sources]]
+id   = "stdin"
 type = "console"
 [pipelines.plugin_sources.config]
 buffer_size = 1000
 ```
 
-**Configuration Options:**
-
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `buffer_size` | int | 1000 | Internal buffer size |
+| `buffer_size` | int | `1000` | Subscriber channel depth |
 
-**Features:**
-- Line-based processing
-- Automatic level detection
-- Non-blocking reads
+At most **one** instance per pipeline: the type is registered with
+`MaxInstances: 1`, and a second instance is rejected at pipeline construction.
+The level is inferred from the line text, and `Source` is set to `console`.
 
-### Random Source
+---
+
+## random
+
+Synthetic entry generator for development, smoke tests, and sanitizer testing.
 
 ```toml
 [[pipelines.plugin_sources]]
-id = "random_in"
+id   = "generator"
 type = "random"
 [pipelines.plugin_sources.config]
 interval_ms = 500
-jitter_ms = 0
-format = "txt"
-length = 20
-special = false
+jitter_ms   = 0
+format      = "txt"
+length      = 20
+special     = false
 ```
 
- **Configuration Options:**
- 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `interval_ms` | int | 500 | Generation interval |
-| `jitter_ms` | int | 0 | Random jitter interval |
-| `format` | string | "txt" | "txt", "json", "raw" |
-| `length` | int | 20 | Log length |
-| `special` | bool | false | Include special characters |
- 
-## Source Statistics
+| `interval_ms` | int | `500` | Emission period |
+| `jitter_ms` | int | `0` | Symmetric jitter; clamped to `interval_ms`, must be non-negative |
+| `format` | string | `txt` | `raw` (message only), `txt` (bracketed line), `json` (JSON object as the message) |
+| `length` | int | `20` | Message length in characters |
+| `special` | bool | `false` | Inject control and non-ASCII characters |
 
-All sources track:
-- Total entries received
-- Dropped entries (buffer full)
-- Invalid entries
-- Last entry timestamp
-- Active connections (network sources)
-- Source-specific metrics
+`special = true` is the intended way to exercise sanitizer policies: it inserts
+control bytes and multi-byte Unicode into otherwise ordinary messages. Levels
+are chosen at random from DEBUG, INFO, WARN, ERROR.
 
-### Null Source
+---
+
+## null
+
+Produces nothing. Useful as a placeholder so a sink-only pipeline satisfies the
+"at least one source" requirement.
 
 ```toml
 [[pipelines.plugin_sources]]
-id = "null_in"
+id   = "void"
 type = "null"
-[pipelines.plugin_sources.config]
 ```
 
-## Buffer Management
+No options.
 
-Each source maintains internal buffers:
-- Default size: 1000 entries
-- Drop policy when full
-- Configurable per source
-- Non-blocking writes
+---
+
+## tcp_chain
+
+Listens for persistent NDJSON streams from upstream LogWisp `tcp_chain` sinks.
+See [Chaining](chaining.md) for the protocol.
+
+```toml
+[[pipelines.plugin_sources]]
+id   = "ingest_tcp"
+type = "tcp_chain"
+[pipelines.plugin_sources.config]
+host             = "0.0.0.0"
+port             = 15801
+buffer_size      = 1000
+max_connections  = 0
+read_timeout_ms  = 0
+hello_timeout_ms = 10000
+trust_node       = true
+
+[pipelines.plugin_sources.config.tls]
+enabled        = true
+cert_file      = "/etc/logwisp/tls/server.crt"
+key_file       = "/etc/logwisp/tls/server.key"
+client_auth    = true
+client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+min_version    = "1.3"
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
+| `port` | int | **required** | Listen port, 1–65535 |
+| `buffer_size` | int | `1000` | Subscriber channel depth |
+| `max_connections` | int | `0` | Concurrent connection cap; `0` = unlimited |
+| `read_timeout_ms` | int | `0` | Per-connection idle read deadline; `0` = none |
+| `hello_timeout_ms` | int | `10000` | Deadline for the hello preamble |
+| `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address |
+| `tls` | table | — | Listener TLS; see [Security](security.md) |
+
+**Behaviour**
+
+- TLS handshakes run explicitly with a 10 s bound before the preamble is read,
+  after the `max_connections` admission check.
+- A connection is rejected if the first line is not a valid hello with a
+  matching protocol version.
+- Each accepted connection gets a session recording the remote address, node
+  label, and — under TLS — `tls` and `tls_peer_cn`.
+- A malformed entry line increments `parse_errors` and is skipped; the
+  connection survives. A line over 1 MiB is a protocol violation and terminates
+  the connection.
+
+**Statistics**: `active_connections`, `rejected_conns`, `parse_errors`,
+`tls_handshake_errors`, `trust_node`.
+
+---
+
+## http_chain
+
+Accepts NDJSON batches POSTed by upstream LogWisp `http_chain` sinks.
+
+```toml
+[[pipelines.plugin_sources]]
+id   = "ingest_http"
+type = "http_chain"
+[pipelines.plugin_sources.config]
+host            = "0.0.0.0"
+port            = 15802
+ingest_path     = "/ingest"
+buffer_size     = 1000
+max_body_bytes  = 8388608
+read_timeout_ms = 30000
+trust_node      = true
+
+[pipelines.plugin_sources.config.tls]
+enabled        = true
+cert_file      = "/etc/logwisp/tls/server.crt"
+key_file       = "/etc/logwisp/tls/server.key"
+client_auth    = true
+client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
+| `port` | int | **required** | Listen port |
+| `ingest_path` | string | `/ingest` | Endpoint path; must start with `/` |
+| `buffer_size` | int | `1000` | Subscriber channel depth |
+| `max_body_bytes` | int | `8388608` | Per-request body cap (8 MiB) |
+| `read_timeout_ms` | int | `30000` | Full request read deadline |
+| `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address |
+| `tls` | table | — | Listener TLS |
+
+**Behaviour**
+
+- Only `POST` to `ingest_path` is routed; other methods get `405` with an
+  `Allow` header, and other paths get `404`.
+- A missing or mismatched `X-Logwisp-Protocol` header is rejected with `400`.
+- Batch acceptance is atomic: entries are published only after the body reads
+  cleanly end to end. A transfer error rejects the whole batch (`400`, or `413`
+  when the body cap is hit) so the sender retries it. A malformed *line* inside
+  an otherwise clean transfer is skipped and counted in `parse_errors`.
+- Success is `204 No Content` with `X-Logwisp-Accepted` set to the number of
+  entries ingested.
+- Sessions are cached per remote host + declared node and recreated after idle
+  expiry.
+
+**Statistics**: `total_requests`, `rejected_requests`, `parse_errors`,
+`cached_sessions`, `trust_node`.
+
+---
+
+## Source Statistics
+
+Every source reports: `id`, `type`, `total_entries`, `dropped_entries`,
+`start_time`, `last_entry_time`, and a type-specific `details` map. These appear
+in the status reporter output and in the `http` sink's status endpoint.
