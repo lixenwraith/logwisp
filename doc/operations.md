@@ -268,12 +268,14 @@ then `kill -HUP`. Automate the expiry check; nothing in LogWisp warns you.
 
 **Access review**
 
-With mTLS, any certificate signed by the configured `client_ca_file` is
-accepted — there is no per-identity allow-list, so "access review" means
-reviewing what your CA has issued. Peer Common Names are recorded in session
-metadata but are not surfaced in statistics and are not used for authorization.
-See [Security](security.md) and the
-[mTLS authentication plan](mtls-auth-plan.md).
+With `tls` alone, any certificate signed by the configured `client_ca_file` is
+accepted, so "access review" means reviewing what your CA has issued. Add an
+`auth` block with an explicit `allow` list and the review becomes the config
+file itself: the identities listed there are the ones that can connect, and
+removing one plus a `SIGHUP` is the revocation path. Authorized identities are
+recorded in session metadata as `auth_identity`; rejections are counted in
+`auth_rejected` and logged at WARN. See
+[Security](security.md#the-auth-block).
 
 **Secret leakage**
 

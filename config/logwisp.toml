@@ -6,10 +6,11 @@
 ### Commented values are the built-in defaults unless marked "example".
 ### Uncommenting a default is a no-op.
 ###
-### NOTE: authentication (password/token/SCRAM), network access control (ACL),
+### NOTE: password/token/SCRAM authentication, network access control (ACL),
 ### http/tcp ingest sources, and http_client/tcp_client sinks were removed in
 ### the restructure and are not available in this version. TLS and mTLS ARE
-### available on every network source and sink; see the [...tls] blocks below.
+### available on every network source and sink; see the [...tls] blocks below,
+### and the [...auth] blocks to authorize peers by certificate identity.
 ###
 ### Environment overrides are currently read WITHOUT the LOGWISP_ prefix
 ### (QUIET, LOGGING_LEVEL, ...). LOGWISP_CONFIG_FILE and LOGWISP_CONFIG_DIR
@@ -106,8 +107,32 @@ name = "default"
 ### insecure_skip_verify = false   Dialer: disable verification (never in prod)
 ### min_version = "1.3"  "1.2" or "1.3". No max_version, no cipher_suites.
 ###
-### Any certificate signed by client_ca_file is accepted; the peer CN is
-### recorded but not used for authorization. See doc/security.md.
+### TLS alone is a CA membership check: ANY certificate the CA signed is
+### accepted. Add an [...auth] block to decide WHICH of them may connect.
+###============================================================================
+
+###============================================================================
+### AUTH (shared shape; sits beside [...tls] on every network source and sink)
+###
+### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
+###   authorize the client certificate. type = "mtls" REQUIRES tls.enabled and
+###   tls.client_auth. On the http sink it gates stream_path AND status_path.
+### Chain sources additionally bind the node label to the identity.
+### Dialers    (tcp_chain/http_chain sinks):
+###   pin the server identity. type = "mtls" REQUIRES tls.enabled and forbids
+###   tls.insecure_skip_verify.
+###
+### type = "none"        none | mtls
+### identity = "cn"      cn | san_dns | san_uri | san_email
+### allow = []           Exact identities. Empty allow AND allow_patterns
+###                      admits any identity the CA vouches for (logged WARN).
+### allow_patterns = []  RE2 patterns; anchor them yourself (^...$)
+### node_binding = ""    Chain sources only, default "force" under mtls:
+###                        none   - trust_node governs, as before
+###                        assert - declared label must equal the identity;
+###                                 per-entry node labels still follow trust_node
+###                        force  - label AND every entry take the identity
+###                      Overrides trust_node. See doc/security.md.
 ###============================================================================
 
 ###============================================================================
@@ -166,6 +191,12 @@ check_interval_ms = 100                 # Directory rescan interval (min 10)
 # client_auth = true
 # client_ca_file = "/etc/logwisp/tls/client-ca.crt"
 # min_version = "1.3"
+# [pipelines.plugin_sources.config.auth]  # authorize senders by certificate
+# type = "none"                         # none | mtls; mtls requires client_auth
+# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# allow = []                            # exact identities; empty = any the CA issued
+# allow_patterns = []                   # RE2, anchor them yourself
+# node_binding = "force"                # none | assert | force; overrides trust_node
 
 ## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
 # [[pipelines.plugin_sources]]
@@ -185,6 +216,12 @@ check_interval_ms = 100                 # Directory rescan interval (min 10)
 # key_file = "/etc/logwisp/tls/server.key"
 # client_auth = true
 # client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+# [pipelines.plugin_sources.config.auth]  # authorize senders by certificate
+# type = "none"                         # none | mtls; mtls requires client_auth
+# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# allow = []                            # exact identities; empty = any the CA issued
+# allow_patterns = []                   # RE2, anchor them yourself
+# node_binding = "force"                # none | assert | force; overrides trust_node
 
 ###============================================================================
 ### Sinks (1+ required, fan-out)
@@ -237,6 +274,11 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # key_file = "/etc/logwisp/tls/server.key"
 # client_auth = false
 # client_ca_file = ""
+# [pipelines.plugin_sinks.config.auth]  # gates BOTH stream_path and status_path
+# type = "none"                         # none | mtls; mtls requires client_auth
+# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# allow = []                            # exact identities; empty = any the CA issued
+# allow_patterns = []                   # RE2, anchor them yourself
 
 ## TCP sink (streaming server, IPv4 clients only)
 # [[pipelines.plugin_sinks]]
@@ -255,6 +297,13 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # enabled = true                        # example
 # cert_file = "/etc/logwisp/tls/server.crt"
 # key_file = "/etc/logwisp/tls/server.key"
+# client_auth = true
+# client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+# [pipelines.plugin_sinks.config.auth]  # authorize stream readers
+# type = "none"                         # none | mtls; mtls requires client_auth
+# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# allow = []                            # exact identities; empty = any the CA issued
+# allow_patterns = []                   # RE2, anchor them yourself
 
 ## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
 ## Do NOT point a chain sink at a chain source in the SAME pipeline: entries
@@ -281,6 +330,11 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # cert_file = "/etc/logwisp/tls/client.crt"
 # key_file = "/etc/logwisp/tls/client.key"
 # min_version = "1.3"
+# [pipelines.plugin_sinks.config.auth]  # pin the downstream server's identity
+# type = "none"                         # none | mtls; mtls requires tls.enabled
+# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# allow = []                            # exact identities; empty = any the CA issued
+# allow_patterns = []                   # RE2, anchor them yourself
 
 ## HTTP chain sink (stdlib client; batched NDJSON POST to downstream http_chain source)
 # [[pipelines.plugin_sinks]]
@@ -303,3 +357,8 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # ca_file = "/etc/logwisp/tls/ca.crt"
 # cert_file = "/etc/logwisp/tls/client.crt"
 # key_file = "/etc/logwisp/tls/client.key"
+# [pipelines.plugin_sinks.config.auth]  # pin the downstream server's identity
+# type = "none"                         # none | mtls; mtls requires tls.enabled
+# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# allow = []                            # exact identities; empty = any the CA issued
+# allow_patterns = []                   # RE2, anchor them yourself

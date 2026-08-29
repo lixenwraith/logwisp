@@ -157,6 +157,11 @@ key_file       = "/etc/logwisp/tls/server.key"
 client_auth    = true
 client_ca_file = "/etc/logwisp/tls/client-ca.crt"
 min_version    = "1.3"
+
+[pipelines.plugin_sources.config.auth]
+type         = "mtls"
+allow        = ["edge-01", "edge-02"]
+node_binding = "force"
 ```
 
 | Option | Type | Default | Description |
@@ -167,23 +172,34 @@ min_version    = "1.3"
 | `max_connections` | int | `0` | Concurrent connection cap; `0` = unlimited |
 | `read_timeout_ms` | int | `0` | Per-connection idle read deadline; `0` = none |
 | `hello_timeout_ms` | int | `10000` | Deadline for the hello preamble |
-| `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address |
+| `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address. Ignored when `auth.node_binding` is active |
 | `tls` | table | — | Listener TLS; see [Security](security.md) |
+| `auth` | table | — | Peer authorization and node binding; see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
 - TLS handshakes run explicitly with a 10 s bound before the preamble is read,
   after the `max_connections` admission check.
+- Authorization runs between the handshake and the hello read, so an
+  unauthorized peer never gets a preamble parsed on its behalf. A rejection is
+  logged at WARN and counted in `rejected_conns`.
 - A connection is rejected if the first line is not a valid hello with a
   matching protocol version.
+- The node label is then resolved: under `auth.node_binding` it comes from the
+  peer's certificate, otherwise `trust_node` governs. `force` also overrides the
+  `node` field on every individual entry; `assert` leaves per-entry labels to
+  `trust_node`, so a relay can forward other nodes' entries while proving its
+  own identity.
 - Each accepted connection gets a session recording the remote address, node
-  label, and — under TLS — `tls` and `tls_peer_cn`.
+  label, — under TLS — `tls` and `tls_peer_cn`, and — under auth —
+  `auth_method` and `auth_identity`.
 - A malformed entry line increments `parse_errors` and is skipped; the
   connection survives. A line over 1 MiB is a protocol violation and terminates
   the connection.
 
 **Statistics**: `active_connections`, `rejected_conns`, `parse_errors`,
-`tls_handshake_errors`, `trust_node`.
+`tls_handshake_errors`, `trust_node`, `auth`, `auth_allowed`, `auth_rejected`,
+`node_binding`.
 
 ---
 
@@ -210,6 +226,11 @@ cert_file      = "/etc/logwisp/tls/server.crt"
 key_file       = "/etc/logwisp/tls/server.key"
 client_auth    = true
 client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+
+[pipelines.plugin_sources.config.auth]
+type         = "mtls"
+allow        = ["edge-01", "edge-02"]
+node_binding = "force"
 ```
 
 | Option | Type | Default | Description |
@@ -220,13 +241,18 @@ client_ca_file = "/etc/logwisp/tls/client-ca.crt"
 | `buffer_size` | int | `1000` | Subscriber channel depth |
 | `max_body_bytes` | int | `8388608` | Per-request body cap (8 MiB) |
 | `read_timeout_ms` | int | `30000` | Full request read deadline |
-| `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address |
+| `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address. Ignored when `auth.node_binding` is active |
 | `tls` | table | — | Listener TLS |
+| `auth` | table | — | Peer authorization and node binding; see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
 - Only `POST` to `ingest_path` is routed; other methods get `405` with an
   `Allow` header, and other paths get `404`.
+- Authorization runs before the body is read, so an unauthorized sender does not
+  get to stream `max_body_bytes` into the process. Both a policy rejection and a
+  node-binding failure answer `403`, distinct from the `400` used for protocol
+  errors, so a sender can tell "not allowed" from "malformed batch".
 - A missing or mismatched `X-Logwisp-Protocol` header is rejected with `400`.
 - Batch acceptance is atomic: entries are published only after the body reads
   cleanly end to end. A transfer error rejects the whole batch (`400`, or `413`
@@ -234,11 +260,13 @@ client_ca_file = "/etc/logwisp/tls/client-ca.crt"
   an otherwise clean transfer is skipped and counted in `parse_errors`.
 - Success is `204 No Content` with `X-Logwisp-Accepted` set to the number of
   entries ingested.
-- Sessions are cached per remote host + declared node and recreated after idle
-  expiry.
+- Sessions are cached per remote host + node + authenticated identity, and
+  recreated after idle expiry. Including the identity in the key means two peers
+  sharing a remote address never share a session.
 
 **Statistics**: `total_requests`, `rejected_requests`, `parse_errors`,
-`cached_sessions`, `trust_node`.
+`cached_sessions`, `trust_node`, `auth`, `auth_allowed`, `auth_rejected`,
+`node_binding`.
 
 ---
 

@@ -18,8 +18,8 @@ streams, or downstream LogWisp nodes.
 | [Formatters](formatters.md) | Output shaping and sanitization |
 | [Chaining](chaining.md) | Multi-node topologies and the chain wire protocol |
 | [Networking](networking.md) | Listeners, dialers, timeouts, connection limits |
-| [Security](security.md) | TLS and mTLS configuration, threat model, current limits |
-| [mTLS Authentication Plan](mtls-auth-plan.md) | Design for certificate-based authorization |
+| [Security](security.md) | TLS, mTLS, and peer authorization; threat model and current limits |
+| [mTLS Authentication](mtls-auth-plan.md) | Design and rationale for certificate-based authorization |
 | [CLI](cli.md) | Flags, signals, exit codes |
 | [Operations](operations.md) | Running, monitoring, tuning, troubleshooting |
 
@@ -55,12 +55,17 @@ endpoint), `tcp` (broadcast server), `null`, and the chain forwarders
 - `raw`, `txt`, and `json` formatting with selectable sanitizer policies
 - Optional flow-level heartbeat entries
 
-### Transport security
+### Transport security and authentication
 
 - TLS 1.2/1.3 on every network source and sink, listener and dialer alike
 - Mutual TLS: listeners can require and verify client certificates; dialers can
-  present a client identity. See [Security](security.md) for what this does and
-  does not currently give you.
+  present a client identity
+- Authorization by certificate identity, per listener: named peers rather than
+  everything the CA issued, with the `http` sink's endpoints gated too
+- Node binding, so a chain source labels entries from the sender's certificate
+  rather than from what the sender claims
+
+See [Security](security.md) for what each layer does and does not give you.
 
 ## Quick Start
 

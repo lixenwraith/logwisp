@@ -59,7 +59,7 @@ type HTTPChainSource struct {
 	// Authorization
 	auth *authz.Policy
 
-	// Session cache: one session per remote host + declared node
+	// Session cache: one session per remote host + node + authenticated identity
 	sessions   map[string]string // key -> sessionID
 	sessionsMu sync.Mutex
 

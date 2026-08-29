@@ -168,11 +168,34 @@ headers, and entry encoding.
 - Handshake failures appear as WARN with the remote address, and increment
   `tls_handshake_errors`.
 
+**Rejected after a successful handshake**
+- `auth: identity "..." is not allowed` — the certificate is valid and chains to
+  the CA, but the identity is not in `auth.allow` / `auth.allow_patterns`. On
+  TCP the connection is closed; on HTTP the answer is `403`.
+- `auth: peer certificate carries no <mode> identity` — `auth.identity` names a
+  field the certificate does not populate, e.g. `san_dns` on a CN-only leaf.
+- `auth: node_binding "assert": declared node "..." does not match identity` —
+  the sender's `node` option and its certificate disagree. Fix one, or use
+  `node_binding = "force"` to let the certificate win silently.
+- On a dialer, the same message inside `Chain connect failed` means the
+  *server* was refused: its certificate identity is not in the sink's
+  `auth.allow`.
+- Rejections appear as WARN and increment `auth_rejected`.
+
 **Entries not arriving over a chain link**
 - Check the sink's `connected` statistic and its `reconnects` count.
+- Check the source's `auth_rejected` — an allow-list miss looks exactly like a
+  network fault from the sender's side.
 - Check the source's `parse_errors` — a version skew shows up here.
 - On `http_chain`, remember entries wait up to `flush_interval_ms` before a
   batch is sent.
+
+**Entries arriving under an unexpected node label**
+- `auth.node_binding` defaults to `force` when `auth.type = "mtls"`, which
+  relabels every entry with the sender's certificate identity. If a dashboard
+  suddenly shows a different label, that is why. Use `node_binding = "assert"`
+  to keep upstream origin labels on relay-to-relay hops, or `"none"` to leave
+  `trust_node` in charge.
 
 **Clients connect but see nothing**
 - The pipeline may be filtering everything out; check `flow.filters` stats.
