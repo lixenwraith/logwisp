@@ -32,6 +32,7 @@ type = "file"
 directory         = "/var/log/myapp"
 pattern           = "*.log"
 check_interval_ms = 100
+raw               = false
 ```
 
 | Option | Type | Default | Description |
@@ -39,6 +40,7 @@ check_interval_ms = 100
 | `directory` | string | **required** | Directory to scan; not recursive |
 | `pattern` | string | `*` | Glob over filenames; `*` and `?` only |
 | `check_interval_ms` | int | `100` | Directory rescan interval; minimum `10` |
+| `raw` | bool | `false` | Never parse a line: the whole line is the message |
 
 **Behaviour**
 
@@ -59,6 +61,11 @@ check_interval_ms = 100
   carry. `time` is read as RFC3339Nano. Any other key, and any non-object line,
   is kept whole as text with the level inferred from common markers
   (`[ERROR]`, `WARN:`, and so on), because parsing it would drop the rest.
+- `raw = true` skips the JSON branch entirely. The line, plus its newline,
+  becomes the message; `fields` stays empty, the time is the read time, and the
+  level is inferred from the text as for any unparsed line. Paired with
+  `format.type = "raw"` this is byte-exact transport for records LogWisp's
+  envelope cannot hold — see [Formatters](formatters.md#raw).
 - `Source` is set to the file's base name.
 
 **Statistics**: per-watcher size, position, entries read, rotation count, and

@@ -34,6 +34,7 @@ type WatcherInfo struct {
 type fileWatcher struct {
 	directory    string
 	callback     func(core.LogEntry)
+	raw          bool
 	position     int64
 	size         int64
 	inode        uint64
@@ -47,10 +48,11 @@ type fileWatcher struct {
 }
 
 // newFileWatcher creates a new watcher for a specific file path
-func newFileWatcher(directory string, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
+func newFileWatcher(directory string, raw bool, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
 	w := &fileWatcher{
 		directory: directory,
 		callback:  callback,
+		raw:       raw,
 		position:  -1,
 		logger:    logger,
 	}
@@ -350,6 +352,16 @@ func (w *fileWatcher) isStopped() bool {
 
 // parseLine converts a line into an entry, as JSON when nothing would be lost
 func (w *fileWatcher) parseLine(line string) core.LogEntry {
+	if w.raw {
+		// Newline restored: sinks write the payload as it stands
+		return core.LogEntry{
+			Time:    time.Now(),
+			Source:  filepath.Base(w.directory),
+			Level:   source.ExtractLogLevel(line),
+			Message: line + "\n",
+		}
+	}
+
 	if entry, ok := w.parseJSON(line); ok {
 		return entry
 	}

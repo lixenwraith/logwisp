@@ -152,6 +152,8 @@ directory = "./"                        # Directory to monitor (required, not re
 pattern = "*.log"                       # Glob pattern (* and ? only)
 ## Tailing an already-open file polls at a fixed 100ms, regardless of this value.
 check_interval_ms = 100                 # Directory rescan interval (min 10)
+## raw = true never parses a line; with format type "raw" the file is relayed byte for byte.
+raw = false                             # Keep the whole line as the message
 
 ## Console source (stdin, single instance per pipeline)
 # [[pipelines.plugin_sources]]

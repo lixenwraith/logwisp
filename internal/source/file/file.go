@@ -116,7 +116,8 @@ func NewFileSourcePlugin(
 		"component", "file_source",
 		"instance_id", id,
 		"directory", opts.Directory,
-		"pattern", opts.Pattern)
+		"pattern", opts.Pattern,
+		"raw", opts.Raw)
 
 	return fs, nil
 }
@@ -261,7 +262,7 @@ func (fs *FileSource) ensureWatcher(path string) {
 		return
 	}
 
-	w := newFileWatcher(path, fs.publish, fs.logger)
+	w := newFileWatcher(path, fs.config.Raw, fs.publish, fs.logger)
 	fs.watchers[path] = w
 
 	fs.logger.Debug("msg", "Created file watcher",
