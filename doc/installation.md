@@ -191,18 +191,20 @@ mode; see [Operations](operations.md#checking-a-configuration).
 
 ## Test Scripts
 
-Two end-to-end scripts under `test/` build multi-node chain topologies against a
-local build:
+End-to-end scripts under `test/` run against a local build:
 
 ```bash
 make
 ./test/chain-test.sh --auto             # two independent relay pipelines
 ./test/chain-aggregate-test.sh --auto   # fan-in: both edges into one pipeline
+./test/mtls-chain-test.sh --auto        # the same fan-in under mTLS
+./test/passthrough-test.sh              # file source relays a wide envelope intact
 ```
 
-Without `--auto` they run the relay in the foreground for interactive
-inspection. They need bash 5+, coreutils, and curl, and they bind ports
-15801–15804. Generated configuration and logs land in `test/run/`.
+Without `--auto` the chain scripts run the relay in the foreground for
+interactive inspection. They need bash 5+, coreutils, and curl, and they bind
+ports 15801–15804. The pass-through test binds nothing. Generated configuration
+and logs land in `test/run/`.
 
 > Two of the three `--auto` assertions currently report `FAIL` against a
 > working build. They grep the sink output for `"source":"edge-tcp/` and
