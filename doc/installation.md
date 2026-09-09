@@ -4,7 +4,7 @@
 
 - **Operating systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
 - **Architecture**: amd64
-- **Go**: 1.26 or newer, to build from source
+- **Go**: 1.27.1 or newer, to build from source
 
 ## Building from Source
 
@@ -36,6 +36,24 @@ go build -o bin/logwisp ./cmd/logwisp
 
 `go install github.com/lixenwraith/logwisp/cmd/logwisp@latest` also works, with
 the same loss of version metadata.
+
+## Container Image
+
+The root `Dockerfile` builds the same package into `scratch` under UID 65532,
+static and stripped. There is no shell and no config in the image: mount one and
+name it, as the binary has no daemon mode and no built-in defaults worth running.
+
+```bash
+REV=$(git rev-parse HEAD)
+docker build -t "logwisp:$(git rev-parse --short HEAD)" \
+  --build-arg VERSION="$(git describe --tags --always)" \
+  --build-arg REVISION="$REV" .
+docker run --rm -v /etc/logwisp:/etc/logwisp:ro logwisp:... -c /etc/logwisp/logwisp.toml
+```
+
+Sinks that listen (`http`, `tcp`) need their ports published; the read-only
+root filesystem and dropped capabilities a restricted runtime imposes are all
+compatible with it, provided a `file` sink's directory is writable by 65532.
 
 ## Configuration
 
