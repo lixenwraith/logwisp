@@ -47,13 +47,18 @@ type fileWatcher struct {
 	logger       *log.Logger
 }
 
-// newFileWatcher creates a new watcher for a specific file path
-func newFileWatcher(directory string, raw bool, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
+// newFileWatcher creates a new watcher for a specific file path.
+// A start position of 0 reads an existing file whole; -1 seeks to its end.
+func newFileWatcher(directory string, raw, fromStart bool, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
+	position := int64(-1)
+	if fromStart {
+		position = 0
+	}
 	w := &fileWatcher{
 		directory: directory,
 		callback:  callback,
 		raw:       raw,
-		position:  -1,
+		position:  position,
 		logger:    logger,
 	}
 	w.lastReadTime.Store(time.Time{})
@@ -62,8 +67,8 @@ func newFileWatcher(directory string, raw bool, callback func(core.LogEntry), lo
 
 // watch starts the main monitoring loop for the file
 func (w *fileWatcher) watch(ctx context.Context) error {
-	if err := w.seekToEnd(); err != nil {
-		return fmt.Errorf("seekToEnd failed: %w", err)
+	if err := w.initPosition(); err != nil {
+		return fmt.Errorf("initPosition failed: %w", err)
 	}
 
 	ticker := time.NewTicker(core.FileWatcherPollInterval)
@@ -299,8 +304,9 @@ func (w *fileWatcher) checkFile() error {
 	return nil
 }
 
-// seekToEnd sets the initial read position to the end of the file
-func (w *fileWatcher) seekToEnd() error {
+// initPosition records the file's metadata and, unless the watcher was created
+// to read from the start, sets the initial read position to the end
+func (w *fileWatcher) initPosition() error {
 	file, err := os.Open(w.directory)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -324,8 +330,6 @@ func (w *fileWatcher) seekToEnd() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Keep existing position (including 0)
-	// First time initialization seeks to the end of the file
 	if w.position == -1 {
 		pos, err := file.Seek(0, io.SeekEnd)
 		if err != nil {

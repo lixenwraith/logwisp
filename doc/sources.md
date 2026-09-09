@@ -33,6 +33,7 @@ directory         = "/var/log/myapp"
 pattern           = "*.log"
 check_interval_ms = 100
 raw               = false
+from              = "end"
 ```
 
 | Option | Type | Default | Description |
@@ -41,6 +42,7 @@ raw               = false
 | `pattern` | string | `*` | Glob over filenames; `*` and `?` only |
 | `check_interval_ms` | int | `100` | Directory rescan interval; minimum `10` |
 | `raw` | bool | `false` | Never parse a line: the whole line is the message |
+| `from` | string | `end` | Where a new watcher starts: `end` or `start` of the file |
 
 **Behaviour**
 
@@ -51,7 +53,9 @@ raw               = false
   stopped and removed on the next scan.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
   restart resumes from the current end of each file and content written while
-  LogWisp was down is not read.
+  LogWisp was down is not read. `from = "start"` reads each file whole when its
+  watcher is created instead — what a process writing beside LogWisp needs, at
+  the cost of replaying a file already on disk at every restart.
 - Rotation is detected from size decrease, modification-time reset, a position
   beyond end-of-file, or an inode change. An inode change where the new file is
   already larger than the recorded position is treated as an atomic save, not a

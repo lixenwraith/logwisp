@@ -61,6 +61,7 @@ const (
 	DefaultFileSourcePattern         = "*"
 	DefaultFileSourceCheckIntervalMS = 100
 	MinFileSourceCheckIntervalMS     = 10
+	DefaultFileSourceFrom            = "end"
 )
 
 // NewFileSourcePlugin creates a file source through plugin factory
@@ -90,6 +91,11 @@ func NewFileSourcePlugin(
 	} else if opts.CheckIntervalMS < MinFileSourceCheckIntervalMS {
 		return nil, fmt.Errorf("check_interval_ms: must be >= %d", MinFileSourceCheckIntervalMS)
 	}
+	if opts.From == "" {
+		opts.From = DefaultFileSourceFrom
+	} else if err := lconfig.OneOf("start", "end")(opts.From); err != nil {
+		return nil, fmt.Errorf("from: %w", err)
+	}
 
 	// Create and return plugin instance
 	fs := &FileSource{
@@ -117,7 +123,8 @@ func NewFileSourcePlugin(
 		"instance_id", id,
 		"directory", opts.Directory,
 		"pattern", opts.Pattern,
-		"raw", opts.Raw)
+		"raw", opts.Raw,
+		"from", opts.From)
 
 	return fs, nil
 }
@@ -262,7 +269,7 @@ func (fs *FileSource) ensureWatcher(path string) {
 		return
 	}
 
-	w := newFileWatcher(path, fs.config.Raw, fs.publish, fs.logger)
+	w := newFileWatcher(path, fs.config.Raw, fs.config.From == "start", fs.publish, fs.logger)
 	fs.watchers[path] = w
 
 	fs.logger.Debug("msg", "Created file watcher",
