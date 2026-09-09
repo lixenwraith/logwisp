@@ -34,6 +34,7 @@ type WatcherInfo struct {
 type fileWatcher struct {
 	directory    string
 	callback     func(core.LogEntry)
+	raw          bool
 	position     int64
 	size         int64
 	inode        uint64
@@ -46,12 +47,18 @@ type fileWatcher struct {
 	logger       *log.Logger
 }
 
-// newFileWatcher creates a new watcher for a specific file path
-func newFileWatcher(directory string, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
+// newFileWatcher creates a new watcher for a specific file path.
+// A start position of 0 reads an existing file whole; -1 seeks to its end.
+func newFileWatcher(directory string, raw, fromStart bool, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
+	position := int64(-1)
+	if fromStart {
+		position = 0
+	}
 	w := &fileWatcher{
 		directory: directory,
 		callback:  callback,
-		position:  -1,
+		raw:       raw,
+		position:  position,
 		logger:    logger,
 	}
 	w.lastReadTime.Store(time.Time{})
@@ -60,8 +67,8 @@ func newFileWatcher(directory string, callback func(core.LogEntry), logger *log.
 
 // watch starts the main monitoring loop for the file
 func (w *fileWatcher) watch(ctx context.Context) error {
-	if err := w.seekToEnd(); err != nil {
-		return fmt.Errorf("seekToEnd failed: %w", err)
+	if err := w.initPosition(); err != nil {
+		return fmt.Errorf("initPosition failed: %w", err)
 	}
 
 	ticker := time.NewTicker(core.FileWatcherPollInterval)
@@ -297,8 +304,9 @@ func (w *fileWatcher) checkFile() error {
 	return nil
 }
 
-// seekToEnd sets the initial read position to the end of the file
-func (w *fileWatcher) seekToEnd() error {
+// initPosition records the file's metadata and, unless the watcher was created
+// to read from the start, sets the initial read position to the end
+func (w *fileWatcher) initPosition() error {
 	file, err := os.Open(w.directory)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -322,8 +330,6 @@ func (w *fileWatcher) seekToEnd() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// Keep existing position (including 0)
-	// First time initialization seeks to the end of the file
 	if w.position == -1 {
 		pos, err := file.Seek(0, io.SeekEnd)
 		if err != nil {
@@ -348,36 +354,67 @@ func (w *fileWatcher) isStopped() bool {
 	return w.stopped
 }
 
-// parseLine attempts to parse a line as JSON, falling back to plain text
+// parseLine converts a line into an entry, as JSON when nothing would be lost
 func (w *fileWatcher) parseLine(line string) core.LogEntry {
-	var jsonLog struct {
-		Time    string          `json:"time"`
-		Level   string          `json:"level"`
-		Message string          `json:"msg"`
-		Fields  json.RawMessage `json:"fields"`
-	}
-
-	if err := json.Unmarshal([]byte(line), &jsonLog); err == nil {
-		timestamp, err := time.Parse(time.RFC3339Nano, jsonLog.Time)
-		if err != nil {
-			timestamp = time.Now()
-		}
-
+	if w.raw {
+		// Newline restored: sinks write the payload as it stands
 		return core.LogEntry{
-			Time:    timestamp,
+			Time:    time.Now(),
 			Source:  filepath.Base(w.directory),
-			Level:   jsonLog.Level,
-			Message: jsonLog.Message,
-			Fields:  jsonLog.Fields,
+			Level:   source.ExtractLogLevel(line),
+			Message: line + "\n",
 		}
 	}
 
-	level := source.ExtractLogLevel(line)
+	if entry, ok := w.parseJSON(line); ok {
+		return entry
+	}
 
 	return core.LogEntry{
 		Time:    time.Now(),
 		Source:  filepath.Base(w.directory),
-		Level:   level,
+		Level:   source.ExtractLogLevel(line),
 		Message: line,
 	}
+}
+
+// parseJSON decodes a line into the entry envelope. A top-level key LogEntry
+// cannot carry refuses the whole line, so a richer record reaches the pipeline
+// as text rather than silently reduced to the four keys kept here.
+func (w *fileWatcher) parseJSON(line string) (core.LogEntry, bool) {
+	if len(line) == 0 || line[0] != '{' {
+		return core.LogEntry{}, false
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &obj); err != nil || len(obj) == 0 {
+		return core.LogEntry{}, false
+	}
+
+	entry := core.LogEntry{Time: time.Now(), Source: filepath.Base(w.directory)}
+	for key, val := range obj {
+		var err error
+		switch key {
+		case "time":
+			var ts string
+			if json.Unmarshal(val, &ts) == nil {
+				if t, terr := time.Parse(time.RFC3339Nano, ts); terr == nil {
+					entry.Time = t
+				}
+			}
+		case "level":
+			err = json.Unmarshal(val, &entry.Level)
+		case "msg":
+			err = json.Unmarshal(val, &entry.Message)
+		case "fields":
+			entry.Fields = val
+		default:
+			return core.LogEntry{}, false
+		}
+		if err != nil {
+			return core.LogEntry{}, false
+		}
+	}
+
+	return entry, true
 }

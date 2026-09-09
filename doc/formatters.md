@@ -30,8 +30,10 @@ Omitting `[pipelines.flow.format]` entirely selects `raw`.
 
 ### raw
 
-Passthrough. `FlagRaw` bypasses both formatting and sanitization, so the
-message reaches the sink exactly as the source produced it.
+Passthrough. `FlagRaw` bypasses formatting and sanitization: the message reaches
+the sink exactly as the source produced it, with no timestamp, level or source
+prefix added. An entry that also carries `fields` gets the fields JSON appended
+verbatim after a single space — `raw` never drops data and never re-encodes it.
 
 ```toml
 [pipelines.flow.format]
@@ -41,6 +43,12 @@ type = "raw"
 Fastest option, and the right one when you are relaying text that is already in
 its final form. Note that it also bypasses sanitization, so control characters
 in the source data reach your sinks intact.
+
+Byte-exact transport needs a source that does not split the line: the `console`
+source, or the `file` source with `raw = true`. Both put the whole line —
+newline included — in the message and leave `fields` empty. The `file` source's
+JSON branch splits a line into message and fields, so `raw` reassembles it as
+`<msg> <fields>` rather than reproducing the original object.
 
 ### txt
 
@@ -89,7 +97,7 @@ you need to override the defaults.
 
 With `flags = 0` the formatter selects `1` for `type = "raw"` and `6`
 (timestamp + level) for every other type. `8` is added automatically whenever an
-entry carries parseable `fields`.
+entry carries parseable `fields` and `1` is not set; `1` always wins.
 
 Examples: `flags = 4` for level only, no timestamp; `flags = 2` for timestamp
 only, no level.
@@ -133,11 +141,11 @@ when writing downstream parsers or grep patterns.
 
 ## Structured Fields
 
-When an entry carries `Fields` (raw JSON), the formatter parses it and switches
-to structured rendering by adding the `StructuredJSON` flag automatically.
-Fields reach a pipeline in two ways: from the `file` source when a tailed line
-parses as JSON with a `fields` key, and from the heartbeat generator when
-`include_stats = true`.
+When an entry carries `Fields` (raw JSON) and `FlagRaw` is not set, the
+formatter parses it and switches to structured rendering by adding the
+`StructuredJSON` flag automatically. Fields reach a pipeline in two ways: from
+the `file` source when a tailed line parses as JSON with a `fields` key, and
+from the heartbeat generator when `include_stats = true`.
 
 ## Choosing a Configuration
 

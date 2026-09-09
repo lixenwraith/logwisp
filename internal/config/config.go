@@ -198,6 +198,8 @@ type FileSourceOptions struct {
 	Directory       string `toml:"directory"`
 	Pattern         string `toml:"pattern"` // glob pattern
 	CheckIntervalMS int64  `toml:"check_interval_ms"`
+	Raw             bool   `toml:"raw"`  // keep the whole line as the message, never parse it
+	From            string `toml:"from"` // "end" (default) or "start" of a newly discovered file
 }
 
 // ConsoleSourceOptions defines settings for a stdin-based source
