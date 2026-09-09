@@ -206,15 +206,6 @@ interactive inspection. They need bash 5+, coreutils, and curl, and they bind
 ports 15801–15804. The pass-through test binds nothing. Generated configuration
 and logs land in `test/run/`.
 
-> Two of the three `--auto` assertions currently report `FAIL` against a
-> working build. They grep the sink output for `"source":"edge-tcp/` and
-> `"node":"edge-http"`, but the JSON formatter emits the `node/source` label
-> under the key `trace`. The transport itself is healthy — the
-> `total_processed` assertion passes and the streamed entries carry
-> `"trace":"edge-tcp/random_rand"` as expected. Until the assertions are
-> updated, verify the streams by eye with `nc 127.0.0.1 15803` and
-> `curl -sN http://127.0.0.1:15804/stream`.
-
 ## Uninstall
 
 ### Linux
