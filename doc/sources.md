@@ -54,10 +54,11 @@ check_interval_ms = 100
   beyond end-of-file, or an inode change. An inode change where the new file is
   already larger than the recorded position is treated as an atomic save, not a
   rotation, and the position is preserved.
-- Lines are parsed as JSON when they contain `time`, `level`, `msg`, and
-  `fields` keys; `time` is read as RFC3339Nano. Anything else is kept as plain
-  text with the level inferred from common markers (`[ERROR]`, `WARN:`, and so
-  on).
+- A line is parsed as JSON only when it is an object whose top-level keys are
+  all drawn from `time`, `level`, `msg` and `fields` — the four an entry can
+  carry. `time` is read as RFC3339Nano. Any other key, and any non-object line,
+  is kept whole as text with the level inferred from common markers
+  (`[ERROR]`, `WARN:`, and so on), because parsing it would drop the rest.
 - `Source` is set to the file's base name.
 
 **Statistics**: per-watcher size, position, entries read, rotation count, and

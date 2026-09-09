@@ -348,36 +348,57 @@ func (w *fileWatcher) isStopped() bool {
 	return w.stopped
 }
 
-// parseLine attempts to parse a line as JSON, falling back to plain text
+// parseLine converts a line into an entry, as JSON when nothing would be lost
 func (w *fileWatcher) parseLine(line string) core.LogEntry {
-	var jsonLog struct {
-		Time    string          `json:"time"`
-		Level   string          `json:"level"`
-		Message string          `json:"msg"`
-		Fields  json.RawMessage `json:"fields"`
+	if entry, ok := w.parseJSON(line); ok {
+		return entry
 	}
-
-	if err := json.Unmarshal([]byte(line), &jsonLog); err == nil {
-		timestamp, err := time.Parse(time.RFC3339Nano, jsonLog.Time)
-		if err != nil {
-			timestamp = time.Now()
-		}
-
-		return core.LogEntry{
-			Time:    timestamp,
-			Source:  filepath.Base(w.directory),
-			Level:   jsonLog.Level,
-			Message: jsonLog.Message,
-			Fields:  jsonLog.Fields,
-		}
-	}
-
-	level := source.ExtractLogLevel(line)
 
 	return core.LogEntry{
 		Time:    time.Now(),
 		Source:  filepath.Base(w.directory),
-		Level:   level,
+		Level:   source.ExtractLogLevel(line),
 		Message: line,
 	}
+}
+
+// parseJSON decodes a line into the entry envelope. A top-level key LogEntry
+// cannot carry refuses the whole line, so a richer record reaches the pipeline
+// as text rather than silently reduced to the four keys kept here.
+func (w *fileWatcher) parseJSON(line string) (core.LogEntry, bool) {
+	if len(line) == 0 || line[0] != '{' {
+		return core.LogEntry{}, false
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &obj); err != nil || len(obj) == 0 {
+		return core.LogEntry{}, false
+	}
+
+	entry := core.LogEntry{Time: time.Now(), Source: filepath.Base(w.directory)}
+	for key, val := range obj {
+		var err error
+		switch key {
+		case "time":
+			var ts string
+			if json.Unmarshal(val, &ts) == nil {
+				if t, terr := time.Parse(time.RFC3339Nano, ts); terr == nil {
+					entry.Time = t
+				}
+			}
+		case "level":
+			err = json.Unmarshal(val, &entry.Level)
+		case "msg":
+			err = json.Unmarshal(val, &entry.Message)
+		case "fields":
+			entry.Fields = val
+		default:
+			return core.LogEntry{}, false
+		}
+		if err != nil {
+			return core.LogEntry{}, false
+		}
+	}
+
+	return entry, true
 }
