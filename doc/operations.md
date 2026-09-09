@@ -231,7 +231,8 @@ pipeline `total_dropped_by_sink` (sink backed up?), sink `total_processed`.
 
 - The watcher seeks to end-of-file on start; only content appended afterwards is
   read. Positions are in memory, so a restart re-seeks to end and anything
-  written during the downtime is lost.
+  written during the downtime is lost. `from = "start"` reads each file whole
+  instead, and replays it on every restart.
 - `pattern` is a filename glob with `*` and `?` only, and matching is not
   recursive.
 - `check_interval_ms` governs how quickly a *new file* is noticed; tailing an

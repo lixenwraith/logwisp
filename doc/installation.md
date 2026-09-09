@@ -4,7 +4,7 @@
 
 - **Operating systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
 - **Architecture**: amd64
-- **Go**: 1.26 or newer, to build from source
+- **Go**: 1.27.1 or newer, to build from source
 
 ## Building from Source
 
@@ -36,6 +36,24 @@ go build -o bin/logwisp ./cmd/logwisp
 
 `go install github.com/lixenwraith/logwisp/cmd/logwisp@latest` also works, with
 the same loss of version metadata.
+
+## Container Image
+
+The root `Dockerfile` builds the same package into `scratch` under UID 65532,
+static and stripped. There is no shell and no config in the image: mount one and
+name it, as the binary has no daemon mode and no built-in defaults worth running.
+
+```bash
+REV=$(git rev-parse HEAD)
+docker build -t "logwisp:$(git rev-parse --short HEAD)" \
+  --build-arg VERSION="$(git describe --tags --always)" \
+  --build-arg REVISION="$REV" .
+docker run --rm -v /etc/logwisp:/etc/logwisp:ro logwisp:... -c /etc/logwisp/logwisp.toml
+```
+
+Sinks that listen (`http`, `tcp`) need their ports published; the read-only
+root filesystem and dropped capabilities a restricted runtime imposes are all
+compatible with it, provided a `file` sink's directory is writable by 65532.
 
 ## Configuration
 
@@ -173,27 +191,20 @@ mode; see [Operations](operations.md#checking-a-configuration).
 
 ## Test Scripts
 
-Two end-to-end scripts under `test/` build multi-node chain topologies against a
-local build:
+End-to-end scripts under `test/` run against a local build:
 
 ```bash
 make
 ./test/chain-test.sh --auto             # two independent relay pipelines
 ./test/chain-aggregate-test.sh --auto   # fan-in: both edges into one pipeline
+./test/mtls-chain-test.sh --auto        # the same fan-in under mTLS
+./test/passthrough-test.sh              # file source relays a wide envelope intact
 ```
 
-Without `--auto` they run the relay in the foreground for interactive
-inspection. They need bash 5+, coreutils, and curl, and they bind ports
-15801–15804. Generated configuration and logs land in `test/run/`.
-
-> Two of the three `--auto` assertions currently report `FAIL` against a
-> working build. They grep the sink output for `"source":"edge-tcp/` and
-> `"node":"edge-http"`, but the JSON formatter emits the `node/source` label
-> under the key `trace`. The transport itself is healthy — the
-> `total_processed` assertion passes and the streamed entries carry
-> `"trace":"edge-tcp/random_rand"` as expected. Until the assertions are
-> updated, verify the streams by eye with `nc 127.0.0.1 15803` and
-> `curl -sN http://127.0.0.1:15804/stream`.
+Without `--auto` the chain scripts run the relay in the foreground for
+interactive inspection. They need bash 5+, coreutils, and curl, and they bind
+ports 15801–15804. The pass-through test binds nothing. Generated configuration
+and logs land in `test/run/`.
 
 ## Uninstall
 

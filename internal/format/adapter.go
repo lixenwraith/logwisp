@@ -90,57 +90,44 @@ func NewFormatterAdapter(cfg *config.FormatConfig) (*FormatterAdapter, error) {
 
 // Format implements Formatter interface
 func (a *FormatterAdapter) Format(entry core.LogEntry) ([]byte, error) {
-	// Map logwisp LogEntry to formatter args
-	level := mapLevel(entry.Level)
-	// syslog-style origin prefix for chained entries
-	src := sourceLabel(entry)
-
-	// Build args based on whether we have structured fields
-	var args []any
-	effectiveFlags := a.flags
-
-	if len(entry.Fields) > 0 {
-		// Parse fields JSON
-		var fields map[string]any
-		if err := json.Unmarshal(entry.Fields, &fields); err == nil && len(fields) > 0 {
-			// Use structured JSON format for fields
-			args = []any{entry.Message, fields}
-			// Add structured flag to properly format fields as JSON object
-			effectiveFlags |= formatter.FlagStructuredJSON
-			return a.formatter.Format(effectiveFlags, entry.Time, level, src, args), nil
-		}
-	}
-	if args == nil {
-		args = []any{entry.Message}
-	}
-
-	a.mu.Lock()
-	out := bytes.Clone(a.formatter.Format(effectiveFlags, entry.Time, level, src, args))
-	a.mu.Unlock()
-	return out, nil
+	return a.serialize(entry, a.flags), nil
 }
 
 // FormatWithFlags allows custom flags for specific formatting needs
 func (a *FormatterAdapter) FormatWithFlags(entry core.LogEntry, customFlags int64) ([]byte, error) {
-	level := mapLevel(entry.Level)
-	src := sourceLabel(entry)
+	return a.serialize(entry, customFlags), nil
+}
 
-	var args []any
-	if len(entry.Fields) > 0 {
-		var fields map[string]any
-		if err := json.Unmarshal(entry.Fields, &fields); err == nil && len(fields) > 0 {
-			args = []any{entry.Message, fields}
-			customFlags |= formatter.FlagStructuredJSON
-		}
-	}
-	if args == nil {
-		args = []any{entry.Message}
-	}
+// serialize renders an entry under the given flags. The returned slice is a
+// copy: the underlying formatter reuses one buffer and sinks retain payloads.
+func (a *FormatterAdapter) serialize(entry core.LogEntry, flags int64) []byte {
+	args, flags := formatArgs(entry, flags)
 
 	a.mu.Lock()
-	out := bytes.Clone(a.formatter.Format(customFlags, entry.Time, level, src, args))
+	out := bytes.Clone(a.formatter.Format(flags, entry.Time, mapLevel(entry.Level), sourceLabel(entry), args))
 	a.mu.Unlock()
-	return out, nil
+	return out
+}
+
+// formatArgs pairs the entry with its flags. FlagRaw keeps the fields JSON
+// verbatim beside the message rather than silently overriding the caller's
+// choice of passthrough; every other mode renders it as a JSON object.
+func formatArgs(entry core.LogEntry, flags int64) ([]any, int64) {
+	if len(entry.Fields) == 0 {
+		return []any{entry.Message}, flags
+	}
+	if flags&formatter.FlagRaw != 0 {
+		if entry.Message == "" {
+			return []any{[]byte(entry.Fields)}, flags
+		}
+		return []any{entry.Message, []byte(entry.Fields)}, flags
+	}
+
+	var fields map[string]any
+	if err := json.Unmarshal(entry.Fields, &fields); err != nil || len(fields) == 0 {
+		return []any{entry.Message}, flags
+	}
+	return []any{entry.Message, fields}, flags | formatter.FlagStructuredJSON
 }
 
 // Name returns formatter type
