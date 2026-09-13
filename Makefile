@@ -33,7 +33,7 @@ install: build
 
 # Uninstall the binary
 uninstall:
-	rm -f $(BINDIR)/$(BINARY_PATH)
+	rm -f $(BINDIR)/$(BINARY_NAME)
 
 # Clean build artifacts
 clean:
