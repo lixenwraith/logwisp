@@ -160,9 +160,10 @@ allow = ["viewer-01"]
 - HTTP/2 is negotiated via ALPN when TLS is enabled; plaintext is HTTP/1.1.
 
 **Status endpoint** returns service and version identity, host, port, TLS flag,
-the compiled auth policy, active client count, buffer size, uptime, endpoint
-paths, and the `total_processed` / `dropped_writes` / `rejected_clients` /
-`auth_rejected` counters.
+the compiled auth policy, active client count, sink and per-client buffer sizes,
+connection limit, write timeout, uptime, endpoint paths, and the
+`total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected`
+counters.
 
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read

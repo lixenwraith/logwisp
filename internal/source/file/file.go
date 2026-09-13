@@ -292,10 +292,19 @@ func (fs *FileSource) ensureWatcher(path string) {
 			}
 		}
 
-		fs.mu.Lock()
-		delete(fs.watchers, path)
-		fs.mu.Unlock()
+		fs.removeWatcher(path, w)
 	}()
+}
+
+// removeWatcher removes only the watcher that finished. A deleted file can be
+// recreated before its old watcher observes stop; in that case ensureWatcher
+// has already installed a replacement under the same path, which must survive.
+func (fs *FileSource) removeWatcher(path string, watcher *fileWatcher) {
+	fs.mu.Lock()
+	if fs.watchers[path] == watcher {
+		delete(fs.watchers, path)
+	}
+	fs.mu.Unlock()
 }
 
 // cleanupWatchers stops and removes watchers for files that no longer exist.
@@ -369,4 +378,3 @@ func globToRegex(glob string) string {
 	regex = strings.ReplaceAll(regex, `\?`, `.`)
 	return "^" + regex + "$"
 }
-

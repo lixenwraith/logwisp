@@ -124,6 +124,9 @@ curl -s http://127.0.0.1:8080/status | jq .
     "tls": false,
     "active_clients": 3,
     "buffer_size": 1000,
+    "client_buffer_size": 256,
+    "max_connections": 32,
+    "write_timeout_ms": 5000,
     "uptime_seconds": 8130
   },
   "endpoints": { "stream": "/stream", "status": "/status" },
@@ -183,8 +186,10 @@ the filter stage logs several lines per entry evaluated.
 
 Raise `buffer_size` when `total_dropped_by_sink` is climbing but the sink itself
 is healthy — that is a burst-absorption problem. Raise `client_buffer_size` when
-`dropped_writes` is climbing for network sinks; that is a slow-consumer problem,
-and a bigger buffer only buys time.
+`dropped_writes` is climbing for network sinks; that is a slow-consumer or
+startup-replay burst problem, and a bigger buffer only buys time. The HTTP
+status endpoint reports both queue bounds alongside the counters so an operator
+can distinguish configuration from demand.
 
 ```toml
 [pipelines.plugin_sinks.config]

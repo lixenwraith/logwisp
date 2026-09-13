@@ -22,7 +22,7 @@ The Makefile works with both GNU make and BSD make. Targets:
 | `make` / `make build` | Build `bin/logwisp` with version metadata |
 | `make dev` | Build with the race detector enabled |
 | `make install` | Install the binary to `$(PREFIX)/bin` (default `/usr/local`) |
-| `make uninstall` | Intended to remove the installed binary — currently broken: it expands to `$(BINDIR)/bin/logwisp` instead of `$(BINDIR)/logwisp`, so it removes nothing. Delete the binary by hand |
+| `make uninstall` | Remove `$(BINDIR)/logwisp` |
 | `make clean` | Remove the built binary |
 | `make version` | Print the version, commit, and build time that would be embedded |
 

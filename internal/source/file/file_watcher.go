@@ -80,7 +80,7 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if w.isStopped() {
-				return fmt.Errorf("watcher stopped")
+				return nil
 			}
 			if err := w.checkFile(); err != nil {
 				// Log error but continue watching
