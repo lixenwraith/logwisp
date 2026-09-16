@@ -140,7 +140,9 @@ allow = ["viewer-01"]
 
 **Behaviour**
 
-- Only `GET` is routed to either path; anything else gets `405`.
+- Only `GET` is routed to either path; anything else gets `405`, `HEAD` on
+  `stream_path` included — a stream is a body, and a client registered to have
+  its body discarded never reads and never leaves.
 - With an `auth` block, one middleware gates **both** endpoints: an
   unauthorized client gets `403` with no body detail, and the rejection is
   logged at WARN and counted in `auth_rejected`. The authorized identity is
@@ -150,11 +152,20 @@ allow = ["viewer-01"]
 - Payloads are framed per the SSE spec, one `data:` line per newline in the
   payload, so multi-line entries stream correctly.
 - The server sets no `WriteTimeout` (that would kill long-lived streams);
-  per-write deadlines come from `write_timeout_ms` via `http.ResponseController`.
+  per-write deadlines come from `write_timeout_ms` via `http.ResponseController`
+  and cover the connected frame, every payload, and the idle comment.
+- A quiet stream emits an SSE comment every 15 s. It refreshes the client's
+  session and is how a peer that stopped reading is noticed.
 - A client whose send queue is full has that event dropped
-  (`dropped_writes`); it is not disconnected.
+  (`dropped_writes`); it is not disconnected. A `dropped_writes` that rises while
+  no client is behind is a burst larger than `client_buffer_size`, not
+  backpressure: size the queue at or above whatever burst the pipeline's
+  `rate_limit` releases at once.
+- A client is registered only once its connected frame has flushed, so the
+  broker never queues into a buffer whose reader has not started.
 - Clients whose session has been idle-expired by the session manager are
-  evicted by the broker.
+  evicted by the broker. With the idle comment above, that reaches only a peer
+  that has stopped accepting bytes on a sink configured `write_timeout_ms = 0`.
 - On shutdown, connected clients receive
   `event: disconnect / data: {"reason":"server_shutdown"}`.
 - HTTP/2 is negotiated via ALPN when TLS is enabled; plaintext is HTTP/1.1.

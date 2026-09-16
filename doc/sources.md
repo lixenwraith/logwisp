@@ -60,6 +60,10 @@ from              = "end"
   beyond end-of-file, or an inode change. An inode change where the new file is
   already larger than the recorded position is treated as an atomic save, not a
   rotation, and the position is preserved.
+- A rotation that renames in place — what a size-capped writer does — puts the
+  same inode back under a name `pattern` also matches. Its watcher resumes at
+  the position the original reached, so `from = "start"` reads the tail an
+  unfinished read left behind rather than the whole archive a second time.
 - A line is parsed as JSON only when it is an object whose top-level keys are
   all drawn from `time`, `level`, `msg` and `fields` — the four an entry can
   carry. `time` is read as RFC3339Nano. Any other key, and any non-object line,
