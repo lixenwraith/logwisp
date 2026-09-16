@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"logwisp/internal/config"
@@ -270,6 +271,12 @@ func (fs *FileSource) ensureWatcher(path string) {
 	}
 
 	w := newFileWatcher(path, fs.config.Raw, fs.config.From == "start", fs.publish, fs.logger)
+	// A rotation renames the file out from under its watcher, so the same inode
+	// reappears here under the archive name. Resume where it was left: from the
+	// start would re-emit every record the file has already delivered.
+	if position, ok := fs.readPosition(path); ok {
+		w.position = position
+	}
 	fs.watchers[path] = w
 
 	fs.logger.Debug("msg", "Created file watcher",
@@ -294,6 +301,25 @@ func (fs *FileSource) ensureWatcher(path string) {
 
 		fs.removeWatcher(path, w)
 	}()
+}
+
+// readPosition reports how far a running watcher has read the file now at path.
+// Callers hold fs.mu.
+func (fs *FileSource) readPosition(path string) (int64, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	for _, w := range fs.watchers {
+		if position, ok := w.readTo(stat.Ino); ok {
+			return position, true
+		}
+	}
+	return 0, false
 }
 
 // removeWatcher removes only the watcher that finished. A deleted file can be

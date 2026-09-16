@@ -42,6 +42,8 @@ type fileWatcher struct {
 	mu           sync.Mutex
 	stopped      bool
 	rotationSeq  int64
+	prevInode    uint64
+	prevPosition int64
 	entriesRead  atomic.Uint64
 	lastReadTime atomic.Value // time.Time
 	logger       *log.Logger
@@ -220,6 +222,9 @@ func (w *fileWatcher) checkFile() error {
 		w.mu.Lock()
 		w.rotationSeq++
 		seq := w.rotationSeq
+		// Retained for the source: the renamed file is about to be discovered
+		// under its archive name, and only this says how much of it was read.
+		w.prevInode, w.prevPosition = oldInode, oldPos
 		w.inode = currentInode
 		w.position = 0 // Reset position on rotation
 		w.mu.Unlock()
@@ -345,6 +350,23 @@ func (w *fileWatcher) initPosition() error {
 	}
 
 	return nil
+}
+
+// readTo reports how far this watcher read the given inode: the file it tails
+// now, or the one a rotation renamed out from under it.
+func (w *fileWatcher) readTo(inode uint64) (int64, bool) {
+	if inode == 0 {
+		return 0, false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	switch inode {
+	case w.inode:
+		return w.position, true
+	case w.prevInode:
+		return w.prevPosition, true
+	}
+	return 0, false
 }
 
 // isStopped checks if the watcher has been instructed to stop

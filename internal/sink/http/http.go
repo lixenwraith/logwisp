@@ -68,6 +68,7 @@ type HTTPSink struct {
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
 	writeTimeout time.Duration
+	keepalive    time.Duration
 
 	// TLS
 	tlsConfig *tls.Config
@@ -150,6 +151,7 @@ func NewHTTPSinkPlugin(
 		logger:       logger,
 		clients:      make(map[uint64]*sseClient),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
+		keepalive:    core.StreamKeepaliveInterval,
 		tlsConfig:    tlsCfg,
 		auth:         authPolicy,
 	}
@@ -205,6 +207,10 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	// Method-scoped patterns: mux answers 405 with Allow header on non-GET
 	mux.HandleFunc(http.MethodGet+" "+h.config.StreamPath, h.handleStream)
 	mux.HandleFunc(http.MethodGet+" "+h.config.StatusPath, h.handleStatus)
+	// A GET pattern also serves HEAD, and a HEAD stream is a registered client
+	// whose body writes are discarded: it never reads, so nothing but the peer
+	// closing the connection ends it. The status path answers one either way.
+	mux.HandleFunc(http.MethodHead+" "+h.config.StreamPath, streamHeadNotAllowed)
 
 	// One wrapper covers stream and status, and keeps the handlers themselves
 	// unaware of authorization
@@ -287,9 +293,9 @@ func (h *HTTPSink) shutdown() {
 	})
 }
 
-// removeClient unregisters a client; the first caller closes the send
-// channel and removes the session. Broker (stale-session eviction) and
-// stream handler (disconnect) may race here safely.
+// removeClient unregisters a client; the first caller closes the send channel.
+// Broker (stale-session eviction) and stream handler (disconnect) may race here
+// safely. The session is the handler's, released when it returns.
 func (h *HTTPSink) removeClient(id uint64) {
 	h.clientsMu.Lock()
 	c, ok := h.clients[id]
@@ -299,7 +305,6 @@ func (h *HTTPSink) removeClient(id uint64) {
 	h.clientsMu.Unlock()
 	if ok {
 		close(c.send)
-		h.proxy.RemoveSession(c.sessionID)
 	}
 }
 
@@ -374,10 +379,6 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	id := h.nextClientID.Add(1)
 
-	h.clientsMu.Lock()
-	h.clients[id] = c
-	h.clientsMu.Unlock()
-
 	count := h.activeClients.Add(1)
 	h.logger.Debug("msg", "HTTP client connected",
 		"component", "http_sink",
@@ -389,6 +390,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		h.removeClient(id)
+		h.proxy.RemoveSession(sess.ID)
 		newCount := h.activeClients.Add(-1)
 		h.logger.Debug("msg", "HTTP client disconnected",
 			"component", "http_sink",
@@ -413,10 +415,23 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 		"status_path": h.config.StatusPath,
 		"buffer_size": h.config.ClientBufferSize,
 	})
+	h.armWrite(rc)
 	fmt.Fprintf(w, "event: connected\ndata: %s\n\n", info)
 	if err := rc.Flush(); err != nil {
 		return
 	}
+
+	// Registered only now: a client the broker can queue into before its reader
+	// reaches the loop below loses a burst to a buffer nobody is draining.
+	h.clientsMu.Lock()
+	h.clients[id] = c
+	h.clientsMu.Unlock()
+
+	// A stream with nothing to carry still has to prove the peer is there. The
+	// comment refreshes the session the broker evicts on, and fails on a peer
+	// that stopped reading.
+	idle := time.NewTicker(h.keepalive)
+	defer idle.Stop()
 
 	clientGone := r.Context().Done()
 	for {
@@ -425,10 +440,17 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // broker evicted (stale session)
 			}
-			if h.writeTimeout > 0 {
-				_ = rc.SetWriteDeadline(time.Now().Add(h.writeTimeout))
-			}
+			h.armWrite(rc)
 			if err := writeSSE(w, payload); err != nil {
+				return
+			}
+			if err := rc.Flush(); err != nil {
+				return
+			}
+			h.proxy.UpdateActivity(sess.ID)
+		case <-idle.C:
+			h.armWrite(rc)
+			if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
 				return
 			}
 			if err := rc.Flush(); err != nil {
@@ -442,6 +464,14 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			rc.Flush()
 			return
 		}
+	}
+}
+
+// armWrite bounds the next response write. Without it an SSE write is unbounded
+// and a peer that stops reading wedges its handler for as long as it stays open.
+func (h *HTTPSink) armWrite(rc *http.ResponseController) {
+	if h.writeTimeout > 0 {
+		_ = rc.SetWriteDeadline(time.Now().Add(h.writeTimeout))
 	}
 }
 
@@ -534,6 +564,12 @@ func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, ident)))
 	})
+}
+
+// streamHeadNotAllowed refuses a body-less read of a stream that is only a body
+func streamHeadNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Allow", http.MethodGet)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 // writeSSE frames a payload per the W3C SSE spec (multi-line safe)
