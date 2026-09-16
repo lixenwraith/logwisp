@@ -207,6 +207,10 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	// Method-scoped patterns: mux answers 405 with Allow header on non-GET
 	mux.HandleFunc(http.MethodGet+" "+h.config.StreamPath, h.handleStream)
 	mux.HandleFunc(http.MethodGet+" "+h.config.StatusPath, h.handleStatus)
+	// A GET pattern also serves HEAD, and a HEAD stream is a registered client
+	// whose body writes are discarded: it never reads, so nothing but the peer
+	// closing the connection ends it. The status path answers one either way.
+	mux.HandleFunc(http.MethodHead+" "+h.config.StreamPath, streamHeadNotAllowed)
 
 	// One wrapper covers stream and status, and keeps the handlers themselves
 	// unaware of authorization
@@ -560,6 +564,12 @@ func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, ident)))
 	})
+}
+
+// streamHeadNotAllowed refuses a body-less read of a stream that is only a body
+func streamHeadNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Allow", http.MethodGet)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 // writeSSE frames a payload per the W3C SSE spec (multi-line safe)

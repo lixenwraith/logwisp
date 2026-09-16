@@ -140,7 +140,9 @@ allow = ["viewer-01"]
 
 **Behaviour**
 
-- Only `GET` is routed to either path; anything else gets `405`.
+- Only `GET` is routed to either path; anything else gets `405`, `HEAD` on
+  `stream_path` included — a stream is a body, and a client registered to have
+  its body discarded never reads and never leaves.
 - With an `auth` block, one middleware gates **both** endpoints: an
   unauthorized client gets `403` with no body detail, and the rejection is
   logged at WARN and counted in `auth_rejected`. The authorized identity is

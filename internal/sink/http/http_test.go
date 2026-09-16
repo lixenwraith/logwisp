@@ -127,3 +127,41 @@ func TestQuietStreamRefreshesItsSession(t *testing.T) {
 		t.Fatalf("last activity %v did not advance on a silent stream", after)
 	}
 }
+
+// HEAD on the stream path is refused rather than served from the GET pattern:
+// its body writes are discarded, so the client it would register never reads.
+func TestHeadOnStreamPathIsRefused(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	defer manager.Stop()
+	created, err := NewHTTPSinkPlugin(
+		"stream",
+		map[string]any{"host": "127.0.0.1", "port": int64(18192)},
+		log.NewLogger(),
+		session.NewProxy(manager, "stream"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpSink := created.(*HTTPSink)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := httpSink.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer httpSink.Stop()
+
+	resp, err := http.Head("http://127.0.0.1:18192/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("HEAD /stream = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	}
+	if got := resp.Header.Get("Allow"); got != http.MethodGet {
+		t.Errorf("Allow = %q, want %q", got, http.MethodGet)
+	}
+	if n := manager.GetSessionCount(); n != 0 {
+		t.Errorf("sessions after HEAD = %d, want 0", n)
+	}
+}
