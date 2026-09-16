@@ -1,7 +1,9 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -72,4 +74,56 @@ func TestStatusReportsQueueAndConnectionBounds(t *testing.T) {
 	}
 
 	var _ sink.Sink = httpSink
+}
+
+// A stream carrying nothing still refreshes its session. Log traffic is what
+// bumps activity otherwise, so a quiet source would idle-expire a healthy client
+// and the broker would evict it on the next entry.
+func TestQuietStreamRefreshesItsSession(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	defer manager.Stop()
+	created, err := NewHTTPSinkPlugin(
+		"stream",
+		map[string]any{"host": "127.0.0.1", "port": int64(18191), "write_timeout_ms": int64(5000)},
+		log.NewLogger(),
+		session.NewProxy(manager, "stream"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpSink := created.(*HTTPSink)
+	httpSink.keepalive = 100 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := httpSink.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer httpSink.Stop()
+
+	resp, err := http.Get("http://127.0.0.1:18191/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	activity := func() time.Time {
+		for _, s := range manager.GetActiveSessions() {
+			return s.LastActivity
+		}
+		t.Fatal("no session for the connected client")
+		return time.Time{}
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for activity().IsZero() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := activity()
+
+	// No events are sent for several keepalive periods.
+	time.Sleep(350 * time.Millisecond)
+	if after := activity(); !after.After(before) {
+		t.Fatalf("last activity %v did not advance on a silent stream", after)
+	}
 }

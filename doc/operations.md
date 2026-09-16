@@ -148,7 +148,7 @@ This endpoint is scoped to one sink, not to the whole process, and it is
 | `dropped_entries` | source | Downstream cannot keep up with the source |
 | `total_dropped` | flow | Rate limit or filters are discarding entries (often intended) |
 | `total_dropped_by_sink` | pipeline | A sink's input queue is full |
-| `dropped_writes` | tcp/http sink | A specific client is too slow |
+| `dropped_writes` | tcp/http sink | A client's queue overflowed: either it is too slow, or one burst exceeded `client_buffer_size` |
 | `rejected_conns` / `rejected_clients` | tcp/http sink, tcp_chain source | `max_connections` is being hit |
 | `tls_handshake_errors` | tcp sink, tcp_chain source | Certificate or version mismatch, or scanning |
 | `parse_errors` | chain source | Protocol or version skew upstream |
@@ -185,11 +185,18 @@ the filter stage logs several lines per entry evaluated.
 ### Buffers
 
 Raise `buffer_size` when `total_dropped_by_sink` is climbing but the sink itself
-is healthy — that is a burst-absorption problem. Raise `client_buffer_size` when
-`dropped_writes` is climbing for network sinks; that is a slow-consumer or
-startup-replay burst problem, and a bigger buffer only buys time. The HTTP
+is healthy — that is a burst-absorption problem.
+
+`dropped_writes` on a network sink has two causes that a counter alone does not
+separate. A consumer slower than the sustained rate cannot be bought off with
+buffer, and drops are the intended outcome. A burst the consumer would have
+drained, arriving faster than it reads, is configuration: the sink queues a
+whole burst while the client writes one frame at a time, so the part of a burst
+above `client_buffer_size` is lost even to a loopback reader.
+Where a `rate_limit` bounds the pipeline, its `burst` is that number — keep
+`client_buffer_size` at or above it and the second cause disappears. The HTTP
 status endpoint reports both queue bounds alongside the counters so an operator
-can distinguish configuration from demand.
+can tell which one is in play.
 
 ```toml
 [pipelines.plugin_sinks.config]
