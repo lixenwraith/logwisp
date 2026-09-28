@@ -14,12 +14,13 @@ import (
 
 // Service manages a collection of log processing pipelines
 type Service struct {
-	pipelines map[string]*pipeline.Pipeline
-	mu        sync.RWMutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	logger    *log.Logger
+	pipelines    map[string]*pipeline.Pipeline
+	mu           sync.RWMutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	logger       *log.Logger
+	shutdownOnce sync.Once
 }
 
 // NewService creates a new, empty service
@@ -49,9 +50,14 @@ func NewService(ctx context.Context, cfg *config.Config, logger *log.Logger) (*S
 		}
 	}
 
+	if errs != nil {
+		// A rejected reload must not retain prepared pipelines or their workers.
+		svc.Shutdown()
+		return nil, errs
+	}
 	logger.Info("msg", "Service initialization completed", "pipelines", len(svc.pipelines))
 
-	return svc, errs
+	return svc, nil
 }
 
 // Start starts all or specific pipelines
@@ -168,6 +174,10 @@ func (svc *Service) RemovePipeline(name string) error {
 
 // Shutdown gracefully stops all pipelines managed by the service
 func (svc *Service) Shutdown() {
+	svc.shutdownOnce.Do(svc.shutdown)
+}
+
+func (svc *Service) shutdown() {
 	svc.logger.Info("msg", "Service shutdown initiated")
 
 	svc.mu.Lock()

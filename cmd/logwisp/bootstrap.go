@@ -35,6 +35,7 @@ func bootstrapInitial(ctx context.Context, cfg *config.Config) (*service.Service
 	}
 
 	if err := svc.Start(); err != nil {
+		svc.Shutdown()
 		return nil, nil, fmt.Errorf("failed to start service pipelines: %w", err)
 	}
 
@@ -47,23 +48,13 @@ func bootstrapInitial(ctx context.Context, cfg *config.Config) (*service.Service
 }
 
 // handleReload orchestrates the entire hot-reload process including status reporter lifecycle
-func handleReload(ctx context.Context, oldSvc *service.Service, statusCancel context.CancelFunc) (*service.Service, *config.Config, context.CancelFunc, error) {
+func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Service, statusCancel context.CancelFunc) (*service.Service, *config.Config, context.CancelFunc, error) {
 	logger.Info("msg", "Starting configuration hot reload")
 
-	// Get updated config from the lixenwraith/config manager
-	lcfg := config.GetConfigManager()
-	if lcfg == nil {
-		err := fmt.Errorf("config manager not available for reload")
-		logger.Error("msg", "Reload failed", "error", err)
+	if err := config.ValidateConfig(newCfg); err != nil {
+		logger.Error("msg", "Invalid reload configuration, keeping old service running", "error", err)
 		return nil, nil, nil, err
 	}
-
-	updatedCfgStruct, err := lcfg.AsStruct()
-	if err != nil {
-		logger.Error("msg", "Failed to get updated config for reload", "error", err, "action", "keeping current configuration")
-		return nil, nil, nil, err
-	}
-	newCfg := updatedCfgStruct.(*config.Config)
 
 	// Bootstrap a new service to ensure it's valid before touching the old one
 	logger.Debug("msg", "Bootstrapping new service with updated config")
@@ -74,6 +65,9 @@ func handleReload(ctx context.Context, oldSvc *service.Service, statusCancel con
 	}
 
 	// Gracefully shut down the old service
+	if statusCancel != nil {
+		statusCancel()
+	}
 	if oldSvc != nil {
 		logger.Info("msg", "Shutting down old service before activating new one")
 		oldSvc.Shutdown()
@@ -81,15 +75,12 @@ func handleReload(ctx context.Context, oldSvc *service.Service, statusCancel con
 
 	// Start the new service
 	if err := newService.Start(); err != nil {
+		newService.Shutdown()
 		logger.Error("msg", "Failed to start new service pipelines after reload. The application may be in a non-functional state.", "error", err)
 		return nil, nil, nil, fmt.Errorf("failed to start new service: %w", err)
 	}
 
 	// Manage status reporter lifecycle
-	if statusCancel != nil {
-		statusCancel()
-	}
-
 	var newStatusCancel context.CancelFunc
 	if newCfg.StatusReporter {
 		newStatusCancel = startStatusReporter(ctx, newService)

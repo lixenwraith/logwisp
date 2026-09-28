@@ -26,20 +26,15 @@ Any scalar configuration key is settable as a flag using its TOML path:
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-c <path>` | Configuration file | `./logwisp.toml` |
-| `--config=<path>` | Configuration file (equals form only) | `./logwisp.toml` |
+| `--config <path>` / `--config=<path>` | Configuration file | `./logwisp.toml` |
 | `--quiet` | Suppress all application output | `false` |
 | `--status_reporter=<bool>` | Periodic status logging | `true` |
 | `--auto_reload=<bool>` | Reload config when the file changes | `false` |
 | `--version` | Print version and exit | — |
 | `-h`, `--help`, `help` | Print usage and exit | — |
 
-> `--config <path>` with a space is not recognized. The path resolver
-> understands `-c <path>` and `--config=<path>` only; the space form is treated
-> as an unknown flag, warned about, and ignored, after which LogWisp silently
-> falls back to `./logwisp.toml`.
->
-> `-c` as the final argument, with no path after it, crashes with an index
-> panic rather than reporting a usage error.
+The last file-selection flag wins. `-c=<path>` also works. A missing or empty
+path returns an error, and `--` ends option parsing.
 
 ### Logging
 
@@ -74,22 +69,19 @@ that the current loader does not implement.
 
 ## Environment Variables
 
-Configuration paths map to environment variables by replacing `.` with `_` and
-uppercasing:
+Configuration paths map to environment variables by replacing `.` with `_`,
+uppercasing and adding `LOGWISP_`:
 
 ```bash
-export QUIET=true
-export LOGGING_LEVEL=debug
-export LOGGING_FILE_DIRECTORY=/var/log/logwisp
+export LOGWISP_QUIET=true
+export LOGWISP_LOGGING_LEVEL=debug
+export LOGWISP_LOGGING_FILE_DIRECTORY=/var/log/logwisp
 ```
 
-> The `LOGWISP_` prefix is **not** currently applied to these — see
-> [Configuration](configuration.md#environment-variables). Bare names like
-> `QUIET` are what LogWisp actually reads, which is worth knowing both to make
-> overrides work and to avoid accidental collisions.
+Bare names used by older versions are now ignored. Rename them to the prefixed
+forms when upgrading; see [Configuration](configuration.md#environment-variables).
 
-The two variables that do carry the prefix are read directly by the path
-resolver:
+The path resolver reads these variables directly:
 
 | Variable | Effect |
 |----------|--------|

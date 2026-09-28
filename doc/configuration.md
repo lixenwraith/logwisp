@@ -20,20 +20,19 @@ limit and formatter) disappears entirely.
 
 The path is resolved before any other configuration is read:
 
-1. `-c <path>` on the command line
-2. `--config=<path>` on the command line
-3. `$LOGWISP_CONFIG_FILE`, joined onto `$LOGWISP_CONFIG_DIR` when both are set
-4. `$LOGWISP_CONFIG_DIR/logwisp.toml`
-5. `~/.config/logwisp/logwisp.toml`, if it exists
-6. `./logwisp.toml`
+1. `-c <path>`, `--config <path>`, or their `=<path>` forms (last one wins)
+2. `$LOGWISP_CONFIG_FILE`, joined onto `$LOGWISP_CONFIG_DIR` when both are set
+3. `$LOGWISP_CONFIG_DIR/logwisp.toml`
+4. `~/.config/logwisp/logwisp.toml`, if it exists
+5. `./logwisp.toml`
 
 Missing file behaviour differs by how it was chosen. An explicitly requested
 file that does not exist is a fatal error (exit code 2); a missing discovered
 default is not an error, and LogWisp starts on built-in defaults.
 
-> `--config <path>` with a space is **not** recognized as a config path. It is
-> parsed as an unknown flag, warned about, and ignored — LogWisp then silently
-> falls back to `./logwisp.toml`. Use `-c <path>` or `--config=<path>`.
+File-selection flags are consumed before schema overrides are parsed. A missing
+or empty path is a usage error; `--` stops option parsing. The selected path is
+runtime metadata and cannot be redirected by a `config_file` key inside the file.
 
 ## Global Settings
 
@@ -186,28 +185,23 @@ suppress them, and they reach every sink in the pipeline.
 
 ## Environment Variables
 
-Environment overrides are derived from the TOML path: `.` becomes `_` and the
-result is uppercased.
+Environment overrides are derived from the TOML path: `.` becomes `_`, the
+result is uppercased, and `LOGWISP_` is prepended.
 
 | TOML path | Environment variable |
 |-----------|---------------------|
-| `quiet` | `QUIET` |
-| `status_reporter` | `STATUS_REPORTER` |
-| `logging.level` | `LOGGING_LEVEL` |
-| `logging.file.directory` | `LOGGING_FILE_DIRECTORY` |
+| `quiet` | `LOGWISP_QUIET` |
+| `status_reporter` | `LOGWISP_STATUS_REPORTER` |
+| `logging.level` | `LOGWISP_LOGGING_LEVEL` |
+| `logging.file.directory` | `LOGWISP_LOGGING_FILE_DIRECTORY` |
 
-> **The `LOGWISP_` prefix is not currently applied.** The configuration loader
-> requests it, but supplying a custom path-to-variable transform replaces the
-> prefixing step rather than composing with it, so LogWisp reads bare
-> `QUIET`, `LOGGING_LEVEL`, and so on from the environment. Treat this as
-> current behaviour to be aware of — bare names like `QUIET` can collide with
-> unrelated variables — rather than as intended design.
->
-> The two exceptions are `LOGWISP_CONFIG_FILE` and `LOGWISP_CONFIG_DIR`, which
-> are read directly by the path resolver and **do** carry the prefix.
+Migration: the old custom transform accidentally read bare names such as `QUIET`
+and `LOGGING_LEVEL`. Rename those variables to their prefixed forms; bare names
+are now ignored. `LOGWISP_CONFIG_FILE` and `LOGWISP_CONFIG_DIR` still select the
+file directly.
 
 Only scalar paths that exist in the configuration schema can be set this way.
-Array elements cannot: `PIPELINES_0_NAME` has no effect.
+Array elements cannot: `LOGWISP_PIPELINES_0_NAME` has no effect.
 
 ## Command-Line Overrides
 
@@ -258,11 +252,21 @@ same port fail at listener bind time, when the pipeline starts.
 auto_reload = true
 ```
 
-or send `SIGHUP` / `SIGUSR1`.
+or send `SIGHUP` / `SIGUSR1`. Signals reread the selected file even when watching
+is disabled and always rebuild, allowing certificate rotation without TOML edits.
+CLI and environment overrides are captured at startup and keep their precedence.
 
 Reload rebuilds the whole service: a new service is constructed from the new
-configuration first, and only if that succeeds is the old one shut down. A
-configuration error therefore leaves the running service untouched.
+configuration first, and only if that succeeds is the old one shut down. Each
+candidate is a detached snapshot and runs top-level validation again. Parse,
+conversion, validation and construction errors leave the running service intact.
+Listener bind/start failures occur after shutdown of the old service and can leave
+the application without working pipelines; correct the file and signal again.
+
+Watch errors (including deletion, permission changes and timeout) are logged
+without rebuilding. Queued path changes are combined, and unchanged pipelines
+and status settings do not trigger another rebuild. Removed file keys fall back
+to the remaining sources on the next successful load.
 
 | Reloaded | Not reloaded |
 |----------|--------------|
@@ -283,3 +287,8 @@ client is disconnected. Chain sinks reconnect on their own backoff schedule.
 | Boolean | `bool` | `true` / `false`, or a bare flag for `true` |
 | Array | `[]T` | Not settable outside the file |
 | Table | struct | Nested path with `.` (flags) or `_` (environment) |
+
+Integer fields reject fractions, overflow and negative unsigned values. Non-finite
+floats and integer-to-float precision loss are rejected too. This applies to plugin
+maps when their constructors decode them. Only TOML configuration files are accepted;
+JSON log formatting and network payloads are unaffected.

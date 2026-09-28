@@ -12,9 +12,9 @@
 ### available on every network source and sink; see the [...tls] blocks below,
 ### and the [...auth] blocks to authorize peers by certificate identity.
 ###
-### Environment overrides are currently read WITHOUT the LOGWISP_ prefix
-### (QUIET, LOGGING_LEVEL, ...). LOGWISP_CONFIG_FILE and LOGWISP_CONFIG_DIR
-### are the exceptions and do carry it. Array-indexed paths such as
+### Environment overrides use the LOGWISP_ prefix
+### (LOGWISP_QUIET, LOGWISP_LOGGING_LEVEL, ...). Bare names are ignored.
+### LOGWISP_CONFIG_FILE and LOGWISP_CONFIG_DIR select the file. Paths such as
 ### pipelines.0.name cannot be set from the CLI or environment at all.
 ###############################################################################
 
@@ -24,7 +24,7 @@
 
 quiet = false                           # Suppress console output
 status_reporter = true                  # Periodic status logging (30s, DEBUG level)
-auto_reload = false                     # Config auto-reload on file change
+auto_reload = false                     # Watch file; read at startup (signals always reread it)
 
 ###############################################################################
 ### Logging (LogWisp's internal operational logging)
