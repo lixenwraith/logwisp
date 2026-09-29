@@ -64,7 +64,7 @@ sudo mkdir -p /etc/logwisp
 sudo cp config/logwisp.toml /etc/logwisp/logwisp.toml
 ```
 
-LogWisp searches, in order: `-c <path>`, `--config=<path>`,
+LogWisp searches, in order: `-c <path>` / `--config <path>` (also `=<path>`),
 `$LOGWISP_CONFIG_DIR`/`$LOGWISP_CONFIG_FILE`, `~/.config/logwisp/logwisp.toml`,
 `./logwisp.toml`. See [Configuration](configuration.md).
 

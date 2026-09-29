@@ -29,10 +29,8 @@ func (p *Proxy) CreateSession(remoteAddr string, metadata map[string]any) *Sessi
 	metadata["instance_id"] = p.instanceID
 
 	// Create session with instance-scoped source
-	session := p.manager.CreateSession(remoteAddr, p.instanceID, metadata)
-	session.InstanceID = p.instanceID
-
-	return session
+	// Set identity before publishing the session to concurrent snapshot readers.
+	return p.manager.createSession(remoteAddr, p.instanceID, p.instanceID, metadata)
 }
 
 // GetSession retrieves a session if it belongs to this instance

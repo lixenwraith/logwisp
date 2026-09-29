@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
+	"reflect"
 	"syscall"
 
 	"logwisp/internal/config"
@@ -29,13 +30,19 @@ func main() {
 	handleHelp(os.Args[1:])
 
 	// Load configuration with automatic CLI parsing
-	cfg, err := config.Load(os.Args[1:])
+	manager, err := config.Load(os.Args[1:])
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") && cfg != nil && cfg.ConfigFile != "" {
-			fmt.Fprintf(os.Stderr, "Error: Config file not found: %s\n", cfg.ConfigFile)
+		if errors.Is(err, config.ErrConfigNotFound) {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(2)
 		}
 		fmt.Fprintf(os.Stderr, "Error: Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+	defer manager.Close()
+	cfg, err := manager.Snapshot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Failed to read config: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -84,9 +91,8 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
 
 	var configChanges <-chan string
-	lcfg := config.GetConfigManager()
-	if cfg.ConfigAutoReload && lcfg != nil {
-		configChanges = lcfg.Watch()
+	if cfg.ConfigAutoReload {
+		configChanges = manager.Watch()
 		logger.Info("msg", "Config auto-reload enabled", "config_file", cfg.ConfigFile)
 	} else {
 		logger.Info("msg", "Config auto-reload disabled")
@@ -101,12 +107,33 @@ func main() {
 		if svc != nil {
 			svc.Shutdown()
 		}
-		if lcfg != nil {
-			lcfg.StopAutoUpdate()
-		}
+		manager.Close()
 		logger.Info("msg", "Shutdown complete")
 		// Deferred logger shutdown will run after this
 	}()
+
+	reload := func(fromDisk bool) {
+		var next *config.Config
+		var err error
+		if fromDisk {
+			next, err = manager.Reload()
+		} else {
+			next, err = manager.Snapshot()
+		}
+		if err != nil {
+			logger.Error("msg", "Failed to read reload configuration", "error", err, "action", "keeping current service")
+			return
+		}
+		// Watch events are hints and may be duplicated or concern startup-only
+		// settings. Signals always rebuild, including for certificate rotation.
+		if !fromDisk && cfg.StatusReporter == next.StatusReporter && reflect.DeepEqual(cfg.Pipelines, next.Pipelines) {
+			return
+		}
+		newSvc, newCfg, newStatusCancel, err := handleReload(ctx, next, svc, statusReporterCancel)
+		if err == nil {
+			svc, cfg, statusReporterCancel = newSvc, newCfg, newStatusCancel
+		}
+	}
 
 	// --- 4. Main Application Event Loop ---
 	logger.Info("msg", "Application started, waiting for signals or config changes")
@@ -115,12 +142,7 @@ func main() {
 		case sig := <-sigChan:
 			if sig == syscall.SIGHUP || sig == syscall.SIGUSR1 {
 				logger.Info("msg", "Reload signal received, triggering manual reload", "signal", sig)
-				newSvc, newCfg, newStatusCancel, err := handleReload(ctx, svc, statusReporterCancel)
-				if err == nil {
-					svc = newSvc
-					cfg = newCfg
-					statusReporterCancel = newStatusCancel
-				}
+				reload(true)
 			} else {
 				logger.Info("msg", "Shutdown signal received", "signal", sig)
 				cancel() // Trigger service shutdown via context
@@ -132,12 +154,8 @@ func main() {
 				configChanges = nil // Stop selecting on this channel
 				continue
 			}
-			logger.Info("msg", "Configuration file change detected, triggering reload", "event", event)
-			newSvc, newCfg, newStatusCancel, err := handleReload(ctx, svc, statusReporterCancel)
-			if err == nil {
-				svc = newSvc
-				cfg = newCfg
-				statusReporterCancel = newStatusCancel
+			if collectConfigChanges(event, configChanges) {
+				reload(false)
 			}
 
 		case <-ctx.Done():

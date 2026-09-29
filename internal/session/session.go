@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -59,7 +60,12 @@ func NewManager(maxIdleTime time.Duration) *Manager {
 
 // CreateSession creates and stores a new session for a connection
 func (m *Manager) CreateSession(remoteAddr string, source string, metadata map[string]any) *Session {
+	return m.createSession(remoteAddr, source, "", metadata)
+}
+
+func (m *Manager) createSession(remoteAddr, source, instanceID string, metadata map[string]any) *Session {
 	session := &Session{
+		InstanceID:   instanceID,
 		ID:           generateSessionID(),
 		RemoteAddr:   remoteAddr,
 		CreatedAt:    time.Now(),
@@ -127,7 +133,7 @@ func (m *Manager) GetActiveSessions() []*Session {
 
 	sessions := make([]*Session, 0, len(m.sessions))
 	for _, session := range m.sessions {
-		sessions = append(sessions, session)
+		sessions = append(sessions, snapshotSession(session))
 	}
 	return sessions
 }
@@ -139,7 +145,7 @@ func (m *Manager) GetSessionCount() int {
 	return len(m.sessions)
 }
 
-// GetSessionsBySource returns all sessions matching a specific source type
+// GetSessionsBySource returns snapshots of sessions matching a specific source type.
 func (m *Manager) GetSessionsBySource(source string) []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -147,13 +153,13 @@ func (m *Manager) GetSessionsBySource(source string) []*Session {
 	var sessions []*Session
 	for _, session := range m.sessions {
 		if session.Source == source {
-			sessions = append(sessions, session)
+			sessions = append(sessions, snapshotSession(session))
 		}
 	}
 	return sessions
 }
 
-// GetActiveSessionsBySource returns all active sessions for a given source
+// GetActiveSessionsBySource returns snapshots of active sessions for a given source.
 func (m *Manager) GetActiveSessionsBySource(source string) []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -163,10 +169,18 @@ func (m *Manager) GetActiveSessionsBySource(source string) []*Session {
 
 	for _, session := range m.sessions {
 		if session.Source == source && now.Sub(session.LastActivity) < m.maxIdleTime {
-			sessions = append(sessions, session)
+			sessions = append(sessions, snapshotSession(session))
 		}
 	}
 	return sessions
+}
+
+// Call under m.mu. Metadata values are immutable after session creation; copy
+// the top-level map so readers cannot add or remove entries in stored metadata.
+func snapshotSession(session *Session) *Session {
+	snapshot := *session
+	snapshot.Metadata = maps.Clone(session.Metadata)
+	return &snapshot
 }
 
 // GetStats returns statistics about the session manager

@@ -14,7 +14,7 @@ Usage:
   logwisp help | -h | --help
   logwisp --version
 
-Any configuration key is settable as a flag using its TOML path:
+Scalar configuration keys are settable as flags using their TOML paths:
   --<path>=<value>              e.g. --logging.level=debug
 
 Common options:
@@ -27,13 +27,9 @@ Logging:
       --logging.output=<mode>   file|stdout|stderr|split|all|none
       --logging.level=<level>   debug|info|warn|error
       --logging.file.directory=<path>
-      --logging.console.target=<target>   stdout|stderr|split
 
-Pipelines (N = 0-based index):
-      --pipelines.N.name=<name>
-      --pipelines.N.plugin_sources.N.type=<type>   file|console|random|null
-      --pipelines.N.plugin_sinks.N.type=<type>     console|file|http|tcp|null
-      --pipelines.N.flow.filters.N.patterns='["ERROR","WARN"]'
+Pipelines, plugins and filters are configured in TOML; array-indexed CLI and
+environment overrides are unsupported. -- ends option parsing.
 
 Environment:
   LOGWISP_<PATH>                Config path, '.' -> '_', uppercase

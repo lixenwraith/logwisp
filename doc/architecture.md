@@ -164,7 +164,9 @@ only for a peer that was already admitted. See the
 
 Reload (signal or file watch) rebuilds the entire service:
 
-1. Re-read the config through the config manager.
+1. Signals reread the selected file; watches consume a newly published snapshot.
+   The application owns its manager and detached snapshots; no global mutable
+   target is shared with the running service. Validate every candidate again.
 2. Build a **new** service from it. If construction fails, the old service keeps
    running untouched.
 3. Shut the old service down, start the new one, and restart the status
@@ -173,6 +175,10 @@ Reload (signal or file watch) rebuilds the entire service:
 Because this is a full rebuild, listening sockets close and reopen and all
 clients are disconnected. Application logging is configured once at startup and
 is **not** re-applied on reload.
+Watch errors do not rebuild services. Queued changes are combined, and an unchanged
+pipeline/status snapshot is skipped. Signals always rebuild for certificate rotation.
+Failed candidates release their session workers. Once the old service has stopped,
+a bind/start failure requires another corrected reload or process restart.
 
 ## Resource Management
 

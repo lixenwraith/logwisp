@@ -12,8 +12,8 @@ type Config struct {
 	StatusReporter   bool `toml:"status_reporter"`
 	ConfigAutoReload bool `toml:"auto_reload"`
 
-	// Configuration file path
-	ConfigFile string `toml:"config_file"`
+	// Selected file path is runtime metadata, never a configurable override.
+	ConfigFile string `toml:"-"`
 
 	// Existing fields
 	Logging   *LogConfig       `toml:"logging"`
