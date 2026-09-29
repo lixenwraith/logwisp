@@ -1,42 +1,22 @@
 package http
 
 import (
-	"context"
+	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"logwisp/internal/session"
 	"logwisp/internal/sink"
-
-	"github.com/lixenwraith/log"
 )
 
 func TestStatusReportsQueueAndConnectionBounds(t *testing.T) {
-	manager := session.NewManager(time.Hour)
-	defer manager.Stop()
-	created, err := NewHTTPSinkPlugin(
-		"stream",
-		map[string]any{
-			"host":               "127.0.0.1",
-			"port":               int64(8081),
-			"buffer_size":        int64(4096),
-			"client_buffer_size": int64(512),
-			"max_connections":    int64(32),
-			"write_timeout_ms":   int64(5000),
-		},
-		log.NewLogger(),
-		session.NewProxy(manager, "stream"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpSink, ok := created.(*HTTPSink)
-	if !ok {
-		t.Fatalf("sink type = %T", created)
-	}
+	httpSink, _ := newTestHTTPSink(t, map[string]any{
+		"buffer_size":        int64(4096),
+		"client_buffer_size": int64(512),
+		"max_connections":    int64(32),
+	})
 
 	recorder := httptest.NewRecorder()
 	httpSink.handleStatus(recorder, httptest.NewRequest("GET", "/status", nil))
@@ -80,32 +60,14 @@ func TestStatusReportsQueueAndConnectionBounds(t *testing.T) {
 // bumps activity otherwise, so a quiet source would idle-expire a healthy client
 // and the broker would evict it on the next entry.
 func TestQuietStreamRefreshesItsSession(t *testing.T) {
-	manager := session.NewManager(time.Hour)
-	defer manager.Stop()
-	created, err := NewHTTPSinkPlugin(
-		"stream",
-		map[string]any{"host": "127.0.0.1", "port": int64(18191), "write_timeout_ms": int64(5000)},
-		log.NewLogger(),
-		session.NewProxy(manager, "stream"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpSink := created.(*HTTPSink)
+	httpSink, manager := newTestHTTPSink(t, nil)
 	httpSink.keepalive = 100 * time.Millisecond
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := httpSink.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	defer httpSink.Stop()
-
-	resp, err := http.Get("http://127.0.0.1:18191/stream")
+	client, baseURL := serveTestHTTPSink(t, httpSink)
+	resp, err := client.Get(baseURL + "/stream")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	activity := func() time.Time {
 		for _, s := range manager.GetActiveSessions() {
@@ -115,42 +77,34 @@ func TestQuietStreamRefreshesItsSession(t *testing.T) {
 		return time.Time{}
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for activity().IsZero() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
 	before := activity()
-
-	// No events are sent for several keepalive periods.
-	time.Sleep(350 * time.Millisecond)
+	if before.IsZero() {
+		t.Fatal("stream session was not registered")
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	heartbeats := 0
+	for heartbeats < 2 && scanner.Scan() {
+		if scanner.Text() == ":" {
+			heartbeats++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if heartbeats != 2 {
+		t.Fatal("stream ended before two keepalives")
+	}
 	if after := activity(); !after.After(before) {
-		t.Fatalf("last activity %v did not advance on a silent stream", after)
+		t.Fatalf("last activity %v did not advance after keepalives from %v", after, before)
 	}
 }
 
 // HEAD on the stream path is refused rather than served from the GET pattern:
 // its body writes are discarded, so the client it would register never reads.
 func TestHeadOnStreamPathIsRefused(t *testing.T) {
-	manager := session.NewManager(time.Hour)
-	defer manager.Stop()
-	created, err := NewHTTPSinkPlugin(
-		"stream",
-		map[string]any{"host": "127.0.0.1", "port": int64(18192)},
-		log.NewLogger(),
-		session.NewProxy(manager, "stream"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpSink := created.(*HTTPSink)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := httpSink.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	defer httpSink.Stop()
-
-	resp, err := http.Head("http://127.0.0.1:18192/stream")
+	httpSink, manager := newTestHTTPSink(t, nil)
+	client, baseURL := serveTestHTTPSink(t, httpSink)
+	resp, err := client.Head(baseURL + "/stream")
 	if err != nil {
 		t.Fatal(err)
 	}

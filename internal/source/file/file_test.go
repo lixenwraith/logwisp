@@ -9,13 +9,12 @@ import (
 	"time"
 
 	"logwisp/internal/core"
+	"logwisp/internal/testutil"
 )
 
 func TestStoppedWatcherReturnsNormally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFile(t, path, "")
 	watcher := newFileWatcher(path, true, true, func(_ core.LogEntry) {}, nil)
 	watcher.stop()
 
@@ -52,9 +51,7 @@ func TestRemoveWatcherPreservesReplacement(t *testing.T) {
 func TestRotatedFileResumesInsteadOfReplaying(t *testing.T) {
 	dir := t.TempDir()
 	active := filepath.Join(dir, "session.jsonl")
-	if err := os.WriteFile(active, []byte("one\ntwo\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFile(t, active, "one\ntwo\n")
 	info, err := os.Stat(active)
 	if err != nil {
 		t.Fatal(err)

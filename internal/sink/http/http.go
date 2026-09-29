@@ -202,7 +202,12 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("http sink bind %s: %w", h.addr, err)
 	}
+	return h.serve(ctx, ln)
+}
 
+// serve owns an already-bound listener, allowing tests to reserve an ephemeral
+// port and exercise the same routing and worker lifecycle as Start.
+func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	mux := http.NewServeMux()
 	// Method-scoped patterns: mux answers 405 with Allow header on non-GET
 	mux.HandleFunc(http.MethodGet+" "+h.config.StreamPath, h.handleStream)
