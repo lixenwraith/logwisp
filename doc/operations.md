@@ -45,9 +45,10 @@ or send a signal:
 kill -HUP $(pidof logwisp)
 ```
 
-Reload constructs a new service from the new configuration **before** tearing
-the old one down, so a broken configuration leaves the running service intact
-and logs the failure:
+Signals reread the selected TOML file even when `auto_reload` is disabled.
+Reload validates a detached snapshot and constructs a new service **before**
+tearing the old one down, so invalid configuration leaves the running service
+intact and logs the failure:
 
 ```
 ERROR msg="Failed to bootstrap new service, keeping old service running" error=...
@@ -63,6 +64,9 @@ What reload does *not* do:
   construction, so rotation requires `SIGHUP`.
 
 Plan reloads on a busy relay the way you would plan a restart.
+Listener bind/start failures happen after the old service stops; these can leave
+the application without working pipelines until a corrected configuration reloads.
+File-watch errors do not restart services, and queued changes are combined.
 
 ### Checking a configuration
 
@@ -264,8 +268,8 @@ and remember `http_chain` waits up to `flush_interval_ms`. For TLS problems see
 
 **Environment variable override has no effect**
 
-LogWisp currently reads these **without** the `LOGWISP_` prefix — `QUIET`,
-`LOGGING_LEVEL`, and so on. Array-indexed paths cannot be set from the
+LogWisp reads `LOGWISP_QUIET`, `LOGWISP_LOGGING_LEVEL`, and other prefixed
+names. Bare names used by older versions must be renamed. Array-indexed paths cannot be set from the
 environment or the command line at all.
 
 ## Security Operations

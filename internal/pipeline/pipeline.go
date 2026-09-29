@@ -76,6 +76,7 @@ func NewPipeline(
 	flowProcessor, err := flow.NewFlow(cfg.Flow, logger)
 	if err != nil {
 		// If flow fails, stop session manager
+		pipelineCancel()
 		sessionManager.Stop()
 		return nil, fmt.Errorf("failed to create flow processor: %w", err)
 	}
@@ -84,6 +85,7 @@ func NewPipeline(
 	// Initialize sources and sinks
 	if err := pipeline.initializeComponents(); err != nil {
 		pipelineCancel()
+		sessionManager.Stop()
 		return nil, err
 	}
 

@@ -12,83 +12,84 @@ import (
 	lconfig "github.com/lixenwraith/config"
 )
 
-// configManager holds the global instance of the configuration manager
-var configManager *lconfig.Config
+// ErrConfigNotFound identifies an explicitly requested missing configuration file.
+var ErrConfigNotFound = lconfig.ErrConfigNotFound
 
-// Load is the single entry point for loading all application configuration
-func Load(args []string) (*Config, error) {
-	configPath, isExplicit := resolveConfigPath(args)
-	// Build configuration with all sources
+// Manager owns the configuration sources and watcher for one application instance.
+// Its snapshots are detached from each other and from the running service.
+type Manager struct {
+	config *lconfig.Config
+	path   string
+}
 
-	// Create target config instance that will be populated
-	finalConfig := &Config{}
-
-	// Builder handles loading, populating the target struct, and validation
+// Load reads the startup sources and validates the initial configuration.
+// Watching starts only when Watch is called after successful service startup.
+func Load(args []string) (*Manager, error) {
+	configPath, isExplicit, configArgs, err := resolveConfigPath(args)
+	if err != nil {
+		return nil, err
+	}
+	initial := defaults()
 	cfg, err := lconfig.NewBuilder().
-		WithTarget(finalConfig).  // Typed target struct
-		WithDefaults(defaults()). // Default values
-		WithSources(
-			lconfig.SourceCLI,
-			lconfig.SourceEnv,
-			lconfig.SourceFile,
-			lconfig.SourceDefault,
-		).
-		WithEnvTransform(customEnvTransform). // Convert '.' to '_' in env separation
-		WithEnvPrefix("LOGWISP_").            // Environment variable prefix
-		WithArgs(args).                       // Command-line arguments
-		WithFile(configPath).                 // TOML config file
-		WithFileFormat("toml").               // Explicit format
-		WithTypedValidator(ValidateConfig).   // Centralized validation
+		WithTarget(initial).
+		WithEnvPrefix("LOGWISP_").
+		WithArgs(configArgs).
+		WithFile(configPath).
+		WithTypedValidator(ValidateConfig).
 		WithSecurityOptions(lconfig.SecurityOptions{
 			PreventPathTraversal: true,
-			MaxFileSize:          10 * 1024 * 1024, // 10MB max config
+			MaxFileSize:          10 * 1024 * 1024,
 		}).
 		Build()
-
 	if err != nil {
-		// Handle file not found errors - maintain existing behavior
-		if errors.Is(err, lconfig.ErrConfigNotFound) {
-			if isExplicit {
-				// Return empty config with file path
-				finalConfig.ConfigFile = configPath
-				return finalConfig, fmt.Errorf("config file not found: %s", configPath)
-			}
-			// If the default config file is not found, it's not an error, default/cli/env will be used
-		} else {
+		if !errors.Is(err, lconfig.ErrConfigNotFound) {
 			return nil, fmt.Errorf("failed to load or validate config: %w", err)
 		}
+		if isExplicit {
+			return nil, fmt.Errorf("config file %q: %w", configPath, err)
+		}
+		// A missing discovered default still permits valid CLI/env/default values.
 	}
-
-	// Store the config file path for hot reload
-	finalConfig.ConfigFile = configPath
-
-	// Store the manager for hot reload
-	configManager = cfg
-
-	// Surface typo'd flags (e.g. --status-reporter vs --status_reporter);
-	// pre-logger phase, stderr only, suppressed in quiet mode
-	if unknown := cfg.UnknownCLIKeys(); len(unknown) > 0 && !finalConfig.Quiet {
+	if unknown := cfg.UnknownCLIKeys(); len(unknown) > 0 && !initial.Quiet {
 		fmt.Fprintf(os.Stderr, "Warning: unrecognized flags ignored: %v\n", unknown)
 	}
+	return &Manager{config: cfg, path: configPath}, nil
+}
 
-	// Start watcher if auto-reload is enabled
-	if finalConfig.ConfigAutoReload {
-		watchOpts := lconfig.WatchOptions{
-			PollInterval:      core.ReloadWatchPollInterval,
-			Debounce:          core.ReloadWatchDebounce,
-			ReloadTimeout:     core.ReloadWatchTimeout,
-			VerifyPermissions: true,
-		}
-		cfg.AutoUpdateWithOptions(watchOpts)
+// Snapshot validates a detached candidate before it is used to build a service.
+// Builder validators only run during Load, so every reload needs this check too.
+func (m *Manager) Snapshot() (*Config, error) {
+	value, err := m.config.AsStruct()
+	if err != nil {
+		return nil, fmt.Errorf("decode configuration: %w", err)
 	}
-
-	return finalConfig, nil
+	cfg := value.(*Config)
+	cfg.ConfigFile = m.path
+	if err := ValidateConfig(cfg); err != nil {
+		return nil, fmt.Errorf("validate configuration: %w", err)
+	}
+	return cfg, nil
 }
 
-// GetConfigManager returns the global configuration manager instance for hot-reloading
-func GetConfigManager() *lconfig.Config {
-	return configManager
+// Reload rereads the selected file, retaining the startup CLI/environment sources.
+// Signals must call this even when automatic watching is disabled.
+func (m *Manager) Reload() (*Config, error) {
+	if err := m.config.LoadFile(m.path); err != nil {
+		return nil, fmt.Errorf("reload %q: %w", m.path, err)
+	}
+	return m.Snapshot()
 }
+
+// Watch subscribes with logwisp's polling and debounce settings.
+func (m *Manager) Watch() <-chan string {
+	opts := lconfig.DefaultWatchOptions()
+	opts.PollInterval = core.ReloadWatchPollInterval
+	opts.Debounce = core.ReloadWatchDebounce
+	opts.ReloadTimeout = core.ReloadWatchTimeout
+	return m.config.WatchWithOptions(opts)
+}
+
+func (m *Manager) Close() { m.config.StopAutoUpdate() }
 
 // defaults provides the default configuration values for the application
 func defaults() *Config {
@@ -139,10 +140,6 @@ func defaults() *Config {
 						Config: map[string]any{
 							"special": true,
 						},
-						// Config: &FileSourceOptions{
-						// 	Directory:       "./",
-						// 	Pattern:         "*.log",
-						// 	CheckIntervalMS: int64(100),
 					},
 				},
 				PluginSinks: []PluginSinkConfig{
@@ -160,46 +157,51 @@ func defaults() *Config {
 	}
 }
 
-// resolveConfigPath determines the configuration file path based on CLI args, env vars, and default locations
-func resolveConfigPath(args []string) (path string, isExplicit bool) {
-	// 1. Check for --config flag in command-line arguments (highest precedence)
-	for i, arg := range args {
-		if arg == "-c" {
-			return args[i+1], true
+// resolveConfigPath consumes file-selection flags before schema CLI parsing.
+// The last selection wins, and -- terminates option handling.
+func resolveConfigPath(args []string) (path string, isExplicit bool, remaining []string, err error) {
+	remaining = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			remaining = append(remaining, args[i:]...)
+			break
 		}
-		if strings.HasPrefix(arg, "--config=") {
-			return strings.TrimPrefix(arg, "--config="), true
+		switch {
+		case arg == "-c" || arg == "--config":
+			if i+1 == len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return "", false, nil, fmt.Errorf("%s requires a configuration file path", arg)
+			}
+			i++
+			path, isExplicit = args[i], true
+		case strings.HasPrefix(arg, "--config=") || strings.HasPrefix(arg, "-c="):
+			_, path, _ = strings.Cut(arg, "=")
+			if path == "" {
+				return "", false, nil, fmt.Errorf("%s requires a configuration file path", arg)
+			}
+			isExplicit = true
+		default:
+			remaining = append(remaining, arg)
 		}
 	}
-
-	// 2. Check environment variables
+	if isExplicit {
+		return path, true, remaining, nil
+	}
 	if configFile := os.Getenv("LOGWISP_CONFIG_FILE"); configFile != "" {
 		path = configFile
 		if configDir := os.Getenv("LOGWISP_CONFIG_DIR"); configDir != "" {
 			path = filepath.Join(configDir, configFile)
 		}
-		return path, true
+		return path, true, remaining, nil
 	}
 	if configDir := os.Getenv("LOGWISP_CONFIG_DIR"); configDir != "" {
-		return filepath.Join(configDir, "logwisp.toml"), true
+		return filepath.Join(configDir, "logwisp.toml"), true, remaining, nil
 	}
-
-	// 3. Check default user config location
 	if homeDir, err := os.UserHomeDir(); err == nil {
-		configPath := filepath.Join(homeDir, ".config", "logwisp", "logwisp.toml")
-		if _, err := os.Stat(configPath); err == nil {
-			return configPath, false // Found a default, but not explicitly set by user
+		path = filepath.Join(homeDir, ".config", "logwisp", "logwisp.toml")
+		if _, err := os.Stat(path); err == nil {
+			return path, false, remaining, nil
 		}
 	}
-
-	// 4. Fallback to default in current directory
-	return "logwisp.toml", false
-}
-
-// customEnvTransform converts TOML-style config paths (e.g., logging.level) to environment variable format (LOGGING_LEVEL)
-func customEnvTransform(path string) string {
-	env := strings.ReplaceAll(path, ".", "_")
-	env = strings.ToUpper(env)
-	// env = "LOGWISP_" + env // already added by WithEnvPrefix
-	return env
+	return "logwisp.toml", false, remaining, nil
 }
