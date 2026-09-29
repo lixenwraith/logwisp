@@ -2,22 +2,13 @@ package main
 
 import (
 	"context"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"logwisp/internal/config"
+	"logwisp/internal/testutil"
 
 	lconfig "github.com/lixenwraith/config"
-	"github.com/lixenwraith/log"
 )
-
-func testLogger(t *testing.T) {
-	t.Helper()
-	logger = log.NewLogger()
-	t.Cleanup(func() { logger = nil })
-}
 
 func TestWatchErrorsDoNotTriggerReloadAndChangesAreCoalesced(t *testing.T) {
 	testLogger(t)
@@ -37,29 +28,6 @@ func TestWatchErrorsDoNotTriggerReloadAndChangesAreCoalesced(t *testing.T) {
 	if collectConfigChanges("", changes) {
 		t.Fatal("closed channel triggered a reload")
 	}
-}
-
-func loadTestConfig(t *testing.T, path string) *config.Config {
-	t.Helper()
-	for _, entry := range os.Environ() {
-		key, value, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "LOGWISP_") {
-			t.Setenv(key, value)
-			if err := os.Unsetenv(key); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	m, err := config.Load([]string{"-c", path, "--quiet", "--status_reporter=false"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(m.Close)
-	cfg, err := m.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cfg
 }
 
 func TestShippedConfigurationBuildsWithCheckedPluginDecoder(t *testing.T) {
@@ -87,9 +55,7 @@ func TestShippedConfigurationBuildsWithCheckedPluginDecoder(t *testing.T) {
 func TestInvalidReloadLeavesStatusReporterRunning(t *testing.T) {
 	testLogger(t)
 	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("[logging]\nlevel = \"info\"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFile(t, path, "[logging]\nlevel = \"info\"\n")
 	for _, mode := range []string{"empty-pipelines", "duplicate-names", "fractional-plugin-integer", "plugin-overflow"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := loadTestConfig(t, path)

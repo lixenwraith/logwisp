@@ -2,38 +2,16 @@ package config
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"logwisp/internal/testutil"
+
 	lconfig "github.com/lixenwraith/config"
 )
-
-func isolateConfig(t *testing.T) {
-	t.Helper()
-	for _, entry := range os.Environ() {
-		key, value, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "LOGWISP_") {
-			t.Setenv(key, value)
-			if err := os.Unsetenv(key); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Chdir(dir)
-}
-
-func writeConfig(t *testing.T, path, contents string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestResolveConfigArguments(t *testing.T) {
 	isolateConfig(t)
@@ -63,7 +41,7 @@ func TestResolveConfigArguments(t *testing.T) {
 
 func TestLoadPrecedenceAndDetachedSnapshots(t *testing.T) {
 	isolateConfig(t)
-	writeConfig(t, "selected.toml", "config_file = \"ignored.toml\"\n[logging]\nlevel = \"error\"\n")
+	testutil.WriteFile(t, "selected.toml", "config_file = \"ignored.toml\"\n[logging]\nlevel = \"error\"\n")
 	t.Setenv("LOGGING_LEVEL", "invalid-bare-variable")
 	t.Setenv("LOGWISP_LOGGING_LEVEL", "debug")
 	m, err := Load([]string{"--config", "selected.toml", "--logging.level=warn", "--quiet"})
@@ -116,7 +94,7 @@ func TestMissingFilesDoNotHideInvalidOverrides(t *testing.T) {
 
 func TestReloadReadsDiskValidatesAndPreservesOldSnapshots(t *testing.T) {
 	isolateConfig(t)
-	writeConfig(t, "reload.toml", "status_reporter = true\n")
+	testutil.WriteFile(t, "reload.toml", "status_reporter = true\n")
 	m, err := Load([]string{"-c", "reload.toml"})
 	if err != nil {
 		t.Fatal(err)
@@ -126,24 +104,24 @@ func TestReloadReadsDiskValidatesAndPreservesOldSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeConfig(t, "reload.toml", "status_reporter = false\n")
+	testutil.WriteFile(t, "reload.toml", "status_reporter = false\n")
 	next, err := m.Reload()
 	if err != nil || next.StatusReporter || !old.StatusReporter || next.ConfigFile != old.ConfigFile {
 		t.Fatalf("disk reload/snapshot ownership: %+v %v", next, err)
 	}
 	// Builder validators do not run on LoadFile; Snapshot must run them again.
-	writeConfig(t, "reload.toml", "pipelines = []\n")
+	testutil.WriteFile(t, "reload.toml", "pipelines = []\n")
 	if _, err := m.Reload(); err == nil || !strings.Contains(err.Error(), "no pipelines") {
 		t.Fatalf("semantically invalid reload accepted: %v", err)
 	}
 	if len(next.Pipelines) == 0 || !old.StatusReporter {
 		t.Fatal("invalid edit changed a published snapshot")
 	}
-	writeConfig(t, "reload.toml", "[logging.file]\nmax_size_mb = 1.5\n")
+	testutil.WriteFile(t, "reload.toml", "[logging.file]\nmax_size_mb = 1.5\n")
 	if _, err := m.Reload(); err == nil {
 		t.Fatal("fractional integer accepted")
 	}
-	writeConfig(t, "reload.toml", "# remove the status override\n")
+	testutil.WriteFile(t, "reload.toml", "# remove the status override\n")
 	recovered, err := m.Reload()
 	if err != nil || !recovered.StatusReporter {
 		t.Fatalf("override removal/recovery: %+v %v", recovered, err)
@@ -152,7 +130,7 @@ func TestReloadReadsDiskValidatesAndPreservesOldSnapshots(t *testing.T) {
 
 func TestWatchStartsOnSubscriptionAndCloses(t *testing.T) {
 	isolateConfig(t)
-	writeConfig(t, "watched.toml", "auto_reload = true\n")
+	testutil.WriteFile(t, "watched.toml", "auto_reload = true\n")
 	m, err := Load([]string{"-c", "watched.toml"})
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +156,7 @@ func TestWatchStartsOnSubscriptionAndCloses(t *testing.T) {
 
 func TestNestedPluginOptionsKeepDefaultsAndNumericTypes(t *testing.T) {
 	isolateConfig(t)
-	writeConfig(t, "plugins.toml", `
+	testutil.WriteFile(t, "plugins.toml", `
 [[pipelines]]
 name = "nested"
 [[pipelines.plugin_sources]]
