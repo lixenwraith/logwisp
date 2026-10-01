@@ -1,18 +1,12 @@
-<table>
-  <tr>
-    <td width="200" valign="middle">
-      <img src="asset/logwisp-logo.svg" alt="LogWisp Logo" width="200"/>
-    </td>
-    <td>
-      <h1>LogWisp</h1>
-      <p>
-        <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.27.1-00ADD8?style=flat&logo=go" alt="Go"></a>
-        <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License"></a>
-        <a href="doc/"><img src="https://img.shields.io/badge/Docs-Available-green.svg" alt="Documentation"></a>
-      </p>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="logwisp-logo.svg" alt="LogWisp Logo" width="160"/>
+  <br>
+  <br>
+  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.27.1-00ADD8?style=flat&logo=go" alt="Go"></a>
+  <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License"></a>
+  <img src="https://img.shields.io/badge/Platform-Linux%20|%20FreeBSD%20|%20amd64-lightgrey" alt="Platforms">
+  <a href="doc/"><img src="https://img.shields.io/badge/Docs-Available-green.svg" alt="Documentation"></a>
+</p>
 
 # LogWisp
 
