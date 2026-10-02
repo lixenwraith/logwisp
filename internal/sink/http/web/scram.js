@@ -65,8 +65,12 @@ function checkCredentials(username, password) {
   if (name.length === 0 || name.length > MAX_USERNAME || /[,=\p{Cc}\p{Cs}]/u.test(username)) {
     throw new Error("invalid username");
   }
+  // TextEncoder would silently turn a lone surrogate into U+FFFD
+  if (/\p{Cs}/u.test(password)) {
+    throw new Error("password contains invalid characters");
+  }
   const pw = encoder.encode(password);
-  if (pw.length === 0 || pw.length > MAX_PASSWORD || /\p{Cs}/u.test(password)) {
+  if (pw.length === 0 || pw.length > MAX_PASSWORD) {
     throw new Error(`password must be 1-${MAX_PASSWORD} bytes`);
   }
   return pw;
