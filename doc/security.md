@@ -680,8 +680,9 @@ server {
 
 `$proxy_add_x_forwarded_for` does not fit this shape: it appends the stream
 server's address, not the client's. LogWisp would name that address as every
-client or, when it is trusted (both on `127.0.0.1`), the hop to its left, which
-the client wrote. LogWisp ignores `X-Real-IP`.
+client or, when it is trusted (both on `127.0.0.1`), the hop to its left: one
+the client wrote, so the client picks its own throttling address. LogWisp
+ignores `X-Real-IP`.
 
 **LogWisp's own TLS listeners take no PROXY header.** LogWisp cannot read the
 PROXY protocol yet; it is planned first in the ACL work
@@ -735,8 +736,9 @@ stream {
   abandoned logins, then one per second, and 4 unfinished at once. One client
   that keeps failing logins makes every other client's logins answer
   `too many attempts` until it stops.
-- Established links keep flowing; a reconnect or an `http_chain` token renewal
-  waits for the budget.
+- Established `tcp_chain` links and open streams keep flowing; a reconnect
+  waits for the budget. An `http_chain` sink logs in again ahead of token
+  expiry and holds its batches under backoff until that login passes.
 - Logs and sessions name the proxy, not the peer.
 - Proxy mode is unaffected: it throttles on the forwarded client.
 - Until LogWisp reads PROXY, mitigate:
