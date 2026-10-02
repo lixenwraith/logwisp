@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"logwisp/internal/authz"
+	"logwisp/internal/chain"
 	"logwisp/internal/config"
 	"logwisp/internal/core"
 	"logwisp/internal/plugin"
@@ -126,6 +127,9 @@ func NewHTTPSinkPlugin(
 	if opts.StreamPath == opts.StatusPath {
 		return nil, fmt.Errorf("stream_path and status_path must differ")
 	}
+	if opts.StreamPath == chain.AuthPath || opts.StatusPath == chain.AuthPath {
+		return nil, fmt.Errorf("%s is reserved for authentication", chain.AuthPath)
+	}
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultHTTPBufferSize
 	}
@@ -136,7 +140,7 @@ func NewHTTPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleListener)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleListener, authz.HTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +208,10 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 // serve owns an already-bound listener, allowing tests to reserve an ephemeral
 // port and exercise the same routing and worker lifecycle as Start.
 func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
+	if err := h.auth.Start(); err != nil {
+		ln.Close()
+		return err
+	}
 	mux := http.NewServeMux()
 	// Method-scoped patterns: mux answers 405 with Allow header on non-GET
 	mux.HandleFunc(http.MethodGet+" "+h.config.StreamPath, h.handleStream)
@@ -214,10 +222,13 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	mux.HandleFunc(http.MethodHead+" "+h.config.StreamPath, streamHeadNotAllowed)
 
 	// One wrapper covers stream and status, and keeps the handlers themselves
-	// unaware of authorization
+	// unaware of authorization. The login endpoint must sit outside it.
 	var handler http.Handler = mux
 	if h.auth.Enabled() {
-		handler = h.authMiddleware(handler)
+		outer := http.NewServeMux()
+		outer.HandleFunc(http.MethodPost+" "+chain.AuthPath, h.handleAuth)
+		outer.Handle("/", h.authMiddleware(mux))
+		handler = outer
 	}
 
 	h.server = &http.Server{
@@ -271,6 +282,7 @@ func (h *HTTPSink) Stop() {
 
 	h.shutdown()
 	h.wg.Wait()
+	h.auth.Close()
 
 	h.logger.Info("msg", " HTTP sink stopped",
 		"component", "http_sink",
@@ -549,13 +561,13 @@ func (h *HTTPSink) GetStats() sink.SinkStats {
 // handlers; absent when auth is disabled
 type identityKey struct{}
 
-// authMiddleware gates every endpoint on the client certificate policy.
-// The rejection carries no detail: the status endpoint already exposes host,
-// port, and throughput counters, so a 403 should not add the shape of the
-// policy on top of that.
+// authMiddleware gates every endpoint on the policy: a client certificate
+// or a bearer token. The rejection carries no detail: the status endpoint
+// already exposes host, port, and throughput counters, so a refusal should
+// not add the shape of the policy on top of that.
 func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ident, err := h.auth.Authorize(r.TLS)
+		ident, status, err := h.auth.AuthorizeRequest(r)
 		if err != nil {
 			h.logger.Warn("msg", "Request rejected by auth policy",
 				"component", "http_sink",
@@ -563,11 +575,30 @@ func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 				"remote_addr", r.RemoteAddr,
 				"path", r.URL.Path,
 				"error", err)
-			http.Error(w, "forbidden", http.StatusForbidden)
+			authz.Refuse(w, status)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, ident)))
 	})
+}
+
+// handleAuth runs one step of a SCRAM login and logs its outcome
+func (h *HTTPSink) handleAuth(w http.ResponseWriter, r *http.Request) {
+	ident, err := h.auth.ServeAuth(w, r)
+	switch {
+	case err != nil:
+		h.logger.Warn("msg", "Login rejected",
+			"component", "http_sink",
+			"instance_id", h.id,
+			"remote_addr", r.RemoteAddr,
+			"error", err)
+	case ident.Name != "":
+		h.logger.Info("msg", "Login accepted",
+			"component", "http_sink",
+			"instance_id", h.id,
+			"remote_addr", r.RemoteAddr,
+			"auth_identity", ident.Name)
+	}
 }
 
 // streamHeadNotAllowed refuses a body-less read of a stream that is only a body

@@ -219,7 +219,6 @@ type TCPChainSourceOptions struct {
 	HelloTimeoutMS int64        `toml:"hello_timeout_ms"` // preamble deadline
 	TrustNode      bool         `toml:"trust_node"`       // false: force node label from remote address
 	Auth           *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // HTTPChainSourceOptions defines settings for a stdlib HTTP listener ingesting
@@ -234,7 +233,6 @@ type HTTPChainSourceOptions struct {
 	ReadTimeoutMS int64        `toml:"read_timeout_ms"` // full request read deadline
 	TrustNode     bool         `toml:"trust_node"`      // false: force node label from remote address
 	Auth          *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // --- Sink Options ---
@@ -289,7 +287,6 @@ type TCPSinkOptions struct {
 	KeepAlivePeriodMS int64        `toml:"keep_alive_period_ms"`
 	MaxConnections    int64        `toml:"max_connections"` // 0 = unlimited
 	Auth              *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // HTTPSinkOptions defines settings for an HTTP SSE server sink
@@ -304,7 +301,6 @@ type HTTPSinkOptions struct {
 	WriteTimeoutMS   int64        `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
 	MaxConnections   int64        `toml:"max_connections"`    // 0 = unlimited
 	Auth             *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // TCPChainSinkOptions defines settings for a stdlib TCP client forwarding
@@ -322,7 +318,6 @@ type TCPChainSinkOptions struct {
 	KeepAlivePeriodMS int64        `toml:"keep_alive_period_ms"`
 	KeepAlive         bool         `toml:"keep_alive"`
 	Auth              *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // HTTPChainSinkOptions defines settings for a stdlib HTTP client posting
@@ -341,38 +336,41 @@ type HTTPChainSinkOptions struct {
 	BackoffMinMS     int64        `toml:"backoff_min_ms"`
 	BackoffMaxMS     int64        `toml:"backoff_max_ms"`
 	Auth             *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // --- Auth Options ---
 
-// AuthOptions defines certificate-based authorization for network plugins.
-// It sits beside `tls` rather than inside it: TLS answers "is this channel
-// private and does the peer chain to a CA", auth answers "may *this* peer do
-// *this*". One shape serves both roles:
-//   - Listeners (tcp/http sinks, tcp_chain/http_chain sources) authorize the
-//     peer's client certificate; type "mtls" requires tls.client_auth.
-//   - Dialers (tcp_chain/http_chain sinks) pin the server's identity beyond
-//     hostname verification.
+// AuthOptions selects how a network plugin authenticates its peer. It sits
+// beside `tls`: TLS answers "is this channel private", auth answers "may this
+// peer do this". Listeners verify (mtls: certificate identity; scram: password
+// via credentials_file); dialers prove themselves (scram) or pin the server
+// (mtls). Validation is per role in internal/authz.
 type AuthOptions struct {
-	// Method: "none" (default, preserves pre-auth behavior) | "mtls"
+	// Method: "none" (default) | "mtls" | "scram"
 	Type string `toml:"type"`
 
-	// Certificate field carrying the identity:
-	// "cn" (default) | "san_dns" | "san_uri" | "san_email"
+	// Certificate field carrying the identity: "cn" (default) | "san_dns" |
+	// "san_uri" | "san_email". Under scram it binds the client certificate to
+	// the user: the field must equal the SCRAM username.
 	Identity string `toml:"identity"`
 
-	// Exact identity matches. Empty Allow *and* AllowPatterns means "any
-	// identity the CA vouches for" - today's behavior, but with the identity
-	// recorded and node binding available.
-	Allow []string `toml:"allow"`
-
-	// RE2 patterns matched against the identity; anchor them yourself
+	// mtls only: exact identities and RE2 patterns (anchor them yourself).
+	// Both empty admits any identity the CA vouches for.
+	Allow         []string `toml:"allow"`
 	AllowPatterns []string `toml:"allow_patterns"`
 
-	// Chain sources only: "none" | "assert" | "force" (default "force" when
-	// Type is "mtls"). Overrides trust_node.
+	// Chain sources only: "none" | "assert" | "force" (default "force").
+	// Overrides trust_node.
 	NodeBinding string `toml:"node_binding"`
+
+	// scram listeners: verifier file written by `logwisp auth add-user`, and
+	// the bearer token lifetime on HTTP listeners (default 15 minutes)
+	CredentialsFile string `toml:"credentials_file"`
+	TokenLifetimeMS int64  `toml:"token_lifetime_ms"`
+
+	// scram dialers: the identity presented and the file holding its password
+	Username     string `toml:"username"`
+	PasswordFile string `toml:"password_file"`
 }
 
 // --- TLS Options ---

@@ -1,0 +1,846 @@
+package authz
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"logwisp/internal/chain"
+	"logwisp/internal/config"
+	"logwisp/internal/tlsx"
+	"logwisp/internal/tokenbucket"
+
+	"github.com/lixenwraith/auth"
+	"github.com/lixenwraith/toml"
+)
+
+const (
+	// ExchangeTimeout bounds a whole SCRAM exchange on either side
+	ExchangeTimeout = 10 * time.Second
+	// DefaultTokenLifetime is how long a bearer token from /auth stays valid
+	DefaultTokenLifetime = 15 * time.Minute
+
+	maxAuthLine  = 4096 // pre-auth lines and /auth bodies come from unauthenticated peers
+	streamBuffer = 64 * 1024
+
+	limitBurst   = 10 // failed or abandoned exchanges per address before throttling
+	limitRate    = 1  // per second
+	limitPending = 4  // unfinished exchanges per address
+	limitPeers   = 65536
+	limitIdle    = time.Minute
+)
+
+// The dialer's floor on the Argon2 cost a server may ask for. A hostile server
+// could otherwise request a cheaply guessable proof; tests lower it.
+var minArgonTime, minArgonMemory uint32 = auth.DefaultArgonTime, auth.DefaultArgonMemory
+
+var errPinMismatch = errors.New("server certificate differs from the one the SCRAM login was bound to")
+
+// authStep is every SCRAM message after the hello: TCP lines and HTTP bodies.
+// Binding is the client's view of the server certificate, used only to tell
+// TLS interception apart from a wrong password in the listener's log.
+type authStep struct {
+	Error     string                   `json:"error,omitempty"`
+	Challenge *auth.ServerFirstMessage `json:"challenge,omitempty"`
+	Proof     *auth.ClientFinalRequest `json:"proof,omitempty"`
+	Binding   string                   `json:"binding,omitempty"`
+	Final     *auth.ServerFinalMessage `json:"final,omitempty"`
+	Token     string                   `json:"token,omitempty"`
+	ExpiresIn int64                    `json:"expires_in,omitempty"`
+}
+
+// Credentials is a parsed credentials file: the verifiers a listener accepts,
+// never passwords, and the key that keeps unknown-user challenges stable.
+type Credentials struct {
+	DecoyKey []byte
+	Users    []*auth.Credential
+}
+
+var credentialKeys = map[string]bool{
+	"username": true, "salt": true, "argon_time": true, "argon_memory": true,
+	"argon_threads": true, "stored_key": true, "server_key": true,
+}
+
+// LoadCredentials reads and validates a credentials file
+func LoadCredentials(path string) (*Credentials, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("auth: credentials_file: %w", err)
+	}
+	c, err := ParseCredentials(data)
+	if err != nil {
+		return nil, fmt.Errorf("auth: credentials_file %s: %w", path, err)
+	}
+	return c, nil
+}
+
+// ParseCredentials validates a whole file: a decoy key, at least one user,
+// unique names, one shared KDF profile (mixed profiles would reveal which
+// accounts exist) and well-formed verifiers.
+func ParseCredentials(data []byte) (*Credentials, error) {
+	root, err := toml.NewParser(data).Parse()
+	if err != nil {
+		return nil, err
+	}
+	for k := range root {
+		if k != "decoy_key" && k != "users" {
+			return nil, fmt.Errorf("unknown key %q", k)
+		}
+	}
+	key, _ := root["decoy_key"].(string)
+	decoy, err := base64.StdEncoding.Strict().DecodeString(key)
+	if err != nil || len(decoy) < 32 {
+		return nil, errors.New("decoy_key must hold at least 32 base64-encoded bytes")
+	}
+	var users []map[string]any
+	switch v := root["users"].(type) {
+	case []map[string]any:
+		users = v
+	case []any:
+		for _, e := range v {
+			if u, ok := e.(map[string]any); ok {
+				users = append(users, u)
+			}
+		}
+	}
+	if len(users) == 0 {
+		return nil, errors.New("no users")
+	}
+	c := &Credentials{DecoyKey: decoy}
+	seen := make(map[string]bool, len(users))
+	for i, u := range users {
+		for k := range u {
+			if !credentialKeys[k] {
+				return nil, fmt.Errorf("users[%d]: unknown key %q", i, k)
+			}
+		}
+		cred, err := auth.ImportCredential(u)
+		if err != nil {
+			return nil, fmt.Errorf("users[%d]: %w", i, err)
+		}
+		if seen[cred.Username] {
+			return nil, fmt.Errorf("users[%d]: duplicate user %q", i, cred.Username)
+		}
+		seen[cred.Username] = true
+		if f := c.Users; len(f) > 0 && (f[0].ArgonTime != cred.ArgonTime || f[0].ArgonMemory != cred.ArgonMemory ||
+			f[0].ArgonThreads != cred.ArgonThreads || len(f[0].Salt) != len(cred.Salt)) {
+			return nil, fmt.Errorf("users[%d] %q: Argon2 profile differs from %q's; all users must share one", i, cred.Username, f[0].Username)
+		}
+		c.Users = append(c.Users, cred)
+	}
+	return c, nil
+}
+
+// Marshal renders the file in its canonical form
+func (c *Credentials) Marshal() ([]byte, error) {
+	users := make([]map[string]any, len(c.Users))
+	for i, u := range c.Users {
+		users[i] = u.Export()
+	}
+	body, err := toml.Marshal(map[string]any{
+		"decoy_key": base64.StdEncoding.EncodeToString(c.DecoyKey),
+		"users":     users,
+	})
+	if err != nil {
+		return nil, err
+	}
+	header := "# logwisp SCRAM verifiers, written by `logwisp auth add-user`. Keep it private.\n"
+	return append([]byte(header), body...), nil
+}
+
+// ReadPassword reads a password file, trimming one trailing line break so a
+// file from an editor and one from `logwisp auth add-user` agree.
+func ReadPassword(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("auth: password_file: %w", err)
+	}
+	pw := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
+	if pw == "" || len(pw) > auth.MaxPasswordLen {
+		return "", fmt.Errorf("auth: password_file %s: password must be 1-%d bytes", path, auth.MaxPasswordLen)
+	}
+	return pw, nil
+}
+
+// --- Listener ---
+
+type scramListener struct {
+	creds    *Credentials
+	cb       []byte    // SHA-256 of this listener's certificate, the channel binding
+	tokens   *auth.JWT // HTTP listeners; a per-instance key, so a reload revokes every token
+	lifetime time.Duration
+	server   atomic.Pointer[auth.ScramServer]
+	limit    limiter
+
+	throttled       atomic.Uint64
+	busy            atomic.Uint64
+	bindingMismatch atomic.Uint64
+}
+
+func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
+	if len(o.Allow) > 0 || len(o.AllowPatterns) > 0 {
+		return fmt.Errorf("auth: allow and allow_patterns apply only to type %q; the credentials file is the allow list", MethodMTLS)
+	}
+	if p.role == RoleDialer {
+		return p.compileSCRAMDialer(o)
+	}
+	switch {
+	case o.Username != "" || o.PasswordFile != "":
+		return errors.New("auth: username and password_file apply only to dialers")
+	case o.CredentialsFile == "":
+		return fmt.Errorf("auth: type %q requires credentials_file", MethodSCRAM)
+	case o.TokenLifetimeMS < 0:
+		return errors.New("auth: token_lifetime_ms must be positive")
+	case o.TokenLifetimeMS > 0 && p.transport != HTTP:
+		return errors.New("auth: token_lifetime_ms applies only to HTTP listeners")
+	}
+	if o.Identity != "" {
+		// Binds the certificate to the user: a peer needs its own of both
+		if tlsCfg.ClientAuth != tls.RequireAndVerifyClientCert {
+			return fmt.Errorf("auth: identity under type %q binds the client certificate to the user and requires tls.client_auth", MethodSCRAM)
+		}
+		var err error
+		if p.identity, err = identityMode(o.Identity); err != nil {
+			return err
+		}
+	}
+	if len(tlsCfg.Certificates) == 0 || len(tlsCfg.Certificates[0].Certificate) == 0 {
+		return errors.New("auth: type scram needs the listener certificate for channel binding")
+	}
+	cb := sha256.Sum256(tlsCfg.Certificates[0].Certificate[0])
+	creds, err := LoadCredentials(o.CredentialsFile)
+	if err != nil {
+		return err
+	}
+	l := &scramListener{creds: creds, cb: cb[:]}
+	if p.transport == HTTP {
+		l.lifetime = DefaultTokenLifetime
+		if o.TokenLifetimeMS > 0 {
+			l.lifetime = time.Duration(o.TokenLifetimeMS) * time.Millisecond
+		}
+		key := make([]byte, 32)
+		rand.Read(key)
+		if l.tokens, err = auth.NewJWT(key, auth.WithIssuer("logwisp"),
+			auth.WithTokenLifetime(l.lifetime), auth.WithLeeway(0)); err != nil {
+			return err
+		}
+	}
+	p.listener = l
+	p.secrets = append(p.secrets, secretFile{"auth.credentials_file", o.CredentialsFile})
+	return nil
+}
+
+// Start brings up the SCRAM server. Plugins call it from Start, so a policy
+// that is constructed but never started holds no goroutine.
+func (p *Policy) Start() error {
+	if p == nil || p.listener == nil {
+		return nil
+	}
+	l := p.listener
+	s, err := auth.NewScramServerWithDecoyKey(l.creds.DecoyKey)
+	if err != nil {
+		return err
+	}
+	for _, c := range l.creds.Users {
+		if err := s.AddCredential(c); err != nil {
+			s.Stop()
+			return fmt.Errorf("auth: user %q: %w", c.Username, err)
+		}
+	}
+	l.server.Store(s)
+	return nil
+}
+
+// Close stops the SCRAM server; exchanges in flight fail
+func (p *Policy) Close() {
+	if p == nil || p.listener == nil {
+		return
+	}
+	if s := p.listener.server.Swap(nil); s != nil {
+		s.Stop()
+	}
+}
+
+// begin opens an exchange for a peer: throttling, then the challenge. On
+// failure, status is the HTTP answer and public the only detail sent.
+func (p *Policy) begin(ip string, first json.RawMessage) (challenge auth.ServerFirstMessage, status int, public string, err error) {
+	l := p.listener
+	var req auth.ClientFirstRequest
+	if err := json.Unmarshal(first, &req); err != nil {
+		p.rejected.Add(1)
+		return challenge, http.StatusBadRequest, "malformed request", fmt.Errorf("%w: malformed client-first message", ErrRefused)
+	}
+	if !l.limit.start(ip) {
+		l.throttled.Add(1)
+		return challenge, http.StatusTooManyRequests, "too many attempts", fmt.Errorf("%w: %s throttled", ErrRefused, ip)
+	}
+	s := l.server.Load()
+	if s == nil {
+		l.busy.Add(1)
+		return challenge, http.StatusServiceUnavailable, "busy", errors.New("auth: scram server is not running")
+	}
+	challenge, err = s.ProcessClientFirstMessage(req.Username, req.ClientNonce)
+	switch {
+	case errors.Is(err, auth.ErrSCRAMTooManyHandshakes), errors.Is(err, auth.ErrSCRAMStopped):
+		l.busy.Add(1)
+		return challenge, http.StatusServiceUnavailable, "busy", err
+	case err != nil:
+		p.rejected.Add(1)
+		return challenge, http.StatusBadRequest, "malformed request", fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	l.limit.track(ip, challenge.FullNonce)
+	return challenge, 0, "", nil
+}
+
+// finish verifies a proof, binding it to this listener's certificate, then
+// the client certificate to the user when configured.
+func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState) (auth.ServerFinalMessage, error) {
+	l := p.listener
+	l.limit.done(ip, nonce)
+	s := l.server.Load()
+	if s == nil {
+		l.busy.Add(1)
+		return auth.ServerFinalMessage{}, errors.New("auth: scram server is not running")
+	}
+	final, err := s.ProcessClientFinalMessage(nonce, step.Proof.ClientProof, auth.WithChannelBinding(l.cb))
+	if err == nil {
+		err = p.bindCertificate(cs, final.Username)
+	}
+	if err != nil {
+		p.rejected.Add(1)
+		if step.Binding != "" && step.Binding != base64.StdEncoding.EncodeToString(l.cb) {
+			l.bindingMismatch.Add(1)
+			err = fmt.Errorf("%w; the client saw another server certificate: TLS interception or a terminating proxy", err)
+		}
+		return auth.ServerFinalMessage{}, fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	p.allowed.Add(1)
+	l.limit.succeeded(ip)
+	return final, nil
+}
+
+func (p *Policy) bindCertificate(cs *tls.ConnectionState, username string) error {
+	if p.identity == "" {
+		return nil
+	}
+	if cs == nil {
+		return errors.New("no client certificate")
+	}
+	if got := tlsx.PeerIdentity(*cs, p.identity); got != username {
+		return fmt.Errorf("certificate %s %q does not match user %q", p.identity, got, username)
+	}
+	return nil
+}
+
+// exchangeTCP runs the listener side after the hello and returns the final
+// line for Accept. An exchange abandoned after its challenge is released from
+// the auth table at once rather than holding a slot for its timeout.
+func (p *Policy) exchangeTCP(a *Admission, cs *tls.ConnectionState) (Identity, []byte, error) {
+	ip := remoteIP(a.conn.RemoteAddr().String())
+	challenge, _, public, err := p.begin(ip, a.Hello.Scram)
+	if err != nil {
+		writeStep(a.conn, authStep{Error: public})
+		return Identity{}, nil, err
+	}
+	settled := false
+	defer func() {
+		if !settled {
+			p.listener.limit.done(ip, challenge.FullNonce)
+			if s := p.listener.server.Load(); s != nil {
+				s.ProcessClientFinalMessage(challenge.FullNonce, "")
+			}
+		}
+	}()
+	if err := writeStep(a.conn, authStep{Challenge: &challenge}); err != nil {
+		return Identity{}, nil, err
+	}
+	line, err := readLine(a.Reader)
+	if err != nil {
+		return Identity{}, nil, fmt.Errorf("read proof: %w", err)
+	}
+	var step authStep
+	if err := json.Unmarshal(line, &step); err != nil || step.Proof == nil {
+		p.rejected.Add(1)
+		writeStep(a.conn, authStep{Error: "malformed proof"})
+		return Identity{}, nil, fmt.Errorf("%w: malformed proof", ErrRefused)
+	}
+	settled = true
+	final, err := p.finish(ip, challenge.FullNonce, step, cs)
+	if err != nil {
+		writeStep(a.conn, authStep{Error: "authentication failed"})
+		return Identity{}, nil, err
+	}
+	out, err := json.Marshal(authStep{Final: &final})
+	if err != nil {
+		return Identity{}, nil, err
+	}
+	return Identity{Name: final.Username, Method: MethodSCRAM}, append(out, '\n'), nil
+}
+
+// ServeAuth answers POST /auth on an HTTP scram listener: a hello gets a
+// challenge, a proof gets the server-final message and a bearer token. It
+// returns the identity of a completed login, or the refusal, for the plugin's
+// log; a challenge alone returns neither.
+func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, error) {
+	if p == nil || p.listener == nil || p.listener.tokens == nil {
+		http.NotFound(w, r)
+		return Identity{}, nil
+	}
+	rc := http.NewResponseController(w)
+	rc.SetReadDeadline(time.Now().Add(ExchangeTimeout))
+	rc.SetWriteDeadline(time.Now().Add(ExchangeTimeout))
+	var req struct {
+		chain.Hello
+		authStep
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAuthLine)).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, authStep{Error: "request too large"})
+		} else {
+			writeJSON(w, http.StatusBadRequest, authStep{Error: "malformed request"})
+		}
+		return Identity{}, fmt.Errorf("auth request: %w", err)
+	}
+	ip := remoteIP(r.RemoteAddr)
+	switch {
+	case len(req.Scram) > 0 && req.LogWisp == chain.ProtocolVersion:
+		challenge, status, public, err := p.begin(ip, req.Scram)
+		if err != nil {
+			writeJSON(w, status, authStep{Error: public})
+			return Identity{}, err
+		}
+		writeJSON(w, http.StatusOK, authStep{Challenge: &challenge})
+		return Identity{}, nil
+	case req.Proof != nil:
+		final, err := p.finish(ip, req.Proof.FullNonce, req.authStep, r.TLS)
+		if err != nil {
+			status := http.StatusUnauthorized
+			if !errors.Is(err, ErrRefused) {
+				status = http.StatusServiceUnavailable
+			}
+			writeJSON(w, status, authStep{Error: "authentication failed"})
+			return Identity{}, err
+		}
+		l := p.listener
+		token, err := l.tokens.GenerateToken(final.Username, nil)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, authStep{Error: "token unavailable"})
+			return Identity{}, err
+		}
+		writeJSON(w, http.StatusOK, authStep{Final: &final, Token: token, ExpiresIn: int64(l.lifetime / time.Second)})
+		return Identity{Name: final.Username, Method: MethodSCRAM}, nil
+	}
+	writeJSON(w, http.StatusBadRequest, authStep{Error: "malformed request"})
+	return Identity{}, errors.New("auth request: neither a hello nor a proof")
+}
+
+func (p *Policy) authorizeToken(r *http.Request) (Identity, int, error) {
+	tokens := p.listener.tokens
+	if tokens == nil {
+		p.rejected.Add(1)
+		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: no token issuer on this listener", ErrRefused)
+	}
+	token, err := auth.ParseBearerToken(r.Header.Get("Authorization"))
+	if err != nil {
+		p.rejected.Add(1)
+		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	user, _, err := tokens.ValidateToken(token)
+	if err != nil {
+		p.rejected.Add(1)
+		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	if err := p.bindCertificate(r.TLS, user); err != nil {
+		p.rejected.Add(1)
+		return Identity{}, http.StatusForbidden, fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	return Identity{Name: user, Method: MethodSCRAM}, 0, nil
+}
+
+func (l *scramListener) stats(d map[string]any) {
+	d["auth_users"] = len(l.creds.Users)
+	d["auth_throttled"] = l.throttled.Load()
+	d["auth_busy"] = l.busy.Load()
+	d["auth_binding_mismatch"] = l.bindingMismatch.Load()
+	if l.tokens != nil {
+		d["auth_token_lifetime_ms"] = l.lifetime.Milliseconds()
+	}
+}
+
+// --- Dialer ---
+
+type scramDialer struct {
+	username string
+	password string
+	token    atomic.Pointer[string]
+	pin      atomic.Pointer[[]byte] // HTTP: certificate the token's login was bound to
+	failures atomic.Uint64
+	lastErr  atomic.Pointer[string]
+}
+
+func (p *Policy) compileSCRAMDialer(o *config.AuthOptions) error {
+	switch {
+	case o.CredentialsFile != "", o.TokenLifetimeMS != 0:
+		return errors.New("auth: credentials_file and token_lifetime_ms apply only to listeners")
+	case o.Identity != "":
+		return fmt.Errorf("auth: identity on a dialer pins the server and applies only to type %q", MethodMTLS)
+	case o.Username == "" || o.PasswordFile == "":
+		return fmt.Errorf("auth: type %q on a dialer requires username and password_file", MethodSCRAM)
+	}
+	password, err := ReadPassword(o.PasswordFile)
+	if err != nil {
+		return err
+	}
+	d := &scramDialer{username: o.Username, password: password}
+	if _, err := d.client().StartAuthentication(); err != nil {
+		return fmt.Errorf("auth: username %q: %w", o.Username, err)
+	}
+	p.dialer = d
+	p.secrets = append(p.secrets, secretFile{"auth.password_file", o.PasswordFile})
+	return nil
+}
+
+func (d *scramDialer) client() *auth.ScramClient {
+	return auth.NewScramClient(d.username, d.password, auth.WithMinArgonCost(minArgonTime, minArgonMemory))
+}
+
+// exchangeTCP runs the dialer side on conn; nothing is trusted until the
+// server's final signature proves it holds this user's verifier.
+func (d *scramDialer) exchangeTCP(conn net.Conn, r *bufio.Reader, node string) (err error) {
+	defer func() { d.record(err) }()
+	tc, ok := conn.(*tls.Conn)
+	if !ok {
+		return errors.New("auth: scram requires TLS")
+	}
+	c := d.client()
+	first, err := c.StartAuthentication()
+	if err != nil {
+		return err
+	}
+	scram, err := json.Marshal(first)
+	if err != nil {
+		return err
+	}
+	line, err := chain.EncodeHello(chain.Hello{Node: node, Scram: scram})
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(line); err != nil {
+		return fmt.Errorf("hello: %w", err)
+	}
+	step, err := readStep(r)
+	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return fmt.Errorf("%w: no challenge within %v (older logwisp, or not a scram listener)", ErrRefused, ExchangeTimeout)
+		}
+		return err
+	}
+	if step.Challenge == nil {
+		return errors.New("auth: server sent no challenge")
+	}
+	cb := certHash(tc.ConnectionState())
+	proof, err := c.ProcessServerFirstMessage(*step.Challenge, auth.WithChannelBinding(cb))
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	if err := writeStep(conn, authStep{Proof: &proof, Binding: base64.StdEncoding.EncodeToString(cb)}); err != nil {
+		return err
+	}
+	if step, err = readStep(r); err != nil {
+		return err
+	}
+	return d.verifyFinal(c, step)
+}
+
+func (d *scramDialer) verifyFinal(c *auth.ScramClient, step authStep) error {
+	if step.Final == nil {
+		return errors.New("auth: server sent no final message")
+	}
+	if err := c.VerifyServerFinalMessage(*step.Final); err != nil {
+		return fmt.Errorf("%w: the server could not prove it holds this user's verifier: %w", ErrRefused, err)
+	}
+	return nil
+}
+
+// Token logs in over HTTP and returns a fresh bearer token: for the CLI, and
+// behind Prepare. The certificate of the first answer is pinned before the
+// proof is sent, so neither the proof nor the token reaches another server.
+func (p *Policy) Token(ctx context.Context, client *http.Client, baseURL string) (token string, err error) {
+	if p == nil || p.dialer == nil {
+		return "", fmt.Errorf("auth: tokens need type %q on a dialer", MethodSCRAM)
+	}
+	d := p.dialer
+	defer func() { d.record(err) }()
+	d.dropToken() // a rotated server certificate must be able to bind anew
+	ctx, cancel := context.WithTimeout(ctx, ExchangeTimeout)
+	defer cancel()
+	url := baseURL + chain.AuthPath
+
+	c := d.client()
+	first, err := c.StartAuthentication()
+	if err != nil {
+		return "", err
+	}
+	scram, err := json.Marshal(first)
+	if err != nil {
+		return "", err
+	}
+	hello, err := json.Marshal(chain.Hello{LogWisp: chain.ProtocolVersion, Scram: scram})
+	if err != nil {
+		return "", err
+	}
+	step, resp, err := postStep(ctx, client, url, hello)
+	if err != nil {
+		return "", err
+	}
+	if step.Challenge == nil || resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		return "", errors.New("auth: no challenge over TLS")
+	}
+	cb := certHash(*resp.TLS)
+	d.pin.Store(&cb)
+	proof, err := c.ProcessServerFirstMessage(*step.Challenge, auth.WithChannelBinding(cb))
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	body, err := json.Marshal(authStep{Proof: &proof, Binding: base64.StdEncoding.EncodeToString(cb)})
+	if err != nil {
+		return "", err
+	}
+	if step, _, err = postStep(ctx, client, url, body); err != nil {
+		return "", err
+	}
+	if err := d.verifyFinal(c, step); err != nil {
+		return "", err
+	}
+	if step.Token == "" {
+		return "", errors.New("auth: server issued no token")
+	}
+	d.token.Store(&step.Token)
+	return step.Token, nil
+}
+
+func (d *scramDialer) dropToken() {
+	d.token.Store(nil)
+	d.pin.Store(nil)
+}
+
+func (d *scramDialer) verifyPin(cs tls.ConnectionState) error {
+	pin := d.pin.Load()
+	if pin == nil {
+		return nil
+	}
+	if len(cs.PeerCertificates) == 0 || !bytes.Equal(certHash(cs), *pin) {
+		return errPinMismatch
+	}
+	return nil
+}
+
+func (d *scramDialer) record(err error) {
+	msg := ""
+	if err != nil {
+		d.failures.Add(1)
+		msg = err.Error()
+	}
+	d.lastErr.Store(&msg)
+}
+
+func (d *scramDialer) stats(m map[string]any) {
+	m["auth_username"] = d.username
+	m["auth_failures"] = d.failures.Load()
+	if e := d.lastErr.Load(); e != nil {
+		m["last_auth_error"] = *e
+	}
+}
+
+// postStep sends one /auth request; any answer but 200 is a refusal
+func postStep(ctx context.Context, client *http.Client, url string, body []byte) (authStep, *http.Response, error) {
+	var step authStep
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return step, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return step, nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAuthLine))
+	if err != nil {
+		return step, resp, err
+	}
+	decodeErr := json.Unmarshal(data, &step)
+	switch {
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed:
+		return step, resp, fmt.Errorf("%w: no auth endpoint at %s (older logwisp, or not a scram listener)", ErrRefused, url)
+	case resp.StatusCode != http.StatusOK:
+		msg := step.Error
+		if msg == "" {
+			msg = resp.Status
+		}
+		return step, resp, fmt.Errorf("%w: server: %s", ErrRefused, msg)
+	case decodeErr != nil:
+		return step, resp, fmt.Errorf("auth: malformed answer: %w", decodeErr)
+	}
+	return step, resp, nil
+}
+
+// --- Wire helpers ---
+
+func readLine(r *bufio.Reader) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		line = append(line, chunk...)
+		if len(line) > maxAuthLine {
+			return nil, fmt.Errorf("line exceeds %d bytes", maxAuthLine)
+		}
+		if err == nil {
+			return bytes.TrimRight(line, "\r\n"), nil
+		}
+		if err != bufio.ErrBufferFull {
+			return nil, err
+		}
+	}
+}
+
+func readStep(r *bufio.Reader) (authStep, error) {
+	var step authStep
+	line, err := readLine(r)
+	if err != nil {
+		return step, err
+	}
+	if err := json.Unmarshal(line, &step); err != nil {
+		return step, fmt.Errorf("auth: malformed answer: %w", err)
+	}
+	if step.Error != "" {
+		return step, fmt.Errorf("%w: server: %s", ErrRefused, step.Error)
+	}
+	return step, nil
+}
+
+func writeStep(w io.Writer, step authStep) error {
+	line, err := json.Marshal(step)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(line, '\n'))
+	return err
+}
+
+func writeJSON(w http.ResponseWriter, status int, step authStep) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	writeStep(w, step)
+}
+
+func certHash(cs tls.ConnectionState) []byte {
+	if len(cs.PeerCertificates) == 0 {
+		return nil
+	}
+	h := sha256.Sum256(cs.PeerCertificates[0].Raw)
+	return h[:]
+}
+
+func remoteIP(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+// --- Throttling ---
+
+// limiter bounds SCRAM attempts per remote address: failed or abandoned
+// exchanges drain a token bucket (successes are refunded) and at most
+// limitPending may be unfinished. A full table fails closed.
+type limiter struct {
+	mu        sync.Mutex
+	peers     map[string]*peerLimit
+	lastSweep time.Time
+}
+
+type peerLimit struct {
+	bucket  *tokenbucket.TokenBucket
+	pending map[string]time.Time // full nonce -> expiry
+	seen    time.Time
+}
+
+func (l *limiter) start(ip string) bool {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.peers == nil {
+		l.peers = make(map[string]*peerLimit)
+	}
+	if now.Sub(l.lastSweep) > limitIdle/6 {
+		l.sweep(now)
+	}
+	pl := l.peers[ip]
+	if pl == nil {
+		if len(l.peers) >= limitPeers {
+			return false
+		}
+		pl = &peerLimit{bucket: tokenbucket.New(limitBurst, limitRate), pending: make(map[string]time.Time)}
+		l.peers[ip] = pl
+	}
+	pl.seen = now
+	for nonce, expiry := range pl.pending {
+		if now.After(expiry) {
+			delete(pl.pending, nonce)
+		}
+	}
+	return len(pl.pending) < limitPending && pl.bucket.Allow()
+}
+
+func (l *limiter) track(ip, nonce string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if pl := l.peers[ip]; pl != nil {
+		pl.pending[nonce] = time.Now().Add(auth.ScramHandshakeTimeout)
+	}
+}
+
+func (l *limiter) done(ip, nonce string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if pl := l.peers[ip]; pl != nil {
+		delete(pl.pending, nonce)
+	}
+}
+
+func (l *limiter) succeeded(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if pl := l.peers[ip]; pl != nil {
+		pl.bucket.Refund(1)
+	}
+}
+
+// sweep drops addresses idle long enough for their bucket to be full again
+func (l *limiter) sweep(now time.Time) {
+	l.lastSweep = now
+	for ip, pl := range l.peers {
+		if now.Sub(pl.seen) > limitIdle && len(pl.pending) == 0 {
+			delete(l.peers, ip)
+		}
+	}
+}

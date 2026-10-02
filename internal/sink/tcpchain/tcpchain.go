@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -50,7 +51,6 @@ type TCPChainSink struct {
 
 	node      string
 	addr      string
-	helloLine []byte
 	tlsConfig *tls.Config
 
 	// Authorization: pins the downstream server's identity
@@ -125,15 +125,11 @@ func NewTCPChainSinkPlugin(
 		}
 	}
 
-	helloLine, err := chain.EncodeHello(node)
-	if err != nil {
-		return nil, fmt.Errorf("hello: %w", err)
-	}
 	tlsCfg, err := tlsx.Client(opts.TLS, opts.Host)
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleDialer)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleDialer, authz.TCP)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +145,6 @@ func NewTCPChainSinkPlugin(
 		config:       opts,
 		node:         node,
 		addr:         net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10)),
-		helloLine:    helloLine,
 		tlsConfig:    tlsCfg,
 		auth:         authPolicy,
 		input:        make(chan core.TransportEvent, opts.BufferSize),
@@ -179,6 +174,7 @@ func NewTCPChainSinkPlugin(
 		"mtls", tlsCfg != nil && len(tlsCfg.Certificates) > 0,
 		"auth", authPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_chain_sink", id, opts.TLS, false)
+	authPolicy.LogStartup(logger, "tcp_chain_sink", id, false)
 	return t, nil
 }
 
@@ -267,6 +263,17 @@ func (t *TCPChainSink) runLoop(ctx context.Context) {
 	defer t.wg.Done()
 	defer t.closeConn()
 
+	// Fold done into the context, so a connect or exchange in flight ends on Stop
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-t.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -313,11 +320,20 @@ func (t *TCPChainSink) deliver(ctx context.Context, line []byte) bool {
 					return false
 				}
 				failures++
-				t.logger.Debug("msg", "Chain connect failed",
-					"component", "tcp_chain_sink",
-					"target", t.addr,
-					"attempt", failures,
-					"error", err)
+				if errors.Is(err, authz.ErrRefused) {
+					// A refusal is configuration, not weather: show it by default
+					t.logger.Warn("msg", "Chain connect refused",
+						"component", "tcp_chain_sink",
+						"target", t.addr,
+						"attempt", failures,
+						"error", err)
+				} else {
+					t.logger.Debug("msg", "Chain connect failed",
+						"component", "tcp_chain_sink",
+						"target", t.addr,
+						"attempt", failures,
+						"error", err)
+				}
 				continue
 			}
 		}
@@ -363,10 +379,9 @@ func (t *TCPChainSink) connect(ctx context.Context) error {
 		return err
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(t.writeTimeout))
-	if _, err := conn.Write(t.helloLine); err != nil {
+	if _, err := t.auth.Greet(ctx, conn, t.node); err != nil {
 		conn.Close()
-		return fmt.Errorf("hello: %w", err)
+		return err
 	}
 
 	t.conn = conn

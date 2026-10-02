@@ -12,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"logwisp/internal/authz"
 	"logwisp/internal/sink"
 	"logwisp/internal/testutil"
+
+	"github.com/lixenwraith/auth"
 )
 
 func TestStatusReportsQueueAndConnectionBounds(t *testing.T) {
@@ -166,6 +169,59 @@ func TestWildcardCORSOnlyWithoutAuth(t *testing.T) {
 		}
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != tc.want {
 			t.Errorf("%s: Access-Control-Allow-Origin = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Under scram the login endpoint sits outside the gate it opens: a hello
+// earns a challenge without a token, while stream and status demand one.
+func TestLoginEndpointBypassesTheGate(t *testing.T) {
+	pki := testutil.NewPKI(t, "viewer-01")
+	cred, err := auth.NewCredential("viewer-01", "viewer-01-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := (&authz.Credentials{DecoyKey: make([]byte, 32), Users: []*auth.Credential{cred}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds := t.TempDir() + "/users.toml"
+	testutil.WriteFile(t, creds, string(data))
+	gated, _ := newTestHTTPSink(t, map[string]any{
+		"tls":  map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey},
+		"auth": map[string]any{"type": "scram", "credentials_file": creds},
+	})
+	client, baseURL := serveTestHTTPSink(t, gated)
+	caPEM, err := os.ReadFile(pki.CA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}
+	baseURL = "https" + strings.TrimPrefix(baseURL, "http")
+
+	hello := `{"logwisp":1,"scram":{"username":"viewer-01","client_nonce":"abcdefgh"}}`
+	resp, err := client.Post(baseURL+"/auth", "application/json", strings.NewReader(hello))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var step struct {
+		Challenge *auth.ServerFirstMessage `json:"challenge"`
+	}
+	json.NewDecoder(resp.Body).Decode(&step)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || step.Challenge == nil {
+		t.Fatalf("POST /auth without a token = %d, challenge %v", resp.StatusCode, step.Challenge)
+	}
+	for _, path := range []string{"/status", "/stream"} {
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("GET %s without a token = %d, want 401", path, resp.StatusCode)
 		}
 	}
 }

@@ -130,7 +130,7 @@ func NewTCPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleListener)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleListener, authz.TCP)
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +205,12 @@ func (t *TCPSink) listen() (net.Listener, error) {
 
 // Start binds the listener and launches accept and broadcast loops
 func (t *TCPSink) Start(ctx context.Context) error {
+	if err := t.auth.Start(); err != nil {
+		return err
+	}
 	ln, err := t.listen()
 	if err != nil {
+		t.auth.Close()
 		return fmt.Errorf("tcp sink bind %s: %w", t.addr, err)
 	}
 	t.listener = ln
@@ -241,6 +245,7 @@ func (t *TCPSink) Stop() {
 
 	t.shutdown()
 	t.wg.Wait()
+	t.auth.Close()
 
 	t.logger.Info("msg", " TCP sink stopped",
 		"component", "tcp_sink",
@@ -347,9 +352,13 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		}
 	}
 
-	// Authorize before registration, so an unauthorized peer never enters the
-	// client map and never receives a broadcast
-	ident, err := t.auth.Authorize(tlsState)
+	// Admit before registration, so an unauthorized peer never enters the
+	// client map and never receives a broadcast. Under scram the viewer's
+	// hello opens the exchange; without it the sink reads nothing.
+	adm, err := t.auth.Admit(conn, tlsState, false, authz.ExchangeTimeout)
+	if err == nil {
+		err = adm.Accept()
+	}
 	if err != nil {
 		t.rejectedConns.Add(1)
 		t.logger.Warn("msg", "Connection rejected by auth policy",
@@ -359,6 +368,7 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 			"error", err)
 		return
 	}
+	ident := adm.Identity
 	ident.Apply(meta)
 
 	sess := t.proxy.CreateSession(remote, meta)
