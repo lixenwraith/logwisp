@@ -9,7 +9,7 @@ Running, monitoring, and maintaining LogWisp.
 lw -c /etc/logwisp/logwisp.toml
 
 # no config: built-in demo pipeline (random source -> stdout)
-logwisp
+lw
 ```
 
 There is no built-in daemon mode. Run LogWisp in the foreground under a
@@ -60,8 +60,9 @@ What reload does *not* do:
 - Preserve connections. Listeners close and reopen, and every SSE, TCP, and
   chain client is disconnected. Chain sinks reconnect on their own backoff;
   browsers reconnect SSE automatically; raw TCP consumers must retry themselves.
-- Reload certificates without a reload — certificate files are read at plugin
-  construction, so rotation requires `SIGHUP`.
+- Notice rotated certificates on its own: certificate files are read at plugin
+  construction and `auto_reload` watches only the configuration file, so
+  rotation requires `SIGHUP`.
 
 Plan reloads on a busy relay the way you would plan a restart.
 Listener bind/start failures happen after the old service stops; these can leave
@@ -158,7 +159,8 @@ Each counter, where it is reported, and what a rise means:
 - `dropped_writes` (`tcp` and `http` sinks): a client's queue overflowed,
   because it is too slow or one burst exceeded `client_buffer_size`
 - `rejected_conns` (`tcp` sink, `tcp_chain` source), `rejected_clients`
-  (`http` sink): `max_connections` is being hit
+  (`http` sink): `max_connections` is being hit; `rejected_conns` also counts
+  auth refusals
 - `tls_handshake_errors` (`tcp` sink, `tcp_chain` source): a certificate or
   version mismatch, or scanning
 - `parse_errors` (chain sources): protocol or version skew upstream
@@ -269,15 +271,18 @@ sink blocked on an unreachable downstream also holds its full input queue.
 
 **Chain link not delivering**
 
-Check `connected` and `reconnects` on the sink, `parse_errors` on the source,
-and remember `http_chain` waits up to `flush_interval_ms`. For TLS problems see
-[Networking](networking.md#troubleshooting).
+Check `connected` and `reconnects` on a `tcp_chain` sink, `parse_errors` on the
+source, and remember `http_chain` waits up to `flush_interval_ms`. For TLS
+problems see [Networking](networking.md#troubleshooting).
 
 **Environment variable override has no effect**
 
 LogWisp reads `LOGWISP_QUIET`, `LOGWISP_LOGGING_LEVEL`, and other prefixed
-names. Bare names used by older versions must be renamed. Array-indexed paths cannot be set from the
-environment or the command line at all.
+names. Bare names used by older versions must be renamed. Array-indexed paths,
+such as a key inside `[[pipelines]]`, cannot be set from the environment or the
+command line; define whole pipelines there with the
+[pipeline flags](cli.md#pipelines) or
+[pipeline variables](cli.md#pipeline-variables).
 
 ## Security Operations
 
