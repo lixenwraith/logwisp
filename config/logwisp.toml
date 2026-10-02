@@ -271,7 +271,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # buffer_size = 1000
 # flush_interval_ms = 100
 
-## HTTP sink (SSE streaming server + JSON status endpoint; IPv4 clients only)
+## HTTP sink (SSE streaming server + JSON status endpoint)
 ## Without an auth block both endpoints are UNAUTHENTICATED and the stream sends
 ## Access-Control-Allow-Origin: *. Bind to a trusted interface.
 # [[pipelines.plugin_sinks]]
@@ -303,7 +303,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 # trusted_proxies = []                  # scram: proxies ending the browsers' TLS; tls may then be off
 
-## TCP sink (streaming server, IPv4 clients only)
+## TCP sink (streaming server)
 # [[pipelines.plugin_sinks]]
 # id = "tcp_out"
 # type = "tcp"

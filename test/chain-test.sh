@@ -190,7 +190,7 @@ cat <<EOF
    $PORT_HTTP_SINK  HTTP sink    -> live check:  browser/curl:
                      http://127.0.0.1:$PORT_HTTP_SINK/stream   (SSE)
                      http://127.0.0.1:$PORT_HTTP_SINK/status   (JSON stats)
- Use 127.0.0.1, not localhost — sinks reject IPv6.
+ Use 127.0.0.1, not localhost — these listeners take IPv4 only.
  Expected: json entries, node "edge-tcp" on :$PORT_TCP_SINK, "edge-http" on :$PORT_HTTP_SINK.
  Logs: $LOG/
 ================================================================
