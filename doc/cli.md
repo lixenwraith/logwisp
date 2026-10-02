@@ -2,14 +2,14 @@
 
 ```
 logwisp [options]
+logwisp auth <command> [flags]
 logwisp help | -h | --help
 logwisp --version
 ```
 
-LogWisp has no subcommands. Earlier releases shipped `logwisp auth` and
-`logwisp tls` for credential and certificate generation; both were removed
-during the restructure. Use `openssl` or your PKI tooling instead — see
-[Security](security.md).
+`logwisp auth` manages SCRAM credentials and logs in to `scram` listeners; see
+[below](#logwisp-auth). There is no certificate-generation command: use
+`openssl` or your PKI tooling — see [Security](security.md#enabling-mtls).
 
 ## Options
 
@@ -173,4 +173,64 @@ no `--background` flag; earlier releases had one and it was removed. See
 ```bash
 kill -HUP  $(pidof logwisp)
 kill -USR1 $(pidof logwisp)
+```
+
+## `logwisp auth`
+
+Manages the credentials files of `auth.type = "scram"` listeners and logs in to
+them as a viewer. See
+[Password Authentication](security.md#password-authentication-scram).
+
+| Command | Does |
+|---------|------|
+| `add-user -credentials FILE -user NAME [-password-file FILE] [-generate]` | Adds a user, or replaces its password |
+| `remove-user -credentials FILE -user NAME` | Removes a user; refuses the last one |
+| `token -url https://HOST:PORT -user NAME -password-file FILE [TLS flags]` | Logs in to an `http` sink or `http_chain` source and prints a bearer token |
+| `stream -addr HOST:PORT -user NAME -password-file FILE [TLS flags]` | Logs in to a `tcp` sink and copies its stream to stdout until interrupted |
+
+`logwisp auth <command> -h` lists a command's flags. The exit status is `0` on
+success, `1` on failure and `2` on a usage error.
+
+**`add-user`** creates the credentials file, with a fresh `decoy_key`, when it
+does not exist. The password comes from `-password-file` when that file exists
+(at least 8 bytes; one trailing line break is trimmed). Otherwise a random
+26-character password (130 bits) is generated and written to `-password-file`,
+or printed once to stdout when there is none. Replacing an existing user's
+password needs an existing `-password-file` or `-generate`, so a mistyped path
+cannot replace a working password; `-generate` always generates, overwriting
+`-password-file`. New users take the file's existing Argon2 profile.
+
+Both file commands rewrite atomically (a temporary file in the same directory,
+then a rename), create files `0600`, keep an existing file's mode and, where
+permitted, its owner, and refuse to write anything the daemon would not load.
+Neither touches a running LogWisp: send `SIGHUP`, since `auto_reload` does not
+watch the credentials file.
+
+**`token`** and **`stream`** build the same TLS and SCRAM client as a chain
+sink. TLS flags: `-ca-file` (default: system roots), `-server-name` (default:
+the host), and `-cert-file` / `-key-file` for a listener with `tls.client_auth`.
+There is no flag to skip verification: an unverified server could relay the
+login. `-url` takes no path, and redirects are not followed. `stream` exits `0`
+on `SIGINT` or `SIGTERM`.
+
+```bash
+# listener host: create users, then apply
+logwisp auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
+  -password-file /etc/logwisp/edge-01.pass
+logwisp auth add-user -credentials /etc/logwisp/users.toml -user viewer \
+  -password-file viewer.pass
+kill -HUP $(pidof logwisp)
+
+# rotate: new password into the file; SIGHUP, deploy the file, SIGHUP the edge
+logwisp auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
+  -password-file /etc/logwisp/edge-01.pass -generate
+
+# http sink status, with the token kept out of curl's argv
+curl --cacert ca.crt -H @<(printf 'Authorization: Bearer %s\n' \
+  "$(logwisp auth token -url https://HOST:PORT -user viewer \
+     -password-file viewer.pass -ca-file ca.crt)") https://HOST:PORT/status
+
+# follow a tcp sink
+logwisp auth stream -addr HOST:PORT -user viewer -password-file viewer.pass \
+  -ca-file ca.crt
 ```

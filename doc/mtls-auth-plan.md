@@ -48,10 +48,10 @@ back to authenticated peers.
 
 ## Non-Goals
 
-- Password authentication. It is designed separately in
-  [scram-auth-plan.md](scram-auth-plan.md), reusing the `auth` block and the
-  reserved hooks (`chain.Hello`, the `Authorization` header in the `http_chain`
-  sink, the "Future: password auth block" comments in the options structs).
+- Password authentication. It is implemented separately as `type = "scram"`
+  ([scram-auth-plan.md](scram-auth-plan.md)) on the same `auth` block and
+  `internal/authz` seam, carried by `chain.Hello` on TCP and a bearer token on
+  HTTP.
 - IP allow/deny lists and per-peer rate limits. Related, but a separate feature
   with its own config surface.
 - OCSP. See [Revocation](#revocation) for what is done instead.

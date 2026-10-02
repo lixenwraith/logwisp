@@ -232,6 +232,10 @@ Startup validation is intentionally split.
 
 `internal/config` validates only global structure:
 
+- no key the file schema does not declare, at any depth outside a plugin's
+  `config` table: `config file "…": unknown key
+  "pipelines[0].plugin_sinks[0].confg"`. A misspelled table path would otherwise
+  drop the whole table it heads. A top-level `config_file` is ignored
 - at least one pipeline
 - unique, non-empty pipeline names
 - at least one source and one sink per pipeline
@@ -239,11 +243,15 @@ Startup validation is intentionally split.
   and `logging.console.target` enum membership
 
 Everything else is validated by the plugin constructor that owns it — port
-range, required paths, path prefixes, enum values, regex compilation, TLS file
-loading. A failure there aborts pipeline construction with a message naming the
-pipeline, plugin id, and offending key. A key the plugin does not declare, at
-any depth, is such a failure (`unknown key "tls.enabeld"`): a misspelled option
-must not silently fall back to its default.
+range, required paths, path prefixes, enum values, regex compilation, TLS and
+credentials file loading. A failure there aborts pipeline construction with a
+message naming the pipeline, plugin id, and offending key. A key the plugin does
+not declare, at any depth, is such a failure (`unknown key "tls.enabeld"`): a
+misspelled option must not silently fall back to its default. For the same
+reason an `auth` block that names peers or credentials (`allow`,
+`allow_patterns`, `credentials_file`, `token_lifetime_ms`, `username`,
+`password_file`) while its `type` is `none` or unset is refused: auth was
+intended and the type forgotten. See [Security](security.md#the-auth-block).
 
 There is **no** cross-pipeline port-conflict detection. Two sinks bound to the
 same port fail at listener bind time, when the pipeline starts.
@@ -255,7 +263,8 @@ auto_reload = true
 ```
 
 or send `SIGHUP` / `SIGUSR1`. Signals reread the selected file even when watching
-is disabled and always rebuild, allowing certificate rotation without TOML edits.
+is disabled and always rebuild, allowing certificate and credentials rotation
+without TOML edits; `auto_reload` watches only the configuration file.
 CLI and environment overrides are captured at startup and keep their precedence.
 
 Reload rebuilds the whole service: a new service is constructed from the new
