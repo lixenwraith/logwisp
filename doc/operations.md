@@ -149,18 +149,23 @@ query it with a client certificate or a token from `lw auth token`.
 
 ### Metrics worth watching
 
-| Metric | Where | Meaning if rising |
-|--------|-------|-------------------|
-| `dropped_entries` | source | Downstream cannot keep up with the source |
-| `total_dropped` | flow | Rate limit or filters are discarding entries (often intended) |
-| `total_dropped_by_sink` | pipeline | A sink's input queue is full |
-| `dropped_writes` | tcp/http sink | A client's queue overflowed: either it is too slow, or one burst exceeded `client_buffer_size` |
-| `rejected_conns` / `rejected_clients` | tcp/http sink, tcp_chain source | `max_connections` is being hit |
-| `tls_handshake_errors` | tcp sink, tcp_chain source | Certificate or version mismatch, or scanning |
-| `parse_errors` | chain source | Protocol or version skew upstream |
-| `reconnects` | chain sink | Unstable link or a flapping downstream |
-| `dropped_batches` | http_chain sink | Downstream rejecting batches permanently |
-| `synthesized` | chain sink | Events reaching the sink without structure |
+Each counter, where it is reported, and what a rise means:
+
+- `dropped_entries` (source): downstream cannot keep up with the source
+- `total_dropped` (flow): the rate limit or filters are discarding entries,
+  often by intent
+- `total_dropped_by_sink` (pipeline): a sink's input queue is full
+- `dropped_writes` (`tcp` and `http` sinks): a client's queue overflowed,
+  because it is too slow or one burst exceeded `client_buffer_size`
+- `rejected_conns` (`tcp` sink, `tcp_chain` source), `rejected_clients`
+  (`http` sink): `max_connections` is being hit
+- `tls_handshake_errors` (`tcp` sink, `tcp_chain` source): a certificate or
+  version mismatch, or scanning
+- `parse_errors` (chain sources): protocol or version skew upstream
+- `reconnects` (`tcp_chain` sink): an unstable link or a flapping downstream
+- `dropped_batches` (`http_chain` sink): downstream is rejecting batches
+  permanently
+- `synthesized` (chain sinks): events reach the sink without structure
 
 ## Log Management
 
