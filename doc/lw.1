@@ -285,7 +285,7 @@ $ lw \-c /etc/logwisp/logwisp.toml \-\-logging.level=debug
 .Pp
 Tail a directory and serve it as a live stream, without a file:
 .Bd -literal -offset indent
-$ lw \-\-source file,directory=/var/log/app,pattern=*.log \e
+$ lw \-\-source 'file,directory=/var/log/app,pattern=*.log' \e
     \-\-sink http,host=127.0.0.1,port=8080
 .Ed
 .Pp
