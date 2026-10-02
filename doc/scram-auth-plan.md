@@ -24,8 +24,9 @@ next to the existing certificate method, without weakening what mTLS gives.
 
 - Standard SASL SCRAM-SHA-256 interoperability. The `auth` exchange is
   logwisp-to-logwisp (or logwisp CLI) only.
-- Browser `EventSource` viewers under SCRAM: they cannot set `Authorization` or
-  run Argon2. mTLS remains the browser path.
+- Browser viewers of a logwisp that terminates TLS itself: a browser cannot see
+  the server certificate, so its proof cannot be channel-bound. Browsers log in
+  through the proxy mode below, or use mTLS.
 - Multiple backends behind a non-sticky L7 balancer: handshake state and the
   token key live in one process.
 
@@ -226,6 +227,85 @@ logwisp auth stream -addr host:port        -user U -password-file P [TLS flags]
   password file, `SIGHUP` the dialer. The dialer retries under backoff in
   between.
 - Revocation: `remove-user`, `SIGHUP`. All tokens die with the reload.
+
+## Planned: Browser Viewers Behind a TLS-Terminating Proxy
+
+**Status:** planned (batch 3). The deployer serves the log stream inside a website
+whose TLS ends at a reverse proxy; logwisp holds no private key and listens in
+plaintext on a trusted hop. Viewers log in with a password from a browser, using a
+client logwisp ships, without the password reaching the proxy or logwisp.
+
+```toml
+[pipelines.plugin_sinks.config]           # http sink only
+login_page  = true                         # GET /auth/login
+viewer_page = false                        # GET /auth/view, optional
+[pipelines.plugin_sinks.config.auth]
+type             = "scram"
+credentials_file = "/etc/logwisp/users.toml"
+trusted_proxies  = ["127.0.0.1"]           # addresses or CIDRs
+```
+
+**Trust model.** `trusted_proxies` switches the http sink into proxy mode:
+- Only listed addresses may connect; anything else gets `403`.
+- `X-Forwarded-For` names the client (the rightmost address not in the list),
+  for throttling and logs. Without proxy mode, forwarded headers stay ignored.
+- `X-Forwarded-Proto` must be `https`, so a site accidentally served in plaintext
+  fails closed instead of exposing sessions.
+- SCRAM runs unbound: there is no logwisp certificate, and a browser cannot read
+  the site's. The proof and the session ride on the site's TLS; a party on the
+  proxy-to-logwisp hop could relay a login, which is why the hop must stay on
+  loopback or a trusted network and why peers are restricted by address.
+- `tls` may stay off. Outside proxy mode nothing changes: proofs stay bound.
+
+**Session.** A browser login asks for a cookie instead of a body token
+(`"session": "cookie"` on the proof). The answer to `/auth` sets
+`logwisp_session` with `HttpOnly; Secure; SameSite=Strict; Max-Age=<lifetime>`
+and no `Path`, so it scopes itself to the mount prefix of the proxy. Stream and
+status accept the cookie or `Authorization: Bearer`, so
+`new EventSource("stream")` works on any page of the same site, and curl and the
+CLI keep using tokens. `POST /auth/logout` clears the cookie and revokes the token
+until its expiry (a bounded in-memory set, gone on reload like every token). An
+open stream outlives its token; a reconnect after expiry gets `401`.
+
+**Endpoints** (reserved `/auth` prefix; every URL in the pages is relative, so a
+proxy path prefix works unchanged):
+
+| Path | Purpose |
+|------|---------|
+| `POST /auth` | SCRAM exchange, as today; unbound in proxy mode |
+| `POST /auth/logout` | clear the cookie, revoke the token |
+| `GET /auth/scram.js` | the client library, always in proxy mode |
+| `GET /auth/login` | login page (`login_page`) |
+| `GET /auth/view` | minimal live viewer (`viewer_page`) |
+
+Pages carry a strict CSP (`default-src 'none'; script-src 'self';
+connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors
+'none'; base-uri 'none'`) and no inline script.
+
+**Client library** (`scram.js`): one dependency-free ES module, kept in the
+repository beside the pages and embedded with `go:embed`, so a site with its own
+CSP can copy it into its bundle instead of loading it from logwisp. It exports
+`login(base, username, password)` and `logout(base)`; internally BLAKE2b and
+Argon2id in plain JS (no WebAssembly, which would need `'wasm-unsafe-eval'`),
+SHA-256 and HMAC from WebCrypto (secure contexts only, which the site's TLS
+gives), the exact AuthMessage format of `lixenwraith/auth`, the same Argon2 floor
+as the Go dialer, and verification of the server's final signature before
+reporting success. The wire protocol above is the contract: a site may implement
+its own client instead.
+
+**CLI.** `logwisp auth token -unbound` logs in to a proxied sink (still pinning
+the proxy's certificate across its two requests).
+
+**Verification.** Go tests: proxy-mode validation (only the http sink, binding
+off only here), refusal of non-proxy peers and non-https forwarded protocol,
+client address from `X-Forwarded-For` for throttling, unbound login over a
+plaintext listener, cookie attributes and its absence from the body, cookie
+accepted on stream and status, logout revocation, bound proofs refused in proxy
+mode. JS: the RFC 9106 Argon2id vector and the `auth` known-answer proof under
+node. `test/scram-proxy-test.sh`: a TLS-terminating reverse proxy in front of a
+plaintext logwisp, headless Chromium logging in through `/auth/login` and
+receiving events through `EventSource`, curl with `token -unbound`, logout,
+direct (non-proxy) access refused.
 
 ## Verification
 
