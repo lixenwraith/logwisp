@@ -65,7 +65,7 @@ async function events(t, chunks) {
 // A split CRLF is one break, so "d" and "e" stay one event; a kept BOM would
 // rename the first field and drop "a".
 test("stream splits lines at CRLF, LF and a lone CR, across chunks", async (t) => {
-  const { got } = await events(t, ["﻿data: a\r\ndata: b\rdata: c\n\r", "\n", "data: d\r", "\ndata: e\r", "\r\n"]);
+  const { got } = await events(t, ["\uFEFFdata: a\r\ndata: b\rdata: c\n\r", "\n", "data: d\r", "\ndata: e\r", "\r\n"]);
   assert.deepEqual(got, [
     { type: "message", data: "a\nb\nc", lastEventId: "" },
     { type: "message", data: "d\ne", lastEventId: "" },
@@ -76,8 +76,8 @@ test("stream interprets fields as the HTML standard does", async (t) => {
   const { got, end } = await events(t, [
     ": comment\nevent: connected\ndata:{\"a\":1}\nid: 7\n\n",
     "data\n\n",
-    "event: no-data\n\n",
-    "data:  one space kept\nunknown: x\nid: 8\0\nretry: 15x\nretry: 3000\n\n",
+    "data:  one space kept\nunknown: x\nid: 8\0\nretry: 3000\nretry: 15x\n\n",
+    "id: 8\nevent: no-data\n\n",
     "id\ndata: never ended\n",
   ]);
   assert.deepEqual(got, [
@@ -85,7 +85,7 @@ test("stream interprets fields as the HTML standard does", async (t) => {
     { type: "message", data: "", lastEventId: "7" },
     { type: "message", data: " one space kept", lastEventId: "7" },
   ]);
-  assert.deepEqual(end, { lastEventId: "7", retry: 3000 });
+  assert.deepEqual(end, { lastEventId: "8", retry: 3000 });
 });
 
 test("stream presents the bearer and refuses anything but a 200 event stream", async (t) => {
@@ -102,7 +102,7 @@ test("stream presents the bearer and refuses anything but a 200 event stream", a
 });
 
 test("stream rejects with the AbortError once its signal aborts", async (t) => {
-  t.mock.method(globalThis, "fetch", async (url, { signal }) => new Response(new ReadableStream({
+  t.mock.method(globalThis, "fetch", async (url, { signal }) => signal.throwIfAborted() ?? new Response(new ReadableStream({
     start(c) {
       c.enqueue(new TextEncoder().encode("data: first\n\n"));
       signal.addEventListener("abort", () => c.error(signal.reason));
@@ -110,6 +110,7 @@ test("stream rejects with the AbortError once its signal aborts", async (t) => {
   }), { headers: { "Content-Type": "text/event-stream" } }));
   const ac = new AbortController();
   await assert.rejects(stream(STREAM, { signal: ac.signal, onEvent: () => ac.abort() }), { name: "AbortError" });
+  await assert.rejects(stream(STREAM, { signal: AbortSignal.abort() }), { name: "AbortError" });
 });
 
 // The mock server signs with the client's own derivation at the Argon2 floor
