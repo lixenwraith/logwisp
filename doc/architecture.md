@@ -40,6 +40,8 @@ Package map:
 - `internal/plugin`: global factory registry populated by plugin `init()`.
 - `internal/chain`: chain wire protocol: hello preamble, entry codec, backoff.
 - `internal/tlsx`: the single seam between `TLSOptions` and `crypto/tls`.
+- `internal/authz`: the single seam between `AuthOptions` and the network
+  plugins: `Admit`, `AuthorizeRequest`, `Greet`, `Prepare`.
 - `internal/session`: session manager and per-instance proxy.
 - `internal/core`: shared types (`LogEntry`, `TransportEvent`), capabilities,
   constants.
@@ -191,8 +193,9 @@ a bind/start failure requires another corrected reload or process restart.
 
 - Every buffer is bounded; the drop-not-block policy keeps memory flat under
   load.
-- Network sinks and chain sources accept a `max_connections` cap. Admission is
-  a load-then-check, so a burst can over-admit by roughly one connection.
+- The `tcp` and `http` sinks and the `tcp_chain` source accept a
+  `max_connections` cap. Admission is a load-then-check, so a burst can
+  over-admit by roughly one connection.
 - Chain listeners bound a single line at `core.MaxLogEntryBytes` (1 MiB); an
   oversized line is a protocol violation and terminates the connection.
 - The `http_chain` source caps each request body at `max_body_bytes`.
