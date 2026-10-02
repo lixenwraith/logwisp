@@ -9,13 +9,14 @@ import (
 
 // The host literal picks the family, strictly: an IPv4 literal or the empty
 // host is IPv4 only, an IPv6 literal (the wildcard :: too) IPv6 only, and a
-// hostname resolves. Brackets and ports belong to addresses, not hosts.
+// hostname resolves. Brackets and ports belong to addresses, not hosts, and
+// an IPv4-mapped address is IPv4 written as IPv6.
 func TestNetworkFollowsTheHostLiteral(t *testing.T) {
 	for _, tc := range []struct{ host, want string }{
 		{"127.0.0.1", "tcp4"}, {"0.0.0.0", "tcp4"}, {"", "tcp4"},
 		{"::1", "tcp6"}, {"::", "tcp6"}, {"fe80::1%eth0", "tcp6"},
 		{"relay.example", "tcp"}, {"localhost", "tcp"},
-		{"[::1]", ""}, {"::1]", ""}, {"10.0.0.1:80", ""},
+		{"[::1]", ""}, {"::1]", ""}, {"10.0.0.1:80", ""}, {"::ffff:10.0.0.1", ""},
 	} {
 		got, err := Network(tc.host)
 		if got != tc.want || (err != nil) != (tc.want == "") {

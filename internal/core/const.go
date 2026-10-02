@@ -15,6 +15,9 @@ func Network(host string) (string, error) {
 	switch {
 	case host == "" || err == nil && addr.Is4():
 		return "tcp4", nil
+	case err == nil && addr.Is4In6():
+		// tcp6 refuses it at bind or dial, long after the config loaded
+		return "", fmt.Errorf("%q is an IPv4-mapped address; write it as IPv4", host)
 	case err == nil:
 		return "tcp6", nil
 	case strings.ContainsAny(host, "[]:"):

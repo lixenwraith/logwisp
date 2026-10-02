@@ -21,8 +21,8 @@ Every listener and dialer keeps strictly to the family of its `host`:
 ### IPv6
 
 - Notation
-  - `host` takes the bare address: `host = "::1"`. A bracketed host or one
-    with a port fails at load.
+  - `host` takes the bare address: `host = "::1"`. A bracketed host, one
+    with a port, or an IPv4-mapped one (`::ffff:10.0.0.1`) fails at load.
   - Addresses and URLs bracket it: logs print `[::1]:8443`, and `lw auth`
     takes `-addr [::1]:8443` and `-url https://[::1]:8443`. Give `curl` `-g`,
     or it reads the brackets as a glob.
