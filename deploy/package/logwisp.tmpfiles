@@ -1,0 +1,3 @@
+# Type Path             Mode User    Group   Age Argument
+d      /var/lib/logwisp 0750 logwisp logwisp -   -
+d      /var/log/logwisp 0750 logwisp logwisp -   -
