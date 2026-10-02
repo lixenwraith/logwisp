@@ -31,7 +31,8 @@ no certificates: see [Security](security.md#enabling-mtls).
     `/etc/logwisp`
   - log directories mount read-only and the output directory writable, each at
     its host path; `--log-group` adds that group's id to the container
-  - listener ports publish on `--listen`; the process inside binds `0.0.0.0`
+  - listener ports publish on `--listen`, an IP address; the process inside
+    binds `0.0.0.0`
   - `--network NET` joins a user network, created when missing, where edges
     reach an aggregator by container name; `host` publishes nothing
   - `--image` defaults to `logwisp:dev`, the `make image` tag; `--build` builds
@@ -51,16 +52,16 @@ no certificates: see [Security](security.md#enabling-mtls).
   - writes `/etc/logwisp/logwisp.toml`, `root:logwisp`, mode 0640
   - adds `logwisp.service.d/deploy.conf` when the node needs it:
     `ReadWritePaths` for an output outside `/var/log/logwisp`,
-    `ProtectHome=read-only` for logs under `/home`, `SupplementaryGroups` for
+    `ProtectHome=read-only` for logs or output under `/home`, `SupplementaryGroups` for
     `--log-group`, `CAP_NET_BIND_SERVICE` for a port below 1024
 - `native`, FreeBSD
   - installs `deploy/package/logwisp.rc` as `/usr/local/etc/rc.d/logwisp`,
     creates the `logwisp` user with `pw`, enables it with `sysrc`; LogWisp logs
     to syslog under the tag `logwisp`
   - writes `/usr/local/etc/logwisp/logwisp.toml`
-  - `--jail NAME` writes under the jail's path and runs the commands through
-    `jexec`; the jail must be running, and the script prints a `jail.conf`
-    example when it is not
+  - `--jail NAME` writes the files and runs the commands through `jexec`, so
+    the jail's own symlinks cannot redirect a write onto the host; the jail
+    must be running, and the script prints a `jail.conf` example when it is not
   - a non-root user binds a port below 1024 only with
     `sysctl net.inet.ip.portrange.reservedhigh` lowered or `mac_portacl`
 - `manual`
@@ -73,7 +74,10 @@ host or in a jail.
 
 Re-running the same command updates the node: an existing `logwisp.toml` is
 kept as `logwisp.toml.bak`, the container is replaced, generated passwords are
-reused. Under `--yes`, replacing a configuration or a container needs `--force`.
+reused. A user already in a credentials file whose password file is missing
+stops the run before any change, instead of getting a new password that would
+lock its edge out. Under `--yes`, replacing a configuration or a container
+needs `--force`.
 
 ## Security options
 
@@ -128,14 +132,15 @@ already, and the `logs` jail has an address the others reach (`AGG_ADDR`).
 
 4. Check: `jexec logs service logwisp status`, the files in the `logs` jail's
    `/var/log/logwisp`, and `https://AGG_ADDR:8080/status` with a token from
-   `lw auth token -user ops` ([CLI](cli.md#logwisp-auth)).
+   `lw auth token -user ops -ca-file ca.crt` ([CLI](cli.md#lw-auth)).
 
 Variants:
 
 - the aggregator on the host itself: drop `--jail logs`
 - no daemon per jail: one `standalone` or `edge` on the host tails each jail's
   logs through the host path (`--log-dir JAIL_PATH/var/log`); the entries then
-  carry the host's label, the file name telling the jails apart
+  carry the host's label and the bare file name, so files of the same name in
+  two jails cannot be told apart
 - a Linux aggregator: run step 2 with `--runtime docker` on that host and point
   the edges at it; the chain protocol is the same
 
