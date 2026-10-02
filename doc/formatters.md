@@ -25,7 +25,7 @@ Each as type and default:
 - `sanitizer_policy` (string, derived from `type`): `raw`, `txt`, `json`, or
   `shell`.
 - `flags` (int64, `0`): bitmask override; `0` selects a per-type default.
-- `timestamp_format` (string, formatter default): Go reference layout, e.g.
+- `timestamp_format` (string, `time.RFC3339Nano`): Go reference layout, e.g.
   `"2006-01-02T15:04:05Z07:00"`.
 
 ## Types
@@ -99,8 +99,10 @@ With `flags = 0` the formatter selects `1` for `type = "raw"` and `6`
 (timestamp + level) for every other type. `8` is added automatically whenever an
 entry carries parseable `fields` and `1` is not set; `1` always wins.
 
-Examples: `flags = 4` for level only, no timestamp; `flags = 2` for timestamp
-only, no level.
+The formatter shows timestamp and level unless a suppress bit says otherwise
+(suppress wins over show), so `2` and `4` alone change nothing. Examples:
+`flags = 16` for level only, no timestamp; `flags = 32` for timestamp only, no
+level.
 
 ## Sanitizer Policies
 
@@ -114,7 +116,7 @@ Each policy, then what to use it with:
 - `txt`: escapes non-printable characters.
   - File and console sinks.
 - `json`: escapes control characters for safe JSON embedding.
-  - `type = "json"`, chain links.
+  - `type = "json"`.
 - `shell`: strips shell metacharacters, whitespace, and control characters.
   - Data that will be passed to a command.
 
@@ -133,7 +135,8 @@ message.
 ## Node Identity in Output
 
 Entries that arrived over a chain link carry a `Node` label. The formatter
-renders it as a syslog-style prefix on the source field:
+renders it as a syslog-style prefix on the source field (`trace` in `json`
+output):
 
 ```
 edge-01/app.log
@@ -160,7 +163,7 @@ By goal:
   `sanitizer_policy = "txt"`.
 - Downstream ingestion (Loki, Elasticsearch, jq): `type = "json"`,
   `sanitizer_policy = "json"`.
-- Compact console output: `type = "txt"`, `flags = 4`.
+- Compact console output: `type = "txt"`, `flags = 16`.
 - Untrusted log content: never `raw`; pick `txt` or `json` and set the
   matching policy.
 
