@@ -2,13 +2,14 @@
 
 ```
 lw [options]
+lw --check [options]
 lw auth <command> [flags]
 lw help | -h | --help
 lw --version
 ```
 
 `lw auth` manages SCRAM credentials and logs in to `scram` listeners; see
-[below](#logwisp-auth). There is no certificate-generation command: use
+[below](#lw-auth). There is no certificate-generation command: use
 `openssl` or your PKI tooling — see [Security](security.md#enabling-mtls).
 
 ## Options
@@ -26,6 +27,8 @@ pipelines have [their own flags](#pipelines):
 
 - `-c <path>`, `--config <path>`, `--config=<path>`: the configuration file,
   default `./logwisp.toml`
+- `--check`: build every pipeline and plugin, bind nothing, report and exit;
+  see [Usage Patterns](#usage-patterns)
 - `--quiet`: suppress all application output, default `false`
 - `--status_reporter=<bool>`: periodic status logging, default `true`
 - `--auto_reload=<bool>`: reload when the configuration file changes, default
@@ -183,9 +186,9 @@ service untouched; see [Configuration](configuration.md#hot-reload).
 
 ## Exit Codes
 
-- `0`: clean shutdown, or `--version` / `--help`
-- `1`: general error: a configuration load or validation failure, a logger
-  init failure, a service bootstrap failure
+- `0`: clean shutdown, `--version` / `--help`, or a valid `--check`
+- `1`: general error: a configuration load or validation failure (`--check`
+  included), a logger init failure, a service bootstrap failure
 - `2`: an explicitly requested configuration file is not found
 
 Exit code 2 applies only when the file was named explicitly (`-c`,
@@ -217,11 +220,6 @@ lw
 ```
 
 **Configuration check**
-
-```bash
-# starts the service; a config error exits non-zero before any pipeline runs
-lw -c /etc/logwisp/logwisp.toml --logging.level=debug
-```
 
 `lw --check` validates without running: it builds every pipeline and plugin as
 a start would (options, TLS files, credentials files, startup warnings), binds
@@ -275,8 +273,9 @@ lw auth stream      -addr HOST:PORT -user NAME -password-file FILE [TLS flags]
 success, `1` on failure and `2` on a usage error.
 
 **`add-user`** creates the credentials file, with a fresh `decoy_key`, when it
-does not exist or is empty (create it empty first to choose its owner). The password comes from `-password-file` when that file exists
-(at least 8 bytes; one trailing line break is trimmed). Otherwise a random
+does not exist or is empty (create it empty first to choose its owner). The
+password comes from `-password-file` when that file exists (at least 8 bytes;
+one trailing line break is trimmed). Otherwise a random
 26-character password (130 bits) is generated and written to `-password-file`,
 or printed once to stdout when there is none. Replacing an existing user's
 password needs an existing `-password-file` or `-generate`, so a mistyped path
@@ -298,9 +297,8 @@ There is no flag to skip verification: an unverified server could relay the
 login. Redirects are not followed. `-unbound` logs in to an `http` sink behind
 a TLS-terminating proxy (`auth.trusted_proxies`), still pinning the proxy's
 certificate across the two requests; only then may `-url` carry the path the
-proxy mounts LogWisp at. `stream` exits `0`
-on `SIGINT` or `SIGTERM`, and `1` when the server ends the stream (a reload or
-shutdown).
+proxy mounts LogWisp at. `stream` exits `0` on `SIGINT` or `SIGTERM`, and `1`
+when the server ends the stream (a reload or shutdown).
 
 Addresses, as for the plugins ([Networking](networking.md#address-family)):
 
