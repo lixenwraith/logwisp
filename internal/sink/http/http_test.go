@@ -2,13 +2,18 @@ package http
 
 import (
 	"bufio"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"logwisp/internal/sink"
+	"logwisp/internal/testutil"
 )
 
 func TestStatusReportsQueueAndConnectionBounds(t *testing.T) {
@@ -117,5 +122,50 @@ func TestHeadOnStreamPathIsRefused(t *testing.T) {
 	}
 	if n := manager.GetSessionCount(); n != 0 {
 		t.Errorf("sessions after HEAD = %d, want 0", n)
+	}
+}
+
+// A stream gated by an auth policy is not offered to every web origin; an
+// open stream keeps the wildcard so browser dashboards still work.
+func TestWildcardCORSOnlyWithoutAuth(t *testing.T) {
+	pki := testutil.NewPKI(t, "viewer-01")
+	caPEM, err := os.ReadFile(pki.CA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	clientCert, err := tls.LoadX509KeyPair(pki.ClientCert, pki.ClientKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	open, _ := newTestHTTPSink(t, nil)
+	gated, _ := newTestHTTPSink(t, map[string]any{
+		"tls": map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey,
+			"client_auth": true, "client_ca_file": pki.CA},
+		"auth": map[string]any{"type": "mtls", "allow": []any{"viewer-01"}},
+	})
+	for _, tc := range []struct {
+		name string
+		sink *HTTPSink
+		want string
+	}{{"open", open, "*"}, {"gated", gated, ""}} {
+		client, baseURL := serveTestHTTPSink(t, tc.sink)
+		if tc.sink.tlsConfig != nil {
+			client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, Certificates: []tls.Certificate{clientCert}}}
+			baseURL = "https" + strings.TrimPrefix(baseURL, "http")
+		}
+		resp, err := client.Get(baseURL + "/stream")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: GET /stream = %d", tc.name, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != tc.want {
+			t.Errorf("%s: Access-Control-Allow-Origin = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

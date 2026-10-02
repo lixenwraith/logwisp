@@ -20,6 +20,7 @@ streams, or downstream LogWisp nodes.
 | [Networking](networking.md) | Listeners, dialers, timeouts, connection limits |
 | [Security](security.md) | TLS, mTLS, and peer authorization; threat model and current limits |
 | [mTLS Authentication](mtls-auth-plan.md) | Design and rationale for certificate-based authorization |
+| [Password Authentication](scram-auth-plan.md) | Planned Argon2id-SCRAM design; mTLS hardening |
 | [CLI](cli.md) | Flags, signals, exit codes |
 | [Operations](operations.md) | Running, monitoring, tuning, troubleshooting |
 

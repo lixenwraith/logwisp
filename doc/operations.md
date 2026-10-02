@@ -281,7 +281,8 @@ openssl x509 -in /etc/logwisp/tls/relay.crt -noout -enddate
 ```
 
 Certificates load at plugin construction, so rotation is: write the new files,
-then `kill -HUP`. Automate the expiry check; nothing in LogWisp warns you.
+then `kill -HUP`. Startup and every reload warn at WARN once a certificate is
+within 30 days of expiry; automate the check anyway.
 
 **Access review**
 

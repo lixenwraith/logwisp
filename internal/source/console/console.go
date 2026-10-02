@@ -13,7 +13,6 @@ import (
 	"logwisp/internal/session"
 	"logwisp/internal/source"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -70,7 +69,7 @@ func NewConsoleSourcePlugin(
 	opts := &config.ConsoleSourceOptions{}
 
 	// Scan config map
-	if err := lconfig.ScanMap(configMap, opts); err != nil {
+	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 

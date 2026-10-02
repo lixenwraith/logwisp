@@ -6,10 +6,12 @@ package tlsx
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	stdlog "log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"logwisp/internal/config"
@@ -17,8 +19,12 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// HandshakeTimeout bounds TLS handshakes on both accept and dial paths
-const HandshakeTimeout = 10 * time.Second
+const (
+	// HandshakeTimeout bounds TLS handshakes on both accept and dial paths
+	HandshakeTimeout = 10 * time.Second
+	// expiryWindow is how far ahead startup announces certificate expiry
+	expiryWindow = 30 * 24 * time.Hour
+)
 
 // Server builds the *tls.Config for listener plugins
 // (tcp/http sinks, tcp_chain/http_chain sources). Returns (nil, nil) when disabled.
@@ -134,6 +140,93 @@ func PeerIdentity(cs tls.ConnectionState, mode string) string {
 		}
 	}
 	return ""
+}
+
+// LogWarnings reports TLS settings that work but are likely mistakes, once per
+// plugin construction, so each reload re-announces expiring certificates.
+func LogWarnings(l *log.Logger, component, id string, o *config.TLSOptions, listener bool) {
+	if o == nil || !o.Enabled {
+		return
+	}
+	var warnings []string
+	if !listener && o.InsecureSkipVerify {
+		warnings = append(warnings, "tls.insecure_skip_verify disables server verification: any peer can impersonate the server")
+	}
+	files := []struct{ key, path string }{{"cert_file", o.CertFile}, {"ca_file", o.CAFile}}
+	if listener {
+		files[1] = struct{ key, path string }{"client_ca_file", o.ClientCAFile}
+	}
+	now := time.Now()
+	for _, f := range files {
+		for _, c := range readCerts(f.path) {
+			if w := expiryWarning(c, now); w != "" {
+				warnings = append(warnings, fmt.Sprintf("tls.%s %s: %s", f.key, f.path, w))
+			}
+		}
+	}
+	if w := SecretFileWarning("tls.key_file", o.KeyFile); w != "" {
+		warnings = append(warnings, w)
+	}
+	for _, w := range warnings {
+		l.Warn("msg", w, "component", component, "instance_id", id)
+	}
+}
+
+// expiryWarning describes a certificate outside, or about to leave, its
+// validity window; a handshake failure is otherwise the first sign.
+func expiryWarning(c *x509.Certificate, now time.Time) string {
+	name := c.Subject.CommonName
+	switch {
+	case now.After(c.NotAfter):
+		return fmt.Sprintf("certificate %q expired on %s", name, c.NotAfter.UTC().Format(time.DateOnly))
+	case now.Before(c.NotBefore):
+		return fmt.Sprintf("certificate %q is not valid until %s", name, c.NotBefore.UTC().Format(time.DateTime))
+	case c.NotAfter.Sub(now) < expiryWindow:
+		return fmt.Sprintf("certificate %q expires on %s", name, c.NotAfter.UTC().Format(time.DateOnly))
+	}
+	return ""
+}
+
+// readCerts parses every certificate in a PEM file. Constructors already
+// loaded it successfully, so an unreadable file yields nothing here.
+func readCerts(path string) []*x509.Certificate {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var certs []*x509.Certificate
+	for block, rest := pem.Decode(data); block != nil; block, rest = pem.Decode(rest) {
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		if c, err := x509.ParseCertificate(block.Bytes); err == nil {
+			certs = append(certs, c)
+		}
+	}
+	return certs
+}
+
+// warnedSecrets keeps reloads from repeating a permission warning per path
+var warnedSecrets sync.Map
+
+// SecretFileWarning describes a secret file every local user can read, once
+// per path per process. Group access is left alone: container secret mounts
+// commonly grant it on purpose.
+func SecretFileWarning(key, path string) string {
+	if path == "" {
+		return ""
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode().Perm()&0o004 == 0 {
+		return ""
+	}
+	if _, seen := warnedSecrets.LoadOrStore(path, struct{}{}); seen {
+		return ""
+	}
+	return fmt.Sprintf("%s %s is readable by all users (mode %04o)", key, path, fi.Mode().Perm())
 }
 
 // HTTPErrorLog adapts the structured logger for http.Server.ErrorLog so TLS

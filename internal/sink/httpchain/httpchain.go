@@ -44,6 +44,7 @@ const (
 	DefaultHTTPChainSinkRequestTimeoutMS = 10000
 	DefaultHTTPChainSinkBackoffMinMS     = 500
 	DefaultHTTPChainSinkBackoffMaxMS     = 30000
+	maxResponseDrain                     = 64 * 1024
 )
 
 // HTTPChainSink batches structured entries and posts NDJSON to a downstream
@@ -92,7 +93,7 @@ func NewHTTPChainSinkPlugin(
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
 	opts := &config.HTTPChainSinkOptions{}
-	if err := lconfig.ScanMap(configMap, opts); err != nil {
+	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	if err := lconfig.NonEmpty(opts.Host); err != nil {
@@ -182,7 +183,11 @@ func NewHTTPChainSinkPlugin(
 		mtls:       tlsCfg != nil && len(tlsCfg.Certificates) > 0,
 		auth:       authPolicy,
 		url:        scheme + "://" + addr + opts.IngestPath,
-		client:     &http.Client{Transport: transport},
+		// A redirect would resend the batch, even from https to plaintext http
+		client: &http.Client{
+			Transport:     transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		input:      make(chan core.TransportEvent, opts.BufferSize),
 		done:       make(chan struct{}),
 		logger:     logger,
@@ -208,6 +213,7 @@ func NewHTTPChainSinkPlugin(
 		"tls", t.tlsEnabled,
 		"mtls", t.mtls,
 		"auth", authPolicy.Describe())
+	tlsx.LogWarnings(logger, "http_chain_sink", id, opts.TLS, false)
 	return t, nil
 }
 
@@ -436,8 +442,8 @@ func (t *HTTPChainSink) post(ctx context.Context, body []byte) (transient bool, 
 		return true, err
 	}
 	defer resp.Body.Close()
-	// Drain for connection reuse
-	io.Copy(io.Discard, resp.Body)
+	// Drain for connection reuse, bounded so a hostile peer cannot stream forever
+	io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseDrain))
 
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:

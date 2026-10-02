@@ -75,7 +75,7 @@ func NewFileSourcePlugin(
 	opts := &config.FileSourceOptions{}
 
 	// Use lconfig to scan map into struct (overriding defaults)
-	if err := lconfig.ScanMap(configMap, opts); err != nil {
+	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
