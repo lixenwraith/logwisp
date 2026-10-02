@@ -106,7 +106,7 @@ trusted_proxies   = []                    # scram http sink behind a TLS-termina
 | `allow` | `mtls` | `[]` | Exact identities to admit |
 | `allow_patterns` | `mtls` | `[]` | RE2 patterns matched against the identity; anchor them yourself |
 | `node_binding` | chain sources | `force` | `none`, `assert`, or `force` |
-| `credentials_file` | `scram` listeners | — | Verifiers written by [`lw auth add-user`](cli.md#logwisp-auth) |
+| `credentials_file` | `scram` listeners | — | Verifiers written by [`lw auth add-user`](cli.md#lw-auth) |
 | `token_lifetime_ms` | `scram` on the `http` sink and `http_chain` source | 15 minutes | Bearer token lifetime, 10 s to 24 h |
 | `username` | `scram` dialers | — | User to log in as |
 | `password_file` | `scram` dialers | — | File holding the password; one trailing line break is trimmed |
@@ -350,7 +350,7 @@ end to end — run it with `--auto` to see each guarantee asserted.
 `type = "scram"` authenticates peers by username and password with
 Argon2id-SCRAM from `lixenwraith/auth`. It needs TLS but no client
 certificates, works on all six network plugins, and is LogWisp's own protocol,
-not standard SASL: viewers use the [`lw auth`](cli.md#logwisp-auth) CLI or,
+not standard SASL: viewers use the [`lw auth`](cli.md#lw-auth) CLI or,
 behind a TLS-terminating proxy, the shipped browser client.
 
 ```toml
@@ -460,7 +460,7 @@ stored_key = "<base64>"
 username = "edge-01"
 ```
 
-Write it with [`lw auth add-user`](cli.md#logwisp-auth) rather than by
+Write it with [`lw auth add-user`](cli.md#lw-auth) rather than by
 hand. The whole file is validated when the plugin is built: a `decoy_key` of at
 least 32 bytes, at least one user, unique names, no unknown keys, and one Argon2
 profile and salt length for every user, since mixed profiles would tell a prober

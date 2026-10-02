@@ -6,7 +6,7 @@ channel binding and the mTLS layer was hardened (see
 on the `auth` release that carries channel binding; then browser logins behind
 a TLS-terminating proxy. Operator documentation lives in
 [Security](security.md#password-authentication-scram) and
-[`lw auth`](cli.md#logwisp-auth).
+[`lw auth`](cli.md#lw-auth).
 
 **Scope:** optional username/password authentication on every network plugin,
 next to the existing certificate method, without weakening what mTLS gives.
