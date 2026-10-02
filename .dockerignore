@@ -1,0 +1,20 @@
+# The builder needs the module and its sources only; local state and keys stay out.
+.git
+.github
+.idea
+.claude
+worktrees
+.worktrees
+bin
+build
+cert
+data
+dev
+log
+logs
+script
+test/run*
+**/node_modules
+*.log
+*.toml
+!config/*.toml

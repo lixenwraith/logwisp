@@ -2,21 +2,26 @@
 # an older builder reports the mismatch only after downloading the module graph.
 ARG GO_VERSION=1.27.1
 
-FROM docker.io/library/golang:${GO_VERSION}-alpine AS build
+# The builder runs natively and cross-compiles, so foreign platforms need no emulation.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:${GO_VERSION}-alpine AS build
 
-# Git supplies Go's VCS build information; only /out/lw crosses stages.
-RUN apk add --no-cache git
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+# The optional build_ca secret adds a CA (an intercepting proxy's) for this step
+# only: Go reads SSL_CERT_DIR besides the system bundle, and a secret mount
+# never reaches a layer. Proxy variables are Docker's predefined build args.
+RUN --mount=type=secret,id=build_ca,target=/run/build-ca/ca.pem \
+    SSL_CERT_DIR=/run/build-ca go mod download
+
 COPY . .
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG VERSION=dev
 ARG REVISION=unknown
+# REVISION identifies the commit: the context has no .git, so no VCS stamping.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath \
+    go build -trimpath -buildvcs=false \
       -ldflags="-s -w -X logwisp/internal/version.Version=${VERSION} -X logwisp/internal/version.GitCommit=${REVISION}" \
       -o /out/lw ./cmd/lw
 
@@ -32,6 +37,8 @@ LABEL org.opencontainers.image.title="logwisp" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.licenses="BSD-3-Clause"
 
+# Dialers without tls.ca_file, and `lw auth` without -ca-file, verify against system roots.
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/lw /lw
 
 # Numeric identity is required in scratch and satisfies a restricted pod spec.
