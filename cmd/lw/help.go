@@ -36,7 +36,7 @@ Pipelines (replace the file's pipelines; see doc/cli.md):
       --pipeline <name>         Start a pipeline; earlier specs go to "cli"
       --source <spec>           TYPE[,key=value...], repeatable
       --sink <spec>             e.g. http,host=0.0.0.0,port=8080, repeatable
-      --filter <spec>           include|exclude,patterns=RE[,...], repeatable
+      --filter <spec>           include|exclude,patterns=RE, repeatable
       --format <spec>           json|txt|raw[,key=value...]
       --rate-limit <spec>       rate=N[,burst=N,policy=drop|pass]
       --heartbeat <spec>        interval_ms=N[,include_stats=true,...]
