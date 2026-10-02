@@ -13,5 +13,5 @@ jobs:
           go-version-file: go.mod
       - run: go test -timeout 60s -race ./...
       - run: go vet ./...
-      - run: go build ./cmd/logwisp
-      - run: GOOS=freebsd GOARCH=amd64 go build -o /tmp/logwisp-freebsd ./cmd/logwisp
+      - run: go build ./cmd/lw
+      - run: GOOS=freebsd GOARCH=amd64 go build -o /tmp/lw-freebsd ./cmd/lw

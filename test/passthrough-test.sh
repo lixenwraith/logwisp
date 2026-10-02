@@ -13,7 +13,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${LOGWISP_BIN:-$SCRIPT_DIR/../bin/logwisp}"
+BIN="${LOGWISP_BIN:-$SCRIPT_DIR/../bin/lw}"
 RUN="$SCRIPT_DIR/run/passthrough"
 
 [[ -x $BIN ]] || { echo "no binary at $BIN; run make build" >&2; exit 1; }

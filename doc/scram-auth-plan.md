@@ -6,7 +6,7 @@ channel binding and the mTLS layer was hardened (see
 on the `auth` release that carries channel binding; then browser logins behind
 a TLS-terminating proxy. Operator documentation lives in
 [Security](security.md#password-authentication-scram) and
-[`logwisp auth`](cli.md#logwisp-auth).
+[`lw auth`](cli.md#logwisp-auth).
 
 **Scope:** optional username/password authentication on every network plugin,
 next to the existing certificate method, without weakening what mTLS gives.
@@ -18,7 +18,7 @@ next to the existing certificate method, without weakening what mTLS gives.
 - No password or password-equivalent on the wire, no KDF work on listeners, and
   no credential relay through a TLS-terminating MITM.
 - Default stays `auth.type = "none"`; existing configurations are unaffected.
-- Config in TOML, credential management and viewer clients in a `logwisp auth`
+- Config in TOML, credential management and viewer clients in a `lw auth`
   CLI.
 
 ## Non-Goals
@@ -201,10 +201,10 @@ closed.
 ## CLI
 
 ```
-logwisp auth add-user    -credentials F -user U [-password-file P] [-generate]
-logwisp auth remove-user -credentials F -user U
-logwisp auth token  -url https://host:port[/path] -user U -password-file P [-unbound] [TLS flags]
-logwisp auth stream -addr host:port        -user U -password-file P [TLS flags]
+lw auth add-user    -credentials F -user U [-password-file P] [-generate]
+lw auth remove-user -credentials F -user U
+lw auth token  -url https://host:port[/path] -user U -password-file P [-unbound] [TLS flags]
+lw auth stream -addr host:port        -user U -password-file P [TLS flags]
 ```
 
 - `add-user` takes the password from `-password-file` when it exists (at least
@@ -303,7 +303,7 @@ refuses redirects, and reports success only after verifying the server's
 signature. A 64 MiB login takes about 2 s on a desktop. The wire protocol above
 is the contract: a site may implement its own client.
 
-**CLI.** `logwisp auth token -unbound` logs in through the proxy, still pinning
+**CLI.** `lw auth token -unbound` logs in through the proxy, still pinning
 its certificate across the two requests; only then may `-url` carry the mount
 path.
 
@@ -341,9 +341,9 @@ last-user refusal. Under node, `scram.js` against the RFC 9106 vector, Go's
 `test/scram-chain-test.sh --auto` (ports 15821-15825): a relay with SCRAM on all
 four listener types plus one `client_auth` + SCRAM port; authorized edges over
 both chain transports; node labels forced to usernames; wrong password, unknown
-user and no-auth edges deliver nothing; a `tcp` sink viewer through `logwisp auth
+user and no-auth edges deliver nothing; a `tcp` sink viewer through `lw auth
 stream` held past the exchange deadline; a raw TLS client without a hello gets
-nothing; the `http` sink through `logwisp auth token` and curl; missing and bad
+nothing; the `http` sink through `lw auth token` and curl; missing and bad
 tokens get `401`; `remove-user` + `SIGHUP` revokes token and login; throttling
 last. `test/scram-proxy-test.sh --auto` (ports 15831-15832): a Go reverse proxy
 ending TLS in front of a plaintext `http` sink mounted at `/logs/`; headless

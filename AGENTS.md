@@ -64,7 +64,7 @@ It is the contract, not a suggestion.
 `go build ./...`, `gofmt -l` on changed files, and `go test` on the packages the
 change touches.
 - A change to platform-sensitive code also cross-builds the production target:
-  `GOOS=freebsd GOARCH=amd64 go build ./cmd/logwisp`.
+  `GOOS=freebsd GOARCH=amd64 go build ./cmd/lw`.
 - Do not run `-race` tests unless investigating a known/suspected race issue; CI
   runs them.
 
@@ -92,7 +92,7 @@ change touches.
   stay free of inline script and style (their CSP); `node --test` there checks
   it against Go's Argon2 and `auth`'s known answer.
 - Listeners and dialers are IPv4-only (`tcp4`). E2E scripts in `test/` need
-  `bin/logwisp` and `--auto`, and each owns a port range and a gitignored run
+  `bin/lw` and `--auto`, and each owns a port range and a gitignored run
   directory.
 - Many older files lack a trailing newline and fail `gofmt -l`; format the files
   you change, not the tree.

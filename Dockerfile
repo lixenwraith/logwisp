@@ -4,7 +4,7 @@ ARG GO_VERSION=1.27.1
 
 FROM docker.io/library/golang:${GO_VERSION}-alpine AS build
 
-# Git supplies Go's VCS build information; only /out/logwisp crosses stages.
+# Git supplies Go's VCS build information; only /out/lw crosses stages.
 RUN apk add --no-cache git
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -18,7 +18,7 @@ ARG REVISION=unknown
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath \
       -ldflags="-s -w -X logwisp/internal/version.Version=${VERSION} -X logwisp/internal/version.GitCommit=${REVISION}" \
-      -o /out/logwisp ./cmd/logwisp
+      -o /out/lw ./cmd/lw
 
 FROM scratch
 
@@ -32,9 +32,9 @@ LABEL org.opencontainers.image.title="logwisp" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.licenses="BSD-3-Clause"
 
-COPY --from=build /out/logwisp /logwisp
+COPY --from=build /out/lw /lw
 
 # Numeric identity is required in scratch and satisfies a restricted pod spec.
 USER 65532:65532
 
-ENTRYPOINT ["/logwisp"]
+ENTRYPOINT ["/lw"]

@@ -25,7 +25,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${LOGWISP_BIN:-$SCRIPT_DIR/../bin/logwisp}"
+BIN="${LOGWISP_BIN:-$SCRIPT_DIR/../bin/lw}"
 RUN="$SCRIPT_DIR/run-mtls"
 CONF="$RUN/conf"
 LOG="$RUN/log"
@@ -78,7 +78,7 @@ start_daemon() { # name conf
 }
 
 # --- Preflight ---
-[[ -x "$BIN" ]] || { echo "binary not found: $BIN (build: go build -o bin/logwisp ./cmd/logwisp)" >&2; exit 1; }
+[[ -x "$BIN" ]] || { echo "binary not found: $BIN (build: go build -o bin/lw ./cmd/lw)" >&2; exit 1; }
 command -v openssl >/dev/null || { echo "openssl not found" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl not found" >&2; exit 1; }
 for p in $PORT_TCP_CHAIN $PORT_HTTP_CHAIN $PORT_TCP_SINK $PORT_HTTP_SINK; do

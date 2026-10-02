@@ -19,7 +19,7 @@ The Makefile works with both GNU make and BSD make. Targets:
 
 | Target | Effect |
 |--------|--------|
-| `make` / `make build` | Build `bin/logwisp` with version metadata |
+| `make` / `make build` | Build `bin/lw` with version metadata |
 | `make dev` | Build with the race detector enabled |
 | `make install` | Install the binary to `$(PREFIX)/bin` (default `/usr/local`) |
 | `make uninstall` | Remove `$(BINDIR)/logwisp` |
@@ -31,10 +31,10 @@ describe` and `git rev-parse`. A plain `go build` produces a working binary that
 reports `dev` for all three:
 
 ```bash
-go build -o bin/logwisp ./cmd/logwisp
+go build -o bin/lw ./cmd/lw
 ```
 
-`go install github.com/lixenwraith/logwisp/cmd/logwisp@latest` also works, with
+`go install github.com/lixenwraith/logwisp/cmd/lw@latest` also works, with
 the same loss of version metadata.
 
 ## Container Image
@@ -85,7 +85,7 @@ After=network.target
 Type=simple
 User=logwisp
 Group=logwisp
-ExecStart=/usr/local/bin/logwisp -c /etc/logwisp/logwisp.toml
+ExecStart=/usr/local/bin/lw -c /etc/logwisp/logwisp.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10
@@ -140,7 +140,7 @@ watches and **write** access to every directory a `file` sink or
 name="logwisp"
 rcvar="${name}_enable"
 pidfile="/var/run/${name}.pid"
-procname="/usr/local/bin/logwisp"
+procname="/usr/local/bin/lw"
 command="/usr/sbin/daemon"
 command_args="-p ${pidfile} -f ${procname} -c /usr/local/etc/logwisp/logwisp.toml"
 
@@ -165,7 +165,7 @@ sudo service logwisp start
 
 | Purpose | Linux | FreeBSD |
 |---------|-------|---------|
-| Binary | `/usr/local/bin/logwisp` | `/usr/local/bin/logwisp` |
+| Binary | `/usr/local/bin/lw` | `/usr/local/bin/lw` |
 | Configuration | `/etc/logwisp/` | `/usr/local/etc/logwisp/` |
 | TLS material | `/etc/logwisp/tls/` | `/usr/local/etc/logwisp/tls/` |
 | Working directory | `/var/lib/logwisp/` | `/var/db/logwisp/` |
@@ -176,10 +176,10 @@ Key files should be mode `0600` and owned by the service account.
 ## Verification
 
 ```bash
-logwisp --version
+lw --version
 
 # start in the foreground with debug logging and watch pipelines come up
-logwisp -c /etc/logwisp/logwisp.toml --logging.level=debug --logging.output=stderr
+lw -c /etc/logwisp/logwisp.toml --logging.level=debug --logging.output=stderr
 
 sudo systemctl status logwisp      # Linux
 sudo service logwisp status        # FreeBSD
@@ -215,7 +215,7 @@ nothing.
 
 ```bash
 sudo systemctl disable --now logwisp
-sudo rm /usr/local/bin/logwisp /etc/systemd/system/logwisp.service
+sudo rm /usr/local/bin/lw /etc/systemd/system/logwisp.service
 sudo systemctl daemon-reload
 sudo rm -rf /etc/logwisp /var/lib/logwisp /var/log/logwisp
 sudo userdel logwisp
@@ -226,7 +226,7 @@ sudo userdel logwisp
 ```bash
 sudo service logwisp stop
 sudo sysrc -x logwisp_enable
-sudo rm /usr/local/bin/logwisp /usr/local/etc/rc.d/logwisp
+sudo rm /usr/local/bin/lw /usr/local/etc/rc.d/logwisp
 sudo rm -rf /usr/local/etc/logwisp /var/db/logwisp /var/log/logwisp
 sudo pw userdel logwisp
 ```

@@ -1,7 +1,7 @@
 # LogWisp Makefile
 # Compatible with GNU Make (Linux) and BSD Make (FreeBSD)
 
-BINARY_NAME = logwisp
+BINARY_NAME = lw
 BUILD_DIR = bin
 BINARY_PATH = $(BUILD_DIR)/$(BINARY_NAME)
 VERSION != git describe --tags --always --dirty 2>/dev/null || echo "dev"
@@ -25,7 +25,7 @@ all: build
 # Build the binary
 build:
 	mkdir -p $(BUILD_DIR)
-	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./cmd/logwisp
+	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./cmd/lw
 
 # Install the binary
 install: build
@@ -41,7 +41,7 @@ clean:
 
 # Development build with race detector
 dev:
-	$(GO) build $(GOFLAGS) -race -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./cmd/logwisp
+	$(GO) build $(GOFLAGS) -race -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./cmd/lw
 
 # Show current version
 version:

@@ -6,7 +6,7 @@ Running, monitoring, and maintaining LogWisp.
 
 ```bash
 # foreground, explicit config
-logwisp -c /etc/logwisp/logwisp.toml
+lw -c /etc/logwisp/logwisp.toml
 
 # no config: built-in demo pipeline (random source -> stdout)
 logwisp
@@ -42,7 +42,7 @@ auto_reload = true
 or send a signal:
 
 ```bash
-kill -HUP $(pidof logwisp)
+kill -HUP $(pidof lw)
 ```
 
 Signals reread the selected TOML file even when `auto_reload` is disabled.
@@ -74,7 +74,7 @@ There is no validate-only mode. To check a file, start it with debug logging and
 watch for pipeline startup:
 
 ```bash
-logwisp -c candidate.toml --logging.level=debug --logging.output=stderr
+lw -c candidate.toml --logging.level=debug --logging.output=stderr
 ```
 
 Success looks like `Created source instance`, `Created sink instance`, and
@@ -145,7 +145,7 @@ curl -s http://127.0.0.1:8080/status | jq .
 
 This endpoint is scoped to one sink, not to the whole process, and without an
 `auth` block it is **unauthenticated**. Bind it to a trusted interface, or
-query it with a client certificate or a token from `logwisp auth token`.
+query it with a client certificate or a token from `lw auth token`.
 
 ### Metrics worth watching
 

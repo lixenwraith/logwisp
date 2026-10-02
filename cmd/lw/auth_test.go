@@ -190,7 +190,7 @@ func TestRemoveUserRefusesTheLastUser(t *testing.T) {
 
 func TestAuthCommandHelpPrintsAuthUsage(t *testing.T) {
 	code, _, stderr := runAuthTest(t, "add-user", "-h")
-	if code != 0 || !strings.Contains(stderr, "Usage: logwisp auth add-user -credentials FILE") {
+	if code != 0 || !strings.Contains(stderr, "Usage: lw auth add-user -credentials FILE") {
 		t.Fatalf("exit %d, stderr: %s", code, stderr)
 	}
 }

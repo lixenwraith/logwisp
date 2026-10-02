@@ -27,7 +27,7 @@ Package map:
 
 | Package | Responsibility |
 |---------|----------------|
-| `cmd/logwisp` | Entry point, help, logger bootstrap, signal loop, status reporter |
+| `cmd/lw` | Entry point, help, logger bootstrap, signal loop, status reporter |
 | `internal/config` | Typed config schema, loading, top-level validation |
 | `internal/service` | Owns the pipeline set; start, stop, shutdown, global stats |
 | `internal/pipeline` | Pipeline runtime and per-pipeline plugin registry |
@@ -47,7 +47,7 @@ Package map:
 ## Plugin Registration
 
 Every plugin registers itself in an `init()` function, and
-`cmd/logwisp/bootstrap.go` blank-imports each package to trigger those
+`cmd/lw/bootstrap.go` blank-imports each package to trigger those
 `init()`s. Adding a plugin therefore means writing the package, calling
 `plugin.RegisterSource` / `plugin.RegisterSink`, and adding one blank import.
 

@@ -10,7 +10,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${LOGWISP_BIN:-$SCRIPT_DIR/../bin/logwisp}"
+BIN="${LOGWISP_BIN:-$SCRIPT_DIR/../bin/lw}"
 RUN="$SCRIPT_DIR/run-proxy"
 CONF="$RUN/conf"
 LOG="$RUN/log"
@@ -59,7 +59,7 @@ wait_port() { # port timeout_s
 }
 
 # --- Preflight ---
-[[ -x "$BIN" ]] || { echo "binary not found: $BIN (build: go build -o bin/logwisp ./cmd/logwisp)" >&2; exit 1; }
+[[ -x "$BIN" ]] || { echo "binary not found: $BIN (build: go build -o bin/lw ./cmd/lw)" >&2; exit 1; }
 for tool in go openssl curl; do
 	command -v "$tool" >/dev/null || { echo "$tool not found" >&2; exit 1; }
 done
@@ -285,7 +285,7 @@ fi
 echo "=== Scenario 2: the CLI through the proxy ==="
 token="$("$BIN" auth token -unbound -url "$SITE/logs" -user viewer-01 -password-file "$AUTH/viewer-01.pass" \
 	-ca-file "$PKI/ca.crt" 2>>"$LOG/auth-cli.out")"
-check "cli: logwisp auth token -unbound logged in through the proxy" $(is_set "$token")
+check "cli: lw auth token -unbound logged in through the proxy" $(is_set "$token")
 code="$(code_of "$SITE/logs/status" "$token")"
 check "cli: /logs/status served with the token (HTTP $code)" $(is "$code" 200)
 sse="$(timeout 3 curl -sN --noproxy '*' --cacert "$PKI/ca.crt" \

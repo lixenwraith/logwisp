@@ -19,7 +19,7 @@ import (
 var logger *log.Logger
 
 func main() {
-	// Before handleHelp, so `logwisp auth <command> -h` prints the auth usage
+	// Before handleHelp, so `lw auth <command> -h` prints the auth usage
 	if len(os.Args) > 1 && os.Args[1] == "auth" {
 		os.Exit(runAuth(os.Args[2:], os.Stdout, os.Stderr))
 	}

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # logwisp SCRAM authentication test: chain edges and sink viewers log in with
-# passwords managed by `logwisp auth`; the guide printed below maps the ports.
+# passwords managed by `lw auth`; the guide printed below maps the ports.
 # Usage: ./scram-chain-test.sh [--auto [--keep]]   manual mode keeps the daemons
 #   up; --auto runs the checks and tears down, --keep skips that on success.
 # Requires: bash 5+, coreutils (timeout), openssl, curl. Linux dev host only.
@@ -8,7 +8,7 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${LOGWISP_BIN:-$SCRIPT_DIR/../bin/logwisp}"
+BIN="${LOGWISP_BIN:-$SCRIPT_DIR/../bin/lw}"
 RUN="$SCRIPT_DIR/run-scram"
 CONF="$RUN/conf"
 LOG="$RUN/log"
@@ -72,7 +72,7 @@ start_daemon() { # name conf
 }
 
 # --- Preflight ---
-[[ -x "$BIN" ]] || { echo "binary not found: $BIN (build: go build -o bin/logwisp ./cmd/logwisp)" >&2; exit 1; }
+[[ -x "$BIN" ]] || { echo "binary not found: $BIN (build: go build -o bin/lw ./cmd/lw)" >&2; exit 1; }
 command -v openssl >/dev/null || { echo "openssl not found" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl not found" >&2; exit 1; }
 for p in $PORT_TCP_CHAIN $PORT_HTTP_CHAIN $PORT_TCP_SINK $PORT_HTTP_SINK $PORT_BOUND; do
@@ -437,16 +437,16 @@ sleep 2
 n2=$(grep -c 'edge-01/' "$RUN/stream.out")
 kill -TERM "$stream_pid" 2>/dev/null
 wait "$stream_pid" "$raw_pid" 2>/dev/null
-check "tcp sink: viewer-01 streamed entries through logwisp auth stream ($n1 lines at 11 s)" $(( n1 >= 1 ))
+check "tcp sink: viewer-01 streamed entries through lw auth stream ($n1 lines at 11 s)" $(( n1 >= 1 ))
 check "tcp sink: stream still live after the exchange deadline ($n1 -> $n2 lines, 11 s -> 13 s)" $(( n2 > n1 ))
 n=$(wc -c < "$RUN/raw.out")
 check "tcp sink: a TLS client with no hello received nothing ($n bytes)" $(( n == 0 ))
 n=$(grep 'component tcp_sink' "$relay_log" | grep -c 'read hello')
 check "tcp sink: relay dropped the silent client at the exchange deadline ($n)" $(( n >= 1 ))
 
-# 6. HTTP sink: a bearer token from logwisp auth token, carried by curl
+# 6. HTTP sink: a bearer token from lw auth token, carried by curl
 token="$(token_for viewer-01)"
-check "http sink: logwisp auth token issued a token for viewer-01" $([[ -n $token ]] && echo 1 || echo 0)
+check "http sink: lw auth token issued a token for viewer-01" $([[ -n $token ]] && echo 1 || echo 0)
 
 code="$(http_get /status "$token")"
 check "http sink: /status served with the token (HTTP $code)" $([[ $code == 200 ]] && echo 1 || echo 0)
@@ -467,7 +467,7 @@ reloads=$(grep -c 'Configuration hot reload completed successfully' "$relay_log"
 reloaded() { (( $(grep -c 'Configuration hot reload completed successfully' "$relay_log") > reloads )); }
 "$BIN" auth remove-user -credentials "$USERS" -user viewer-01 2>>"$LOG/auth-cli.out"
 rc=$?
-check "revocation: logwisp auth remove-user removed viewer-01 (exit $rc)" $(( rc == 0 ))
+check "revocation: lw auth remove-user removed viewer-01 (exit $rc)" $(( rc == 0 ))
 kill -HUP "$RELAY_PID"
 wait_until 20 reloaded && wait_port "$PORT_HTTP_SINK" 10
 rc=$?
@@ -477,7 +477,7 @@ code="$(http_get /status "$token")"
 check "revocation: the old token is refused after the reload (HTTP $code)" $([[ $code == 401 ]] && echo 1 || echo 0)
 token_for viewer-01 >/dev/null
 rc=$?
-check "revocation: logwisp auth token for viewer-01 now fails (exit $rc)" $(( rc == 1 ))
+check "revocation: lw auth token for viewer-01 now fails (exit $rc)" $(( rc == 1 ))
 
 # 8. Throttling, last: it leaves this address throttled on the http sink.
 # At most 4 exchanges may be unfinished per address, so hellos that are

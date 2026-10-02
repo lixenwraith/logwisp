@@ -347,7 +347,7 @@ type AuthOptions struct {
 	// Overrides trust_node.
 	NodeBinding string `toml:"node_binding"`
 
-	// scram listeners: verifier file written by `logwisp auth add-user`, and
+	// scram listeners: verifier file written by `lw auth add-user`, and
 	// the bearer token lifetime on HTTP listeners (default 15 minutes)
 	CredentialsFile string `toml:"credentials_file"`
 	TokenLifetimeMS int64  `toml:"token_lifetime_ms"`

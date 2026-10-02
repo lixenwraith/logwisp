@@ -106,7 +106,7 @@ trusted_proxies   = []                    # scram http sink behind a TLS-termina
 | `allow` | `mtls` | `[]` | Exact identities to admit |
 | `allow_patterns` | `mtls` | `[]` | RE2 patterns matched against the identity; anchor them yourself |
 | `node_binding` | chain sources | `force` | `none`, `assert`, or `force` |
-| `credentials_file` | `scram` listeners | — | Verifiers written by [`logwisp auth add-user`](cli.md#logwisp-auth) |
+| `credentials_file` | `scram` listeners | — | Verifiers written by [`lw auth add-user`](cli.md#logwisp-auth) |
 | `token_lifetime_ms` | `scram` on the `http` sink and `http_chain` source | 15 minutes | Bearer token lifetime, 10 s to 24 h |
 | `username` | `scram` dialers | — | User to log in as |
 | `password_file` | `scram` dialers | — | File holding the password; one trailing line break is trimmed |
@@ -350,7 +350,7 @@ end to end — run it with `--auto` to see each guarantee asserted.
 `type = "scram"` authenticates peers by username and password with
 Argon2id-SCRAM from `lixenwraith/auth`. It needs TLS but no client
 certificates, works on all six network plugins, and is LogWisp's own protocol,
-not standard SASL: viewers use the [`logwisp auth`](cli.md#logwisp-auth) CLI or,
+not standard SASL: viewers use the [`lw auth`](cli.md#logwisp-auth) CLI or,
 behind a TLS-terminating proxy, the shipped browser client.
 
 ```toml
@@ -405,7 +405,7 @@ connection. After the challenge the dialer pins the certificate it was bound to:
 the proof and every ingest request must meet the same certificate, or the TLS
 handshake fails before anything is sent. The `http_chain` sink then drops token
 and pin and logs in again, which also covers a rotated server certificate. A
-token printed by `logwisp auth token` is not pinned.
+token printed by `lw auth token` is not pinned.
 
 ### Certificates and users
 
@@ -447,7 +447,7 @@ share a bucket: there, one client can exhaust every other client's logins.
 ### Credentials file
 
 ```toml
-# logwisp SCRAM verifiers, written by `logwisp auth add-user`. Keep it private.
+# logwisp SCRAM verifiers, written by `lw auth add-user`. Keep it private.
 decoy_key = "<base64, 32 random bytes>"
 
 [[users]]
@@ -460,7 +460,7 @@ stored_key = "<base64>"
 username = "edge-01"
 ```
 
-Write it with [`logwisp auth add-user`](cli.md#logwisp-auth) rather than by
+Write it with [`lw auth add-user`](cli.md#logwisp-auth) rather than by
 hand. The whole file is validated when the plugin is built: a `decoy_key` of at
 least 32 bytes, at least one user, unique names, no unknown keys, and one Argon2
 profile and salt length for every user, since mixed profiles would tell a prober
@@ -477,14 +477,14 @@ different users.
 - **Rollout.** Turning `scram` on cuts off every dialer of that listener that
   has no credentials. Upgrade every binary first, then add a second listener
   with `scram` on another port, move the dialers to it, and remove the old one.
-- **Password rotation.** `logwisp auth add-user -generate` with the user's
+- **Password rotation.** `lw auth add-user -generate` with the user's
   `-password-file` replaces verifier and password together. `SIGHUP` the
   listener, deploy the password file, `SIGHUP` the dialer. Logins fail in
   between and the dialer retries under backoff, holding its current entry or
   batch while its input queue fills. To avoid the gap, add a second user, move
   the dialer to it, then remove the first; under `node_binding = "force"` the
   node label follows the username.
-- **Revocation.** `logwisp auth remove-user`, then `SIGHUP`. The reload drops
+- **Revocation.** `lw auth remove-user`, then `SIGHUP`. The reload drops
   every connection and revokes every token; other dialers log in again on
   their own.
 
@@ -500,7 +500,7 @@ different users.
 - Browsers log in only to an `http` sink in proxy mode, below; elsewhere use
   `mtls` for browsers.
 - `nc` and `openssl s_client` cannot read a `scram` `tcp` sink; use
-  `logwisp auth stream`.
+  `lw auth stream`.
 
 `test/scram-chain-test.sh --auto` exercises these guarantees end to end.
 
@@ -545,7 +545,7 @@ location /logs/ {
   `Secure`, `SameSite=Strict`, `Max-Age` the token lifetime, and no `Path`, so
   it scopes itself to the mount (`/logs` above). Stream and status accept it or
   a bearer token, so `new EventSource("/logs/stream")` works on any page of the
-  site, beside the site's own Basic auth too, and `logwisp auth token -unbound`
+  site, beside the site's own Basic auth too, and `lw auth token -unbound`
   keeps working. `POST /auth` with
   `{"logout": true}` clears the cookie and revokes the token until it expires.
   `/auth` takes only `application/json`, which a cross-origin page cannot send
@@ -618,7 +618,7 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 - Use a dedicated CA for LogWisp so its trust decisions stay independent.
 - Keep leaf lifetimes short (90–825 days) and automate renewal.
 - Key, credentials and password files should be `0600` and owned by the service
-  account; a world-readable one is reported at startup. `logwisp auth` creates
+  account; a world-readable one is reported at startup. `lw auth` creates
   them `0600` and keeps the mode of an existing file.
 - Rotation requires a reload (`SIGHUP`), because certificates and credentials
   are loaded once at plugin construction; there is no on-disk watch for them.

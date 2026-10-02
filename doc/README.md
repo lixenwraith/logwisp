@@ -21,7 +21,7 @@ streams, or downstream LogWisp nodes.
 | [Security](security.md) | TLS, mTLS, and peer authorization; threat model and current limits |
 | [mTLS Authentication](mtls-auth-plan.md) | Design and rationale for certificate-based authorization |
 | [Password Authentication](scram-auth-plan.md) | Design and rationale for Argon2id-SCRAM authentication; mTLS hardening |
-| [CLI](cli.md) | Flags, signals, exit codes, `logwisp auth` |
+| [CLI](cli.md) | Flags, signals, exit codes, `lw auth` |
 | [Operations](operations.md) | Running, monitoring, tuning, troubleshooting |
 
 A fully annotated configuration covering every option lives at
@@ -64,7 +64,7 @@ endpoint), `tcp` (broadcast server), `null`, and the chain forwarders
 - Authorization by certificate identity, per listener: named peers rather than
   everything the CA issued, with the `http` sink's endpoints gated too
 - Password authentication (Argon2id-SCRAM) bound to the listener's certificate,
-  with bearer tokens on HTTP listeners and a `logwisp auth` CLI, and browser
+  with bearer tokens on HTTP listeners and a `lw auth` CLI, and browser
   logins behind a TLS-terminating proxy
 - Node binding, so a chain source labels entries from the sender's certificate
   identity or username rather than from what the sender claims
@@ -96,7 +96,7 @@ target = "stdout"
 ```
 
 ```bash
-logwisp -c config.toml
+lw -c config.toml
 ```
 
 ## System Requirements

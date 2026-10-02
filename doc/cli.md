@@ -1,13 +1,13 @@
 # Command Line Interface
 
 ```
-logwisp [options]
-logwisp auth <command> [flags]
-logwisp help | -h | --help
-logwisp --version
+lw [options]
+lw auth <command> [flags]
+lw help | -h | --help
+lw --version
 ```
 
-`logwisp auth` manages SCRAM credentials and logs in to `scram` listeners; see
+`lw auth` manages SCRAM credentials and logs in to `scram` listeners; see
 [below](#logwisp-auth). There is no certificate-generation command: use
 `openssl` or your PKI tooling — see [Security](security.md#enabling-mtls).
 
@@ -142,7 +142,7 @@ pipeline — rate limit included — is replaced rather than merged.
 
 ```bash
 # verbose, everything to stderr
-logwisp -c dev.toml --logging.output=stderr --logging.level=debug
+lw -c dev.toml --logging.output=stderr --logging.level=debug
 
 # no config at all: synthetic generator to stdout
 logwisp
@@ -152,7 +152,7 @@ logwisp
 
 ```bash
 # starts the service; a config error exits non-zero before any pipeline runs
-logwisp -c /etc/logwisp/logwisp.toml --logging.level=debug
+lw -c /etc/logwisp/logwisp.toml --logging.level=debug
 ```
 
 There is no dry-run or validate-only mode. The closest approximation is starting
@@ -161,7 +161,7 @@ with debug logging and stopping once the pipelines report as started.
 **Production**
 
 ```bash
-logwisp -c /etc/logwisp/logwisp.toml --logging.output=file
+lw -c /etc/logwisp/logwisp.toml --logging.output=file
 ```
 
 Run under a supervisor (systemd, rc.d) rather than backgrounding it — there is
@@ -171,11 +171,11 @@ no `--background` flag; earlier releases had one and it was removed. See
 **Reload**
 
 ```bash
-kill -HUP  $(pidof logwisp)
-kill -USR1 $(pidof logwisp)
+kill -HUP  $(pidof lw)
+kill -USR1 $(pidof lw)
 ```
 
-## `logwisp auth`
+## `lw auth`
 
 Manages the credentials files of `auth.type = "scram"` listeners and logs in to
 them as a viewer. See
@@ -188,7 +188,7 @@ them as a viewer. See
 | `token -url https://HOST:PORT[/PATH] -user NAME -password-file FILE [-unbound] [TLS flags]` | Logs in to an `http` sink or `http_chain` source and prints a bearer token |
 | `stream -addr HOST:PORT -user NAME -password-file FILE [TLS flags]` | Logs in to a `tcp` sink and copies its stream to stdout until interrupted |
 
-`logwisp auth <command> -h` lists a command's flags. The exit status is `0` on
+`lw auth <command> -h` lists a command's flags. The exit status is `0` on
 success, `1` on failure and `2` on a usage error.
 
 **`add-user`** creates the credentials file, with a fresh `decoy_key`, when it
@@ -222,22 +222,22 @@ shutdown).
 ```bash
 # listener host: a file the service user can read, users, then apply
 install -m 0640 -o root -g logwisp /dev/null /etc/logwisp/users.toml
-logwisp auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
+lw auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
   -password-file /etc/logwisp/edge-01.pass
-logwisp auth add-user -credentials /etc/logwisp/users.toml -user viewer \
+lw auth add-user -credentials /etc/logwisp/users.toml -user viewer \
   -password-file viewer.pass
-kill -HUP $(pidof logwisp)
+kill -HUP $(pidof lw)
 
 # rotate: new password into the file; SIGHUP, deploy the file, SIGHUP the edge
-logwisp auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
+lw auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
   -password-file /etc/logwisp/edge-01.pass -generate
 
 # http sink status, with the token kept out of curl's argv
 curl --cacert ca.crt -H @<(printf 'Authorization: Bearer %s\n' \
-  "$(logwisp auth token -url https://HOST:PORT -user viewer \
+  "$(lw auth token -url https://HOST:PORT -user viewer \
      -password-file viewer.pass -ca-file ca.crt)") https://HOST:PORT/status
 
 # follow a tcp sink
-logwisp auth stream -addr HOST:PORT -user viewer -password-file viewer.pass \
+lw auth stream -addr HOST:PORT -user viewer -password-file viewer.pass \
   -ca-file ca.crt
 ```

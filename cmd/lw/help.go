@@ -10,13 +10,13 @@ import (
 const helpText = `LogWisp %s - log collection, processing, and distribution
 
 Usage:
-  logwisp [options]
-  logwisp help | -h | --help
-  logwisp --version
+  lw [options]
+  lw help | -h | --help
+  lw --version
 
 Subcommands:
-  logwisp auth <command>        SCRAM credentials files, bearer tokens and tcp
-                                sink viewing; logwisp auth -h lists commands
+  lw auth <command>        SCRAM credentials files, bearer tokens and tcp
+                                sink viewing; lw auth -h lists commands
 
 Scalar configuration keys are settable as flags using their TOML paths:
   --<path>=<value>              e.g. --logging.level=debug

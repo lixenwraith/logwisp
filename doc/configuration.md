@@ -208,9 +208,9 @@ Array elements cannot: `LOGWISP_PIPELINES_0_NAME` has no effect.
 Any scalar configuration path is settable as a flag using its TOML path:
 
 ```bash
-logwisp --logging.level=debug --status_reporter=false
-logwisp --logging.level debug          # space form also works
-logwisp --quiet                        # bare flag means true
+lw --logging.level=debug --status_reporter=false
+lw --logging.level debug          # space form also works
+lw --quiet                        # bare flag means true
 ```
 
 Unrecognized flags are reported on stderr before the logger exists and are then

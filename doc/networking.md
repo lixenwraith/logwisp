@@ -56,7 +56,7 @@ Fixed, non-configurable bounds:
 | HTTP read-header timeout | 10 s | `http` sink, `http_chain` source |
 | HTTP server shutdown grace | 2 s | `http` sink, `http_chain` source |
 | Max single entry line | 1 MiB | Chain listeners |
-| SCRAM login | 10 s | `tcp` sink, chain sinks, `logwisp auth`, each `/auth` request |
+| SCRAM login | 10 s | `tcp` sink, chain sinks, `lw auth`, each `/auth` request |
 | SCRAM line or `/auth` body | 4 KiB | `scram` listeners and dialers |
 
 The `http` sink deliberately leaves the server's `WriteTimeout` unset, since it
@@ -206,7 +206,7 @@ headers, and entry encoding.
   between the peers terminates TLS. Pass TLS through to LogWisp; the login
   cannot work otherwise, except on an `http` sink in proxy mode
   (`auth.trusted_proxies`), where `the client bound its proof to the proxy's
-  certificate` means a client that needs `logwisp auth token -unbound`, and
+  certificate` means a client that needs `lw auth token -unbound`, and
   `the client sent an unbound proof` the reverse. On an `http_chain` sink,
   `server certificate differs from the one the SCRAM login was bound to` means
   the certificate changed after the login: a rotation (the retry binds anew),
@@ -225,7 +225,7 @@ headers, and entry encoding.
   server read the hello and said nothing. Over HTTP the same case reads
   `no auth endpoint at …/auth`.
 - `Argon2 parameters below client minimum` — the credentials file holds a
-  cheaper Argon2 profile than the defaults; recreate it with `logwisp auth`.
+  cheaper Argon2 profile than the defaults; recreate it with `lw auth`.
 - `peer offered no credentials` (`authentication required` on the wire) in the
   listener's log — a peer without `scram` reached a `scram` listener; a client
   that sends nothing logs `read hello: … i/o timeout` after 10 s instead. A

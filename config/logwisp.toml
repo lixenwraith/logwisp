@@ -10,7 +10,7 @@
 ### http_client/tcp_client sinks are not available in this version. TLS is
 ### available on every network source and sink (the [...tls] blocks below), and
 ### the [...auth] blocks authenticate peers by certificate (mtls) or password
-### (scram; credentials via `logwisp auth`). Unknown keys anywhere in this file
+### (scram; credentials via `lw auth`). Unknown keys anywhere in this file
 ### or in any plugin config are rejected at startup.
 ###
 ### Environment overrides use the LOGWISP_ prefix
@@ -119,7 +119,7 @@ name = "default"
 ### On the http sink the block gates stream_path AND status_path.
 ### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
 ###   mtls  authorizes the client certificate; REQUIRES tls.client_auth.
-###   scram admits the users in credentials_file (`logwisp auth add-user`).
+###   scram admits the users in credentials_file (`lw auth add-user`).
 ### Dialers    (tcp_chain/http_chain sinks):
 ###   mtls  pins the server identity.
 ###   scram logs in as username with the password in password_file.
@@ -212,7 +212,7 @@ from = "end"                            # "end" or "start" of a newly discovered
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
-# credentials_file = ""                 # scram: written by `logwisp auth add-user`
+# credentials_file = ""                 # scram: written by `lw auth add-user`
 
 ## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
 # [[pipelines.plugin_sources]]
@@ -238,7 +238,7 @@ from = "end"                            # "end" or "start" of a newly discovered
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
-# credentials_file = ""                 # scram: written by `logwisp auth add-user`
+# credentials_file = ""                 # scram: written by `lw auth add-user`
 # token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 
 ###============================================================================
@@ -299,7 +299,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
-# credentials_file = ""                 # scram: log in with `logwisp auth token`
+# credentials_file = ""                 # scram: log in with `lw auth token`
 # token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 # trusted_proxies = []                  # scram: proxies ending the browsers' TLS; tls may then be off
 
@@ -327,7 +327,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
-# credentials_file = ""                 # scram: readers use `logwisp auth stream`
+# credentials_file = ""                 # scram: readers use `lw auth stream`
 
 ## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
 ## Do NOT point a chain sink at a chain source in the SAME pipeline: entries

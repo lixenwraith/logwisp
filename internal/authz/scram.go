@@ -167,12 +167,12 @@ func (c *Credentials) Marshal() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	header := "# logwisp SCRAM verifiers, written by `logwisp auth add-user`. Keep it private.\n"
+	header := "# logwisp SCRAM verifiers, written by `lw auth add-user`. Keep it private.\n"
 	return append([]byte(header), body...), nil
 }
 
 // ReadPassword reads a password file, trimming one trailing line break so a
-// file from an editor and one from `logwisp auth add-user` agree.
+// file from an editor and one from `lw auth add-user` agree.
 func ReadPassword(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -355,7 +355,7 @@ func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState
 		p.rejected.Add(1)
 		switch {
 		case step.Binding != "" && l.proxy != nil:
-			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (logwisp auth token -unbound)", err)
+			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (lw auth token -unbound)", err)
 		case step.Binding == "" && l.cb != nil:
 			err = fmt.Errorf("%w; the client sent an unbound proof (-unbound), but this listener binds logins to its certificate", err)
 		case step.Binding != "" && step.Binding != base64.StdEncoding.EncodeToString(l.cb):
