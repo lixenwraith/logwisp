@@ -184,10 +184,12 @@ Reload (signal or file watch) rebuilds the entire service:
 Because this is a full rebuild, listening sockets close and reopen and all
 clients are disconnected. Application logging is configured once at startup and
 is **not** re-applied on reload.
-Watch errors do not rebuild services. Queued changes are combined, and an unchanged
-pipeline/status snapshot is skipped. Signals always rebuild for certificate rotation.
-Failed candidates release their session workers. Once the old service has stopped,
-a bind/start failure requires another corrected reload or process restart.
+
+Watch errors do not rebuild services. Queued changes are combined, and an
+unchanged pipeline/status snapshot is skipped. Signals always rebuild for
+certificate rotation. Failed candidates release their session workers. Once the
+old service has stopped, a bind/start failure requires another corrected reload
+or process restart.
 
 ## Resource Management
 
