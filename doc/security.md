@@ -14,16 +14,16 @@ configure it, and — equally important — what it does not yet do.
 | Authorization from peer identity (allow-lists, node binding) | Implemented — see [The Auth Block](#the-auth-block) |
 | Authentication on the `http` sink's stream and status endpoints | Implemented, via the auth block |
 | Server identity pinning by dialers | Implemented, via the auth block |
+| Startup warnings for expiring certificates and risky settings | Implemented — see [Startup Warnings](#startup-warnings) |
+| Unknown configuration keys rejected | Implemented — a typo in `tls` or `auth` fails startup |
 | Certificate revocation lists (CRL) or OCSP | **Not implemented** — revoke by editing the allow-list |
-| Password, token, or SCRAM authentication | **Removed**; not currently available |
+| Password (Argon2id-SCRAM) authentication | **Planned** — see [scram-auth-plan.md](scram-auth-plan.md) |
 | IP allow/deny lists, per-IP connection or request limits | **Not implemented** |
 
-Earlier releases carried basic-auth, bearer-token, and SCRAM authentication.
-Those were removed during the move to the plugin/flow architecture and the
-switch to standard-library networking. Certificates are the one credential the
-transport still carries, so they are what authentication is built on: the `tls`
-block establishes that a peer chains to your CA, and the `auth` block decides
-which peers that CA vouches for may actually do what.
+Certificates are the credential the transport already carries, so they are what
+authentication is built on today: the `tls` block establishes that a peer chains
+to your CA, and the `auth` block decides which peers that CA vouches for may
+actually do what.
 
 ## The TLS Block
 
@@ -79,6 +79,8 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
 - a certificate or key that will not load, or a CA file containing no
   certificates
 - a `min_version` that is neither `"1.2"` nor `"1.3"`
+- a key the plugin does not know, at any depth: `unknown key "tls.enabeld"`. A
+  misspelled option must not silently leave a protection switched off
 
 ## The Auth Block
 
@@ -144,7 +146,8 @@ WARN msg="Auth policy admits any identity the configured CA vouches for"
 ```
 
 Anchor your patterns. `allow_patterns = ["edge-\\d{2}"]` matches
-`evil-edge-01-impostor`; `["^edge-\\d{2}$"]` does not.
+`evil-edge-01-impostor`; `["^edge-\\d{2}$"]` does not. An unanchored pattern is
+reported at startup.
 
 ### Node binding
 
@@ -203,6 +206,18 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
   that has no node concept
 
 Errors read like `auth: type "mtls" requires tls.client_auth`.
+
+## Startup Warnings
+
+Some settings work but are usually mistakes. Each plugin reports them at WARN
+when it is constructed, so startup and every reload repeat them:
+
+- a certificate in `cert_file`, `ca_file` or `client_ca_file` that has expired,
+  is not yet valid, or expires within 30 days
+- `insecure_skip_verify` on a dialer
+- an `allow_patterns` entry not anchored at both ends of every alternative
+  (`^a|b$` admits `a…` and `…b`)
+- a `key_file` every local user can read (once per path per process)
 
 ## Enabling mTLS
 
@@ -339,7 +354,7 @@ interface or front them with an authenticating proxy.
 
 | Surface | Exposure when `auth.type = "none"` |
 |---------|-----------------------------------|
-| `http` sink `stream_path` | Full log stream, with `Access-Control-Allow-Origin: *`, so any browser origin can read it |
+| `http` sink `stream_path` | Full log stream, with `Access-Control-Allow-Origin: *`, so any browser origin can read it (the header is omitted once an auth policy is set) |
 | `http` sink `status_path` | Host, port, TLS flag, uptime, client counts, throughput counters |
 | `tcp` sink | Full log stream to any client that connects |
 | `tcp_chain` / `http_chain` source | Ingest from any peer the CA vouches for, under any node label it claims |
@@ -356,11 +371,12 @@ way to authenticate a plaintext listener.
 
 - Use a dedicated CA for LogWisp so its trust decisions stay independent.
 - Keep leaf lifetimes short (90–825 days) and automate renewal.
-- Key files should be `0600` and owned by the service account.
+- Key files should be `0600` and owned by the service account; a world-readable
+  one is reported at startup.
 - Rotation requires a reload (`SIGHUP`), because certificates are loaded once at
   plugin construction; there is no on-disk watch for certificate files.
-- Check expiry yourself: `openssl x509 -in relay.crt -noout -enddate`. Nothing
-  warns before a certificate lapses; it surfaces as a handshake failure.
+- Startup and every reload warn 30 days before a certificate lapses. Still
+  automate renewal; the warning only reaches someone reading the log.
 - Keep the identity field you authorize on stable across rotations. Reissuing a
   leaf with a different CN silently drops the peer out of the allow list.
 
@@ -369,7 +385,8 @@ way to authenticate a plaintext listener.
 - Prefer `min_version = "1.3"`. Drop to `"1.2"` only for a peer that genuinely
   cannot do 1.3.
 - Never enable `insecure_skip_verify` outside a lab; it disables server
-  verification entirely and makes the connection trivially interceptable.
+  verification entirely and makes the connection trivially interceptable. It is
+  reported at startup.
 - Bind listeners to specific interfaces rather than `0.0.0.0` where you can.
 - On any ingest port reachable from a network you do not fully control, set
   `auth.type = "mtls"` with an explicit `allow` list. `trust_node = false` is the

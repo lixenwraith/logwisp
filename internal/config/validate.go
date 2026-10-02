@@ -2,6 +2,10 @@ package config
 
 import (
 	"fmt"
+	"maps"
+	"reflect"
+	"slices"
+	"strings"
 
 	lconfig "github.com/lixenwraith/config"
 )
@@ -79,5 +83,57 @@ func validateLogConfig(cfg *LogConfig) error {
 		}
 	}
 
+	return nil
+}
+
+// Scan decodes a plugin's config map into target, rejecting keys target does
+// not declare: a misspelled tls or auth key must fail, not silently disable
+// the protection it was meant to configure.
+func Scan(configMap map[string]any, target any) error {
+	if err := unknownKeys(configMap, reflect.TypeOf(target), ""); err != nil {
+		return err
+	}
+	return lconfig.ScanMap(configMap, target)
+}
+
+// unknownKeys walks nested tables against the toml tags of t. Map-typed fields
+// hold free-form keys and are not descended into.
+func unknownKeys(m map[string]any, t reflect.Type, prefix string) error {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+	fields := make(map[string]reflect.Type, t.NumField())
+	for f := range t.Fields() {
+		if name, _, _ := strings.Cut(f.Tag.Get("toml"), ","); name != "" && name != "-" {
+			fields[name] = f.Type
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(m)) {
+		ft, ok := fields[key]
+		if !ok {
+			return fmt.Errorf("unknown key %q", prefix+key)
+		}
+		var tables []map[string]any
+		switch v := m[key].(type) {
+		case map[string]any:
+			tables = []map[string]any{v}
+		case []map[string]any:
+			tables = v
+		case []any:
+			for _, e := range v {
+				if table, ok := e.(map[string]any); ok {
+					tables = append(tables, table)
+				}
+			}
+		}
+		for _, table := range tables {
+			if err := unknownKeys(table, ft, prefix+key+"."); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }

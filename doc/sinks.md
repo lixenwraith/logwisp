@@ -178,7 +178,7 @@ counters.
 
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read
-> it. Set `auth.type = "mtls"` (which requires `tls.client_auth`), bind to a
+> it. With one, the header is omitted. Set `auth.type = "mtls"` (which requires `tls.client_auth`), bind to a
 > trusted interface, or put an authenticating reverse proxy in front.
 
 ---
@@ -363,6 +363,8 @@ key_file  = "/etc/logwisp/tls/client.key"
 - Retries apply to transport errors, `408`, `429`, and `5xx`. Any other
   non-2xx response is treated as permanent, and the batch is dropped and counted
   in `dropped_batches`.
+- Redirects are never followed; a `3xx` is permanent too. Following one would
+  resend the batch wherever the response points, plaintext `http` included.
 - HTTP/2 is off by design; batched NDJSON POSTs gain nothing from it.
 - On shutdown a single best-effort flush of the pending batch is attempted.
 

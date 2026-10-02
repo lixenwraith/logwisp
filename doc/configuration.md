@@ -241,7 +241,9 @@ Startup validation is intentionally split.
 Everything else is validated by the plugin constructor that owns it — port
 range, required paths, path prefixes, enum values, regex compilation, TLS file
 loading. A failure there aborts pipeline construction with a message naming the
-pipeline, plugin id, and offending key.
+pipeline, plugin id, and offending key. A key the plugin does not declare, at
+any depth, is such a failure (`unknown key "tls.enabeld"`): a misspelled option
+must not silently fall back to its default.
 
 There is **no** cross-pipeline port-conflict detection. Two sinks bound to the
 same port fail at listener bind time, when the pipeline starts.

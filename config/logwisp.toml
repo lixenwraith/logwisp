@@ -6,11 +6,12 @@
 ### Commented values are the built-in defaults unless marked "example".
 ### Uncommenting a default is a no-op.
 ###
-### NOTE: password/token/SCRAM authentication, network access control (ACL),
-### http/tcp ingest sources, and http_client/tcp_client sinks were removed in
-### the restructure and are not available in this version. TLS and mTLS ARE
-### available on every network source and sink; see the [...tls] blocks below,
-### and the [...auth] blocks to authorize peers by certificate identity.
+### NOTE: password authentication (planned: doc/scram-auth-plan.md), network
+### access control (ACL), http/tcp ingest sources, and http_client/tcp_client
+### sinks are not available in this version. TLS and mTLS ARE available on
+### every network source and sink; see the [...tls] blocks below, and the
+### [...auth] blocks to authorize peers by certificate identity.
+### Unknown keys in any plugin config are rejected at startup.
 ###
 ### Environment overrides use the LOGWISP_ prefix
 ### (LOGWISP_QUIET, LOGWISP_LOGGING_LEVEL, ...). Bare names are ignored.

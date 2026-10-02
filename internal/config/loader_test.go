@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"logwisp/internal/testutil"
-
-	lconfig "github.com/lixenwraith/config"
 )
 
 func TestResolveConfigArguments(t *testing.T) {
@@ -185,11 +183,48 @@ allow = ["one", "two"]
 		t.Fatal(err)
 	}
 	opts := TCPSinkOptions{Host: "127.0.0.1", BufferSize: 1000}
-	if err := lconfig.ScanMap(cfg.Pipelines[0].PluginSinks[0].Config, &opts); err != nil {
+	if err := Scan(cfg.Pipelines[0].PluginSinks[0].Config, &opts); err != nil {
 		t.Fatal(err)
 	}
 	if opts.Host != "127.0.0.1" || opts.BufferSize != 1000 || opts.Port != 9000 || opts.WriteTimeoutMS != 9007199254740993 ||
 		opts.TLS == nil || opts.TLS.ServerName != "relay.example" || opts.Auth == nil || !reflect.DeepEqual(opts.Auth.Allow, []string{"one", "two"}) {
 		t.Fatalf("plugin defaults, nested tables or integer precision lost: %+v", opts)
+	}
+}
+
+// A misspelled key, even inside a nested tls or auth table, fails plugin
+// construction instead of leaving the protection it named switched off.
+func TestPluginConfigRejectsUnknownKeys(t *testing.T) {
+	isolateConfig(t)
+	for key, table := range map[string]string{
+		"bogus":       "bogus = true",
+		"tls.enabeld": "[pipelines.plugin_sinks.config.tls]\nenabeld = true",
+		"auth.tpye":   "[pipelines.plugin_sinks.config.auth]\ntpye = \"mtls\"",
+	} {
+		testutil.WriteFile(t, "plugins.toml", `
+[[pipelines]]
+name = "typo"
+[[pipelines.plugin_sources]]
+id = "in"
+type = "null"
+[[pipelines.plugin_sinks]]
+id = "out"
+type = "tcp"
+[pipelines.plugin_sinks.config]
+port = 9000
+`+table+"\n")
+		m, err := Load([]string{"-c", "plugins.toml"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := m.Snapshot()
+		m.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = Scan(cfg.Pipelines[0].PluginSinks[0].Config, &TCPSinkOptions{})
+		if err == nil || !strings.Contains(err.Error(), `"`+key+`"`) {
+			t.Errorf("unknown key %s: err = %v", key, err)
+		}
 	}
 }

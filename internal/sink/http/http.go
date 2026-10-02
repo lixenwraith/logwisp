@@ -107,7 +107,7 @@ func NewHTTPSinkPlugin(
 		Host:           DefaultHTTPHost,
 		WriteTimeoutMS: 0, // SSE indefinite streaming
 	}
-	if err := lconfig.ScanMap(configMap, opts); err != nil {
+	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	if err := lconfig.Port(opts.Port); err != nil {
@@ -167,12 +167,8 @@ func NewHTTPSinkPlugin(
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
 		"auth", authPolicy.Describe())
-	if authPolicy.Unrestricted() {
-		logger.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
-			"component", "http_sink",
-			"instance_id", id,
-			"hint", "set auth.allow or auth.allow_patterns to authorize named clients")
-	}
+	tlsx.LogWarnings(logger, "http_sink", id, opts.TLS, true)
+	authPolicy.LogStartup(logger, "http_sink", id, false)
 	return h, nil
 }
 
@@ -407,7 +403,10 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if !h.auth.Enabled() {
+		// An authenticated stream is not offered to every web origin
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 

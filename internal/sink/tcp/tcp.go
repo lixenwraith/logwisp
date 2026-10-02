@@ -58,8 +58,10 @@ type TCPSink struct {
 	input  chan core.TransportEvent
 	logger *log.Logger
 
-	// Client registry
+	// Client registry. conns holds every accepted connection, so shutdown also
+	// reaches peers still in the handshake, before they become clients.
 	clients      map[uint64]*tcpClient
+	conns        map[net.Conn]struct{}
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
 	writeTimeout time.Duration
@@ -86,11 +88,10 @@ type TCPSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-// tcpClient pairs a connection with its bounded send queue.
+// tcpClient is a registered connection's bounded send queue.
 // send is written by the broadcast loop (non-blocking) and drained by the
 // writer goroutine; closed signals reader-detected disconnect.
 type tcpClient struct {
-	conn      net.Conn
 	send      chan []byte
 	sessionID string
 	closed    chan struct{}
@@ -107,7 +108,7 @@ func NewTCPSinkPlugin(
 		Host:      DefaultTCPHost,
 		KeepAlive: true,
 	}
-	if err := lconfig.ScanMap(configMap, opts); err != nil {
+	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	if err := lconfig.Port(opts.Port); err != nil {
@@ -143,6 +144,7 @@ func NewTCPSinkPlugin(
 		done:         make(chan struct{}),
 		logger:       logger,
 		clients:      make(map[uint64]*tcpClient),
+		conns:        make(map[net.Conn]struct{}),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
 		tlsConfig:    tlsCfg,
 		auth:         authPolicy,
@@ -157,12 +159,8 @@ func NewTCPSinkPlugin(
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
 		"auth", authPolicy.Describe())
-	if authPolicy.Unrestricted() {
-		logger.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
-			"component", "tcp_sink",
-			"instance_id", id,
-			"hint", "set auth.allow or auth.allow_patterns to authorize named clients")
-	}
+	tlsx.LogWarnings(logger, "tcp_sink", id, opts.TLS, true)
+	authPolicy.LogStartup(logger, "tcp_sink", id, false)
 	return t, nil
 }
 
@@ -258,8 +256,8 @@ func (t *TCPSink) shutdown() {
 			t.listener.Close() // unblocks acceptLoop
 		}
 		t.clientsMu.Lock()
-		for _, c := range t.clients {
-			c.conn.Close() // unblocks per-connection readers
+		for conn := range t.conns {
+			conn.Close() // unblocks handshakes and per-connection readers
 		}
 		t.clientsMu.Unlock()
 	})
@@ -287,9 +285,17 @@ func (t *TCPSink) acceptLoop() {
 			continue
 		}
 
-		// Certificate authorization runs in handleConn post-handshake,
-		// pre-registration. Password-auth extension point: preamble
-		// verification belongs at the same place.
+		t.clientsMu.Lock()
+		select {
+		case <-t.done:
+			// shutdown already swept conns; this one would outlive it
+			t.clientsMu.Unlock()
+			conn.Close()
+			return
+		default:
+		}
+		t.conns[conn] = struct{}{}
+		t.clientsMu.Unlock()
 
 		t.wg.Add(1)
 		go t.handleConn(conn)
@@ -305,6 +311,10 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 	// Counted from accept: max_connections bounds concurrent handshakes too
 	count := t.activeConns.Add(1)
 	defer func() {
+		conn.Close()
+		t.clientsMu.Lock()
+		delete(t.conns, conn)
+		t.clientsMu.Unlock()
 		newCount := t.activeConns.Add(-1)
 		t.logger.Debug("msg", "TCP connection closed",
 			"component", "tcp_sink",
@@ -327,7 +337,6 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 				"component", "tcp_sink",
 				"remote_addr", remote,
 				"error", err)
-			conn.Close()
 			return
 		}
 		cs := tc.ConnectionState()
@@ -348,14 +357,12 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 			"instance_id", t.id,
 			"remote_addr", remote,
 			"error", err)
-		conn.Close()
 		return
 	}
 	ident.Apply(meta)
 
 	sess := t.proxy.CreateSession(remote, meta)
 	c := &tcpClient{
-		conn:      conn,
 		send:      make(chan []byte, t.config.ClientBufferSize),
 		sessionID: sess.ID,
 		closed:    make(chan struct{}),

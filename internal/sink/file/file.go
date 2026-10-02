@@ -68,7 +68,7 @@ func NewFileSinkPlugin(
 	opts := &config.FileSinkOptions{}
 
 	// Scan config map into struct
-	if err := lconfig.ScanMap(configMap, opts); err != nil {
+	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
