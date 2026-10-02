@@ -99,7 +99,7 @@ With `flags = 0` the formatter selects `1` for `type = "raw"` and `6`
 (timestamp + level) for every other type. `8` is added automatically whenever an
 entry carries parseable `fields` and `1` is not set; `1` always wins.
 
-The formatter shows timestamp and level unless a suppress bit says otherwise
+`txt` and `json` show timestamp and level unless a suppress bit says otherwise
 (suppress wins over show), so `2` and `4` alone change nothing. Examples:
 `flags = 16` for level only, no timestamp; `flags = 32` for timestamp only, no
 level.
