@@ -64,11 +64,11 @@ exponential backoff and jitter.
   stream and status endpoints, and lets a dialer pin the server it talks to
 - Password authentication (Argon2id-SCRAM) on the same block: listeners hold
   verifiers, never passwords, and do no KDF work; every login outside proxy
-  mode is bound to the
-  listener's certificate, so no relay presenting another one can use it; HTTP
-  listeners issue short-lived bearer tokens. `lw auth` manages credentials
-  files and logs viewers in; behind a site's TLS-terminating proxy, browsers
-  log in through a shipped login page and a dependency-free JS client
+  mode is bound to the listener's certificate, so no relay presenting another
+  one can use it; HTTP listeners issue short-lived bearer tokens. `lw auth`
+  manages credentials files and logs viewers in; behind a site's
+  TLS-terminating proxy, browsers log in through a shipped login page and a
+  dependency-free JS client
 - Node binding: a chain source can label entries from the sender's certificate
   identity or username instead of from what the sender claims, so origin
   attribution is not forgeable
@@ -84,6 +84,8 @@ authentication designs for the rationale and what is deliberately left out.
 
 - [Installation](doc/installation.md): building, installing, services,
   the container image, packaging
+- [Deployment](doc/deployment.md): `deploy/lw-deploy.sh` for edges,
+  aggregators, containers, services, jails
 - [Architecture](doc/architecture.md): component model, data flow,
   concurrency, back-pressure
 - [Configuration](doc/configuration.md): TOML structure, precedence,
@@ -101,6 +103,9 @@ authentication designs for the rationale and what is deliberately left out.
   `lw auth`; also the `lw(1)` manual, [`doc/lw.1`](doc/lw.1)
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
+- [To Do](doc/todo.md): planned work in priority order: network access
+  control and the PROXY protocol, a hardening review of the config libraries,
+  packaging
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](config/logwisp.toml).
