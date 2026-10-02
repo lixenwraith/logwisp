@@ -268,14 +268,15 @@ Options, each as type and default:
 
 - `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the
   listener keeps to its family ([Networking](networking.md#address-family)).
-- `port` (int, required): listen port.
-- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`.
+- `port` (int, required): listen port, 1–65535.
+- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
+  `/auth` is reserved for the login.
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB).
 - `read_timeout_ms` (int, `30000`): full request read deadline.
 - `trust_node` (bool, `true`): `false` overrides the sender's node label with
   its remote address; ignored when `auth.node_binding` is active.
-- `tls` (table): listener TLS.
+- `tls` (table): listener TLS; see [Security](security.md).
 - `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
   see [Security](security.md#the-auth-block).
 
