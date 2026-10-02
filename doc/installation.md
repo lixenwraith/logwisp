@@ -60,6 +60,8 @@ first. It honours `DESTDIR`, `PREFIX` and `SYSCONFDIR`:
   manager, prefer `PREFIX=/usr/local`; systemd reads units, sysusers and
   tmpfiles from there too.
 - FreeBSD defaults: `PREFIX=/usr/local`, `SYSCONFDIR=/usr/local/etc`.
+- `INSTALL_OS` (default: `uname -s`) picks the layout, so
+  `INSTALL_OS=FreeBSD DESTDIR=...` stages the FreeBSD one on another system.
 
 ```bash
 make release

@@ -80,6 +80,7 @@ help:
 	@echo "  uninstall    Remove them, keeping $(SYSCONFDIR)/logwisp"
 	@echo ""
 	@echo "Variables: GO=$(GO) PREFIX=$(PREFIX) SYSCONFDIR=$(SYSCONFDIR) DESTDIR=$(DESTDIR)"
+	@echo "  INSTALL_OS=$(INSTALL_OS) (the layout install uses: FreeBSD or any other)"
 	@echo "  GO_BUILDFLAGS, GO_LDFLAGS (extra go build and linker flags), E2E (scripts),"
 	@echo "  CONTAINER_ENGINE, IMAGE, IMAGE_TAG, BUILD_CA, IMAGE_BUILD_FLAGS, IMAGE_CHECK_CONFIG"
 
