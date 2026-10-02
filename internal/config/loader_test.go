@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -123,6 +124,13 @@ func TestReloadReadsDiskValidatesAndPreservesOldSnapshots(t *testing.T) {
 	recovered, err := m.Reload()
 	if err != nil || !recovered.StatusReporter {
 		t.Fatalf("override removal/recovery: %+v %v", recovered, err)
+	}
+	// Only a missing discovered default is tolerated; a named file must exist.
+	if err := os.Remove("reload.toml"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reload(); !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("reload without the named file: %v", err)
 	}
 }
 

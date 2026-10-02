@@ -31,7 +31,8 @@ func TestPipelineSpecGrammar(t *testing.T) {
 		"--filter", "include,patterns=ERROR,patterns=WARN",
 		"--filter", `exclude,patterns=\d{1\,3}`,
 		"--format", `txt,timestamp_format=Jan 2\, 2006`,
-		"--pipeline", "b", "--source", "null", "--sink", "null", "--sink", "null")
+		"--pipeline", "b", "--source", "null", "--sink", "null", "--sink", "null", "--heartbeat", "interval_ms=1000",
+		"--", "--source", "random")
 	want := []PipelineConfig{{
 		Name: "cli",
 		Flow: &FlowConfig{
@@ -53,7 +54,7 @@ func TestPipelineSpecGrammar(t *testing.T) {
 		}}},
 	}, {
 		Name:          "b",
-		Flow:          &FlowConfig{},
+		Flow:          &FlowConfig{Heartbeat: &HeartbeatConfig{Enabled: true, IntervalMS: 1000}},
 		PluginSources: []PluginSourceConfig{{ID: "null", Type: "null", Config: map[string]any{}}},
 		PluginSinks: []PluginSinkConfig{
 			{ID: "null", Type: "null", Config: map[string]any{}},
@@ -66,6 +67,7 @@ func TestPipelineSpecGrammar(t *testing.T) {
 	for want, args := range map[string][]string{
 		`--sink http,port: missing "="`:                                  {"--sink", "http,port"},
 		`--source directory=/x: missing TYPE`:                            {"--source", "directory=/x"},
+		`--source file,type=x: TYPE already sets "type"`:                 {"--source", "file,type=x"},
 		`--sink http,tls.cert_file=c: "tls" is both a value and a table`: {"--sink", "http,tls=1,tls.cert_file=c"},
 		`--sink requires a value`:                                        {"--sink="},
 		`--format txt: pipeline "cli" already has one`:                   {"--format", "json", "--format", "txt"},
