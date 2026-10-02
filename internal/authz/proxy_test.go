@@ -201,8 +201,7 @@ func TestOnlyUnboundLoginsBehindProxy(t *testing.T) {
 
 // Behind a proxy the limiter counts the forwarded client, and an IPv6 client
 // by its /64, so neither one proxy address nor one host's many addresses
-// share or escape a budget. A link-local /64 is the whole link: those count
-// by address.
+// share or escape a budget.
 func TestProxyModeThrottlesTheForwardedClient(t *testing.T) {
 	f := newFixture(t)
 	_, srv := f.proxyListener(t)
@@ -228,7 +227,6 @@ func TestProxyModeThrottlesTheForwardedClient(t *testing.T) {
 	}{
 		{"one client", []string{"203.0.113.7"}, "203.0.113.7", "198.51.100.1"},
 		{"one IPv6 /64", []string{"2001:db8::1", "2001:db8::2", "2001:db8::3", "2001:db8::4"}, "2001:db8::5", "2001:db8:0:1::1"},
-		{"one link-local address", []string{"fe80::1"}, "fe80::1", "fe80::2"},
 	} {
 		for i := range limitPending {
 			hello(tc.clients[i%len(tc.clients)]) // unanswered: each holds a slot

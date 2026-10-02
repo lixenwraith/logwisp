@@ -34,8 +34,8 @@ Every listener and dialer keeps strictly to the family of its `host`:
 - Peers
   - Logs and sessions name an IPv6 peer by its address, a link-local one with
     its zone.
-  - SCRAM throttling counts an IPv6 client by its /64, a link-local one by its
-    address: every host on a link shares `fe80::/64`.
+  - SCRAM throttling counts an IPv6 client by its /64, so the hosts on a link
+    share one link-local budget: each can pick any `fe80::/64` address.
   - A peer with a zone never matches `auth.trusted_proxies`: put the proxy on
     loopback or a routed address.
 
