@@ -14,6 +14,14 @@
   <span id="state" role="status">connecting…</span>
   <button id="logout" type="button">Sign out</button>
 </header>
+<form id="login" class="card" method="post" hidden>
+  <p class="note">This browser keeps no cookie for this site, so the session lives in this page and ends when it closes.</p>
+  <label>Username <input name="username" autocomplete="username" required></label>
+  <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+  <button type="submit">Sign in</button>
+  <progress id="progress" max="1" hidden></progress>
+  <p id="status" role="status"></p>
+</form>
 <main id="log"></main>
 </body>
 </html>

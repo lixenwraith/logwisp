@@ -1,4 +1,4 @@
-import { login } from "./scram.js";
+import { cookiesUsable, login } from "./scram.js";
 
 const base = new URL("..", location.href);
 const form = document.getElementById("login");
@@ -44,5 +44,18 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+// A cookie session cannot outlive this page without cookies; the viewer, when
+// the sink serves it, keeps a token in memory instead
+async function cookiesUnavailable() {
+  status.textContent = "This browser keeps no cookie for this site, so a sign-in here would not last.";
+  const viewer = await fetch("view", { method: "HEAD", cache: "no-store", redirect: "error" }).catch(() => null);
+  if (!viewer?.ok) return;
+  const link = document.createElement("a");
+  link.href = "view";
+  link.textContent = "Sign in on the viewer instead.";
+  status.append(" ", link);
+}
+
 // Enabled only once this script runs, so a failed load cannot submit the form natively
-button.disabled = false;
+if (cookiesUsable()) button.disabled = false;
+else cookiesUnavailable();

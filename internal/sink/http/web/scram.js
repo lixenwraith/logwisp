@@ -64,6 +64,17 @@ export async function logout(base, { token } = {}) {
   }
 }
 
+// Whether the session cookie would stick. Chromium blocking every cookie still
+// reports navigator.cookieEnabled, so a cookie with the session's attributes
+// must also come back.
+export function cookiesUsable() {
+  if (!globalThis.navigator?.cookieEnabled) return false;
+  document.cookie = "logwisp_probe=1; Secure; SameSite=Strict";
+  const usable = document.cookie.split("; ").includes("logwisp_probe=1");
+  document.cookie = "logwisp_probe=; Max-Age=0; Secure; SameSite=Strict";
+  return usable;
+}
+
 /**
  * Reads an event stream through fetch, which can send the bearer EventSource
  * cannot. onEvent({type, data, lastEventId}) gets each event EventSource would
