@@ -174,10 +174,9 @@ one per /64), on handshake starts: a token bucket (burst 10, 1/s) refunded on
 success, and at most 4 unfinished exchanges. An unanswered HTTP challenge holds
 its slot for the `auth` handshake timeout (30 s); abandoned TCP exchanges
 release their slot, and their entry in the `auth` handshake table,
-immediately. The address table
-holds 65,536 entries, drops one idle for a minute once its challenges have
-expired, and fails closed when full; the SCRAM server itself caps in-flight
-handshakes at 4,096 (`busy`).
+immediately. The address table holds 65,536 entries, drops one idle for a
+minute once its challenges have expired, and fails closed when full; the SCRAM
+server itself caps in-flight handshakes at 4,096 (`busy`).
 
 Counters: `auth_allowed` counts logins; `auth_rejected` every refusal — failed
 proofs, malformed requests, missing credentials and, on HTTP, refused tokens;
