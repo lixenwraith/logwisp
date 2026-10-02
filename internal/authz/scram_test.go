@@ -556,3 +556,29 @@ func TestScramListenerAuthorizeFailsClosed(t *testing.T) {
 		t.Fatalf("Authorize under scram = %v, want a refusal", err)
 	}
 }
+
+// A token is renewed ahead of its expiry, so a healthy link never pays a
+// refused request each lifetime.
+func TestTokenIsRenewedBeforeExpiry(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: 1000}, f.serverTLS, RoleListener, HTTP)
+	srv, _ := f.httpListener(t, l, f.serverTLS)
+	d := f.dialer(t, "edge-01", "edge-01-secret")
+	client := f.httpClient(d)
+	prepare := func() {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/protected", nil)
+		if err := d.Prepare(t.Context(), client, srv.URL, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prepare()
+	prepare()
+	if n := l.allowed.Load(); n != 1 {
+		t.Fatalf("logins within the lifetime = %d, want 1", n)
+	}
+	time.Sleep(600 * time.Millisecond) // past lifetime - margin (500 ms)
+	prepare()
+	if n := l.allowed.Load(); n != 2 {
+		t.Fatalf("logins after the renewal point = %d, want 2", n)
+	}
+}

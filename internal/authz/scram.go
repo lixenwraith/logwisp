@@ -456,15 +456,20 @@ func (p *Policy) authorizeToken(r *http.Request) (Identity, int, error) {
 		p.rejected.Add(1)
 		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: no token issuer on this listener", ErrRefused)
 	}
-	token, err := auth.ParseBearerToken(r.Header.Get("Authorization"))
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		p.rejected.Add(1)
+		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: no bearer token", ErrRefused)
+	}
+	token, err := auth.ParseBearerToken(header)
 	if err != nil {
 		p.rejected.Add(1)
-		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: %w", ErrRefused, err)
+		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: malformed bearer token", ErrRefused)
 	}
 	user, _, err := tokens.ValidateToken(token)
 	if err != nil {
 		p.rejected.Add(1)
-		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: %w", ErrRefused, err)
+		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: bearer %w", ErrRefused, err)
 	}
 	if err := p.bindCertificate(r.TLS, user); err != nil {
 		p.rejected.Add(1)
@@ -489,6 +494,7 @@ type scramDialer struct {
 	username string
 	password string
 	token    atomic.Pointer[string]
+	renewAt  atomic.Int64           // unix nanoseconds; Prepare logs in again from then
 	pin      atomic.Pointer[[]byte] // HTTP: certificate the token's login was bound to
 	failures atomic.Uint64
 	lastErr  atomic.Pointer[string]
@@ -632,8 +638,19 @@ func (p *Policy) Token(ctx context.Context, client *http.Client, baseURL string)
 	if step.Token == "" {
 		return "", errors.New("auth: server issued no token")
 	}
+	d.renewAt.Store(renewAt(time.Now(), time.Duration(step.ExpiresIn)*time.Second).UnixNano())
 	d.token.Store(&step.Token)
 	return step.Token, nil
+}
+
+// renewAt schedules a fresh login ahead of expiry, so a healthy link never
+// pays a refused request each lifetime; 401 stays the fallback for reloads.
+func renewAt(now time.Time, lifetime time.Duration) time.Time {
+	if lifetime <= 0 {
+		return now.Add(100 * 365 * 24 * time.Hour) // lifetime unknown: renew on 401 only
+	}
+	margin := min(max(5*time.Second, lifetime/10), lifetime/2)
+	return now.Add(lifetime - margin)
 }
 
 func (d *scramDialer) dropToken() {
@@ -700,6 +717,21 @@ func postStep(ctx context.Context, client *http.Client, url string, body []byte)
 		return step, resp, fmt.Errorf("auth: malformed answer: %w", decodeErr)
 	}
 	return step, resp, nil
+}
+
+// AwaitClose blocks until a listener ends a link after its admission. Chain
+// sources never write once a link is up, so a line is a refusal (ErrRefused,
+// sent to dialers without scram that never read it) and EOF a close.
+func AwaitClose(r *bufio.Reader) error {
+	line, err := readLine(r)
+	if err != nil {
+		return err
+	}
+	var step authStep
+	if json.Unmarshal(line, &step) == nil && step.Error != "" {
+		return fmt.Errorf("%w: server: %s", ErrRefused, step.Error)
+	}
+	return errors.New("unexpected data from server")
 }
 
 // --- Wire helpers ---

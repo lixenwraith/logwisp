@@ -417,7 +417,7 @@ func (p *Policy) Prepare(ctx context.Context, client *http.Client, baseURL strin
 		return nil
 	}
 	token := p.dialer.token.Load()
-	if token == nil {
+	if token == nil || time.Now().UnixNano() >= p.dialer.renewAt.Load() {
 		t, err := p.Token(ctx, client, baseURL)
 		if err != nil {
 			return err

@@ -59,8 +59,12 @@ type TCPChainSink struct {
 	input  chan core.TransportEvent
 	logger *log.Logger
 
-	// conn owned exclusively by run loop goroutine
+	// conn and the backoff state are owned exclusively by the run loop goroutine.
+	// failures survives a link that dies right after connecting, so a refusing
+	// source is retried with growing delays rather than in a tight loop.
 	conn          net.Conn
+	connectedAt   time.Time
+	failures      int
 	everConnected bool
 	dialTimeout   time.Duration
 	writeTimeout  time.Duration
@@ -309,29 +313,28 @@ func (t *TCPChainSink) runLoop(ctx context.Context) {
 // deliver writes one line, holding it across reconnects until sent or shutdown.
 // Backpressure during outage propagates to the pipeline dispatch drop counter.
 func (t *TCPChainSink) deliver(ctx context.Context, line []byte) bool {
-	failures := 0
 	for {
 		if t.conn == nil {
-			if failures > 0 && !t.waitBackoff(ctx, failures) {
+			if t.failures > 0 && !t.waitBackoff(ctx, t.failures) {
 				return false
 			}
 			if err := t.connect(ctx); err != nil {
 				if ctx.Err() != nil {
 					return false
 				}
-				failures++
+				t.failures++
 				if errors.Is(err, authz.ErrRefused) {
 					// A refusal is configuration, not weather: show it by default
 					t.logger.Warn("msg", "Chain connect refused",
 						"component", "tcp_chain_sink",
 						"target", t.addr,
-						"attempt", failures,
+						"attempt", t.failures,
 						"error", err)
 				} else {
 					t.logger.Debug("msg", "Chain connect failed",
 						"component", "tcp_chain_sink",
 						"target", t.addr,
-						"attempt", failures,
+						"attempt", t.failures,
 						"error", err)
 				}
 				continue
@@ -341,13 +344,17 @@ func (t *TCPChainSink) deliver(ctx context.Context, line []byte) bool {
 		t.conn.SetWriteDeadline(time.Now().Add(t.writeTimeout))
 		if _, err := t.conn.Write(line); err != nil {
 			t.writeErrors.Add(1)
-			failures++
+			t.failures++
 			t.logger.Warn("msg", "Chain write failed",
 				"component", "tcp_chain_sink",
 				"target", t.addr,
 				"error", err)
 			t.closeConn()
 			continue
+		}
+		// Healthy once it outlives the shortest backoff
+		if t.failures > 0 && time.Since(t.connectedAt) >= time.Duration(t.config.BackoffMinMS)*time.Millisecond {
+			t.failures = 0
 		}
 		return true
 	}
@@ -379,10 +386,26 @@ func (t *TCPChainSink) connect(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := t.auth.Greet(ctx, conn, t.node); err != nil {
+	r, err := t.auth.Greet(ctx, conn, t.node)
+	if err != nil {
 		conn.Close()
 		return err
 	}
+	// A source never writes once a link is up: a line is a refusal this sink
+	// could not otherwise see, EOF a close. Stop writing into either.
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		err := authz.AwaitClose(r)
+		conn.Close()
+		if errors.Is(err, authz.ErrRefused) {
+			t.logger.Warn("msg", "Chain link refused",
+				"component", "tcp_chain_sink",
+				"target", t.addr,
+				"error", err)
+		}
+	}()
+	t.connectedAt = time.Now()
 
 	t.conn = conn
 	t.connected.Store(true)
