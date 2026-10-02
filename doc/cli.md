@@ -24,32 +24,28 @@ pipelines have [their own flags](#pipelines):
 
 ### Common
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `-c <path>` | Configuration file | `./logwisp.toml` |
-| `--config <path>` / `--config=<path>` | Configuration file | `./logwisp.toml` |
-| `--quiet` | Suppress all application output | `false` |
-| `--status_reporter=<bool>` | Periodic status logging | `true` |
-| `--auto_reload=<bool>` | Reload config when the file changes | `false` |
-| `--version` | Print version and exit | — |
-| `-h`, `--help`, `help` | Print usage and exit | — |
+- `-c <path>`, `--config <path>`, `--config=<path>`: the configuration file,
+  default `./logwisp.toml`
+- `--quiet`: suppress all application output, default `false`
+- `--status_reporter=<bool>`: periodic status logging, default `true`
+- `--auto_reload=<bool>`: reload when the configuration file changes, default
+  `false`
+- `--version`: print the version and exit
+- `-h`, `--help`, `help`: print usage and exit
 
 The last file-selection flag wins. `-c=<path>` also works. A missing or empty
 path returns an error, and `--` ends option parsing.
 
 ### Logging
 
-| Flag | Values |
-|------|--------|
-| `--logging.output` | `file`, `stdout`, `stderr`, `split`, `all`, `none` |
-| `--logging.level` | `debug`, `info`, `warn`, `error` |
-| `--logging.format` | `raw`, `txt`, `json` |
-| `--logging.sanitization` | `raw`, `json`, `txt`, `shell` |
-| `--logging.file.directory` | path |
-| `--logging.file.name` | string |
-| `--logging.file.max_size_mb` | integer |
-| `--logging.file.max_total_size_mb` | integer |
-| `--logging.file.retention_hours` | float |
+- `--logging.output`: `file`, `stdout`, `stderr`, `split`, `all` or `none`
+- `--logging.level`: `debug`, `info`, `warn` or `error`
+- `--logging.format`: `raw`, `txt` or `json`
+- `--logging.sanitization`: `raw`, `json`, `txt` or `shell`
+- `--logging.file.directory`: a path
+- `--logging.file.name`: a string
+- `--logging.file.max_size_mb`, `--logging.file.max_total_size_mb`: integers
+- `--logging.file.retention_hours`: a float
 
 `--logging.console.target` is accepted but has no effect; the console
 destination is derived from `--logging.output`.
@@ -129,10 +125,10 @@ forms when upgrading; see [Configuration](configuration.md#environment-variables
 
 The path resolver reads these variables directly:
 
-| Variable | Effect |
-|----------|--------|
-| `LOGWISP_CONFIG_FILE` | Configuration file path; joined onto `LOGWISP_CONFIG_DIR` when both are set |
-| `LOGWISP_CONFIG_DIR` | Configuration directory; alone, implies `<dir>/logwisp.toml` |
+- `LOGWISP_CONFIG_FILE`: the configuration file path, joined onto
+  `LOGWISP_CONFIG_DIR` when both are set
+- `LOGWISP_CONFIG_DIR`: the configuration directory; alone, it implies
+  `<dir>/logwisp.toml`
 
 ### Pipeline Variables
 
@@ -175,12 +171,8 @@ A reload rereads the file and keeps the command-line or environment pipelines.
 
 ## Signals
 
-| Signal | Action |
-|--------|--------|
-| `SIGINT` | Graceful shutdown |
-| `SIGTERM` | Graceful shutdown |
-| `SIGHUP` | Reload configuration |
-| `SIGUSR1` | Reload configuration |
+- `SIGINT`, `SIGTERM`: graceful shutdown
+- `SIGHUP`, `SIGUSR1`: reload the configuration
 
 `SIGHUP` is ignored during startup, before the signal handler is installed, so
 LogWisp survives a terminal hang-up like `nohup`. Once running, it triggers a
@@ -191,11 +183,10 @@ service untouched; see [Configuration](configuration.md#hot-reload).
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| `0` | Clean shutdown, or `--version` / `--help` |
-| `1` | General error: config load or validation failure, logger init failure, service bootstrap failure |
-| `2` | Explicitly requested configuration file not found |
+- `0`: clean shutdown, or `--version` / `--help`
+- `1`: general error: a configuration load or validation failure, a logger
+  init failure, a service bootstrap failure
+- `2`: an explicitly requested configuration file is not found
 
 Exit code 2 applies only when the file was named explicitly (`-c`,
 `--config=`, or the `LOGWISP_CONFIG_*` variables). A missing discovered default
@@ -265,12 +256,20 @@ Manages the credentials files of `auth.type = "scram"` listeners and logs in to
 them as a viewer. See
 [Password Authentication](security.md#password-authentication-scram).
 
-| Command | Does |
-|---------|------|
-| `add-user -credentials FILE -user NAME [-password-file FILE] [-generate]` | Adds a user, or replaces its password |
-| `remove-user -credentials FILE -user NAME` | Removes a user; refuses the last one |
-| `token -url https://HOST:PORT[/PATH] -user NAME -password-file FILE [-unbound] [TLS flags]` | Logs in to an `http` sink or `http_chain` source and prints a bearer token |
-| `stream -addr HOST:PORT -user NAME -password-file FILE [TLS flags]` | Logs in to a `tcp` sink and copies its stream to stdout until interrupted |
+```
+lw auth add-user    -credentials FILE -user NAME [-password-file FILE] [-generate]
+lw auth remove-user -credentials FILE -user NAME
+lw auth token       -url https://HOST:PORT[/PATH] -user NAME -password-file FILE
+                    [-unbound] [TLS flags]
+lw auth stream      -addr HOST:PORT -user NAME -password-file FILE [TLS flags]
+```
+
+- `add-user`: adds a user, or replaces its password
+- `remove-user`: removes a user; refuses the last one
+- `token`: logs in to an `http` sink or `http_chain` source and prints a
+  bearer token
+- `stream`: logs in to a `tcp` sink and copies its stream to stdout until
+  interrupted
 
 `lw auth <command> -h` lists a command's flags. The exit status is `0` on
 success, `1` on failure and `2` on a usage error.
