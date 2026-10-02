@@ -126,8 +126,9 @@ on a non-retryable response or on shutdown (`dropped_batches`).
 
 ## Network Architecture
 
-All listeners bind `tcp4` and all dialers dial `tcp4`. IPv6 clients cannot
-connect; this is deliberate, not an oversight.
+Each listener and dialer keeps strictly to the family of its host literal:
+`tcp4` for IPv4, IPv6-only `tcp6` for IPv6 (`::` too); a hostname resolves.
+See [Networking](networking.md#address-family).
 
 | Plugin | Role | Protocol |
 |--------|------|----------|

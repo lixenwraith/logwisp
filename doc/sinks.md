@@ -127,7 +127,7 @@ allow = ["viewer-01"]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
+| `host` | string | `0.0.0.0` | Bind address, IPv4 or IPv6 (`::`); the listener keeps to its family ([Networking](networking.md#address-family)) |
 | `port` | int | **required** | Listen port |
 | `stream_path` | string | `/stream` | SSE endpoint; must start with `/` |
 | `status_path` | string | `/status` | Status endpoint; must start with `/` and differ from `stream_path` |
@@ -235,7 +235,7 @@ allow = ["viewer-01"]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
+| `host` | string | `0.0.0.0` | Bind address, IPv4 or IPv6 (`::`); the listener keeps to its family ([Networking](networking.md#address-family)) |
 | `port` | int | **required** | Listen port |
 | `buffer_size` | int | `1000` | Sink input queue depth |
 | `client_buffer_size` | int | `256` | Per-client send queue depth |
@@ -302,7 +302,7 @@ key_file  = "/etc/logwisp/tls/client.key"
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `host` | string | **required** | Downstream host |
+| `host` | string | **required** | Downstream host or address; an IPv6 one goes bare (`::1`) |
 | `port` | int | **required** | Downstream port |
 | `node` | string | `os.Hostname()` | Origin label stamped on first-hop entries |
 | `buffer_size` | int | `1000` | Sink input queue depth |
@@ -382,7 +382,7 @@ key_file  = "/etc/logwisp/tls/client.key"
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `host` | string | **required** | Downstream host |
+| `host` | string | **required** | Downstream host or address; an IPv6 one goes bare (`::1`) |
 | `port` | int | **required** | Downstream port |
 | `ingest_path` | string | `/ingest` | Endpoint path; must start with `/` |
 | `node` | string | `os.Hostname()` | Origin label stamped on first-hop entries |

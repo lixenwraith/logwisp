@@ -6,12 +6,38 @@ see [Chaining](chaining.md).
 
 ## Address Family
 
-**All listeners bind `tcp4` and all dialers dial `tcp4`.** IPv6 is not
-supported, deliberately. An IPv6 client cannot connect and will simply see a
-connection failure.
+Every listener and dialer keeps strictly to the family of its `host`:
 
-When testing locally use `127.0.0.1`, not `localhost` — the latter may resolve
-to `::1` and appear as an unexplained connection refusal.
+- IPv4 literal (`127.0.0.1`, the default `0.0.0.0`): IPv4 only (`tcp4`). An
+  empty `host` is the IPv4 wildcard, as `0.0.0.0`.
+- IPv6 literal (`::1`, `::`, `fe80::1%eth0`): IPv6 only (`tcp6`).
+  - `::` takes no IPv4 connections, on Linux and FreeBSD alike, whatever the
+    system's `bindv6only` default.
+  - To serve both families, run two listeners on the same port, one on
+    `0.0.0.0` and one on `::`: neither holds the other's port.
+- Hostname: resolved. A listener binds one address (IPv4 when there is one),
+  so name the address to be sure; a dialer tries each address in turn.
+
+### IPv6
+
+- Notation
+  - `host` takes the bare address: `host = "::1"`. A bracketed host or one
+    with a port fails at load.
+  - Addresses and URLs bracket it: logs print `[::1]:8443`, and `lw auth`
+    takes `-addr [::1]:8443` and `-url https://[::1]:8443`. Give `curl` `-g`,
+    or it reads the brackets as a glob.
+  - A link-local address carries its zone, `fe80::1%eth0`, escaped in URLs as
+    `https://[fe80::1%25eth0]:8443`.
+- TLS: a dialer verifies an IPv6 target against the certificate's IP SANs
+  (`subjectAltName = IP:::1`), as it does an IPv4 one. The zone is not part of
+  the name; `server_name` overrides as usual.
+- Peers
+  - Logs and sessions name an IPv6 peer by its address, a link-local one with
+    its zone.
+  - SCRAM throttling counts an IPv6 client by its /64, a link-local one by its
+    address: every host on a link shares `fe80::/64`.
+  - A peer with a zone never matches `auth.trusted_proxies`: put the proxy on
+    loopback or a routed address.
 
 ## Network Plugins
 
@@ -163,7 +189,9 @@ headers, and entry encoding.
 
 **Connection refused**
 - Confirm the pipeline started; a bind failure is logged at ERROR.
-- Confirm you are dialing IPv4. `localhost` may resolve to `::1`.
+- Confirm the dialer uses the listener's family: `[::1]` does not reach a
+  `127.0.0.1` or `0.0.0.0` listener, nor `127.0.0.1` a `::` one. `localhost`
+  may resolve to either.
 - Check the port is not already bound by another pipeline in the same process.
 
 **TLS handshake failure**

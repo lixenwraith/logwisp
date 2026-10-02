@@ -192,7 +192,7 @@ from = "end"                            # "end" or "start" of a newly discovered
 # id = "chain_in"
 # type = "tcp_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only
+# host = "0.0.0.0"                      # IPv4 only; "::" or "::1": IPv6 only
 # port = 9440                           # Required
 # buffer_size = 1000
 # max_connections = 0                   # 0 = unlimited
@@ -219,7 +219,7 @@ from = "end"                            # "end" or "start" of a newly discovered
 # id = "hchain_in"
 # type = "http_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"
+# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
 # port = 9441                           # Required
 # ingest_path = "/ingest"               # Must start with "/"
 # buffer_size = 1000
@@ -278,7 +278,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # id = "http_out"
 # type = "http"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"
+# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
 # port = 8081                           # Required
 # stream_path = "/stream"               # Must start with "/"
 # status_path = "/status"               # Must differ from stream_path
@@ -308,7 +308,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # id = "tcp_out"
 # type = "tcp"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"
+# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
 # port = 9090                           # Required
 # buffer_size = 1000
 # client_buffer_size = 256
@@ -336,7 +336,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # id = "chain_out"
 # type = "tcp_chain"
 # [pipelines.plugin_sinks.config]
-# host = "10.0.0.1"                     # Required
+# host = "10.0.0.1"                     # Required; IPv6 bare, e.g. "fd00::1"
 # port = 9440                           # Required
 # node = ""                             # origin label, default hostname; preserved across hops
 # buffer_size = 1000
@@ -367,7 +367,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # id = "hchain_out"
 # type = "http_chain"
 # [pipelines.plugin_sinks.config]
-# host = "10.0.0.1"                     # Required
+# host = "10.0.0.1"                     # Required; IPv6 bare, e.g. "fd00::1"
 # port = 9441                           # Required
 # ingest_path = "/ingest"
 # node = ""                             # origin label, default hostname; preserved across hops

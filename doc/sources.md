@@ -182,7 +182,7 @@ node_binding = "force"
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
+| `host` | string | `0.0.0.0` | Bind address, IPv4 or IPv6 (`::`); the listener keeps to its family ([Networking](networking.md#address-family)) |
 | `port` | int | **required** | Listen port, 1–65535 |
 | `buffer_size` | int | `1000` | Subscriber channel depth |
 | `max_connections` | int | `0` | Concurrent connection cap; `0` = unlimited |
@@ -260,7 +260,7 @@ node_binding = "force"
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
+| `host` | string | `0.0.0.0` | Bind address, IPv4 or IPv6 (`::`); the listener keeps to its family ([Networking](networking.md#address-family)) |
 | `port` | int | **required** | Listen port |
 | `ingest_path` | string | `/ingest` | Endpoint path; must start with `/` |
 | `buffer_size` | int | `1000` | Subscriber channel depth |

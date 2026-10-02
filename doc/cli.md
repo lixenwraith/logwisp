@@ -296,6 +296,15 @@ proxy mounts LogWisp at. `stream` exits `0`
 on `SIGINT` or `SIGTERM`, and `1` when the server ends the stream (a reload or
 shutdown).
 
+Addresses, as for the plugins ([Networking](networking.md#address-family)):
+
+- An IPv6 address goes in brackets: `-addr [::1]:PORT`,
+  `-url https://[::1]:PORT`; in a URL a link-local zone is escaped,
+  `https://[fe80::1%25eth0]:PORT`.
+- The dial keeps to the address's family; a hostname resolves.
+- `-server-name` defaults to the host; an address, without brackets or zone,
+  must then be among the certificate's IP SANs.
+
 ```bash
 # listener host: a file the service user can read, users, then apply
 install -m 0640 -o root -g logwisp /dev/null /etc/logwisp/users.toml

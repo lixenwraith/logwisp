@@ -266,5 +266,5 @@ optional, and entries are labelled with the username. See
   otherwise-idle links and their sessions warm.
 - **Ports** used by the bundled test scripts: `15801` tcp_chain ingest, `15802`
   http_chain ingest, `15803` tcp sink, `15804` http sink.
-- **Use `127.0.0.1`, not `localhost`**, when testing locally: all listeners and
-  dialers are IPv4-only, and `localhost` may resolve to `::1`.
+- **Dial the listener's own literal** when testing locally: a listener on
+  `127.0.0.1` takes IPv4 only, and `localhost` may resolve to `::1`.

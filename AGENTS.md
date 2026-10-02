@@ -94,8 +94,10 @@ change touches.
   dependency-free ES module (sites copy it into their bundles) and the pages
   stay free of inline script and style (their CSP); `node --test` there checks
   it against Go's Argon2 and `auth`'s known answer.
-- Listeners and dialers are IPv4-only (`tcp4`). E2E scripts in `test/` need
-  `bin/lw` and `--auto`, and each owns a port range and a gitignored run
-  directory.
+- Listeners and dialers take their network from `core.Network`, strictly per
+  family: an IPv4 literal `tcp4`, an IPv6 literal (`::` too) IPv6-only `tcp6`,
+  a hostname `tcp`. Join addresses with `net.JoinHostPort`, build URLs with
+  `net/url`. E2E scripts in `test/` need `bin/lw` and `--auto`, and each owns
+  a port range and a gitignored run directory.
 - Many older files lack a trailing newline and fail `gofmt -l`; format the files
   you change, not the tree.

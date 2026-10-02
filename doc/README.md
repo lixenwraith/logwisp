@@ -105,7 +105,8 @@ lw -c config.toml
 - **Architecture**: amd64
 - **Go**: 1.26+ to build from source
 
-Network sources and sinks bind and dial over IPv4 only.
+Network sources and sinks bind and dial IPv4 or IPv6, each keeping strictly to
+the family of its host ([Networking](networking.md#address-family)).
 
 ## License
 
