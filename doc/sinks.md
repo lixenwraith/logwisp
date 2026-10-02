@@ -148,7 +148,7 @@ allow = ["viewer-01"]
 - With an `auth` block, one middleware gates **both** endpoints, with no body
   detail in a refusal. Under `mtls` a refused certificate gets `403`. Under
   `scram` a client logs in at `POST /auth`, which sits outside the gate (see
-  [`lw auth token`](cli.md#logwisp-auth)), and sends
+  [`lw auth token`](cli.md#lw-auth)), and sends
   `Authorization: Bearer <token>`; a missing, invalid or expired token gets
   `401` with `WWW-Authenticate`, a certificate that does not match the token's
   user `403`. A stream is checked when it connects and outlives its token; a
@@ -254,7 +254,7 @@ allow = ["viewer-01"]
   first: a hello carrying the login, then challenge, proof and final, all
   within 10 s, after which the stream follows on the same connection. `nc` and
   `openssl s_client` cannot do this; use
-  [`lw auth stream`](cli.md#logwisp-auth).
+  [`lw auth stream`](cli.md#lw-auth).
 - A write that misses its deadline means the kernel buffer stayed full for the
   whole timeout, so the client is disconnected immediately rather than retried.
 - A client whose send queue is full has that event dropped (`dropped_writes`)
