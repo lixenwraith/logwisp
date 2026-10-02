@@ -49,6 +49,9 @@ It is the contract, not a suggestion.
 
 - `doc/` is already long. Condense when you touch it; append only for a new concept
   or scope.
+- No tables in docs, never a large one: docs are read in terminals and in editors
+  that do not render Markdown. Use hierarchical bullet lists (item, then its
+  details indented beneath); fenced blocks for config, commands and port maps.
 - A gap you are deferring goes in the "Not Implemented" list of the design doc it
   belongs to: extend the item, or add a concise one in the list's pattern.
 - The repository describes the architecture, never a machine: docs and commands
