@@ -198,13 +198,16 @@ make
 ./test/chain-test.sh --auto             # two independent relay pipelines
 ./test/chain-aggregate-test.sh --auto   # fan-in: both edges into one pipeline
 ./test/mtls-chain-test.sh --auto        # the same fan-in under mTLS
+./test/scram-chain-test.sh --auto       # SCRAM logins on every network plugin
 ./test/passthrough-test.sh              # file source relays a wide envelope intact
 ```
 
 Without `--auto` the chain scripts run the relay in the foreground for
-interactive inspection. They need bash 5+, coreutils, and curl, and they bind
-ports 15801–15804. The pass-through test binds nothing. Generated configuration
-and logs land in `test/run/`.
+interactive inspection. They need bash 5+, coreutils, and curl (the mTLS and
+SCRAM scripts also openssl). The plain chain scripts bind ports 15801–15804 and
+write to `test/run/`; the mTLS script uses 15811–15814 and `test/run-mtls/`, the
+SCRAM script 15821–15825 and `test/run-scram/`. The pass-through test binds
+nothing.
 
 ## Uninstall
 

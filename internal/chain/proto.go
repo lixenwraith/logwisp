@@ -11,28 +11,30 @@ import (
 // ProtocolVersion is declared in the hello preamble
 const ProtocolVersion = 1
 
-// Hello is the first NDJSON line sent by the dialing side after connect.
-// Reserved for future revisions: auth credential, feature flags (ack, compression).
+// Hello is the first NDJSON line a dialer sends after connect. Fields are
+// optional so older peers ignore what they do not know; a field a peer must
+// understand needs a ProtocolVersion bump. Scram opens an authentication
+// exchange (authz owns its content), so chain need not know the auth library.
 type Hello struct {
-	LogWisp int    `json:"logwisp"`
-	Node    string `json:"node,omitempty"`
-	// Auth     string   `json:"auth,omitempty"`
-	// Features []string `json:"features,omitempty"`
+	LogWisp int             `json:"logwisp"`
+	Node    string          `json:"node,omitempty"`
+	Scram   json.RawMessage `json:"scram,omitempty"`
 }
 
-// HTTP transport mapping of the chain protocol.
-// Hello preamble equivalent: protocol + node carried as request headers.
-// Reserved extension point: Authorization header for auth, TLS at transport.
+// HTTP transport mapping of the chain protocol: protocol and node travel as
+// request headers, SCRAM runs on AuthPath and yields a bearer token.
 const (
 	HeaderProtocol    = "X-Logwisp-Protocol"
 	HeaderNode        = "X-Logwisp-Node"
 	HeaderAccepted    = "X-Logwisp-Accepted"
 	ContentTypeNDJSON = "application/x-ndjson"
+	AuthPath          = "/auth"
 )
 
 // EncodeHello serializes a newline-terminated hello preamble
-func EncodeHello(node string) ([]byte, error) {
-	b, err := json.Marshal(Hello{LogWisp: ProtocolVersion, Node: node})
+func EncodeHello(h Hello) ([]byte, error) {
+	h.LogWisp = ProtocolVersion
+	b, err := json.Marshal(h)
 	if err != nil {
 		return nil, err
 	}

@@ -161,7 +161,7 @@ func (p *Pipeline) initSourceCapabilities(s source.Source, cfg config.PluginSour
 		// Network capabilities
 		case core.CapNetLimit:
 			continue // No-op for now, placeholder
-		case core.CapTLS:
+		case core.CapTLS, core.CapProxyTLS:
 			hasTLS = true
 		case core.CapAuth:
 			hasAuth = true
@@ -202,7 +202,7 @@ func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig
 		// Network capabilities
 		case core.CapNetLimit:
 			continue // No-op for now, placeholder
-		case core.CapTLS:
+		case core.CapTLS, core.CapProxyTLS:
 			hasTLS = true
 		case core.CapAuth:
 			hasAuth = true

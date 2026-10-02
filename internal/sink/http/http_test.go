@@ -2,18 +2,26 @@ package http
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"logwisp/internal/core"
 	"logwisp/internal/sink"
 	"logwisp/internal/testutil"
+
+	"github.com/lixenwraith/auth"
+	"github.com/lixenwraith/log"
 )
 
 func TestStatusReportsQueueAndConnectionBounds(t *testing.T) {
@@ -167,5 +175,147 @@ func TestWildcardCORSOnlyWithoutAuth(t *testing.T) {
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != tc.want {
 			t.Errorf("%s: Access-Control-Allow-Origin = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// Under scram the login endpoint sits outside the gate it opens: a hello
+// earns a challenge without a token, while stream and status demand one.
+func TestLoginEndpointBypassesTheGate(t *testing.T) {
+	pki := testutil.NewPKI(t, "viewer-01")
+	creds := scramCredentials(t)
+	gated, _ := newTestHTTPSink(t, map[string]any{
+		"tls":  map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey},
+		"auth": map[string]any{"type": "scram", "credentials_file": creds},
+	})
+	client, baseURL := serveTestHTTPSink(t, gated)
+	caPEM, err := os.ReadFile(pki.CA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}
+	baseURL = "https" + strings.TrimPrefix(baseURL, "http")
+
+	hello := `{"logwisp":1,"scram":{"username":"viewer-01","client_nonce":"abcdefgh"}}`
+	resp, err := client.Post(baseURL+"/auth", "application/json", strings.NewReader(hello))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var step struct {
+		Challenge *auth.ServerFirstMessage `json:"challenge"`
+	}
+	json.NewDecoder(resp.Body).Decode(&step)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || step.Challenge == nil {
+		t.Fatalf("POST /auth without a token = %d, challenge %v", resp.StatusCode, step.Challenge)
+	}
+	for _, path := range []string{"/status", "/stream"} {
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("GET %s without a token = %d, want 401", path, resp.StatusCode)
+		}
+	}
+}
+
+// proxied sends what a TLS-terminating proxy would: the client and https
+func proxied(req *http.Request) *http.Request {
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	return req
+}
+
+func proxySink(t *testing.T, proxies []any, overrides map[string]any) *HTTPSink {
+	t.Helper()
+	opts := map[string]any{"auth": map[string]any{"type": "scram", "credentials_file": scramCredentials(t), "trusted_proxies": proxies}}
+	maps.Copy(opts, overrides)
+	h, _ := newTestHTTPSink(t, opts)
+	return h
+}
+
+// Behind a proxy the sink serves the client library and the enabled pages
+// under /auth/, each with its type and the pages' CSP; the viewer learns a
+// custom status path from its meta tag.
+func TestProxyModeServesBrowserFiles(t *testing.T) {
+	h := proxySink(t, []any{"127.0.0.1"}, map[string]any{"login_page": true, "viewer_page": true, "status_path": "/api/status"})
+	if !slices.Contains(h.Capabilities(), core.CapProxyTLS) {
+		t.Fatal("a proxy-mode sink does not report proxy_tls")
+	}
+	client, baseURL := serveTestHTTPSink(t, h)
+	for file, ctype := range map[string]string{
+		"scram.js": "text/javascript", "login": "text/html", "login.js": "text/javascript",
+		"style.css": "text/css", "view": "text/html", "view.js": "text/javascript",
+	} {
+		req, _ := http.NewRequest(http.MethodGet, baseURL+"/auth/"+file, nil)
+		resp, err := client.Do(proxied(req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), ctype) ||
+			!strings.Contains(resp.Header.Get("Content-Security-Policy"), "script-src 'self'") {
+			t.Errorf("/auth/%s: %d %q %q", file, resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Security-Policy"))
+		}
+		if file == "view" && !bytes.Contains(body, []byte(`content="api/status"`)) {
+			t.Error("the viewer page does not carry the custom status path")
+		}
+	}
+}
+
+// Behind a proxy nothing answers a peer outside trusted_proxies, not even the
+// login page or the challenge.
+func TestProxyModeRefusesDirectPeers(t *testing.T) {
+	h := proxySink(t, []any{"192.0.2.1"}, map[string]any{"login_page": true})
+	client, baseURL := serveTestHTTPSink(t, h)
+	for _, target := range []struct{ method, path string }{
+		{http.MethodGet, "/auth/login"}, {http.MethodGet, "/status"}, {http.MethodPost, "/auth"},
+	} {
+		req, _ := http.NewRequest(target.method, baseURL+target.path, strings.NewReader(`{"logwisp":1}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(proxied(req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s from an untrusted peer: %d, want 403", target.method, target.path, resp.StatusCode)
+		}
+	}
+}
+
+// Pages exist only behind a proxy, where browsers can log in; the viewer
+// needs the login page; /auth and the paths under it are reserved.
+func TestPagesNeedProxyMode(t *testing.T) {
+	scram := map[string]any{"type": "scram", "credentials_file": scramCredentials(t)}
+	pki := testutil.NewPKI(t, "viewer-01")
+	tlsOn := map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey}
+	proxy := map[string]any{"type": "scram", "credentials_file": scram["credentials_file"], "trusted_proxies": []any{"127.0.0.1"}}
+	for name, opts := range map[string]map[string]any{
+		"login page without proxies": {"tls": tlsOn, "auth": scram, "login_page": true},
+		"viewer without login":       {"auth": proxy, "viewer_page": true},
+		"stream under /auth":         {"auth": proxy, "stream_path": "/auth/stream"},
+	} {
+		maps.Copy(opts, map[string]any{"host": "127.0.0.1", "port": int64(8081)})
+		if _, err := NewHTTPSinkPlugin("stream", opts, log.NewLogger(), nil); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// Every line break SSE recognises, a lone CR included, starts another data:
+// line: an entry cannot inject an event:, retry: or id: field.
+func TestSSEFramesEveryLineAsData(t *testing.T) {
+	rec := httptest.NewRecorder()
+	if err := writeSSE(rec, []byte("a\revent: disconnect\r\nretry: 99999999\nid: x\r")); err != nil {
+		t.Fatal(err)
+	}
+	want := "data: a\ndata: event: disconnect\ndata: retry: 99999999\ndata: id: x\n\n"
+	if got := rec.Body.String(); got != want {
+		t.Fatalf("framed %q, want %q", got, want)
 	}
 }

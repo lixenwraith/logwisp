@@ -1,13 +1,17 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
 
 	lconfig "github.com/lixenwraith/config"
+	"github.com/lixenwraith/toml"
 )
 
 // ValidateConfig validates top-level structure only
@@ -119,7 +123,9 @@ func unknownKeys(m map[string]any, t reflect.Type, prefix string) error {
 		var tables []map[string]any
 		switch v := m[key].(type) {
 		case map[string]any:
-			tables = []map[string]any{v}
+			if err := unknownKeys(v, ft, prefix+key+"."); err != nil {
+				return err
+			}
 		case []map[string]any:
 			tables = v
 		case []any:
@@ -129,11 +135,30 @@ func unknownKeys(m map[string]any, t reflect.Type, prefix string) error {
 				}
 			}
 		}
-		for _, table := range tables {
-			if err := unknownKeys(table, ft, prefix+key+"."); err != nil {
+		for i, table := range tables {
+			if err := unknownKeys(table, ft, fmt.Sprintf("%s%s[%d].", prefix, key, i)); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// checkFileKeys rejects keys the configuration file declares that Config does
+// not: a misspelled table path such as plugin_sinks.confg.tls would otherwise
+// drop the whole table. Plugin config maps are checked by Scan instead.
+func checkFileKeys(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	root, err := toml.NewParser(data).Parse()
+	if err != nil {
+		return err
+	}
+	delete(root, "config_file") // runtime metadata, documented as ignored in the file
+	return unknownKeys(root, reflect.TypeOf(Config{}), "")
 }

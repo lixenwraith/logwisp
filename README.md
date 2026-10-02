@@ -62,15 +62,23 @@ exponential backoff and jitter.
 - Authorization by certificate identity: an `auth` block admits named peers
   (exact or RE2) rather than everything the CA issued, gates the `http` sink's
   stream and status endpoints, and lets a dialer pin the server it talks to
+- Password authentication (Argon2id-SCRAM) on the same block: listeners hold
+  verifiers, never passwords, and do no KDF work; every login outside proxy
+  mode is bound to the
+  listener's certificate, so no relay presenting another one can use it; HTTP
+  listeners issue short-lived bearer tokens. `logwisp auth` manages credentials
+  files and logs viewers in; behind a site's TLS-terminating proxy, browsers
+  log in through a shipped login page and a dependency-free JS client
 - Node binding: a chain source can label entries from the sender's certificate
-  instead of from what the sender claims, so origin attribution is not forgeable
+  identity or username instead of from what the sender claims, so origin
+  attribution is not forgeable
 - Fail-closed configuration: unknown keys are rejected, and startup warns about
-  expiring certificates, disabled verification and unanchored allow patterns
+  expiring certificates, disabled verification, unanchored allow patterns and
+  world-readable secrets
 
 See [Security](doc/security.md) for configuration and the exact boundary, and
-the [mTLS authentication design](doc/mtls-auth-plan.md) for the rationale and
-what is deliberately left out. Password authentication (Argon2id-SCRAM) is
-planned; see the [SCRAM design](doc/scram-auth-plan.md).
+the [mTLS](doc/mtls-auth-plan.md) and [SCRAM](doc/scram-auth-plan.md)
+authentication designs for the rationale and what is deliberately left out.
 
 ## Documentation
 
@@ -87,8 +95,8 @@ planned; see the [SCRAM design](doc/scram-auth-plan.md).
 | [Networking](doc/networking.md) | Listeners, dialers, timeouts, connection limits |
 | [Security](doc/security.md) | TLS, mTLS, and peer authorization; threat model and current limits |
 | [mTLS Authentication](doc/mtls-auth-plan.md) | Design and rationale for certificate-based authorization |
-| [Password Authentication](doc/scram-auth-plan.md) | Planned Argon2id-SCRAM design; mTLS hardening |
-| [CLI](doc/cli.md) | Flags, signals, exit codes |
+| [Password Authentication](doc/scram-auth-plan.md) | Design and rationale for Argon2id-SCRAM authentication; mTLS hardening |
+| [CLI](doc/cli.md) | Flags, signals, exit codes, `logwisp auth` |
 | [Operations](doc/operations.md) | Running, monitoring, tuning, troubleshooting |
 
 A fully annotated configuration covering every option ships as

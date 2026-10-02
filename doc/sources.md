@@ -190,22 +190,30 @@ node_binding = "force"
 | `hello_timeout_ms` | int | `10000` | Deadline for the hello preamble |
 | `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address. Ignored when `auth.node_binding` is active |
 | `tls` | table | — | Listener TLS; see [Security](security.md) |
-| `auth` | table | — | Peer authorization and node binding; see [Security](security.md#the-auth-block) |
+| `auth` | table | — | Peer authentication (`mtls` or `scram`) and node binding; see [Security](security.md#the-auth-block) |
+
+For passwords instead of certificates, the `auth` block takes `type = "scram"`
+and a `credentials_file`, and `client_auth` becomes optional; see
+[Password Authentication](security.md#password-authentication-scram).
 
 **Behaviour**
 
 - TLS handshakes run explicitly with a 10 s bound before the preamble is read,
   after the `max_connections` admission check.
-- Authorization runs between the handshake and the hello read, so an
-  unauthorized peer never gets a preamble parsed on its behalf. A rejection is
-  logged at WARN and counted in `rejected_conns`.
 - A connection is rejected if the first line is not a valid hello with a
   matching protocol version.
+- Under `mtls` the certificate is checked before the hello is read, so an
+  unauthorized peer never gets a preamble parsed on its behalf. Under `scram`
+  the hello opens the login: challenge, proof and final follow on the same
+  connection, the whole exchange within `hello_timeout_ms`, and the final is
+  sent only once node binding agrees. A source without `scram` answers a hello
+  offering credentials with `authentication not enabled`. A rejection is logged
+  at WARN and counted in `rejected_conns`.
 - The node label is then resolved: under `auth.node_binding` it comes from the
-  peer's certificate, otherwise `trust_node` governs. `force` also overrides the
-  `node` field on every individual entry; `assert` leaves per-entry labels to
-  `trust_node`, so a relay can forward other nodes' entries while proving its
-  own identity.
+  peer's certificate identity or username, otherwise `trust_node` governs.
+  `force` also overrides the `node` field on every individual entry; `assert`
+  leaves per-entry labels to `trust_node`, so a relay can forward other nodes'
+  entries while proving its own identity.
 - Each accepted connection gets a session recording the remote address, node
   label, — under TLS — `tls` and `tls_peer_cn`, and — under auth —
   `auth_method` and `auth_identity`.
@@ -215,7 +223,8 @@ node_binding = "force"
 
 **Statistics**: `active_connections`, `rejected_conns`, `parse_errors`,
 `tls_handshake_errors`, `trust_node`, `auth`, `auth_allowed`, `auth_rejected`,
-`node_binding`.
+`node_binding`; under `scram` also `auth_users`, `auth_throttled`, `auth_busy`
+and `auth_binding_mismatch`.
 
 ---
 
@@ -259,16 +268,19 @@ node_binding = "force"
 | `read_timeout_ms` | int | `30000` | Full request read deadline |
 | `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address. Ignored when `auth.node_binding` is active |
 | `tls` | table | — | Listener TLS |
-| `auth` | table | — | Peer authorization and node binding; see [Security](security.md#the-auth-block) |
+| `auth` | table | — | Peer authentication (`mtls` or `scram`) and node binding; see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
-- Only `POST` to `ingest_path` is routed; other methods get `405` with an
-  `Allow` header, and other paths get `404`.
+- Only `POST` to `ingest_path` and to `/auth` is routed; other methods get `405`
+  with an `Allow` header, and other paths get `404`. `/auth` is the SCRAM login
+  and answers `404` unless `auth.type = "scram"`.
 - Authorization runs before the body is read, so an unauthorized sender does not
-  get to stream `max_body_bytes` into the process. Both a policy rejection and a
-  node-binding failure answer `403`, distinct from the `400` used for protocol
-  errors, so a sender can tell "not allowed" from "malformed batch".
+  get to stream `max_body_bytes` into the process. A missing, invalid or expired
+  bearer token (`scram`) answers `401`, so the sender logs in again; a refused
+  certificate, a certificate that does not match the token's user, and a
+  node-binding failure answer `403`. Both are distinct from the `400` used for
+  protocol errors, so a sender can tell "not allowed" from "malformed batch".
 - A missing or mismatched `X-Logwisp-Protocol` header is rejected with `400`.
 - Batch acceptance is atomic: entries are published only after the body reads
   cleanly end to end. A transfer error rejects the whole batch (`400`, or `413`
@@ -282,12 +294,13 @@ node_binding = "force"
 
 **Statistics**: `total_requests`, `rejected_requests`, `parse_errors`,
 `cached_sessions`, `trust_node`, `auth`, `auth_allowed`, `auth_rejected`,
-`node_binding`.
+`node_binding`; under `scram` also `auth_users`, `auth_throttled`, `auth_busy`,
+`auth_binding_mismatch` and `auth_token_lifetime_ms`.
 
 ---
 
 ## Source Statistics
 
 Every source reports: `id`, `type`, `total_entries`, `dropped_entries`,
-`start_time`, `last_entry_time`, and a type-specific `details` map. These appear
-in the status reporter output and in the `http` sink's status endpoint.
+`start_time`, `last_entry_time`, and a type-specific `details` map. The DEBUG
+status report spreads `details` into each plugin's line.

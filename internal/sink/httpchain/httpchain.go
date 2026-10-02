@@ -55,8 +55,9 @@ type HTTPChainSink struct {
 	session *session.Session
 	config  *config.HTTPChainSinkOptions
 
-	node string
-	url  string
+	node    string
+	baseURL string // scheme://host:port, where /auth lives
+	url     string
 
 	tlsEnabled bool
 	mtls       bool
@@ -106,6 +107,8 @@ func NewHTTPChainSinkPlugin(
 		opts.IngestPath = DefaultHTTPChainSinkIngestPath
 	} else if !strings.HasPrefix(opts.IngestPath, "/") {
 		return nil, fmt.Errorf("ingest_path: must start with '/'")
+	} else if opts.IngestPath == chain.AuthPath {
+		return nil, fmt.Errorf("ingest_path: %s is reserved for authentication", chain.AuthPath)
 	}
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultHTTPChainSinkBufferSize
@@ -142,7 +145,7 @@ func NewHTTPChainSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleDialer)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleDialer, authz.HTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +185,7 @@ func NewHTTPChainSinkPlugin(
 		tlsEnabled: tlsCfg != nil,
 		mtls:       tlsCfg != nil && len(tlsCfg.Certificates) > 0,
 		auth:       authPolicy,
+		baseURL:    scheme + "://" + addr,
 		url:        scheme + "://" + addr + opts.IngestPath,
 		// A redirect would resend the batch, even from https to plaintext http
 		client: &http.Client{
@@ -214,6 +218,7 @@ func NewHTTPChainSinkPlugin(
 		"mtls", t.mtls,
 		"auth", authPolicy.Describe())
 	tlsx.LogWarnings(logger, "http_chain_sink", id, opts.TLS, false)
+	authPolicy.LogStartup(logger, "http_chain_sink", id, false)
 	return t, nil
 }
 
@@ -435,10 +440,15 @@ func (t *HTTPChainSink) post(ctx context.Context, body []byte) (transient bool, 
 	req.Header.Set("Content-Type", chain.ContentTypeNDJSON)
 	req.Header.Set(chain.HeaderProtocol, strconv.Itoa(chain.ProtocolVersion))
 	req.Header.Set(chain.HeaderNode, t.node)
-	// Future: Authorization header for auth
+	// Under scram: log in when no token is held; every failure is transient,
+	// so the batch waits under backoff rather than being dropped
+	if err := t.auth.Prepare(reqCtx, t.client, t.baseURL, req); err != nil {
+		return true, err
+	}
 
 	resp, err := t.client.Do(req)
 	if err != nil {
+		t.auth.Invalidate(0, err) // another server certificate: log in anew
 		return true, err
 	}
 	defer resp.Body.Close()
@@ -448,6 +458,9 @@ func (t *HTTPChainSink) post(ctx context.Context, body []byte) (transient bool, 
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return false, nil
+	case t.auth.Invalidate(resp.StatusCode, nil):
+		// Token expired or the source reloaded; the retry logs in again
+		return true, fmt.Errorf("status %s", resp.Status)
 	case resp.StatusCode == http.StatusRequestTimeout,
 		resp.StatusCode == http.StatusTooManyRequests,
 		resp.StatusCode >= 500:

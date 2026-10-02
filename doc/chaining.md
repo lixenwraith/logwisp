@@ -45,14 +45,15 @@ Chained entries carry a `node` label identifying where they originated.
 Relays preserve `node`, so a label survives any number of hops and identifies
 the original producer rather than the last relay.
 
-Under mTLS the source can instead bind the label to the sender's certificate,
-which overrides `trust_node` entirely:
+With an `auth` block the source can instead bind the label to the sender's
+authenticated identity — its certificate identity under `mtls`, its username
+under `scram` — which overrides `trust_node` entirely:
 
 | `auth.node_binding` | Connection label | Per-entry `node` field |
 |---------------------|------------------|------------------------|
 | `none` | `trust_node` governs | `trust_node` governs |
-| `assert` | Must equal the certificate identity, or the peer is rejected | `trust_node` governs |
-| `force` (default under `mtls`) | The certificate identity | Overwritten with the identity |
+| `assert` | Must equal the identity, or the peer is rejected | `trust_node` governs |
+| `force` (default with an `auth` block) | The identity | Overwritten with the identity |
 
 Pick `force` at an ingest boundary you do not trust — it is the only setting
 where a compromised edge cannot mislabel its entries, including through the
@@ -64,10 +65,11 @@ Formatters render node identity as a syslog-style prefix on the source field:
 `edge-01/app.log`. In JSON output the node therefore appears inside the source
 field, not as a separate top-level key.
 
-> `trust_node = true` with no `auth` block means any peer the CA vouches for can
+> `trust_node = true` with no `auth` block means any peer that can connect can
 > claim **any** node label, including one belonging to another host. On an
-> untrusted network set `auth.type = "mtls"` with `node_binding = "force"`;
-> `trust_node = false` is the fallback when certificates are not an option.
+> untrusted network set an `auth` block (`mtls` or `scram`) and keep
+> `node_binding = "force"`; `trust_node = false` is the fallback when neither is
+> an option.
 
 ## Wire Protocol
 
@@ -92,6 +94,24 @@ A persistent connection carrying newline-delimited JSON.
 Line size is bounded at 1 MiB. An oversized line is a protocol violation and
 terminates the connection, because the scanner cannot resynchronize afterwards.
 
+Under `auth.type = "scram"` the hello also carries the SCRAM client-first
+message, and three more lines precede the entries, each one JSON object of at
+most 4 KiB:
+
+```
+dialer   {"logwisp":1,"node":"edge-01","scram":{"username":"edge-01","client_nonce":"…"}}
+listener {"challenge":{"full_nonce":"…","salt":"…","argon_time":3,"argon_memory":65536,"argon_threads":4}}
+dialer   {"proof":{"full_nonce":"…","client_proof":"…"},"binding":"<base64 SHA-256 of the server certificate>"}
+listener {"final":{"server_signature":"…","username":"edge-01"}}
+```
+
+The whole exchange runs within `hello_timeout_ms`; the listener sends the final
+line only after node binding agrees, and a refusal at any step is one
+`{"error":"…"}` line before the connection closes. The field is additive, so
+the protocol version stays `1`: a listener without `scram` answers a hello
+carrying it with `{"error":"authentication not enabled"}`, while an older
+binary ignores it and the dialer gives up after 10 s.
+
 ### HTTP transport
 
 Batches of NDJSON delivered by `POST`, with the preamble expressed as headers.
@@ -101,10 +121,18 @@ Batches of NDJSON delivered by `POST`, with the preamble expressed as headers.
 | `X-Logwisp-Protocol` | request | Protocol version; must be `1` |
 | `X-Logwisp-Node` | request | Origin node label |
 | `Content-Type` | request | `application/x-ndjson` |
+| `Authorization` | request | `Bearer <token>`, under `scram` |
 | `X-Logwisp-Accepted` | response | Number of entries ingested |
 
 Responses: `204` on success, `400` for a bad protocol version or a malformed
-body, `413` when the body cap is exceeded, `405` for a non-`POST` method.
+body, `413` when the body cap is exceeded, `405` for a non-`POST` method, `401`
+for a missing or expired token, `403` for a refused certificate or node label.
+
+Under `scram` the sink first logs in with two `POST /auth` requests carrying the
+same JSON as the TCP lines: the hello (`200` and the challenge), then the proof
+(`200` with the final message, `token` and `expires_in` in seconds). A refusal is
+`{"error":"…"}`: `401` for a failed proof, `429` when throttled, `503` when the
+listener is busy, `400` or `413` for a malformed or oversized body.
 
 ### Entry encoding
 
@@ -127,7 +155,7 @@ in at ingest.
 | Transport | Guarantee | Failure behaviour |
 |-----------|-----------|-------------------|
 | `tcp_chain` | Per-line, held across reconnects | Retries with exponential backoff plus ±20 % jitter until written or shutdown; back-pressure appears upstream as `total_dropped_by_sink` |
-| `http_chain` | At-least-once per batch | Retries transport errors, `408`, `429`, `5xx`; drops on any other non-2xx (`dropped_batches`) |
+| `http_chain` | At-least-once per batch | Retries transport errors, `408`, `429`, `5xx` and, under `scram`, failed logins and `401`; drops on any other non-2xx (`dropped_batches`) |
 
 `http_chain` batches can be delivered twice when a successful request's response
 is lost. There is no de-duplication downstream; design your consumers to
@@ -218,6 +246,12 @@ port = 8080
 Entries arriving on this relay are labelled `edge-01` or `edge-02` because that
 is what their certificates say, regardless of the `node` each edge configured.
 `test/mtls-chain-test.sh` builds exactly this shape against a throwaway PKI.
+
+To use passwords instead of client certificates, replace both `auth` blocks:
+`type = "scram"` with `username` and `password_file` on the edge, and with a
+`credentials_file` on the relay. `client_auth` and the edge's certificate become
+optional, and entries are labelled with the username. See
+[Password Authentication](security.md#password-authentication-scram).
 
 ## Operational Notes
 

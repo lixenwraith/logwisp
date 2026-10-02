@@ -104,7 +104,8 @@ level = "debug"
 
 It emits a service summary and then walks each pipeline, flattening scalar
 statistics into log fields and recursing into flow, rate limiter, filter,
-source, and sink stats.
+source, and sink stats. Each plugin's `details` are spread into its line, so
+the auth and TLS rejection counters show up there.
 
 Disable with `status_reporter = false`.
 
@@ -142,8 +143,9 @@ curl -s http://127.0.0.1:8080/status | jq .
 }
 ```
 
-This endpoint is scoped to one sink, not to the whole process, and it is
-**unauthenticated**. Bind it to a trusted interface.
+This endpoint is scoped to one sink, not to the whole process, and without an
+`auth` block it is **unauthenticated**. Bind it to a trusted interface, or
+query it with a client certificate or a token from `logwisp auth token`.
 
 ### Metrics worth watching
 
@@ -280,20 +282,22 @@ environment or the command line at all.
 openssl x509 -in /etc/logwisp/tls/relay.crt -noout -enddate
 ```
 
-Certificates load at plugin construction, so rotation is: write the new files,
-then `kill -HUP`. Startup and every reload warn at WARN once a certificate is
-within 30 days of expiry; automate the check anyway.
+Certificates and SCRAM credentials files load at plugin construction, so
+rotation is: write the new files, then `kill -HUP`. Startup and every reload
+warn at WARN once a certificate is within 30 days of expiry; automate the check
+anyway. For passwords see
+[rotation and revocation](security.md#rollout-rotation-and-revocation).
 
 **Access review**
 
 With `tls` alone, any certificate signed by the configured `client_ca_file` is
 accepted, so "access review" means reviewing what your CA has issued. Add an
-`auth` block with an explicit `allow` list and the review becomes the config
-file itself: the identities listed there are the ones that can connect, and
-removing one plus a `SIGHUP` is the revocation path. Authorized identities are
-recorded in session metadata as `auth_identity`; rejections are counted in
-`auth_rejected` and logged at WARN. See
-[Security](security.md#the-auth-block).
+`auth` block with an explicit `allow` list, or `scram` with its credentials
+file, and the review becomes those files: the identities or users listed there
+are the ones that can connect, and removing one plus a `SIGHUP` is the
+revocation path. Authorized identities are recorded in session metadata as
+`auth_identity`; rejections are counted in `auth_rejected` and logged at WARN.
+See [Security](security.md#the-auth-block).
 
 **Secret leakage**
 

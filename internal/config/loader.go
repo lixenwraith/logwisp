@@ -65,6 +65,9 @@ func (m *Manager) Snapshot() (*Config, error) {
 	}
 	cfg := value.(*Config)
 	cfg.ConfigFile = m.path
+	if err := checkFileKeys(m.path); err != nil {
+		return nil, fmt.Errorf("config file %q: %w", m.path, err)
+	}
 	if err := ValidateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("validate configuration: %w", err)
 	}

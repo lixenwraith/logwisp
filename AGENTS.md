@@ -74,14 +74,23 @@ change touches.
   keys must fail at any depth. Set defaults on the options struct before the
   call; `TestEveryPluginRejectsUnknownKeys` covers every registered plugin.
 - Network security has two seams: `tlsx` (TLS configs, startup warnings) and
-  `authz` (every admission decision). Both return nil when disabled and every
-  method tolerates a nil receiver; keep call sites branch-free on config.
-- A plugin starts goroutines in `Start`, never in its constructor: a rejected
-  reload discards constructed plugins without calling `Stop`. Reload is the only
-  rotation path for certificates and secrets.
+  `authz`. Listeners admit only through `Admit`/`AuthorizeRequest`, dialers
+  through `Greet`/`Prepare`; `Authorize` refuses under scram, so a plugin gated
+  on it alone fails closed. Nil policies are valid: keep call sites branch-free.
+- A plugin starts goroutines in `Start`, never in its constructor (the SCRAM
+  server too: `Policy.Start`/`Close`): a rejected reload discards constructed
+  plugins without calling `Stop`. Reload is the only rotation path for
+  certificates, credentials and token keys.
 - The chain `Hello` is the protocol's extension point: optional fields only (old
   peers ignore unknown JSON); anything a peer must understand bumps
   `chain.ProtocolVersion`.
+- TLS tests over `net.Pipe` close the raw pipe ends: `tls.Conn.Close` waits up
+  to 5 s writing close_notify nobody reads. authz tests lower the dialer's
+  Argon2 floor in `TestMain`; elsewhere every login costs the 64 MiB default.
+- `internal/sink/http/web/` is embedded by the `http` sink. `scram.js` stays one
+  dependency-free ES module (sites copy it into their bundles) and the pages
+  stay free of inline script and style (their CSP); `node --test` there checks
+  it against Go's Argon2 and `auth`'s known answer.
 - Listeners and dialers are IPv4-only (`tcp4`). E2E scripts in `test/` need
   `bin/logwisp` and `--auto`, and each owns a port range and a gitignored run
   directory.

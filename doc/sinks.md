@@ -135,22 +135,37 @@ allow = ["viewer-01"]
 | `client_buffer_size` | int | `256` | Per-client send queue depth |
 | `write_timeout_ms` | int | `0` | Per-event write deadline; `0` = none |
 | `max_connections` | int | `0` | Concurrent stream cap; `0` = unlimited |
+| `login_page` | bool | `false` | Serve the browser login page at `/auth/login`; needs `auth.trusted_proxies` |
+| `viewer_page` | bool | `false` | Serve a minimal live viewer at `/auth/view`; needs `login_page` |
 | `tls` | table | — | Listener TLS; see [Security](security.md) |
-| `auth` | table | — | Client authorization; see [Security](security.md#the-auth-block) |
+| `auth` | table | — | Client authentication (`mtls` or `scram`); see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
 - Only `GET` is routed to either path; anything else gets `405`, `HEAD` on
   `stream_path` included — a stream is a body, and a client registered to have
   its body discarded never reads and never leaves.
-- With an `auth` block, one middleware gates **both** endpoints: an
-  unauthorized client gets `403` with no body detail, and the rejection is
-  logged at WARN and counted in `auth_rejected`. The authorized identity is
-  recorded in the client's session as `auth_method` / `auth_identity`.
+- With an `auth` block, one middleware gates **both** endpoints, with no body
+  detail in a refusal. Under `mtls` a refused certificate gets `403`. Under
+  `scram` a client logs in at `POST /auth`, which sits outside the gate (see
+  [`logwisp auth token`](cli.md#logwisp-auth)), and sends
+  `Authorization: Bearer <token>`; a missing, invalid or expired token gets
+  `401` with `WWW-Authenticate`, a certificate that does not match the token's
+  user `403`. A stream is checked when it connects and outlives its token; a
+  reload ends it. `/auth` and every path under it are reserved.
+- With `auth.trusted_proxies` (proxy mode) the sink sits behind a site's
+  TLS-terminating reverse proxy: only the proxies may connect, browsers log in
+  through `/auth/login` or the site's own copy of `/auth/scram.js`, and stream
+  and status also accept the `logwisp_session` cookie. See
+  [Browsers behind a TLS-terminating proxy](security.md#browsers-behind-a-tls-terminating-proxy).
+- Refusals are logged at WARN and counted in `auth_rejected`. The authorized
+  identity is recorded in the client's session as `auth_method` /
+  `auth_identity`.
 - On connect the client receives an `event: connected` frame carrying its
   client id, session id, sink instance id, endpoint paths, and buffer size.
-- Payloads are framed per the SSE spec, one `data:` line per newline in the
-  payload, so multi-line entries stream correctly.
+- Payloads are framed per the SSE spec, one `data:` line per line break in the
+  payload (CRLF, LF or a lone CR), so multi-line entries stream correctly and
+  no entry can inject an `event:`, `id:` or `retry:` field.
 - The server sets no `WriteTimeout` (that would kill long-lived streams);
   per-write deadlines come from `write_timeout_ms` via `http.ResponseController`
   and cover the connected frame, every payload, and the idle comment.
@@ -176,10 +191,15 @@ connection limit, write timeout, uptime, endpoint paths, and the
 `total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected`
 counters.
 
+**Statistics**: `dropped_writes`, `rejected_clients`, `auth`, `auth_allowed`,
+`auth_rejected`; under `scram` also `auth_users`, `auth_throttled`,
+`auth_busy`, `auth_binding_mismatch` and `auth_token_lifetime_ms`, and in
+proxy mode `auth_trusted_proxies`.
+
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read
-> it. With one, the header is omitted. Set `auth.type = "mtls"` (which requires `tls.client_auth`), bind to a
-> trusted interface, or put an authenticating reverse proxy in front.
+> it. With one, the header is omitted. Set an `auth` block, bind to a trusted
+> interface, or put an authenticating reverse proxy in front.
 
 ---
 
@@ -224,13 +244,17 @@ allow = ["viewer-01"]
 | `keep_alive_period_ms` | int | `30000` | Keep-alive idle period |
 | `max_connections` | int | `0` | Concurrent connection cap; `0` = unlimited |
 | `tls` | table | — | Listener TLS |
-| `auth` | table | — | Client authorization; see [Security](security.md#the-auth-block) |
+| `auth` | table | — | Client authentication (`mtls` or `scram`); see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
 - The sink is write-only. Each connection also runs a reader that discards
   inbound bytes; it exists to detect disconnects and to refresh session
-  activity when a client sends anything.
+  activity when a client sends anything. Under `scram` the client must log in
+  first: a hello carrying the login, then challenge, proof and final, all
+  within 10 s, after which the stream follows on the same connection. `nc` and
+  `openssl s_client` cannot do this; use
+  [`logwisp auth stream`](cli.md#logwisp-auth).
 - A write that misses its deadline means the kernel buffer stayed full for the
   whole timeout, so the client is disconnected immediately rather than retried.
 - A client whose send queue is full has that event dropped (`dropped_writes`)
@@ -241,6 +265,10 @@ allow = ["viewer-01"]
   registration, so an unauthorized client never enters the client map and never
   receives a broadcast. Its connection is closed, the rejection logged at WARN,
   and `rejected_conns` incremented.
+
+**Statistics**: `write_errors`, `dropped_writes`, `rejected_conns`,
+`tls_handshake_errors`, `auth`, `auth_allowed`, `auth_rejected`; under `scram`
+also `auth_users`, `auth_throttled`, `auth_busy` and `auth_binding_mismatch`.
 
 ---
 
@@ -285,15 +313,27 @@ key_file  = "/etc/logwisp/tls/client.key"
 | `keep_alive` | bool | `true` | Enable TCP keep-alive |
 | `keep_alive_period_ms` | int | `30000` | Keep-alive idle period |
 | `tls` | table | — | Dialer TLS; `cert_file`/`key_file` present a client identity |
-| `auth` | table | — | Server identity pinning; see [Security](security.md#dialer-side-pinning) |
+| `auth` | table | — | Server identity pinning (`mtls`) or a login (`scram`); see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
 - The connection is established lazily, so pipeline start does not depend on the
   downstream being up.
+- Under `scram` the hello carries the login, and the link counts as established
+  only once the server's final message proves it holds the user's verifier. The
+  exchange is bounded at 10 s and cut short by shutdown. A refusal —
+  `authentication failed`, `authentication not enabled`, `no challenge within
+  10s` — is logged at WARN as `Chain connect refused` on every attempt; other
+  connect failures log at DEBUG. Both retry under the normal backoff.
 - Each entry is serialized as one canonical JSON line. Delivery holds the line
   across reconnects until it is written or the process shuts down, with
-  exponential backoff plus ±20 % jitter between attempts.
+  exponential backoff plus ±20 % jitter between attempts. The delay keeps
+  growing until a link outlives `backoff_min_ms`, so a source that drops every
+  link right after accepting it is not retried in a tight loop.
+- A source never writes once a link is up, so the sink watches each link: a
+  line from the source is a refusal (a sink without `scram` facing a `scram`
+  source), logged at WARN as `Chain link refused`; EOF ends the link at once
+  instead of at the next failed write.
 - Because delivery blocks the sink's run loop during an outage, back-pressure
   surfaces as a full input queue and is counted by the pipeline as
   `total_dropped_by_sink`.
@@ -302,12 +342,12 @@ key_file  = "/etc/logwisp/tls/client.key"
 - Events arriving without a structured entry are wrapped from the formatted
   payload and counted in `synthesized`.
 
-An `auth` block on a dialer pins the server's identity: the policy runs as part
-of the handshake, so a server it rejects is treated like any other connect
-failure and retried under the normal backoff.
+Under `mtls` the policy pins the server's identity as part of the handshake, so
+a server it rejects is refused like a failed login above.
 
 **Statistics**: `target`, `node`, `tls`, `auth`, `connected`, `reconnects`,
-`write_errors`, `synthesized`.
+`write_errors`, `synthesized`; under `scram` also `auth_username`,
+`auth_failures` and `last_auth_error` (empty after a successful login).
 
 ---
 
@@ -354,7 +394,7 @@ key_file  = "/etc/logwisp/tls/client.key"
 | `backoff_min_ms` | int | `500` | Retry backoff floor |
 | `backoff_max_ms` | int | `30000` | Retry backoff ceiling |
 | `tls` | table | — | Dialer TLS; `cert_file`/`key_file` present a client identity |
-| `auth` | table | — | Server identity pinning; see [Security](security.md#dialer-side-pinning) |
+| `auth` | table | — | Server identity pinning (`mtls`) or a login (`scram`); see [Security](security.md#the-auth-block) |
 
 **Behaviour**
 
@@ -362,18 +402,28 @@ key_file  = "/etc/logwisp/tls/client.key"
   the first attempt succeeded but the response was lost.
 - Retries apply to transport errors, `408`, `429`, and `5xx`. Any other
   non-2xx response is treated as permanent, and the batch is dropped and counted
-  in `dropped_batches`.
+  in `dropped_batches`. A retry is logged at WARN, a dropped batch at ERROR.
+- Under `scram` the sink logs in at `POST /auth` whenever it holds no token and
+  sends `Authorization: Bearer <token>`. A failed login is retried like a
+  transport error, holding the batch. The token is renewed ahead of its expiry;
+  a `401` on ingest (the source reloaded) drops it and the retry logs in again.
+  A `403` is permanent. A
+  connection presenting a certificate other than the one the login was bound
+  to drops token and pin, and the retry logs in anew. A sink without `scram`
+  facing a `scram` source gets `401` and drops every batch.
 - Redirects are never followed; a `3xx` is permanent too. Following one would
   resend the batch wherever the response points, plaintext `http` included.
 - HTTP/2 is off by design; batched NDJSON POSTs gain nothing from it.
 - On shutdown a single best-effort flush of the pending batch is attempted.
 
 **Statistics**: `target`, `node`, `tls`, `auth`, `batches_sent`,
-`request_errors`, `dropped_batches`, `synthesized`.
+`request_errors`, `dropped_batches`, `synthesized`; under `scram` also
+`auth_username`, `auth_failures` and `last_auth_error`.
 
 ---
 
 ## Sink Statistics
 
 Every sink reports: `id`, `type`, `total_processed`, `active_connections`,
-`start_time`, `last_processed`, and a type-specific `details` map.
+`start_time`, `last_processed`, and a type-specific `details` map. The DEBUG
+status report spreads `details` into each plugin's line.

@@ -69,36 +69,8 @@ func statusReporter(service *service.Service, ctx context.Context) {
 
 // logStats recursively logs statistics with automatic field extraction
 func logStats(msg string, name string, stats any) {
-	// Build base log fields
-	fields := []any{
-		"msg", msg,
-		"name", name,
-	}
-
-	// Extract and flatten important metrics from stats map
 	if statsMap, ok := stats.(map[string]any); ok {
-		// Add scalar values directly
-		for key, value := range statsMap {
-			switch v := value.(type) {
-			case string, bool, int, int64, uint64, float64:
-				fields = append(fields, key, v)
-			case time.Time:
-				if !v.IsZero() {
-					fields = append(fields, key, v.Format(time.RFC3339))
-				}
-			case map[string]any:
-				// For nested maps, log summary counts if they contain arrays/maps
-				if count := getItemCount(v); count > 0 {
-					fields = append(fields, fmt.Sprintf("%s_count", key), count)
-				}
-			case []any, []map[string]any:
-				// For arrays, just log the count
-				fields = append(fields, fmt.Sprintf("%s_count", key), getArrayLength(value))
-			}
-		}
-
-		// Log the flattened stats
-		logger.Debug(fields...)
+		logger.Debug(statsFields(msg, name, statsMap)...)
 
 		// Recursively log nested structures with detail
 		for key, value := range statsMap {
@@ -120,6 +92,39 @@ func logStats(msg string, name string, stats any) {
 			}
 		}
 	}
+}
+
+// statsFields flattens one stats map into log fields. A plugin's details map
+// is spread into the line: its auth and TLS rejection counters live there.
+func statsFields(msg, name string, stats map[string]any) []any {
+	fields := []any{"msg", msg, "name", name}
+	add := func(key string, value any) {
+		switch v := value.(type) {
+		case string, bool, int, int64, uint64, float64:
+			fields = append(fields, key, v)
+		case time.Time:
+			if !v.IsZero() {
+				fields = append(fields, key, v.Format(time.RFC3339))
+			}
+		case map[string]any:
+			// For nested maps, log summary counts if they contain arrays/maps
+			if count := getItemCount(v); count > 0 {
+				fields = append(fields, fmt.Sprintf("%s_count", key), count)
+			}
+		case []any, []map[string]any:
+			fields = append(fields, fmt.Sprintf("%s_count", key), getArrayLength(value))
+		}
+	}
+	for key, value := range stats {
+		if details, ok := value.(map[string]any); ok && key == "details" {
+			for k, v := range details {
+				add(k, v)
+			}
+			continue
+		}
+		add(key, value)
+	}
+	return fields
 }
 
 // getItemCount returns the count of items in a map (for nested structures)

@@ -41,12 +41,12 @@ deadline" wherever the table says so.
 |--------|--------|---------|--------|
 | `tcp` sink | `write_timeout_ms` | `5000` | One write to one client; a miss disconnects that client |
 | `http` sink | `write_timeout_ms` | `0` (none) | One SSE event write |
-| `tcp_chain` source | `hello_timeout_ms` | `10000` | Reading the protocol preamble |
+| `tcp_chain` source | `hello_timeout_ms` | `10000` | Reading the protocol preamble, and under `scram` the whole login |
 | `tcp_chain` source | `read_timeout_ms` | `0` (none) | Idle time between entries |
 | `http_chain` source | `read_timeout_ms` | `30000` | Reading a whole request body |
 | `tcp_chain` sink | `dial_timeout_ms` | `5000` | TCP connect |
 | `tcp_chain` sink | `write_timeout_ms` | `5000` | One line write |
-| `http_chain` sink | `request_timeout_ms` | `10000` | Dial plus write plus response |
+| `http_chain` sink | `request_timeout_ms` | `10000` | Dial plus write plus response, and a SCRAM login when one is due |
 
 Fixed, non-configurable bounds:
 
@@ -56,6 +56,8 @@ Fixed, non-configurable bounds:
 | HTTP read-header timeout | 10 s | `http` sink, `http_chain` source |
 | HTTP server shutdown grace | 2 s | `http` sink, `http_chain` source |
 | Max single entry line | 1 MiB | Chain listeners |
+| SCRAM login | 10 s | `tcp` sink, chain sinks, `logwisp auth`, each `/auth` request |
+| SCRAM line or `/auth` body | 4 KiB | `scram` listeners and dialers |
 
 The `http` sink deliberately leaves the server's `WriteTimeout` unset, since it
 would terminate long-lived SSE streams; per-event deadlines come from
@@ -76,9 +78,10 @@ sink, and the `tcp_chain` source. `0` means unlimited.
 The `http_chain` source has no connection cap; it bounds work with
 `max_body_bytes` and `read_timeout_ms` instead.
 
-There is **no** per-IP limiting and no IP allow/deny list. `flow.rate_limit` is
-a pipeline-wide entry rate limit, not a network-level one — it cannot
-distinguish or throttle an individual peer.
+Apart from SCRAM logins, which are throttled per address (see
+[Security](security.md#throttling)), there is **no** per-IP limiting and no IP
+allow/deny list. `flow.rate_limit` is a pipeline-wide entry rate limit, not a
+network-level one — it cannot distinguish or throttle an individual peer.
 
 ## Keep-Alive
 
@@ -141,10 +144,12 @@ TLS is enabled. Only `GET` is routed to the stream and status paths. Each event
 is framed as one `data:` line per newline in the payload, so multi-line entries
 stream intact. Response headers set `Cache-Control: no-cache`,
 `X-Accel-Buffering: no`, and, without an auth policy,
-`Access-Control-Allow-Origin: *`.
+`Access-Control-Allow-Origin: *`. Under `scram`, `POST /auth` serves the login
+and both paths take `Authorization: Bearer <token>`.
 
 **TCP sink** — raw payload bytes, no framing added by the sink. Whether entries
-are newline-delimited depends on the formatter.
+are newline-delimited depends on the formatter. Under `scram` the client's hello
+and login lines come first, as on a [chain link](chaining.md#tcp-transport).
 
 **Chain transports** — see [Chaining](chaining.md) for the hello preamble,
 headers, and entry encoding.
@@ -183,25 +188,78 @@ headers, and entry encoding.
 - `auth: node_binding "assert": declared node "..." does not match identity` —
   the sender's `node` option and its certificate disagree. Fix one, or use
   `node_binding = "force"` to let the certificate win silently.
-- On a dialer, the same message inside `Chain connect failed` means the
-  *server* was refused: its certificate identity is not in the sink's
+- On a `tcp_chain` sink the same message inside `Chain connect refused` means
+  the *server* was refused: its certificate identity is not in the sink's
   `auth.allow`.
 - Rejections appear as WARN and increment `auth_rejected`.
 
+**SCRAM login fails**
+- `authentication failed` — the dialer is not told why, by design. The
+  listener's WARN line (`Connection rejected by auth policy` on TCP,
+  `Login rejected` on HTTP) is: `invalid credentials` for a wrong password, an
+  unknown user, or one removed or rotated on the listener (compare the
+  `password_file` with the last `add-user`, and check the listener got
+  `SIGHUP`); `certificate cn "…" does not match user "…"` for the `identity`
+  binding.
+- `the client saw another server certificate: TLS interception or a terminating
+  proxy` in the listener's log, with `auth_binding_mismatch` rising — something
+  between the peers terminates TLS. Pass TLS through to LogWisp; the login
+  cannot work otherwise, except on an `http` sink in proxy mode
+  (`auth.trusted_proxies`), where `the client bound its proof to the proxy's
+  certificate` means a client that needs `logwisp auth token -unbound`, and
+  `the client sent an unbound proof` the reverse. On an `http_chain` sink,
+  `server certificate differs from the one the SCRAM login was bound to` means
+  the certificate changed after the login: a rotation (the retry binds anew),
+  several backends, or interception.
+- `403` from an `http` sink in proxy mode, with `not a trusted proxy` or
+  `X-Forwarded-Proto` in its WARN line — the request did not come from a listed
+  proxy, or the proxy did not forward `X-Forwarded-Proto: https` and
+  `X-Forwarded-For`.
+- `too many attempts` — the address failed or abandoned logins faster than one
+  per second beyond a burst of 10, or has 4 unfinished; it clears within seconds
+  once the failing peer stops. Peers behind one NAT share the budget. `busy` —
+  4,096 logins in flight, or the listener is stopping.
+- `authentication not enabled` — the dialer has `scram`; the listener's
+  `auth.type` is `none` or `mtls`.
+- `no challenge within 10s (older logwisp, or not a scram listener)` — the
+  server read the hello and said nothing. Over HTTP the same case reads
+  `no auth endpoint at …/auth`.
+- `Argon2 parameters below client minimum` — the credentials file holds a
+  cheaper Argon2 profile than the defaults; recreate it with `logwisp auth`.
+- `peer offered no credentials` (`authentication required` on the wire) in the
+  listener's log — a peer without `scram` reached a `scram` listener; a client
+  that sends nothing logs `read hello: … i/o timeout` after 10 s instead. A
+  `tcp_chain` sink without `scram` logs WARN `Chain link refused` with that
+  reason and retries under growing backoff; what it wrote before reading the
+  refusal is lost. An `http_chain` sink without `scram` gets `401` and drops
+  every batch.
+
+**`401` on HTTP under `scram`**
+- An `http_chain` sink renews its token before it expires, so a `401` means
+  the listener reloaded (every reload revokes all tokens); the retry logs in
+  again.
+- Continuous `401` means the token never sticks: several LogWisp processes
+  behind one address, a proxy that strips `Authorization`, or a
+  `token_lifetime_ms` shorter than a request takes. A token used with `curl`
+  dies with every listener reload.
+- `403` is not the token: it is the `identity` binding, node binding or, in
+  proxy mode, the proxy gate.
+
 **Entries not arriving over a chain link**
 - Check the sink's `connected` statistic and its `reconnects` count.
-- Check the source's `auth_rejected` — an allow-list miss looks exactly like a
-  network fault from the sender's side.
+- Check the source's `auth_rejected` — an allow-list miss or a failed login
+  looks exactly like a network fault from the sender's side — and the sink's
+  `last_auth_error`.
 - Check the source's `parse_errors` — a version skew shows up here.
 - On `http_chain`, remember entries wait up to `flush_interval_ms` before a
   batch is sent.
 
 **Entries arriving under an unexpected node label**
-- `auth.node_binding` defaults to `force` when `auth.type = "mtls"`, which
-  relabels every entry with the sender's certificate identity. If a dashboard
-  suddenly shows a different label, that is why. Use `node_binding = "assert"`
-  to keep upstream origin labels on relay-to-relay hops, or `"none"` to leave
-  `trust_node` in charge.
+- `auth.node_binding` defaults to `force` with any `auth` block, which
+  relabels every entry with the sender's certificate identity or username. If
+  a dashboard suddenly shows a different label, that is why. Use
+  `node_binding = "assert"` to keep upstream origin labels on relay-to-relay
+  hops, or `"none"` to leave `trust_node` in charge.
 
 **Clients connect but see nothing**
 - The pipeline may be filtering everything out; check `flow.filters` stats.

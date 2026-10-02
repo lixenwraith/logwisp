@@ -228,3 +228,35 @@ port = 9000
 		}
 	}
 }
+
+// A misspelled table path above a plugin's config drops that whole table, so
+// the file itself is checked too; only config_file is tolerated, as documented.
+func TestConfigFileRejectsUnknownKeys(t *testing.T) {
+	isolateConfig(t)
+	for key, body := range map[string]string{
+		"pipelines[0].plugin_sinks[0].confg": "[pipelines.plugin_sinks.confg.tls]\nenabled = true",
+		"logging.levle":                      "[logging]\nlevle = \"debug\"",
+	} {
+		testutil.WriteFile(t, "typo.toml", `config_file = "ignored.toml"
+[[pipelines]]
+name = "typo"
+[[pipelines.plugin_sources]]
+id = "in"
+type = "null"
+[[pipelines.plugin_sinks]]
+id = "out"
+type = "tcp"
+[pipelines.plugin_sinks.config]
+port = 9000
+`+body+"\n")
+		m, err := Load([]string{"-c", "typo.toml"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = m.Snapshot()
+		m.Close()
+		if err == nil || !strings.Contains(err.Error(), `"`+key+`"`) {
+			t.Errorf("unknown key %s: err = %v", key, err)
+		}
+	}
+}

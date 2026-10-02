@@ -7,6 +7,7 @@ const (
 	// Network capabilities
 	CapNetLimit Capability = "netlimit"
 	CapTLS      Capability = "tls"
+	CapProxyTLS Capability = "proxy_tls" // TLS ends at a trusted reverse proxy
 	CapAuth     Capability = "auth"
 
 	// Session capabilities
