@@ -289,10 +289,12 @@ $ lw \-\-source 'file,directory=/var/log/app,pattern=*.log' \e
     \-\-sink http,host=127.0.0.1,port=8080
 .Ed
 .Pp
-Add a user, letting
+Create a credentials file the service account can read, add a user,
+letting
 .Nm
 generate the password into a file, then reload the server:
 .Bd -literal -offset indent
+# install \-m 0600 \-o logwisp \-g logwisp /dev/null /etc/logwisp/users.toml
 # lw auth add-user \-credentials /etc/logwisp/users.toml \e
     \-user alice \-password-file /root/alice.pass
 # systemctl reload logwisp
