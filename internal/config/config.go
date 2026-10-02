@@ -172,15 +172,6 @@ type PluginSourceConfig struct {
 	ConfigFile string         `toml:"config_file,omitempty"` // TODO: support for include/source mechanism for nested config
 }
 
-// // SourceConfig is a polymorphic struct representing a single data source
-// type SourceConfig struct {
-// 	Type string `toml:"type"`
-//
-// 	// Polymorphic - only one populated based on type
-// 	File    *FileSourceOptions    `toml:"file,omitempty"`
-// 	Console *ConsoleSourceOptions `toml:"console,omitempty"`
-// }
-
 // NullSourceOptions defines settings for a null source (no configuration needed)
 type NullSourceOptions struct{}
 
@@ -219,7 +210,6 @@ type TCPChainSourceOptions struct {
 	HelloTimeoutMS int64        `toml:"hello_timeout_ms"` // preamble deadline
 	TrustNode      bool         `toml:"trust_node"`       // false: force node label from remote address
 	Auth           *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // HTTPChainSourceOptions defines settings for a stdlib HTTP listener ingesting
@@ -234,7 +224,6 @@ type HTTPChainSourceOptions struct {
 	ReadTimeoutMS int64        `toml:"read_timeout_ms"` // full request read deadline
 	TrustNode     bool         `toml:"trust_node"`      // false: force node label from remote address
 	Auth          *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // --- Sink Options ---
@@ -246,15 +235,6 @@ type PluginSinkConfig struct {
 	Config     map[string]any `toml:"config"`
 	ConfigFile string         `toml:"config_file,omitempty"` // TODO: support for include/source mechanism for nested config
 }
-
-// // SinkConfig is a polymorphic struct representing a single data sink
-// type SinkConfig struct {
-// 	Type string `toml:"type"`
-//
-// 	// Polymorphic - only one populated based on type
-// 	Console *ConsoleSinkOptions `toml:"console,omitempty"`
-// 	File    *FileSinkOptions    `toml:"file,omitempty"`
-// }
 
 // NullSinkOptions defines settings for a null sink (no configuration needed)
 type NullSinkOptions struct{}
@@ -289,7 +269,6 @@ type TCPSinkOptions struct {
 	KeepAlivePeriodMS int64        `toml:"keep_alive_period_ms"`
 	MaxConnections    int64        `toml:"max_connections"` // 0 = unlimited
 	Auth              *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // HTTPSinkOptions defines settings for an HTTP SSE server sink
@@ -303,8 +282,9 @@ type HTTPSinkOptions struct {
 	ClientBufferSize int64        `toml:"client_buffer_size"` // per-client send queue
 	WriteTimeoutMS   int64        `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
 	MaxConnections   int64        `toml:"max_connections"`    // 0 = unlimited
+	LoginPage        bool         `toml:"login_page"`         // GET /auth/login, needs auth.trusted_proxies
+	ViewerPage       bool         `toml:"viewer_page"`        // GET /auth/view, needs login_page
 	Auth             *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // TCPChainSinkOptions defines settings for a stdlib TCP client forwarding
@@ -322,7 +302,6 @@ type TCPChainSinkOptions struct {
 	KeepAlivePeriodMS int64        `toml:"keep_alive_period_ms"`
 	KeepAlive         bool         `toml:"keep_alive"`
 	Auth              *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // HTTPChainSinkOptions defines settings for a stdlib HTTP client posting
@@ -341,49 +320,53 @@ type HTTPChainSinkOptions struct {
 	BackoffMinMS     int64        `toml:"backoff_min_ms"`
 	BackoffMaxMS     int64        `toml:"backoff_max_ms"`
 	Auth             *AuthOptions `toml:"auth"`
-	// Future: password auth block
 }
 
 // --- Auth Options ---
 
-// AuthOptions defines certificate-based authorization for network plugins.
-// It sits beside `tls` rather than inside it: TLS answers "is this channel
-// private and does the peer chain to a CA", auth answers "may *this* peer do
-// *this*". One shape serves both roles:
-//   - Listeners (tcp/http sinks, tcp_chain/http_chain sources) authorize the
-//     peer's client certificate; type "mtls" requires tls.client_auth.
-//   - Dialers (tcp_chain/http_chain sinks) pin the server's identity beyond
-//     hostname verification.
+// AuthOptions selects how a network plugin authenticates its peer. It sits
+// beside `tls`: TLS answers "is this channel private", auth answers "may this
+// peer do this". Listeners verify (mtls: certificate identity; scram: password
+// via credentials_file); dialers prove themselves (scram) or pin the server
+// (mtls). Validation is per role in internal/authz.
 type AuthOptions struct {
-	// Method: "none" (default, preserves pre-auth behavior) | "mtls"
+	// Method: "none" (default) | "mtls" | "scram"
 	Type string `toml:"type"`
 
-	// Certificate field carrying the identity:
-	// "cn" (default) | "san_dns" | "san_uri" | "san_email"
+	// Certificate field carrying the identity: "cn" (default) | "san_dns" |
+	// "san_uri" | "san_email". Under scram it binds the client certificate to
+	// the user: the field must equal the SCRAM username.
 	Identity string `toml:"identity"`
 
-	// Exact identity matches. Empty Allow *and* AllowPatterns means "any
-	// identity the CA vouches for" - today's behavior, but with the identity
-	// recorded and node binding available.
-	Allow []string `toml:"allow"`
-
-	// RE2 patterns matched against the identity; anchor them yourself
+	// mtls only: exact identities and RE2 patterns (anchor them yourself).
+	// Both empty admits any identity the CA vouches for.
+	Allow         []string `toml:"allow"`
 	AllowPatterns []string `toml:"allow_patterns"`
 
-	// Chain sources only: "none" | "assert" | "force" (default "force" when
-	// Type is "mtls"). Overrides trust_node.
+	// Chain sources only: "none" | "assert" | "force" (default "force").
+	// Overrides trust_node.
 	NodeBinding string `toml:"node_binding"`
+
+	// scram listeners: verifier file written by `logwisp auth add-user`, and
+	// the bearer token lifetime on HTTP listeners (default 15 minutes)
+	CredentialsFile string `toml:"credentials_file"`
+	TokenLifetimeMS int64  `toml:"token_lifetime_ms"`
+
+	// scram http sink: addresses or CIDRs of the reverse proxies that end the
+	// browsers' TLS; logins are then unbound and sessions may be cookies
+	TrustedProxies []string `toml:"trusted_proxies"`
+
+	// scram dialers: the identity presented and the file holding its password
+	Username     string `toml:"username"`
+	PasswordFile string `toml:"password_file"`
 }
 
 // --- TLS Options ---
 
-// TLSOptions defines transport security for network sources and sinks.
-// One shape serves both roles so the config block is uniform:
-//   - Listeners (tcp/http sinks, tcp_chain/http_chain sources) use
-//     cert_file/key_file as server identity; client_auth/client_ca_file
-//     require and verify peer certificates (mTLS).
-//   - Dialers (tcp_chain/http_chain sinks) use ca_file/server_name to verify
-//     the server; cert_file/key_file present a client identity (mTLS).
+// TLSOptions is one shape for both roles. Listeners present cert_file and
+// key_file and verify clients with client_auth and client_ca_file; dialers
+// verify the server with ca_file and server_name and may present
+// cert_file and key_file.
 type TLSOptions struct {
 	Enabled bool `toml:"enabled"`
 

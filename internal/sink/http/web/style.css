@@ -1,0 +1,117 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --fg: #1d2330;
+  --muted: #5b6475;
+  --panel: #ffffff;
+  --line: #d6dae2;
+  --accent: #2f6fdb;
+  font: 15px/1.45 system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171d;
+    --fg: #e3e7ef;
+    --muted: #9aa3b5;
+    --panel: #1c2028;
+    --line: #2e3440;
+    --accent: #6ea0ff;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.45rem 1rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card {
+  max-width: 22rem;
+  margin: 12vh auto 0;
+  padding: 1.5rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+form {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1.2rem;
+}
+
+label {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+}
+
+input {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+progress {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+#status {
+  min-height: 1.4em;
+  margin: 0.8rem 0 0;
+  color: var(--muted);
+}
+
+.viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.viewer header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+#state {
+  flex: 1;
+  color: var(--muted);
+}
+
+#log {
+  flex: 1;
+  overflow: auto;
+  padding: 0.5rem 1rem;
+  font: 13px/1.4 ui-monospace, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

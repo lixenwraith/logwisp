@@ -15,3 +15,5 @@ catalog.txt
 combined.txt
 test/run/
 test/run-mtls/
+test/run-scram/
+test/run-proxy/

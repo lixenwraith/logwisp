@@ -44,12 +44,16 @@ func WriteFile(t testing.TB, path, contents string) {
 // certificate, written as PEM files for plugins that load TLS from disk.
 type PKI struct {
 	CA, ServerCert, ServerKey, ClientCert, ClientKey string
+
+	dir    string
+	ca     *x509.Certificate
+	caKey  *ecdsa.PrivateKey
+	serial int64
 }
 
 // NewPKI issues the PKI into a test directory; clientCN names the client.
-func NewPKI(t testing.TB, clientCN string) PKI {
+func NewPKI(t testing.TB, clientCN string) *PKI {
 	t.Helper()
-	dir := t.TempDir()
 	now := time.Now()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -68,30 +72,41 @@ func NewPKI(t testing.TB, clientCN string) PKI {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pki := PKI{CA: writePEM(t, dir, "ca.crt", "CERTIFICATE", caDER)}
-	issue := func(name, cn string, serial int64, usage x509.ExtKeyUsage, ips []net.IP) (string, string) {
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: cn},
-			NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
-			KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}, IPAddresses: ips,
-		}
-		der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return writePEM(t, dir, name+".crt", "CERTIFICATE", der), writePEM(t, dir, name+".key", "PRIVATE KEY", keyDER)
-	}
-	pki.ServerCert, pki.ServerKey = issue("server", "relay.internal", 2, x509.ExtKeyUsageServerAuth, []net.IP{net.IPv4(127, 0, 0, 1)})
-	pki.ClientCert, pki.ClientKey = issue("client", clientCN, 3, x509.ExtKeyUsageClientAuth, nil)
+	pki := &PKI{dir: t.TempDir(), ca: ca, caKey: caKey, serial: 1}
+	pki.CA = writePEM(t, pki.dir, "ca.crt", "CERTIFICATE", caDER)
+	pki.ServerCert, pki.ServerKey = pki.Leaf(t, "server", "relay.internal", false)
+	pki.ClientCert, pki.ClientKey = pki.Leaf(t, "client", clientCN, true)
 	return pki
+}
+
+// Leaf issues another certificate from the same CA: a client certificate, or
+// a server certificate valid for 127.0.0.1.
+func (p *PKI) Leaf(t testing.TB, name, cn string, client bool) (certFile, keyFile string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.serial++
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(p.serial), Subject: pkix.Name{CommonName: cn},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	if client {
+		tmpl.ExtKeyUsage, tmpl.IPAddresses = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, nil
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, p.ca, &key.PublicKey, p.caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writePEM(t, p.dir, name+".crt", "CERTIFICATE", der), writePEM(t, p.dir, name+".key", "PRIVATE KEY", keyDER)
 }
 
 func writePEM(t testing.TB, dir, name, blockType string, der []byte) string {

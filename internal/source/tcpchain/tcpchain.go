@@ -96,7 +96,7 @@ func NewTCPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleChainListener)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleChainListener, authz.TCP)
 	if err != nil {
 		return nil, err
 	}
@@ -149,11 +149,15 @@ func (s *TCPChainSource) Subscribe() <-chan core.LogEntry {
 
 // Start binds the listener and begins accepting connections
 func (s *TCPChainSource) Start() error {
+	if err := s.auth.Start(); err != nil {
+		return err
+	}
 	addr := net.JoinHostPort(s.config.Host, strconv.FormatInt(s.config.Port, 10))
 	// IPv4-only. TLS-wrapped when configured; handshake runs explicitly in
 	// handleConn under tlsx.HandshakeTimeout, pre-hello.
 	ln, err := net.Listen("tcp4", addr)
 	if err != nil {
+		s.auth.Close()
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
 	if s.tlsConfig != nil {
@@ -189,6 +193,7 @@ func (s *TCPChainSource) Stop() {
 	s.mu.Unlock()
 
 	s.wg.Wait()
+	s.auth.Close()
 
 	s.mu.Lock()
 	for _, ch := range s.subscribers {
@@ -292,56 +297,51 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		tlsState = &cs
 	}
 
-	// Authorize before a preamble is parsed on an unauthorized peer's behalf
-	ident, err := s.auth.Authorize(tlsState)
+	// Certificates are checked before the hello is read; under scram the hello
+	// carries the exchange. Nothing is acknowledged until node binding agrees.
+	adm, err := s.auth.Admit(conn, tlsState, true, time.Duration(s.config.HelloTimeoutMS)*time.Millisecond)
 	if err != nil {
-		s.rejectedConns.Add(1)
-		s.logger.Warn("msg", "Connection rejected by auth policy",
-			"component", "tcp_chain_source",
-			"instance_id", s.id,
-			"remote_addr", remote,
-			"error", err)
-		return // deferred cleanup closes conn
-	}
-
-	scanner := bufio.NewScanner(conn)
-	// Oversized line (> MaxLogEntryBytes) is a protocol violation; scanner is
-	// unrecoverable after ErrTooLong, connection terminates
-	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
-
-	// Hello preamble
-	conn.SetReadDeadline(time.Now().Add(time.Duration(s.config.HelloTimeoutMS) * time.Millisecond))
-	if !scanner.Scan() {
-		s.logger.Warn("msg", "Connection closed before hello",
-			"component", "tcp_chain_source",
-			"remote_addr", remote,
-			"error", scanner.Err())
+		if errors.Is(err, authz.ErrRefused) {
+			s.rejectedConns.Add(1)
+			s.logger.Warn("msg", "Connection rejected by auth policy",
+				"component", "tcp_chain_source",
+				"instance_id", s.id,
+				"remote_addr", remote,
+				"error", err)
+		} else {
+			s.logger.Warn("msg", "Rejected chain connection",
+				"component", "tcp_chain_source",
+				"remote_addr", remote,
+				"error", err)
+		}
 		return
 	}
-	hello, err := chain.DecodeHello(scanner.Bytes())
-	if err != nil {
-		s.logger.Warn("msg", "Rejected chain connection",
-			"component", "tcp_chain_source",
-			"remote_addr", remote,
-			"error", err)
-		return
-	}
+	ident := adm.Identity
 
 	fallbackNode := remote
 	if host, _, splitErr := net.SplitHostPort(remote); splitErr == nil {
 		fallbackNode = host
 	}
-	connNode, err := s.auth.ResolveNode(hello.Node, fallbackNode, s.config.TrustNode, ident)
+	connNode, err := s.auth.ResolveNode(adm.Hello.Node, fallbackNode, s.config.TrustNode, ident)
 	if err != nil {
 		s.rejectedConns.Add(1)
+		adm.Reject("node label rejected")
 		s.logger.Warn("msg", "Connection rejected by node binding",
 			"component", "tcp_chain_source",
 			"instance_id", s.id,
 			"remote_addr", remote,
-			"declared_node", hello.Node,
+			"declared_node", adm.Hello.Node,
 			"error", err)
 		return
 	}
+	if err := adm.Accept(); err != nil {
+		return
+	}
+	scanner := bufio.NewScanner(adm.Reader)
+	// Oversized line (> MaxLogEntryBytes) is a protocol violation; scanner is
+	// unrecoverable after ErrTooLong, connection terminates
+	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
+
 	// force relabels every entry, so an edge cannot smuggle a foreign origin
 	// through the per-entry node field either
 	trustEntryNode := s.auth.TrustsEntryNode(s.config.TrustNode)

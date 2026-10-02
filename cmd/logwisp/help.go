@@ -14,6 +14,10 @@ Usage:
   logwisp help | -h | --help
   logwisp --version
 
+Subcommands:
+  logwisp auth <command>        SCRAM credentials files, bearer tokens and tcp
+                                sink viewing; logwisp auth -h lists commands
+
 Scalar configuration keys are settable as flags using their TOML paths:
   --<path>=<value>              e.g. --logging.level=debug
 
@@ -62,7 +66,6 @@ func handleHelp(args []string) {
 	}
 }
 
-// printHelp writes usage to stdout and exits with success
 func printHelp() {
 	fmt.Printf(helpText, version.Short())
 	os.Exit(0)

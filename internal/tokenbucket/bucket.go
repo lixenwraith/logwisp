@@ -43,6 +43,14 @@ func (tb *TokenBucket) AllowN(n float64) bool {
 	return false
 }
 
+// Refund returns n tokens, never beyond capacity, for an attempt that turned
+// out not to count against the limit
+func (tb *TokenBucket) Refund(n float64) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	tb.tokens = min(tb.capacity, tb.tokens+n)
+}
+
 // Tokens returns the current number of available tokens
 func (tb *TokenBucket) Tokens() float64 {
 	tb.mu.Lock()

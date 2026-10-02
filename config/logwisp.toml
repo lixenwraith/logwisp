@@ -6,12 +6,12 @@
 ### Commented values are the built-in defaults unless marked "example".
 ### Uncommenting a default is a no-op.
 ###
-### NOTE: password authentication (planned: doc/scram-auth-plan.md), network
-### access control (ACL), http/tcp ingest sources, and http_client/tcp_client
-### sinks are not available in this version. TLS and mTLS ARE available on
-### every network source and sink; see the [...tls] blocks below, and the
-### [...auth] blocks to authorize peers by certificate identity.
-### Unknown keys in any plugin config are rejected at startup.
+### NOTE: network access control (ACL), http/tcp ingest sources, and
+### http_client/tcp_client sinks are not available in this version. TLS is
+### available on every network source and sink (the [...tls] blocks below), and
+### the [...auth] blocks authenticate peers by certificate (mtls) or password
+### (scram; credentials via `logwisp auth`). Unknown keys anywhere in this file
+### or in any plugin config are rejected at startup.
 ###
 ### Environment overrides use the LOGWISP_ prefix
 ### (LOGWISP_QUIET, LOGWISP_LOGGING_LEVEL, ...). Bare names are ignored.
@@ -115,25 +115,36 @@ name = "default"
 ###============================================================================
 ### AUTH (shared shape; sits beside [...tls] on every network source and sink)
 ###
+### Both methods REQUIRE tls.enabled; dialers forbid tls.insecure_skip_verify.
+### On the http sink the block gates stream_path AND status_path.
 ### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
-###   authorize the client certificate. type = "mtls" REQUIRES tls.enabled and
-###   tls.client_auth. On the http sink it gates stream_path AND status_path.
-### Chain sources additionally bind the node label to the identity.
+###   mtls  authorizes the client certificate; REQUIRES tls.client_auth.
+###   scram admits the users in credentials_file (`logwisp auth add-user`).
 ### Dialers    (tcp_chain/http_chain sinks):
-###   pin the server identity. type = "mtls" REQUIRES tls.enabled and forbids
-###   tls.insecure_skip_verify.
+###   mtls  pins the server identity.
+###   scram logs in as username with the password in password_file.
+### Chain sources additionally bind the node label to the identity or username.
+### A block naming peers or credentials with type = "none" is refused.
 ###
-### type = "none"        none | mtls
-### identity = "cn"      cn | san_dns | san_uri | san_email
-### allow = []           Exact identities. Empty allow AND allow_patterns
+### type = "none"        none | mtls | scram
+### identity = "cn"      cn | san_dns | san_uri | san_email. Unset under scram;
+###                      set on a scram listener (needs tls.client_auth), the
+###                      certificate's field must equal the username.
+### allow = []           mtls: exact identities. Empty allow AND allow_patterns
 ###                      admits any identity the CA vouches for (logged WARN).
-### allow_patterns = []  RE2 patterns; anchor them yourself (^...$)
-### node_binding = ""    Chain sources only, default "force" under mtls:
+### allow_patterns = []  mtls: RE2 patterns; anchor them yourself (^...$)
+### node_binding = ""    Chain sources only, default "force" with mtls or scram:
 ###                        none   - trust_node governs, as before
 ###                        assert - declared label must equal the identity;
 ###                                 per-entry node labels still follow trust_node
 ###                        force  - label AND every entry take the identity
 ###                      Overrides trust_node. See doc/security.md.
+### credentials_file = ""   scram listeners: verifiers; read at (re)load, not watched
+### token_lifetime_ms = 0   scram, http sink and http_chain source: 10 s to 24 h, 0 = 15 minutes
+### username = ""           scram dialers
+### password_file = ""      scram dialers: one trailing line break is trimmed
+### trusted_proxies = []    scram http sink: TLS-terminating reverse proxies
+###                         (addresses or CIDRs); browsers log in through them
 ###============================================================================
 
 ###============================================================================
@@ -195,12 +206,13 @@ from = "end"                            # "end" or "start" of a newly discovered
 # client_auth = true
 # client_ca_file = "/etc/logwisp/tls/client-ca.crt"
 # min_version = "1.3"
-# [pipelines.plugin_sources.config.auth]  # authorize senders by certificate
-# type = "none"                         # none | mtls; mtls requires client_auth
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
-# allow = []                            # exact identities; empty = any the CA issued
-# allow_patterns = []                   # RE2, anchor them yourself
+# [pipelines.plugin_sources.config.auth]  # authenticate senders
+# type = "none"                         # none | mtls | scram; mtls requires client_auth
+# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
+# allow = []                            # mtls: exact identities; empty = any the CA issued
+# allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
+# credentials_file = ""                 # scram: written by `logwisp auth add-user`
 
 ## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
 # [[pipelines.plugin_sources]]
@@ -220,12 +232,14 @@ from = "end"                            # "end" or "start" of a newly discovered
 # key_file = "/etc/logwisp/tls/server.key"
 # client_auth = true
 # client_ca_file = "/etc/logwisp/tls/client-ca.crt"
-# [pipelines.plugin_sources.config.auth]  # authorize senders by certificate
-# type = "none"                         # none | mtls; mtls requires client_auth
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
-# allow = []                            # exact identities; empty = any the CA issued
-# allow_patterns = []                   # RE2, anchor them yourself
+# [pipelines.plugin_sources.config.auth]  # authenticate senders
+# type = "none"                         # none | mtls | scram; mtls requires client_auth
+# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
+# allow = []                            # mtls: exact identities; empty = any the CA issued
+# allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
+# credentials_file = ""                 # scram: written by `logwisp auth add-user`
+# token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 
 ###============================================================================
 ### Sinks (1+ required, fan-out)
@@ -258,7 +272,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # flush_interval_ms = 100
 
 ## HTTP sink (SSE streaming server + JSON status endpoint; IPv4 clients only)
-## Both endpoints are UNAUTHENTICATED and the stream sends
+## Without an auth block both endpoints are UNAUTHENTICATED and the stream sends
 ## Access-Control-Allow-Origin: *. Bind to a trusted interface.
 # [[pipelines.plugin_sinks]]
 # id = "http_out"
@@ -272,6 +286,8 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # client_buffer_size = 256              # Per-client send queue
 # write_timeout_ms = 0                  # Per-event deadline, 0 = none
 # max_connections = 0                   # 0 = unlimited
+# login_page = false                    # GET /auth/login; needs auth.trusted_proxies
+# viewer_page = false                   # GET /auth/view; needs login_page
 # [pipelines.plugin_sinks.config.tls]
 # enabled = true                        # example
 # cert_file = "/etc/logwisp/tls/server.crt"
@@ -279,10 +295,13 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # client_auth = false
 # client_ca_file = ""
 # [pipelines.plugin_sinks.config.auth]  # gates BOTH stream_path and status_path
-# type = "none"                         # none | mtls; mtls requires client_auth
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
-# allow = []                            # exact identities; empty = any the CA issued
-# allow_patterns = []                   # RE2, anchor them yourself
+# type = "none"                         # none | mtls | scram; browsers: mtls, or scram behind a proxy
+# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
+# allow = []                            # mtls: exact identities; empty = any the CA issued
+# allow_patterns = []                   # mtls: RE2, anchor them yourself
+# credentials_file = ""                 # scram: log in with `logwisp auth token`
+# token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
+# trusted_proxies = []                  # scram: proxies ending the browsers' TLS; tls may then be off
 
 ## TCP sink (streaming server, IPv4 clients only)
 # [[pipelines.plugin_sinks]]
@@ -303,11 +322,12 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # key_file = "/etc/logwisp/tls/server.key"
 # client_auth = true
 # client_ca_file = "/etc/logwisp/tls/client-ca.crt"
-# [pipelines.plugin_sinks.config.auth]  # authorize stream readers
-# type = "none"                         # none | mtls; mtls requires client_auth
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
-# allow = []                            # exact identities; empty = any the CA issued
-# allow_patterns = []                   # RE2, anchor them yourself
+# [pipelines.plugin_sinks.config.auth]  # authenticate stream readers
+# type = "none"                         # none | mtls | scram; mtls requires client_auth
+# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
+# allow = []                            # mtls: exact identities; empty = any the CA issued
+# allow_patterns = []                   # mtls: RE2, anchor them yourself
+# credentials_file = ""                 # scram: readers use `logwisp auth stream`
 
 ## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
 ## Do NOT point a chain sink at a chain source in the SAME pipeline: entries
@@ -334,11 +354,13 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # cert_file = "/etc/logwisp/tls/client.crt"
 # key_file = "/etc/logwisp/tls/client.key"
 # min_version = "1.3"
-# [pipelines.plugin_sinks.config.auth]  # pin the downstream server's identity
-# type = "none"                         # none | mtls; mtls requires tls.enabled
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
-# allow = []                            # exact identities; empty = any the CA issued
-# allow_patterns = []                   # RE2, anchor them yourself
+# [pipelines.plugin_sinks.config.auth]  # pin the server (mtls) or log in (scram)
+# type = "none"                         # none | mtls | scram; both require tls.enabled
+# identity = "cn"                       # mtls: cn | san_dns | san_uri | san_email
+# allow = []                            # mtls: exact identities; empty = any the CA issued
+# allow_patterns = []                   # mtls: RE2, anchor them yourself
+# username = ""                         # scram
+# password_file = ""                    # scram
 
 ## HTTP chain sink (stdlib client; batched NDJSON POST to downstream http_chain source)
 # [[pipelines.plugin_sinks]]
@@ -361,8 +383,10 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # ca_file = "/etc/logwisp/tls/ca.crt"
 # cert_file = "/etc/logwisp/tls/client.crt"
 # key_file = "/etc/logwisp/tls/client.key"
-# [pipelines.plugin_sinks.config.auth]  # pin the downstream server's identity
-# type = "none"                         # none | mtls; mtls requires tls.enabled
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
-# allow = []                            # exact identities; empty = any the CA issued
-# allow_patterns = []                   # RE2, anchor them yourself
+# [pipelines.plugin_sinks.config.auth]  # pin the server (mtls) or log in (scram)
+# type = "none"                         # none | mtls | scram; both require tls.enabled
+# identity = "cn"                       # mtls: cn | san_dns | san_uri | san_email
+# allow = []                            # mtls: exact identities; empty = any the CA issued
+# allow_patterns = []                   # mtls: RE2, anchor them yourself
+# username = ""                         # scram
+# password_file = ""                    # scram

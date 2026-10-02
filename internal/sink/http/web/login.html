@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LogWisp sign-in</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="login.js"></script>
+</head>
+<body>
+<main class="card">
+  <h1>LogWisp</h1>
+  <form id="login" method="post">
+    <label>Username <input name="username" autocomplete="username" required></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" disabled>Sign in</button>
+  </form>
+  <progress id="progress" max="1" hidden></progress>
+  <p id="status" role="status"></p>
+</main>
+</body>
+</html>

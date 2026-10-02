@@ -5,11 +5,15 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"logwisp/internal/authz"
 	"logwisp/internal/session"
+	"logwisp/internal/testutil"
 
+	"github.com/lixenwraith/auth"
 	"github.com/lixenwraith/log"
 )
 
@@ -45,4 +49,21 @@ func serveTestHTTPSink(t *testing.T, h *HTTPSink) (*http.Client, string) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	t.Cleanup(client.CloseIdleConnections)
 	return client, "http://" + listener.Addr().String()
+}
+
+// scramCredentials writes a credentials file holding viewer-01 under a cheap
+// Argon2 profile
+func scramCredentials(t *testing.T) string {
+	t.Helper()
+	cred, err := auth.NewCredential("viewer-01", "viewer-01-secret", auth.WithTime(1), auth.WithMemory(64), auth.WithThreads(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := (&authz.Credentials{DecoyKey: make([]byte, 32), Users: []*auth.Credential{cred}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "users.toml")
+	testutil.WriteFile(t, path, string(data))
+	return path
 }

@@ -154,11 +154,12 @@ Idle sessions are reaped every 5 minutes against a 30-minute idle limit. The
 HTTP sink's broker treats a vanished session as an eviction signal and closes
 the corresponding SSE client.
 
-Authorization decisions do not read session metadata — they are made from the
-handshake by `internal/authz`, at the point of connection or request, and their
-outcome is *recorded* in the session. That ordering matters: a session exists
-only for a peer that was already admitted. See the
-[mTLS authentication design](mtls-auth-plan.md).
+Authorization decisions do not read session metadata — `internal/authz` makes
+them from the handshake, the SCRAM exchange or a bearer token, at the point of
+connection or request, and their outcome is *recorded* in the session. That
+ordering matters: a session exists only for a peer that was already admitted.
+See the [mTLS](mtls-auth-plan.md) and [SCRAM](scram-auth-plan.md)
+authentication designs.
 
 ## Configuration Reload
 

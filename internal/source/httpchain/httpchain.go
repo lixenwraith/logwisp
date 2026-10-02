@@ -95,6 +95,8 @@ func NewHTTPChainSourcePlugin(
 		opts.IngestPath = DefaultHTTPChainSourceIngestPath
 	} else if !strings.HasPrefix(opts.IngestPath, "/") {
 		return nil, fmt.Errorf("ingest_path: must start with '/'")
+	} else if opts.IngestPath == chain.AuthPath {
+		return nil, fmt.Errorf("ingest_path: %s is reserved for authentication", chain.AuthPath)
 	}
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultHTTPChainSourceBufferSize
@@ -109,7 +111,7 @@ func NewHTTPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleChainListener)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleChainListener, authz.HTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -163,16 +165,22 @@ func (s *HTTPChainSource) Subscribe() <-chan core.LogEntry {
 
 // Start binds the listener and serves the ingest endpoint
 func (s *HTTPChainSource) Start() error {
+	if err := s.auth.Start(); err != nil {
+		return err
+	}
 	addr := net.JoinHostPort(s.config.Host, strconv.FormatInt(s.config.Port, 10))
 	// IPv4-only, aligns with tcp/http sinks
 	ln, err := net.Listen("tcp4", addr)
 	if err != nil {
+		s.auth.Close()
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
 
 	mux := http.NewServeMux()
 	// Method-scoped pattern: mux answers 405 with Allow header on non-POST
 	mux.HandleFunc(http.MethodPost+" "+s.config.IngestPath, s.handleIngest)
+	// Answers 404 unless the policy is scram
+	mux.HandleFunc(http.MethodPost+" "+chain.AuthPath, s.handleAuth)
 
 	s.server = &http.Server{
 		Handler:           mux,
@@ -212,6 +220,7 @@ func (s *HTTPChainSource) Stop() {
 		defer cancel()
 		s.server.Shutdown(ctx)
 	}
+	s.auth.Close()
 
 	s.sessionsMu.Lock()
 	for _, id := range s.sessions {
@@ -269,10 +278,9 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	s.totalRequests.Add(1)
 
 	// Authorize before the body is read: an unauthorized sender should not get
-	// to stream max_body_bytes into the process. 403 is distinct from the 400
-	// used for protocol errors, so a sender can tell "not allowed" from
-	// "malformed batch".
-	ident, err := s.auth.Authorize(r.TLS)
+	// to stream max_body_bytes into the process. 401 (log in again) and 403
+	// (not allowed) are distinct from the 400 used for protocol errors.
+	ident, status, err := s.auth.AuthorizeRequest(r)
 	if err != nil {
 		s.rejectedRequests.Add(1)
 		s.logger.Warn("msg", "Request rejected by auth policy",
@@ -280,7 +288,7 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 			"instance_id", s.id,
 			"remote_addr", r.RemoteAddr,
 			"error", err)
-		http.Error(w, "forbidden", http.StatusForbidden)
+		authz.Refuse(w, status)
 		return
 	}
 
@@ -352,6 +360,25 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(len(entries)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAuth runs one step of a SCRAM login and logs its outcome
+func (s *HTTPChainSource) handleAuth(w http.ResponseWriter, r *http.Request) {
+	ident, err := s.auth.ServeAuth(w, r)
+	switch {
+	case err != nil:
+		s.logger.Warn("msg", "Login rejected",
+			"component", "http_chain_source",
+			"instance_id", s.id,
+			"remote_addr", r.RemoteAddr,
+			"error", err)
+	case ident.Name != "":
+		s.logger.Info("msg", "Login accepted",
+			"component", "http_chain_source",
+			"instance_id", s.id,
+			"remote_addr", r.RemoteAddr,
+			"auth_identity", ident.Name)
+	}
 }
 
 // sessionFor returns the cached session for a remote+node+identity,

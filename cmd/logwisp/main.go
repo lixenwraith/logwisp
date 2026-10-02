@@ -16,20 +16,21 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// logger is the global logger instance for the application
 var logger *log.Logger
 
-// main is the entry point for the LogWisp application
 func main() {
+	// Before handleHelp, so `logwisp auth <command> -h` prints the auth usage
+	if len(os.Args) > 1 && os.Args[1] == "auth" {
+		os.Exit(runAuth(os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	// --- 1. Initial setup ---
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
 
-	// Help handled before config parsing; loader has no help flag.
-	// Also the future dispatch point for subcommands (tls, etc.)
+	// Before config parsing: the loader has no help flag
 	handleHelp(os.Args[1:])
 
-	// Load configuration with automatic CLI parsing
 	manager, err := config.Load(os.Args[1:])
 	if err != nil {
 		if errors.Is(err, config.ErrConfigNotFound) {
@@ -46,27 +47,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize output handler
 	InitOutputHandler(cfg.Quiet)
 
-	// Handle version
 	if cfg.ShowVersion {
 		fmt.Println(version.String())
 		os.Exit(0)
 	}
 
-	// Initialize logger instance and apply configuration
 	if err := initializeLogger(cfg); err != nil {
 		FatalError(1, "Failed to initialize logger: %v\n", err)
 	}
 	defer shutdownLogger()
 
-	// Start the logger
 	if err := logger.Start(); err != nil {
 		FatalError(1, "Failed to start logger: %v\n", err)
 	}
 
-	// Log startup information
 	logger.Info("msg", "LogWisp starting",
 		"version", version.String(),
 		"config_file", cfg.ConfigFile,
@@ -74,7 +70,6 @@ func main() {
 		"status_reporter", cfg.StatusReporter,
 		"auto_reload", cfg.ConfigAutoReload)
 
-	// Create context for shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -98,7 +93,6 @@ func main() {
 		logger.Info("msg", "Config auto-reload disabled")
 	}
 
-	// Service shutdown sequence
 	defer func() {
 		logger.Info("msg", "Shutdown initiated")
 		if statusReporterCancel != nil {
@@ -109,7 +103,6 @@ func main() {
 		}
 		manager.Close()
 		logger.Info("msg", "Shutdown complete")
-		// Deferred logger shutdown will run after this
 	}()
 
 	reload := func(fromDisk bool) {
@@ -164,7 +157,6 @@ func main() {
 	}
 }
 
-// shutdownLogger gracefully shuts down the global logger.
 func shutdownLogger() {
 	if logger != nil {
 		if err := logger.Shutdown(core.LoggerShutdownTimeout); err != nil {

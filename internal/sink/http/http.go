@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"logwisp/internal/authz"
+	"logwisp/internal/chain"
 	"logwisp/internal/config"
 	"logwisp/internal/core"
 	"logwisp/internal/plugin"
@@ -75,6 +77,7 @@ type HTTPSink struct {
 
 	// Authorization
 	auth *authz.Policy
+	web  map[string]http.Handler // proxy mode: GET /auth/... browser files
 
 	// Runtime
 	done      chan struct{}
@@ -126,6 +129,11 @@ func NewHTTPSinkPlugin(
 	if opts.StreamPath == opts.StatusPath {
 		return nil, fmt.Errorf("stream_path and status_path must differ")
 	}
+	for _, p := range []string{opts.StreamPath, opts.StatusPath} {
+		if p == chain.AuthPath || strings.HasPrefix(p, chain.AuthPath+"/") {
+			return nil, fmt.Errorf("%s and the paths under it are reserved for authentication", chain.AuthPath)
+		}
+	}
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultHTTPBufferSize
 	}
@@ -136,9 +144,21 @@ func NewHTTPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, opts.TLS, authz.RoleListener)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleListener, authz.HTTP)
 	if err != nil {
 		return nil, err
+	}
+	switch {
+	case (opts.LoginPage || opts.ViewerPage) && !authPolicy.BehindProxy():
+		return nil, errors.New("login_page and viewer_page need auth.trusted_proxies: browsers log in only behind a TLS-terminating proxy")
+	case opts.ViewerPage && !opts.LoginPage:
+		return nil, errors.New("viewer_page needs login_page, where it sends a signed-out viewer")
+	}
+	var web map[string]http.Handler
+	if authPolicy.BehindProxy() {
+		if web, err = webHandlers(opts); err != nil {
+			return nil, err
+		}
 	}
 
 	h := &HTTPSink{
@@ -154,6 +174,7 @@ func NewHTTPSinkPlugin(
 		keepalive:    core.StreamKeepaliveInterval,
 		tlsConfig:    tlsCfg,
 		auth:         authPolicy,
+		web:          web,
 	}
 	h.lastProcessed.Store(time.Time{})
 
@@ -166,7 +187,9 @@ func NewHTTPSinkPlugin(
 		"status_path", opts.StatusPath,
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
-		"auth", authPolicy.Describe())
+		"auth", authPolicy.Describe(),
+		"login_page", opts.LoginPage,
+		"viewer_page", opts.ViewerPage)
 	tlsx.LogWarnings(logger, "http_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_sink", id, false)
 	return h, nil
@@ -177,6 +200,9 @@ func (h *HTTPSink) Capabilities() []core.Capability {
 	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
 	if h.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
+	}
+	if h.auth.BehindProxy() {
+		caps = append(caps, core.CapProxyTLS)
 	}
 	if h.auth.Enabled() {
 		caps = append(caps, core.CapAuth) // authorizes clients, not just the CA
@@ -204,6 +230,10 @@ func (h *HTTPSink) Start(ctx context.Context) error {
 // serve owns an already-bound listener, allowing tests to reserve an ephemeral
 // port and exercise the same routing and worker lifecycle as Start.
 func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
+	if err := h.auth.Start(); err != nil {
+		ln.Close()
+		return err
+	}
 	mux := http.NewServeMux()
 	// Method-scoped patterns: mux answers 405 with Allow header on non-GET
 	mux.HandleFunc(http.MethodGet+" "+h.config.StreamPath, h.handleStream)
@@ -214,10 +244,20 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	mux.HandleFunc(http.MethodHead+" "+h.config.StreamPath, streamHeadNotAllowed)
 
 	// One wrapper covers stream and status, and keeps the handlers themselves
-	// unaware of authorization
+	// unaware of authorization. Login and its browser files sit outside it;
+	// in proxy mode everything sits behind the proxy gate.
 	var handler http.Handler = mux
 	if h.auth.Enabled() {
-		handler = h.authMiddleware(handler)
+		outer := http.NewServeMux()
+		outer.HandleFunc(http.MethodPost+" "+chain.AuthPath, h.handleAuth)
+		for p, file := range h.web {
+			outer.Handle(http.MethodGet+" "+p, file)
+		}
+		outer.Handle("/", h.authMiddleware(mux))
+		handler = outer
+		if h.auth.BehindProxy() {
+			handler = h.proxyGate(outer)
+		}
 	}
 
 	h.server = &http.Server{
@@ -271,6 +311,7 @@ func (h *HTTPSink) Stop() {
 
 	h.shutdown()
 	h.wg.Wait()
+	h.auth.Close()
 
 	h.logger.Info("msg", " HTTP sink stopped",
 		"component", "http_sink",
@@ -358,7 +399,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rc := http.NewResponseController(w)
-	remote := r.RemoteAddr
+	remote := clientAddr(r)
 
 	meta := map[string]any{
 		"type": "http_client",
@@ -549,25 +590,44 @@ func (h *HTTPSink) GetStats() sink.SinkStats {
 // handlers; absent when auth is disabled
 type identityKey struct{}
 
-// authMiddleware gates every endpoint on the client certificate policy.
-// The rejection carries no detail: the status endpoint already exposes host,
-// port, and throughput counters, so a 403 should not add the shape of the
-// policy on top of that.
+// authMiddleware gates every endpoint on the policy: a client certificate
+// or a bearer token. The rejection carries no detail: the status endpoint
+// already exposes host, port, and throughput counters, so a refusal should
+// not add the shape of the policy on top of that.
 func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ident, err := h.auth.Authorize(r.TLS)
+		ident, status, err := h.auth.AuthorizeRequest(r)
 		if err != nil {
 			h.logger.Warn("msg", "Request rejected by auth policy",
 				"component", "http_sink",
 				"instance_id", h.id,
-				"remote_addr", r.RemoteAddr,
+				"remote_addr", clientAddr(r),
 				"path", r.URL.Path,
 				"error", err)
-			http.Error(w, "forbidden", http.StatusForbidden)
+			authz.Refuse(w, status)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, ident)))
 	})
+}
+
+// handleAuth runs one step of a SCRAM login and logs its outcome
+func (h *HTTPSink) handleAuth(w http.ResponseWriter, r *http.Request) {
+	ident, err := h.auth.ServeAuth(w, r)
+	switch {
+	case err != nil:
+		h.logger.Warn("msg", "Login rejected",
+			"component", "http_sink",
+			"instance_id", h.id,
+			"remote_addr", clientAddr(r),
+			"error", err)
+	case ident.Name != "":
+		h.logger.Info("msg", "Login accepted",
+			"component", "http_sink",
+			"instance_id", h.id,
+			"remote_addr", clientAddr(r),
+			"auth_identity", ident.Name)
+	}
 }
 
 // streamHeadNotAllowed refuses a body-less read of a stream that is only a body
@@ -576,7 +636,7 @@ func streamHeadNotAllowed(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
-// writeSSE frames a payload per the W3C SSE spec (multi-line safe)
+// writeSSE frames a payload per the W3C SSE spec, one data: line per line
 func writeSSE(w http.ResponseWriter, payload []byte) error {
 	for _, line := range splitLines(payload) {
 		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
@@ -587,27 +647,28 @@ func writeSSE(w http.ResponseWriter, payload []byte) error {
 	return err
 }
 
-// splitLines splits payload by newlines, trimming a single trailing newline
+// splitLines splits on every break SSE recognises (CRLF, LF and a lone CR),
+// so no payload byte can end a data: line and start an event: or retry:
+// field. One trailing break is dropped.
 func splitLines(data []byte) [][]byte {
 	if len(data) == 0 {
 		return nil
 	}
-	if data[len(data)-1] == '\n' {
+	if bytes.HasSuffix(data, []byte("\r\n")) {
+		data = data[:len(data)-2]
+	} else if data[len(data)-1] == '\n' || data[len(data)-1] == '\r' {
 		data = data[:len(data)-1]
 	}
 	var lines [][]byte
-	start := 0
-	for i := 0; i < len(data); i++ {
-		if data[i] == '\n' {
-			lines = append(lines, data[start:i])
-			start = i + 1
+	for {
+		i := bytes.IndexAny(data, "\r\n")
+		if i < 0 {
+			return append(lines, data)
 		}
+		lines = append(lines, data[:i])
+		if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+			i++
+		}
+		data = data[i+1:]
 	}
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-	if len(lines) == 0 {
-		return [][]byte{data}
-	}
-	return lines
 }
