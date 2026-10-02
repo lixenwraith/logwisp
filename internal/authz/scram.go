@@ -888,10 +888,11 @@ func remoteIP(addr string) string {
 // --- Throttling ---
 
 // throttleKey is what the limiter counts: an address, or for IPv6 its /64,
-// which one host usually holds whole
+// which one host usually holds whole. A link-local /64 is every host on the
+// link, so a link-local peer counts by its address.
 func throttleKey(ip string) string {
 	addr, err := netip.ParseAddr(ip)
-	if err != nil || addr.Is4() {
+	if err != nil || addr.Is4() || addr.IsLinkLocalUnicast() {
 		return ip
 	}
 	return netip.PrefixFrom(addr, 64).Masked().String()
