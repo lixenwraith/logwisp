@@ -20,6 +20,7 @@ import (
 
 	"logwisp/internal/authz"
 	"logwisp/internal/config"
+	"logwisp/internal/core"
 	"logwisp/internal/tlsx"
 
 	"github.com/lixenwraith/auth"
@@ -231,7 +232,7 @@ func defineRemoveUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 }
 
 func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
-	rawURL := fs.String("url", "", "listener `URL`, https://HOST:PORT (with -unbound, a proxy's mount URL may carry a path)")
+	rawURL := fs.String("url", "", "listener `URL`, https://HOST:PORT or https://[IPV6]:PORT (with -unbound, a proxy's mount URL may carry a path)")
 	user := fs.String("user", "", "user `name`")
 	passwordFile := fs.String("password-file", "", "`file` holding the password")
 	unbound := fs.Bool("unbound", false, "log in without channel binding, to an http sink behind a TLS-terminating proxy (auth.trusted_proxies)")
@@ -245,6 +246,10 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			// TLS passthrough cannot route by path: only a terminating proxy can
 			return usageError("-url takes a path only with -unbound")
 		}
+		network, err := core.Network(u.Hostname())
+		if err != nil {
+			return usageError("-url: " + err.Error())
+		}
 		tlsCfg, policy, err := dialPolicy(tlsOpts, u.Hostname(), *user, *passwordFile, authz.HTTP)
 		if err != nil {
 			return err
@@ -256,7 +261,7 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 					var d net.Dialer
-					return d.DialContext(ctx, "tcp4", addr)
+					return d.DialContext(ctx, network, addr)
 				},
 				TLSClientConfig:     tlsCfg,
 				TLSHandshakeTimeout: tlsx.HandshakeTimeout,
@@ -264,7 +269,8 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			// A redirect would carry the login to another endpoint
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
-		token, err := policy.Token(context.Background(), client, "https://"+u.Host+u.Path)
+		// String escapes an IPv6 zone, which u.Host holds raw
+		token, err := policy.Token(context.Background(), client, u.String())
 		if err != nil {
 			return err
 		}
@@ -274,14 +280,15 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 }
 
 func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
-	addr := fs.String("addr", "", "tcp sink `address`, HOST:PORT")
+	addr := fs.String("addr", "", "tcp sink `address`, HOST:PORT or [IPV6]:PORT")
 	user := fs.String("user", "", "user `name`")
 	passwordFile := fs.String("password-file", "", "`file` holding the password")
 	tlsOpts := tlsFlags(fs)
 	return func(stdout, _ io.Writer) error {
 		host, _, err := net.SplitHostPort(*addr)
-		if err != nil || host == "" {
-			return usageError("-addr must be HOST:PORT")
+		network, nerr := core.Network(host)
+		if err != nil || nerr != nil || host == "" {
+			return usageError("-addr must be HOST:PORT, with an IPv6 address in brackets")
 		}
 		tlsCfg, policy, err := dialPolicy(tlsOpts, host, *user, *passwordFile, authz.TCP)
 		if err != nil {
@@ -290,7 +297,7 @@ func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		dctx, cancel := context.WithTimeout(ctx, tlsx.HandshakeTimeout)
-		conn, err := (&tls.Dialer{Config: tlsCfg}).DialContext(dctx, "tcp4", *addr)
+		conn, err := (&tls.Dialer{Config: tlsCfg}).DialContext(dctx, network, *addr)
 		cancel()
 		if err == nil {
 			defer conn.Close()

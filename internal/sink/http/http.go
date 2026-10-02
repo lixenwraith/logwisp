@@ -55,8 +55,9 @@ type HTTPSink struct {
 	proxy *session.Proxy
 
 	// Configuration
-	config *config.HTTPSinkOptions
-	addr   string
+	config  *config.HTTPSinkOptions
+	addr    string
+	network string
 
 	// Network
 	server *http.Server
@@ -116,6 +117,10 @@ func NewHTTPSinkPlugin(
 	if err := lconfig.Port(opts.Port); err != nil {
 		return nil, fmt.Errorf("port: %w", err)
 	}
+	network, err := core.Network(opts.Host)
+	if err != nil {
+		return nil, fmt.Errorf("host: %w", err)
+	}
 	if opts.StreamPath == "" {
 		opts.StreamPath = DefaultHTTPStreamPath
 	} else if !strings.HasPrefix(opts.StreamPath, "/") {
@@ -166,6 +171,7 @@ func NewHTTPSinkPlugin(
 		proxy:        proxy,
 		config:       opts,
 		addr:         net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10)),
+		network:      network,
 		input:        make(chan core.TransportEvent, opts.BufferSize),
 		done:         make(chan struct{}),
 		logger:       logger,
@@ -217,10 +223,9 @@ func (h *HTTPSink) Input() chan<- core.TransportEvent {
 
 // Start binds the listener and serves stream/status endpoints
 func (h *HTTPSink) Start(ctx context.Context) error {
-	// IPv4-only, parity with existing network sinks.
 	// TLS is applied via server.TLSConfig + ServeTLS below, not by wrapping
 	// ln; net/http then owns handshake, ALPN (h2), and per-conn errors.
-	ln, err := net.Listen("tcp4", h.addr)
+	ln, err := net.Listen(h.network, h.addr)
 	if err != nil {
 		return fmt.Errorf("http sink bind %s: %w", h.addr, err)
 	}

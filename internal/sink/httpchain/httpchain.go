@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -103,6 +104,10 @@ func NewHTTPChainSinkPlugin(
 	if err := lconfig.Port(opts.Port); err != nil {
 		return nil, fmt.Errorf("port: %w", err)
 	}
+	network, err := core.Network(opts.Host)
+	if err != nil {
+		return nil, fmt.Errorf("host: %w", err)
+	}
 	if opts.IngestPath == "" {
 		opts.IngestPath = DefaultHTTPChainSinkIngestPath
 	} else if !strings.HasPrefix(opts.IngestPath, "/") {
@@ -158,10 +163,9 @@ func NewHTTPChainSinkPlugin(
 	addr := net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10))
 
 	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			// IPv4-only, aligns with tcp/http sinks
+		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
 			d := net.Dialer{}
-			return d.DialContext(ctx, "tcp4", address)
+			return d.DialContext(ctx, network, address)
 		},
 		MaxIdleConnsPerHost: 2,
 		IdleConnTimeout:     90 * time.Second,
@@ -172,9 +176,9 @@ func NewHTTPChainSinkPlugin(
 		// NDJSON POSTs gain nothing from it
 	}
 
-	scheme := "http"
+	base := url.URL{Scheme: "http", Host: addr} // escapes an IPv6 zone
 	if tlsCfg != nil {
-		scheme = "https"
+		base.Scheme = "https"
 	}
 
 	t := &HTTPChainSink{
@@ -185,8 +189,8 @@ func NewHTTPChainSinkPlugin(
 		tlsEnabled: tlsCfg != nil,
 		mtls:       tlsCfg != nil && len(tlsCfg.Certificates) > 0,
 		auth:       authPolicy,
-		baseURL:    scheme + "://" + addr,
-		url:        scheme + "://" + addr + opts.IngestPath,
+		baseURL:    base.String(),
+		url:        base.String() + opts.IngestPath,
 		// A redirect would resend the batch, even from https to plaintext http
 		client: &http.Client{
 			Transport:     transport,

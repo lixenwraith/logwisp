@@ -45,9 +45,10 @@ const (
 
 // HTTPChainSource accepts NDJSON batches from upstream http_chain sinks
 type HTTPChainSource struct {
-	id     string
-	proxy  *session.Proxy
-	config *config.HTTPChainSourceOptions
+	id      string
+	proxy   *session.Proxy
+	config  *config.HTTPChainSourceOptions
+	network string
 
 	subscribers []chan core.LogEntry
 	server      *http.Server
@@ -91,6 +92,10 @@ func NewHTTPChainSourcePlugin(
 	if err := lconfig.Port(opts.Port); err != nil {
 		return nil, fmt.Errorf("port: %w", err)
 	}
+	network, err := core.Network(opts.Host)
+	if err != nil {
+		return nil, fmt.Errorf("host: %w", err)
+	}
 	if opts.IngestPath == "" {
 		opts.IngestPath = DefaultHTTPChainSourceIngestPath
 	} else if !strings.HasPrefix(opts.IngestPath, "/") {
@@ -120,6 +125,7 @@ func NewHTTPChainSourcePlugin(
 		id:          id,
 		proxy:       proxy,
 		config:      opts,
+		network:     network,
 		subscribers: make([]chan core.LogEntry, 0),
 		sessions:    make(map[string]string),
 		logger:      logger,
@@ -169,8 +175,7 @@ func (s *HTTPChainSource) Start() error {
 		return err
 	}
 	addr := net.JoinHostPort(s.config.Host, strconv.FormatInt(s.config.Port, 10))
-	// IPv4-only, aligns with tcp/http sinks
-	ln, err := net.Listen("tcp4", addr)
+	ln, err := net.Listen(s.network, addr)
 	if err != nil {
 		s.auth.Close()
 		return fmt.Errorf("listen %s: %w", addr, err)

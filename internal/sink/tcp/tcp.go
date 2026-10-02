@@ -48,8 +48,9 @@ type TCPSink struct {
 	proxy *session.Proxy
 
 	// Configuration
-	config *config.TCPSinkOptions
-	addr   string
+	config  *config.TCPSinkOptions
+	addr    string
+	network string
 
 	// Network
 	listener net.Listener
@@ -114,6 +115,10 @@ func NewTCPSinkPlugin(
 	if err := lconfig.Port(opts.Port); err != nil {
 		return nil, fmt.Errorf("port: %w", err)
 	}
+	network, err := core.Network(opts.Host)
+	if err != nil {
+		return nil, fmt.Errorf("host: %w", err)
+	}
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultTCPBufferSize
 	}
@@ -140,6 +145,7 @@ func NewTCPSinkPlugin(
 		proxy:        proxy,
 		config:       opts,
 		addr:         net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10)),
+		network:      network,
 		input:        make(chan core.TransportEvent, opts.BufferSize),
 		done:         make(chan struct{}),
 		logger:       logger,
@@ -192,8 +198,7 @@ func (t *TCPSink) listen() (net.Listener, error) {
 			Idle:   time.Duration(t.config.KeepAlivePeriodMS) * time.Millisecond,
 		}
 	}
-	// IPv4-only, parity with existing network sinks
-	ln, err := lc.Listen(context.Background(), "tcp4", t.addr)
+	ln, err := lc.Listen(context.Background(), t.network, t.addr)
 	if err != nil {
 		return nil, err
 	}
