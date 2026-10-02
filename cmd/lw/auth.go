@@ -269,8 +269,10 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			// A redirect would carry the login to another endpoint
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
-		// String escapes an IPv6 zone, which u.Host holds raw
-		token, err := policy.Token(context.Background(), client, u.String())
+		// String escapes an IPv6 zone, which u.Host holds raw; the parts drop
+		// an empty "?" that would swallow the /auth path
+		base := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}
+		token, err := policy.Token(context.Background(), client, base.String())
 		if err != nil {
 			return err
 		}

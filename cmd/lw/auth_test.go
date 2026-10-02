@@ -195,16 +195,18 @@ func TestAuthCommandHelpPrintsAuthUsage(t *testing.T) {
 	}
 }
 
-// A link-local -url keeps its zone escaped on the way to the dial: the login
-// is posted to the URL given, not to one that no longer parses
-func TestTokenLogsInAtAZonedIPv6URL(t *testing.T) {
+// The login is posted to the -url given plus /auth: a link-local URL keeps
+// its zone escaped, not turned into one that no longer parses
+func TestTokenLogsInAtTheURLGiven(t *testing.T) {
 	pass := filepath.Join(t.TempDir(), "edge-01.pass")
 	if err := os.WriteFile(pass, []byte("correct horse battery\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// No such interface: the dial fails at once, after the URL is formed
-	code, _, stderr := runAuthTest(t, "token", "-url", "https://[fe80::1%25nosuchif0]:1", "-user", "edge-01", "-password-file", pass)
-	if code != 1 || !strings.Contains(stderr, `"https://[fe80::1%25nosuchif0]:1/auth"`) {
-		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	// No such interface or listener: the dial fails at once, after the URL is formed
+	for _, rawURL := range []string{"https://[fe80::1%25nosuchif0]:1", "https://127.0.0.1:1?"} {
+		code, _, stderr := runAuthTest(t, "token", "-url", rawURL, "-user", "edge-01", "-password-file", pass)
+		if want := `"` + strings.TrimSuffix(rawURL, "?") + `/auth"`; code != 1 || !strings.Contains(stderr, want) {
+			t.Errorf("%s: exit %d, stderr: %s", rawURL, code, stderr)
+		}
 	}
 }
