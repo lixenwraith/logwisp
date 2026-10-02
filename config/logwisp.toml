@@ -140,7 +140,7 @@ name = "default"
 ###                        force  - label AND every entry take the identity
 ###                      Overrides trust_node. See doc/security.md.
 ### credentials_file = ""   scram listeners: verifiers; read at (re)load, not watched
-### token_lifetime_ms = 0   scram, http sink and http_chain source: 0 = 15 minutes
+### token_lifetime_ms = 0   scram, http sink and http_chain source: 10 s to 24 h, 0 = 15 minutes
 ### username = ""           scram dialers
 ### password_file = ""      scram dialers: one trailing line break is trimmed
 ###============================================================================
@@ -206,7 +206,7 @@ from = "end"                            # "end" or "start" of a newly discovered
 # min_version = "1.3"
 # [pipelines.plugin_sources.config.auth]  # authenticate senders
 # type = "none"                         # none | mtls | scram; mtls requires client_auth
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
@@ -232,12 +232,12 @@ from = "end"                            # "end" or "start" of a newly discovered
 # client_ca_file = "/etc/logwisp/tls/client-ca.crt"
 # [pipelines.plugin_sources.config.auth]  # authenticate senders
 # type = "none"                         # none | mtls | scram; mtls requires client_auth
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
 # credentials_file = ""                 # scram: written by `logwisp auth add-user`
-# token_lifetime_ms = 0                 # scram bearer tokens; 0 = 15 minutes
+# token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 
 ###============================================================================
 ### Sinks (1+ required, fan-out)
@@ -292,11 +292,11 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # client_ca_file = ""
 # [pipelines.plugin_sinks.config.auth]  # gates BOTH stream_path and status_path
 # type = "none"                         # none | mtls | scram; browsers need mtls
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # credentials_file = ""                 # scram: log in with `logwisp auth token`
-# token_lifetime_ms = 0                 # scram bearer tokens; 0 = 15 minutes
+# token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 
 ## TCP sink (streaming server, IPv4 clients only)
 # [[pipelines.plugin_sinks]]
@@ -319,7 +319,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # client_ca_file = "/etc/logwisp/tls/client-ca.crt"
 # [pipelines.plugin_sinks.config.auth]  # authenticate stream readers
 # type = "none"                         # none | mtls | scram; mtls requires client_auth
-# identity = "cn"                       # cn | san_dns | san_uri | san_email
+# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # credentials_file = ""                 # scram: readers use `logwisp auth stream`

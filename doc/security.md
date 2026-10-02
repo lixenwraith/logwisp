@@ -92,7 +92,7 @@ allow             = []                    # mtls
 allow_patterns    = []                    # mtls
 node_binding      = "force"               # chain sources only
 credentials_file  = ""                    # scram listeners
-token_lifetime_ms = 0                     # scram, HTTP listeners; 0 = 15 minutes
+token_lifetime_ms = 0                     # scram, HTTP listeners; 10 s to 24 h, 0 = 15 minutes
 username          = ""                    # scram dialers
 password_file     = ""                    # scram dialers
 ```
@@ -105,7 +105,7 @@ password_file     = ""                    # scram dialers
 | `allow_patterns` | `mtls` | `[]` | RE2 patterns matched against the identity; anchor them yourself |
 | `node_binding` | chain sources | `force` | `none`, `assert`, or `force` |
 | `credentials_file` | `scram` listeners | — | Verifiers written by [`logwisp auth add-user`](cli.md#logwisp-auth) |
-| `token_lifetime_ms` | `scram` on the `http` sink and `http_chain` source | 15 minutes | Bearer token lifetime |
+| `token_lifetime_ms` | `scram` on the `http` sink and `http_chain` source | 15 minutes | Bearer token lifetime, 10 s to 24 h |
 | `username` | `scram` dialers | — | User to log in as |
 | `password_file` | `scram` dialers | — | File holding the password; one trailing line break is trimmed |
 
@@ -213,9 +213,9 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
 - a key of the other method: `allow` or `allow_patterns` under `scram`, a
   `scram` key under `mtls`
 - a `scram` listener without a loadable `credentials_file` (see
-  [Credentials file](#credentials-file)), with `username` or `password_file`, with
-  a negative `token_lifetime_ms` or one on a TCP listener, or with `identity`
-  but no `tls.client_auth`
+  [Credentials file](#credentials-file)), with `username` or `password_file`,
+  with a `token_lifetime_ms` outside 10 s to 24 h or on a TCP listener, or with
+  `identity` but no `tls.client_auth`
 - a `scram` dialer without `username` and `password_file`, with
   `credentials_file`, `token_lifetime_ms` or `identity` (server pinning is
   `mtls` only), or with a password file that is empty or over 1024 bytes
@@ -432,7 +432,8 @@ ends mid-exchange frees it at once. A refused start answers `too many attempts`
 (HTTP `429`) and counts `auth_throttled`; the table holds 65,536 addresses and
 refuses new ones when full. Separately, at most 4,096 exchanges may be in flight
 per listener; beyond that, or while the plugin stops, a login gets `busy` (HTTP
-`503`) and counts `auth_busy`. Peers behind one NAT share a bucket.
+`503`) and counts `auth_busy`. Peers behind one NAT or one passthrough proxy
+share a bucket: there, one client can exhaust every other client's logins.
 
 ### Credentials file
 
@@ -455,7 +456,9 @@ hand. The whole file is validated when the plugin is built: a `decoy_key` of at
 least 32 bytes, at least one user, unique names, no unknown keys, and one Argon2
 profile and salt length for every user, since mixed profiles would tell a prober
 which users exist. `decoy_key` keeps unknown-user challenges stable across
-restarts and edits; the CLI creates it once and preserves it. The file is read
+restarts and edits; the CLI creates it once and preserves it. A single probe
+cannot tell a real user from an unknown one, but a prober polling a name sees
+its salt change when the user is added, rotated or removed. The file is read
 only when the plugin is built and `auto_reload` does not watch it: send
 `SIGHUP` after every change. Use one file per listener when listeners admit
 different users.
@@ -480,6 +483,7 @@ different users.
 
 - TLS must terminate at LogWisp. Behind a terminating proxy or load balancer
   every login fails by design; pass TLS through instead (TCP or SNI routing).
+  All clients then share the proxy's address, and so one throttling budget.
 - One process per HTTP address. Handshake state and the token key live in one
   instance, so behind a balancer the proof or the token can reach an instance
   that never saw the login.

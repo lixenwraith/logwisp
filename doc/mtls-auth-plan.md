@@ -156,68 +156,25 @@ Errors follow existing style: `auth: type "mtls" requires tls.client_auth`.
 
 ### The `internal/authz` package
 
-```go
-package authz
-
-// Policy is the compiled form of config.AuthOptions.
-type Policy struct { /* role, identity mode, exact set, patterns, binding, counters */ }
-
-// Role selects the validation and behavior appropriate to the call site.
-const ( RoleListener Role = iota; RoleChainListener; RoleDialer )
-
-// New compiles a policy. Returns (nil, nil) when auth is disabled, matching
-// the tlsx.Server / tlsx.Client convention. tlsOpts is the sibling `tls`
-// block, so an unenforceable policy fails here rather than at run time.
-func New(o *config.AuthOptions, tlsOpts *config.TLSOptions, role Role) (*Policy, error)
-
-// Identity is the outcome of a successful authorization.
-type Identity struct {
-    Name   string // the selected certificate field
-    Method string // "mtls"
-}
-
-// Apply stamps an identity onto session metadata.
-func (id Identity) Apply(meta map[string]any)
-
-// Authorize extracts and checks the peer identity from a completed handshake.
-func (p *Policy) Authorize(cs *tls.ConnectionState) (Identity, error)
-
-// VerifyConnection is assignable to tls.Config.VerifyConnection on a dialer.
-func (p *Policy) VerifyConnection(cs tls.ConnectionState) error
-
-// ResolveNode applies node_binding to the label a peer declared.
-func (p *Policy) ResolveNode(declared, fallback string, trustNode bool, id Identity) (string, error)
-
-// TrustsEntryNode reports whether per-entry node labels survive the policy.
-func (p *Policy) TrustsEntryNode(trustNode bool) bool
-
-// Stats reports counters for the sink/source stats map.
-func (p *Policy) Stats() map[string]any
-```
-
-This mirrors `internal/tlsx`: one small package that is the single seam between
-declarative config and a cross-cutting concern. `New` returns `(nil, nil)` for
-the disabled case and **every method tolerates a nil receiver**, so a call site
-reads identically whether or not auth is configured — no nil checks, no branch
-on config:
-
-```go
-id, err := s.auth.Authorize(tlsState)   // nil policy: (zero Identity, nil)
-if err != nil { /* reject */ }
-```
+One small package, mirroring `internal/tlsx`, is the single seam between the
+`auth` block and the plugins. `New(o, tlsCfg, role, transport)` compiles a policy
+against the sibling TLS config and returns `(nil, nil)` when auth is disabled;
+every method tolerates a nil receiver, so call sites never branch on config.
+Listeners admit only through `Admit` (TCP) and `AuthorizeRequest` (HTTP); the
+current API, including SCRAM, is in [scram-auth-plan.md](scram-auth-plan.md#the-authz-seam).
 
 ### Enforcement Points
 
 **`tcp_chain` source** (`internal/source/tcpchain/tcpchain.go`, `handleConn`)
 
-Handshake → **authorize** → read hello → `ResolveNode` → create session. The
-authorization sits between the handshake and the hello read, so an unauthorized
-peer never gets a preamble parsed on its behalf. `chain.DecodeEntry` is then
+Handshake → `Admit` (authorize, then read hello) → `ResolveNode` → create
+session. Under `mtls` the certificate is checked before the hello is read, so
+an unauthorized peer never gets a preamble parsed on its behalf. `chain.DecodeEntry` is then
 called with `auth.TrustsEntryNode(trust_node)` rather than `trust_node` itself.
 
 **`http_chain` source** (`internal/source/httpchain/httpchain.go`, `handleIngest`)
 
-Per request, from `r.TLS`, before the body is read — an unauthorized sender does
+Per request, through `AuthorizeRequest`, before the body is read — an unauthorized sender does
 not get to stream `max_body_bytes` into the process. Rejection is `403`,
 distinct from the `400` used for protocol errors, so a sender can tell "you are
 not allowed" from "your batch was malformed". `ResolveNode` then governs the

@@ -157,16 +157,8 @@ func intentKey(o *config.AuthOptions) string {
 		return "allow"
 	case len(o.AllowPatterns) > 0:
 		return "allow_patterns"
-	case o.CredentialsFile != "":
-		return "credentials_file"
-	case o.TokenLifetimeMS != 0:
-		return "token_lifetime_ms"
-	case o.Username != "":
-		return "username"
-	case o.PasswordFile != "":
-		return "password_file"
 	}
-	return ""
+	return scramKey(o)
 }
 
 func nodeBinding(binding string, role Role) (string, error) {
@@ -319,6 +311,10 @@ func (p *Policy) Admit(conn net.Conn, cs *tls.ConnectionState, wantHello bool, t
 		return nil, fmt.Errorf("read hello: %w", err)
 	}
 	if a.Hello, err = chain.DecodeHello(line); err != nil {
+		if scram {
+			p.rejected.Add(1)
+			writeStep(conn, authStep{Error: "malformed hello"})
+		}
 		return nil, err
 	}
 	switch {

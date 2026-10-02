@@ -109,7 +109,8 @@ username = "edge-01"
 ```
 
 `decoy_key` keeps unknown-user challenges stable across restarts and edits, so
-probing usernames reveals nothing. It is created by the first `add-user` and
+a single probe cannot tell a real user from an unknown one (a real user's salt
+changes when it is added, rotated or removed). It is created by the first `add-user` and
 preserved by every rewrite. An empty user set, a duplicate user, a missing or
 short `decoy_key`, an unknown key, or users differing in KDF profile or salt
 length are configuration errors. The file is read at construction; the SCRAM
@@ -166,8 +167,9 @@ starts: a token bucket (burst 10, 1/s) refunded on success, and at most 4
 unfinished exchanges. An unanswered HTTP challenge holds its slot for the
 `auth` handshake timeout (30 s); abandoned TCP exchanges release their slot,
 and their entry in the `auth` handshake table, immediately. The address table
-holds 65,536 entries and fails closed when full; the SCRAM server itself caps
-in-flight handshakes at 4,096 (`busy`).
+holds 65,536 entries, drops one idle for a minute once its challenges have
+expired, and fails closed when full; the SCRAM server itself caps in-flight
+handshakes at 4,096 (`busy`).
 
 Counters: `auth_allowed` counts logins; `auth_rejected` every refusal — failed
 proofs, malformed requests, missing credentials and, on HTTP, refused tokens;

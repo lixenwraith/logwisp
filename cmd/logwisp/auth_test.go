@@ -103,11 +103,15 @@ func TestAddUserNeverReplacesAPasswordWithoutASource(t *testing.T) {
 	}
 }
 
-func TestRewriteKeepsFileModeAndDecoyKey(t *testing.T) {
+// The daemon reads a link's target: a rewrite through the link updates it
+func TestRewriteKeepsFileModeDecoyKeyAndLink(t *testing.T) {
 	dir := t.TempDir()
-	creds, pass := filepath.Join(dir, "users.toml"), filepath.Join(dir, "edge-02.pass")
-	orig := writeCredentials(t, creds, "edge-01")
-	if err := os.Chmod(creds, 0o640); err != nil {
+	creds, target, pass := filepath.Join(dir, "users.toml"), filepath.Join(dir, "real.toml"), filepath.Join(dir, "edge-02.pass")
+	orig := writeCredentials(t, target, "edge-01")
+	if err := os.Chmod(target, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, creds); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(pass, []byte("correct horse battery\n"), 0o600); err != nil {
@@ -116,19 +120,40 @@ func TestRewriteKeepsFileModeAndDecoyKey(t *testing.T) {
 	if code, _, stderr := runAuthTest(t, "add-user", "-credentials", creds, "-user", "edge-02", "-password-file", pass); code != 0 {
 		t.Fatalf("exit %d; stderr: %s", code, stderr)
 	}
-	fi, err := os.Stat(creds)
+	if fi, err := os.Lstat(creds); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link replaced by a file (%v)", err)
+	}
+	fi, err := os.Stat(target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fi.Mode().Perm() != 0o640 {
 		t.Fatalf("mode %v, want 0640", fi.Mode().Perm())
 	}
-	c, err := authz.LoadCredentials(creds)
+	c, err := authz.LoadCredentials(target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(c.DecoyKey, orig.DecoyKey) || len(c.Users) != 2 || c.Users[1].Username != "edge-02" {
 		t.Fatalf("decoy key kept: %v, users: %d", bytes.Equal(c.DecoyKey, orig.DecoyKey), len(c.Users))
+	}
+}
+
+// An empty file is how an operator picks the owner before the first user
+func TestAddUserFillsAnEmptyFile(t *testing.T) {
+	creds := filepath.Join(t.TempDir(), "users.toml")
+	if err := os.WriteFile(creds, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runAuthTest(t, "add-user", "-credentials", creds, "-user", "edge-01"); code != 0 {
+		t.Fatalf("exit %d; stderr: %s", code, stderr)
+	}
+	fi, err := os.Stat(creds)
+	if err != nil || fi.Mode().Perm() != 0o640 {
+		t.Fatalf("mode %v (%v), want 0640", fi.Mode().Perm(), err)
+	}
+	if c, err := authz.LoadCredentials(creds); err != nil || len(c.Users) != 1 {
+		t.Fatalf("credentials after add-user: %v", err)
 	}
 }
 

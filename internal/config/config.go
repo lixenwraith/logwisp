@@ -172,15 +172,6 @@ type PluginSourceConfig struct {
 	ConfigFile string         `toml:"config_file,omitempty"` // TODO: support for include/source mechanism for nested config
 }
 
-// // SourceConfig is a polymorphic struct representing a single data source
-// type SourceConfig struct {
-// 	Type string `toml:"type"`
-//
-// 	// Polymorphic - only one populated based on type
-// 	File    *FileSourceOptions    `toml:"file,omitempty"`
-// 	Console *ConsoleSourceOptions `toml:"console,omitempty"`
-// }
-
 // NullSourceOptions defines settings for a null source (no configuration needed)
 type NullSourceOptions struct{}
 
@@ -244,15 +235,6 @@ type PluginSinkConfig struct {
 	Config     map[string]any `toml:"config"`
 	ConfigFile string         `toml:"config_file,omitempty"` // TODO: support for include/source mechanism for nested config
 }
-
-// // SinkConfig is a polymorphic struct representing a single data sink
-// type SinkConfig struct {
-// 	Type string `toml:"type"`
-//
-// 	// Polymorphic - only one populated based on type
-// 	Console *ConsoleSinkOptions `toml:"console,omitempty"`
-// 	File    *FileSinkOptions    `toml:"file,omitempty"`
-// }
 
 // NullSinkOptions defines settings for a null sink (no configuration needed)
 type NullSinkOptions struct{}
@@ -375,13 +357,10 @@ type AuthOptions struct {
 
 // --- TLS Options ---
 
-// TLSOptions defines transport security for network sources and sinks.
-// One shape serves both roles so the config block is uniform:
-//   - Listeners (tcp/http sinks, tcp_chain/http_chain sources) use
-//     cert_file/key_file as server identity; client_auth/client_ca_file
-//     require and verify peer certificates (mTLS).
-//   - Dialers (tcp_chain/http_chain sinks) use ca_file/server_name to verify
-//     the server; cert_file/key_file present a client identity (mTLS).
+// TLSOptions is one shape for both roles. Listeners present cert_file and
+// key_file and verify clients with client_auth and client_ca_file; dialers
+// verify the server with ca_file and server_name and may present
+// cert_file and key_file.
 type TLSOptions struct {
 	Enabled bool `toml:"enabled"`
 

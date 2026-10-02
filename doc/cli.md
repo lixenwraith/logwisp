@@ -192,7 +192,7 @@ them as a viewer. See
 success, `1` on failure and `2` on a usage error.
 
 **`add-user`** creates the credentials file, with a fresh `decoy_key`, when it
-does not exist. The password comes from `-password-file` when that file exists
+does not exist or is empty (create it empty first to choose its owner). The password comes from `-password-file` when that file exists
 (at least 8 bytes; one trailing line break is trimmed). Otherwise a random
 26-character password (130 bits) is generated and written to `-password-file`,
 or printed once to stdout when there is none. Replacing an existing user's
@@ -200,9 +200,11 @@ password needs an existing `-password-file` or `-generate`, so a mistyped path
 cannot replace a working password; `-generate` always generates, overwriting
 `-password-file`. New users take the file's existing Argon2 profile.
 
-Both file commands rewrite atomically (a temporary file in the same directory,
-then a rename), create files `0600`, keep an existing file's mode and, where
-permitted, its owner, and refuse to write anything the daemon would not load.
+Both file commands rewrite atomically (a temporary file in the same directory
+as the file, or a symlink's target, then a rename), create files `0600`, keep an
+existing file's mode and owner, and refuse to write anything the daemon would
+not load. A change that cannot keep the owner fails: run it as root or as the
+owner.
 Neither touches a running LogWisp: send `SIGHUP`, since `auto_reload` does not
 watch the credentials file.
 
@@ -211,10 +213,12 @@ sink. TLS flags: `-ca-file` (default: system roots), `-server-name` (default:
 the host), and `-cert-file` / `-key-file` for a listener with `tls.client_auth`.
 There is no flag to skip verification: an unverified server could relay the
 login. `-url` takes no path, and redirects are not followed. `stream` exits `0`
-on `SIGINT` or `SIGTERM`.
+on `SIGINT` or `SIGTERM`, and `1` when the server ends the stream (a reload or
+shutdown).
 
 ```bash
-# listener host: create users, then apply
+# listener host: a file the service user can read, users, then apply
+install -m 0640 -o root -g logwisp /dev/null /etc/logwisp/users.toml
 logwisp auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
   -password-file /etc/logwisp/edge-01.pass
 logwisp auth add-user -credentials /etc/logwisp/users.toml -user viewer \

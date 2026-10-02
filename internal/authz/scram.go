@@ -34,6 +34,10 @@ const (
 	ExchangeTimeout = 10 * time.Second
 	// DefaultTokenLifetime is how long a bearer token from /auth stays valid
 	DefaultTokenLifetime = 15 * time.Minute
+	// Token lifetime bounds: tokens expire on whole seconds and dialers renew
+	// 5 s ahead, so shorter ones arrive already expired
+	MinTokenLifetime = 10 * time.Second
+	MaxTokenLifetime = 24 * time.Hour
 
 	maxAuthLine  = 4096 // pre-auth lines and /auth bodies come from unauthenticated peers
 	streamBuffer = 64 * 1024
@@ -204,8 +208,9 @@ func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
 		return errors.New("auth: username and password_file apply only to dialers")
 	case o.CredentialsFile == "":
 		return fmt.Errorf("auth: type %q requires credentials_file", MethodSCRAM)
-	case o.TokenLifetimeMS < 0:
-		return errors.New("auth: token_lifetime_ms must be positive")
+	case o.TokenLifetimeMS != 0 && (o.TokenLifetimeMS < MinTokenLifetime.Milliseconds() || o.TokenLifetimeMS > MaxTokenLifetime.Milliseconds()):
+		return fmt.Errorf("auth: token_lifetime_ms %d is outside %d (%s) to %d (%s)", o.TokenLifetimeMS,
+			MinTokenLifetime.Milliseconds(), MinTokenLifetime, MaxTokenLifetime.Milliseconds(), MaxTokenLifetime)
 	case o.TokenLifetimeMS > 0 && p.transport != HTTP:
 		return errors.New("auth: token_lifetime_ms applies only to HTTP listeners")
 	}
@@ -291,10 +296,14 @@ func (p *Policy) begin(ip string, first json.RawMessage) (challenge auth.ServerF
 	}
 	s := l.server.Load()
 	if s == nil {
+		l.limit.release(ip)
 		l.busy.Add(1)
 		return challenge, http.StatusServiceUnavailable, "busy", errors.New("auth: scram server is not running")
 	}
 	challenge, err = s.ProcessClientFirstMessage(req.Username, req.ClientNonce)
+	if err != nil {
+		l.limit.release(ip)
+	}
 	switch {
 	case errors.Is(err, auth.ErrSCRAMTooManyHandshakes), errors.Is(err, auth.ErrSCRAMStopped):
 		l.busy.Add(1)
@@ -409,6 +418,7 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 		authStep
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAuthLine)).Decode(&req); err != nil {
+		p.rejected.Add(1)
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, authStep{Error: "request too large"})
@@ -446,6 +456,7 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 		writeJSON(w, http.StatusOK, authStep{Final: &final, Token: token, ExpiresIn: int64(l.lifetime / time.Second)})
 		return Identity{Name: final.Username, Method: MethodSCRAM}, nil
 	}
+	p.rejected.Add(1)
 	writeJSON(w, http.StatusBadRequest, authStep{Error: "malformed request"})
 	return Identity{}, errors.New("auth request: neither a hello nor a proof")
 }
@@ -736,18 +747,20 @@ func AwaitClose(r *bufio.Reader) error {
 
 // --- Wire helpers ---
 
+// readLine refuses a line over maxAuthLine as soon as it arrives: r buffers
+// far more, for the stream after the exchange.
 func readLine(r *bufio.Reader) ([]byte, error) {
-	var line []byte
 	for {
-		chunk, err := r.ReadSlice('\n')
-		line = append(line, chunk...)
-		if len(line) > maxAuthLine {
+		b, _ := r.Peek(r.Buffered())
+		if i := bytes.IndexByte(b, '\n'); i >= 0 && i < maxAuthLine {
+			line := bytes.Clone(bytes.TrimRight(b[:i+1], "\r\n"))
+			r.Discard(i + 1)
+			return line, nil
+		}
+		if len(b) >= maxAuthLine {
 			return nil, fmt.Errorf("line exceeds %d bytes", maxAuthLine)
 		}
-		if err == nil {
-			return bytes.TrimRight(line, "\r\n"), nil
-		}
-		if err != bufio.ErrBufferFull {
+		if _, err := r.Peek(len(b) + 1); err != nil {
 			return nil, err
 		}
 	}
@@ -811,9 +824,10 @@ type limiter struct {
 }
 
 type peerLimit struct {
-	bucket  *tokenbucket.TokenBucket
-	pending map[string]time.Time // full nonce -> expiry
-	seen    time.Time
+	bucket   *tokenbucket.TokenBucket
+	pending  map[string]time.Time // full nonce -> expiry
+	reserved int                  // started, challenge not yet issued
+	seen     time.Time
 }
 
 func (l *limiter) start(ip string) bool {
@@ -835,19 +849,31 @@ func (l *limiter) start(ip string) bool {
 		l.peers[ip] = pl
 	}
 	pl.seen = now
-	for nonce, expiry := range pl.pending {
-		if now.After(expiry) {
-			delete(pl.pending, nonce)
-		}
+	pl.expire(now)
+	// Reserved under this lock: concurrent hellos cannot all pass the check
+	if len(pl.pending)+pl.reserved >= limitPending || !pl.bucket.Allow() {
+		return false
 	}
-	return len(pl.pending) < limitPending && pl.bucket.Allow()
+	pl.reserved++
+	return true
 }
 
+// track turns start's reservation into the exchange's nonce
 func (l *limiter) track(ip, nonce string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if pl := l.peers[ip]; pl != nil {
+		pl.reserved--
 		pl.pending[nonce] = time.Now().Add(auth.ScramHandshakeTimeout)
+	}
+}
+
+// release frees start's reservation when no challenge was issued
+func (l *limiter) release(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if pl := l.peers[ip]; pl != nil {
+		pl.reserved--
 	}
 }
 
@@ -867,11 +893,20 @@ func (l *limiter) succeeded(ip string) {
 	}
 }
 
+func (pl *peerLimit) expire(now time.Time) {
+	for nonce, expiry := range pl.pending {
+		if now.After(expiry) {
+			delete(pl.pending, nonce)
+		}
+	}
+}
+
 // sweep drops addresses idle long enough for their bucket to be full again
 func (l *limiter) sweep(now time.Time) {
 	l.lastSweep = now
 	for ip, pl := range l.peers {
-		if now.Sub(pl.seen) > limitIdle && len(pl.pending) == 0 {
+		pl.expire(now) // an abandoned HTTP challenge has no done
+		if now.Sub(pl.seen) > limitIdle && len(pl.pending) == 0 && pl.reserved == 0 {
 			delete(l.peers, ip)
 		}
 	}

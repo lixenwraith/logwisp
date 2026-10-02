@@ -127,11 +127,12 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	generate := fs.Bool("generate", false, "generate a new password, replacing any -password-file; needed to rotate without one")
 	return func(stdout, stderr io.Writer) error {
 		creds, err := authz.LoadCredentials(*path)
-		switch {
-		case errors.Is(err, os.ErrNotExist):
-			creds = &authz.Credentials{DecoyKey: make([]byte, 32)}
+		// An empty file is one created beforehand to choose its owner
+		if fi, serr := os.Stat(*path); errors.Is(err, os.ErrNotExist) || serr == nil && fi.Size() == 0 {
+			creds, err = &authz.Credentials{DecoyKey: make([]byte, 32)}, nil
 			rand.Read(creds.DecoyKey)
-		case err != nil:
+		}
+		if err != nil {
 			return err
 		}
 		i := slices.IndexFunc(creds.Users, func(c *auth.Credential) bool { return c.Username == *user })
@@ -287,7 +288,9 @@ func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			var r io.Reader
 			if r, err = policy.Greet(ctx, conn, ""); err == nil {
 				defer context.AfterFunc(ctx, func() { conn.Close() })()
-				_, err = io.Copy(stdout, r)
+				if _, err = io.Copy(stdout, r); err == nil {
+					err = errors.New("stream closed by server")
+				}
 			}
 		}
 		if ctx.Err() != nil {
@@ -332,10 +335,16 @@ func encodeCredentials(creds *authz.Credentials) ([]byte, error) {
 	return data, err
 }
 
-// writeAtomic replaces path by rename, so the daemon never reads a partial
-// file, keeping an existing file's mode and owner (0600 for a new one).
-// Keeping the owner is best effort: only root may give a file away.
+// writeAtomic replaces path (a symlink's target) by rename, so the daemon
+// never reads a partial file, keeping an existing file's mode and owner (0600
+// for a new one). A change that would lose the owner fails: the daemon could
+// no longer read the file and would keep the old users.
 func writeAtomic(path string, data []byte) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	mode, uid, gid := os.FileMode(0o600), -1, -1
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
@@ -354,8 +363,8 @@ func writeAtomic(path string, data []byte) error {
 		err = tmp.Chmod(mode)
 	}
 	if err == nil && uid >= 0 {
-		if err = tmp.Chown(uid, gid); errors.Is(err, os.ErrPermission) {
-			err = nil
+		if err = tmp.Chown(uid, gid); err != nil {
+			err = fmt.Errorf("%s: cannot keep owner %d:%d (run as root or that owner): %w", path, uid, gid, err)
 		}
 	}
 	if err == nil {

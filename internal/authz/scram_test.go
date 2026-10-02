@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -257,7 +258,7 @@ func TestGreetEndsWithContext(t *testing.T) {
 }
 
 // An exchange abandoned after its challenge leaves the auth handshake table
-// at once instead of holding a slot until it times out.
+// and the limiter at once instead of holding a slot until it times out.
 func TestAbandonedExchangeReleasesItsSlot(t *testing.T) {
 	f := newFixture(t)
 	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
@@ -292,6 +293,12 @@ func TestAbandonedExchangeReleasesItsSlot(t *testing.T) {
 	if _, err := l.listener.server.Load().ProcessClientFinalMessage(step.Challenge.FullNonce, "AAAA"); !errors.Is(err, auth.ErrSCRAMInvalidNonce) {
 		t.Fatalf("abandoned handshake still pending: %v", err)
 	}
+	lim := &l.listener.limit
+	lim.mu.Lock()
+	defer lim.mu.Unlock()
+	if pl := lim.peers["pipe"]; pl == nil || len(pl.pending) != 0 || pl.reserved != 0 {
+		t.Fatalf("limiter still holds the abandoned exchange: %+v", pl)
+	}
 }
 
 // A refusal after authentication, such as node binding, reaches the dialer as
@@ -308,7 +315,8 @@ func TestRejectAfterExchangeSendsReason(t *testing.T) {
 }
 
 // With identity set under scram, the client certificate must name the user:
-// a peer needs its own certificate and its own password.
+// a peer needs its own certificate and its own password, and a token works
+// only with the certificate of its login.
 func TestCertificateBindsToUser(t *testing.T) {
 	f := newFixture(t)
 	mtls := f.serverTLS.Clone()
@@ -320,47 +328,152 @@ func TestCertificateBindsToUser(t *testing.T) {
 	if res, _, _ := f.connect(t, l, mtls, f.dialer(t, "edge-02", "edge-02-secret"), nil); !errors.Is(res.err, ErrRefused) {
 		t.Fatalf("edge-01's certificate admitted user edge-02: %v", res.err)
 	}
+
+	h := f.listener(t, config.AuthOptions{Identity: "cn"}, mtls, RoleListener, HTTP)
+	srv, _ := f.httpListener(t, h, mtls)
+	d := f.dialer(t, "edge-01", "edge-01-secret")
+	token, err := d.Token(t.Context(), f.httpClient(d), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := f.clientTLS.Clone()
+	cert, key := f.pki.Leaf(t, "edge-02", "edge-02", true)
+	other.Certificates = []tls.Certificate{f.keyPair(t, cert, key)}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: other}}
+	resp := get(t, client, srv.URL+"/protected", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) })
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("edge-01's token with edge-02's certificate: %d, want 403", resp.StatusCode)
+	}
 }
 
-// Failed attempts drain an address's budget; beyond it the listener answers
-// "too many attempts" without running the exchange.
-func TestFailedAttemptsAreThrottled(t *testing.T) {
+// An unknown user's challenge salt comes from the file's decoy key, so it is
+// the same after a restart and a prober learns nothing from restarts.
+func TestUnknownUserSaltSurvivesRestart(t *testing.T) {
+	f := newFixture(t)
+	var salts []string
+	for range 2 {
+		l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+		c, err := l.listener.server.Load().ProcessClientFirstMessage("nobody", strings.Repeat("n", 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		salts = append(salts, c.Salt)
+	}
+	if salts[0] != salts[1] {
+		t.Fatalf("unknown user salts differ across restarts: %q, %q", salts[0], salts[1])
+	}
+}
+
+// Unauthenticated peers get 4 KiB: a longer hello line or /auth body is
+// refused before it is parsed.
+func TestPreAuthInputIsCapped(t *testing.T) {
 	f := newFixture(t)
 	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+	sc, cc := net.Pipe()
+	server, client := tls.Server(sc, f.serverTLS), tls.Client(cc, f.clientTLS)
+	t.Cleanup(func() { sc.Close(); cc.Close() })
+	done := make(chan error, 1)
+	go func() {
+		server.Handshake()
+		cs := server.ConnectionState()
+		_, err := l.Admit(server, &cs, true, 5*time.Second)
+		done <- err
+	}()
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	go client.Write(bytes.Repeat([]byte("x"), 2*maxAuthLine))
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized hello: %v", err)
+	}
+
+	h := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	srv, _ := f.httpListener(t, h, f.serverTLS)
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: f.clientTLS}}
+	resp, err := hc.Post(srv.URL+chain.AuthPath, "application/json", bytes.NewReader(bytes.Repeat([]byte(" "), 2*maxAuthLine)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized /auth body: %d, want 413", resp.StatusCode)
+	}
+}
+
+// A dialer refuses a challenge below its Argon2 floor before computing a
+// proof, so a hostile server cannot obtain a cheaply guessable one.
+func TestDialerRefusesACheapChallenge(t *testing.T) {
+	f := newFixture(t) // verifiers at t=1, m=64 KiB
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+	d := f.dialer(t, "edge-01", "edge-01-secret")
+	minArgonTime, minArgonMemory = auth.DefaultArgonTime, auth.DefaultArgonMemory
+	t.Cleanup(func() { minArgonTime, minArgonMemory = 1, 64 })
+	if _, _, err := f.connect(t, l, f.serverTLS, d, nil); !errors.Is(err, auth.ErrSCRAMParamsTooSmall) {
+		t.Fatalf("cheap challenge: %v", err)
+	}
+	if n := l.allowed.Load(); n != 0 {
+		t.Fatalf("logins = %d, want 0", n)
+	}
+}
+
+// Only failed attempts drain an address's budget; beyond it the listener
+// answers "too many attempts" without running the exchange.
+func TestOnlyFailedAttemptsAreThrottled(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+	right := f.dialer(t, "edge-01", "edge-01-secret")
+	for i := range limitBurst + 1 {
+		if _, _, err := f.connect(t, l, f.serverTLS, right, nil); err != nil {
+			t.Fatalf("successful login %d: %v", i, err)
+		}
+	}
 	wrong := f.dialer(t, "edge-01", "not-the-secret")
 	for range limitBurst {
 		f.connect(t, l, f.serverTLS, wrong, nil)
 	}
-	_, _, err := f.connect(t, l, f.serverTLS, f.dialer(t, "edge-01", "edge-01-secret"), nil)
+	_, _, err := f.connect(t, l, f.serverTLS, right, nil)
 	if err == nil || !strings.Contains(err.Error(), "too many attempts") || l.listener.throttled.Load() != 1 {
 		t.Fatalf("attempt over budget: %v, throttled %d", err, l.listener.throttled.Load())
 	}
 }
 
-// Successes are refunded, unfinished exchanges are capped per address, and a
-// full table refuses new addresses rather than growing without bound.
+// Successes are refunded; unfinished exchanges are capped per address from
+// the moment they start, so concurrent hellos cannot all pass; a full table
+// refuses new addresses, and the sweep frees addresses whose challenges were
+// abandoned.
 func TestLimiterBounds(t *testing.T) {
 	var l limiter
 	for i := range 2 * limitBurst {
 		if !l.start("10.0.0.1") {
 			t.Fatalf("successful attempt %d throttled", i)
 		}
+		l.track("10.0.0.1", "n")
+		l.done("10.0.0.1", "n")
 		l.succeeded("10.0.0.1")
 	}
 	for i := range limitPending {
 		if !l.start("10.0.0.2") {
 			t.Fatalf("pending exchange %d throttled", i)
 		}
-		l.track("10.0.0.2", string(rune('a'+i)))
 	}
 	if l.start("10.0.0.2") {
-		t.Fatal("an exchange beyond the pending cap was admitted")
+		t.Fatal("an exchange beyond the pending cap was admitted before any challenge")
+	}
+	l.release("10.0.0.2")
+	if !l.start("10.0.0.2") {
+		t.Fatal("a released reservation still counts")
 	}
 	for i := len(l.peers); i < limitPeers; i++ {
-		l.peers[net.IPv4(10, 1, byte(i>>8), byte(i)).String()] = &peerLimit{seen: time.Now()}
+		l.peers[net.IPv4(10, 1, byte(i>>8), byte(i)).String()] = &peerLimit{
+			seen: time.Now(), pending: map[string]time.Time{"abandoned": time.Now().Add(time.Second)},
+		}
 	}
 	if l.start("192.0.2.1") {
 		t.Fatal("a full table admitted a new address")
+	}
+	l.sweep(time.Now().Add(2 * limitIdle))
+	if len(l.peers) != 1 { // 10.0.0.2 still holds its reservations
+		t.Fatalf("%d addresses left after their challenges expired, want 1", len(l.peers))
 	}
 }
 
@@ -517,7 +630,8 @@ func TestReadPasswordTrimsOneLineBreak(t *testing.T) {
 	}
 }
 
-// A credentials file is validated whole, and Marshal round-trips.
+// A credentials file is validated whole, and Marshal round-trips. Each case
+// breaks one rule of an otherwise valid file.
 func TestCredentialsFileValidation(t *testing.T) {
 	f := newFixture(t)
 	data, err := os.ReadFile(f.creds)
@@ -529,20 +643,21 @@ func TestCredentialsFileValidation(t *testing.T) {
 		t.Fatalf("round trip: %+v, %v", c, err)
 	}
 	valid := string(data)
-	dup := strings.Replace(valid, `"edge-02"`, `"edge-01"`, 1)
+	decoyLine := regexp.MustCompile(`(?m)^decoy_key = .*\n`)
 	stronger := cheapCredential(t, "edge-03", "edge-03-secret")
 	stronger.ArgonTime = 2
 	mixed, _ := (&Credentials{DecoyKey: c.DecoyKey, Users: []*auth.Credential{c.Users[0], stronger}}).Marshal()
-	for name, contents := range map[string]string{
-		"no decoy key":  strings.Replace(valid, "decoy_key", "decoy_kex", 1),
-		"short decoy":   "decoy_key = \"AAAA\"\n",
-		"no users":      "decoy_key = \"" + strings.Repeat("A", 44) + "\"\n",
-		"duplicate":     dup,
-		"unknown key":   strings.Replace(valid, "argon_time", "argon_tme", 1),
-		"mixed profile": string(mixed),
+	for name, tc := range map[string]struct{ contents, want string }{
+		"no decoy key":     {decoyLine.ReplaceAllString(valid, ""), "decoy_key must hold"},
+		"short decoy":      {decoyLine.ReplaceAllString(valid, "decoy_key = \"AAAA\"\n"), "decoy_key must hold"},
+		"no users":         {decoyLine.FindString(valid), "no users"},
+		"duplicate":        {strings.Replace(valid, `"edge-02"`, `"edge-01"`, 1), "duplicate user"},
+		"unknown user key": {strings.Replace(valid, "argon_time", "comment = 1\nargon_time", 1), `unknown key "comment"`},
+		"unknown file key": {"comment = 1\n" + valid, `unknown key "comment"`},
+		"mixed profile":    {string(mixed), "profile differs"},
 	} {
-		if _, err := ParseCredentials([]byte(contents)); err == nil {
-			t.Errorf("%s: accepted", name)
+		if _, err := ParseCredentials([]byte(tc.contents)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error %v, want %q", name, err, tc.want)
 		}
 	}
 }
@@ -561,7 +676,7 @@ func TestScramListenerAuthorizeFailsClosed(t *testing.T) {
 // refused request each lifetime.
 func TestTokenIsRenewedBeforeExpiry(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: 1000}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: MinTokenLifetime.Milliseconds()}, f.serverTLS, RoleListener, HTTP)
 	srv, _ := f.httpListener(t, l, f.serverTLS)
 	d := f.dialer(t, "edge-01", "edge-01-secret")
 	client := f.httpClient(d)
@@ -576,7 +691,11 @@ func TestTokenIsRenewedBeforeExpiry(t *testing.T) {
 	if n := l.allowed.Load(); n != 1 {
 		t.Fatalf("logins within the lifetime = %d, want 1", n)
 	}
-	time.Sleep(600 * time.Millisecond) // past lifetime - margin (500 ms)
+	ahead := time.Until(time.Unix(0, d.dialer.renewAt.Load()))
+	if ahead <= 0 || ahead > MinTokenLifetime-5*time.Second {
+		t.Fatalf("renewal scheduled %v ahead, want within lifetime - 5 s", ahead)
+	}
+	d.dialer.renewAt.Store(time.Now().UnixNano()) // the renewal point arrives
 	prepare()
 	if n := l.allowed.Load(); n != 2 {
 		t.Fatalf("logins after the renewal point = %d, want 2", n)
