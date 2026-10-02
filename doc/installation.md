@@ -242,7 +242,8 @@ sudo service logwisp status        # FreeBSD
 ```
 
 Expect `Created source instance`, `Created sink instance` and
-`Starting pipeline` for each pipeline. There is no validate-only mode; see
+`Starting pipeline` for each pipeline. To validate a configuration without
+starting it, run `lw --check -c FILE`; see
 [Operations](operations.md#checking-a-configuration).
 
 ## Test Scripts

@@ -15,6 +15,9 @@ GIT_COMMIT ?= $(GIT_COMMIT_DEFAULT)
 BUILD_TIME_DEFAULT != f='+%Y-%m-%d_%H:%M:%S'; e="$${SOURCE_DATE_EPOCH:-}"; \
 	if [ -n "$$e" ]; then date -u -d "@$$e" "$$f" 2>/dev/null || date -u -r "$$e" "$$f"; else date -u "$$f"; fi
 BUILD_TIME ?= $(BUILD_TIME_DEFAULT)
+# The image stamps the commit time, so a rebuild of one commit stays cached
+IMAGE_BUILD_TIME_DEFAULT != TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%d_%H:%M:%S 2>/dev/null || echo unknown
+IMAGE_BUILD_TIME ?= $(IMAGE_BUILD_TIME_DEFAULT)
 VERSION_LDFLAGS = -X 'logwisp/internal/version.Version=$(VERSION)' \
 	-X 'logwisp/internal/version.GitCommit=$(GIT_COMMIT)' \
 	-X 'logwisp/internal/version.BuildTime=$(BUILD_TIME)'
@@ -74,7 +77,7 @@ help:
 	@echo "Container:"
 	@echo "  image        Build $(IMAGE):$(IMAGE_TAG) with $(CONTAINER_ENGINE) (scratch, static, UID 65532)"
 	@echo "  image-check  Run it read-only, offline, without capabilities: --version, then"
-	@echo "               start $(IMAGE_CHECK_CONFIG) and stop it cleanly"
+	@echo "               --check on $(IMAGE_CHECK_CONFIG)"
 	@echo "Install (build or release first):"
 	@echo "  install      Binary, manual, sample config, service files, licence and docs"
 	@echo "  uninstall    Remove them, keeping $(SYSCONFDIR)/logwisp"
@@ -145,25 +148,15 @@ image:
 	$(CONTAINER_ENGINE) build "$$@" $(IMAGE_BUILD_FLAGS) \
 		--build-arg VERSION='$(VERSION)' \
 		--build-arg REVISION='$(IMAGE_REVISION)' \
+		--build-arg BUILD_TIME='$(IMAGE_BUILD_TIME)' \
 		-t '$(IMAGE):$(IMAGE_TAG)' .
 
-# There is no validate-only mode, so the config check is a start that must still
-# be running after a few seconds and must exit 0 on SIGTERM.
+# --check builds every pipeline and plugin, as a start would, and binds nothing
 image-check:
 	$(IMAGE_RUN) --rm '$(IMAGE):$(IMAGE_TAG)' --version
 	@set -eu; cfg='$(IMAGE_CHECK_CONFIG)'; case "$$cfg" in /*) ;; *) cfg="$$(pwd)/$$cfg" ;; esac; \
-	cid=$$($(IMAGE_RUN) -d --mount "type=bind,src=$$cfg,dst=/etc/logwisp/logwisp.toml,readonly" \
-		'$(IMAGE):$(IMAGE_TAG)' -c /etc/logwisp/logwisp.toml); \
-	trap '$(CONTAINER_ENGINE) rm -f "$$cid" >/dev/null' EXIT; \
-	sleep 3; \
-	running=$$($(CONTAINER_ENGINE) inspect -f '{{.State.Running}}' "$$cid"); \
-	$(CONTAINER_ENGINE) stop -t 10 "$$cid" >/dev/null; \
-	code=$$($(CONTAINER_ENGINE) inspect -f '{{.State.ExitCode}}' "$$cid"); \
-	if [ "$$running" != true ] || [ "$$code" != 0 ]; then \
-		$(CONTAINER_ENGINE) logs "$$cid"; \
-		echo "image-check: $$cfg: running=$$running exit=$$code"; exit 1; \
-	fi; \
-	echo "image-check: $$cfg started and stopped cleanly"
+	$(IMAGE_RUN) --rm --mount "type=bind,src=$$cfg,dst=/etc/logwisp/logwisp.toml,readonly" \
+		'$(IMAGE):$(IMAGE_TAG)' --check -c /etc/logwisp/logwisp.toml
 
 # install stages what a package ships and compiles nothing, so a packager owns
 # the build flags. The service files get the installed paths substituted; a
@@ -203,6 +196,7 @@ uninstall:
 		if [ -e "$$f" ]; then rm -f "$$f"; echo "remove  $$f"; fi; \
 	done; \
 	for d in "$$root$(DOCDIR)" "$$root$(LICENSEDIR)"; do \
+		case "$$d" in */logwisp) ;; *) echo "keep    $$d (not a logwisp directory)"; continue ;; esac; \
 		if [ -d "$$d" ]; then rm -rf "$$d"; echo "remove  $$d"; fi; \
 	done; \
 	echo "keep    $$root$(SYSCONFDIR)/logwisp (configuration and credentials)"

@@ -20,10 +20,11 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 ARG REVISION=unknown
+ARG BUILD_TIME=unknown
 # REVISION identifies the commit: the context has no .git, so no VCS stamping.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -buildvcs=false \
-      -ldflags="-s -w -X logwisp/internal/version.Version=${VERSION} -X logwisp/internal/version.GitCommit=${REVISION}" \
+      -ldflags="-s -w -X logwisp/internal/version.Version=${VERSION} -X logwisp/internal/version.GitCommit=${REVISION} -X logwisp/internal/version.BuildTime=${BUILD_TIME}" \
       -o /out/lw ./cmd/lw
 
 FROM scratch

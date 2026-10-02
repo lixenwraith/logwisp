@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -120,5 +121,24 @@ func TestMisspelledSpecKeyFailsPluginConstruction(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), `unknown key "tls.enabeld"`) {
 		t.Fatalf("misspelled spec key accepted: %v", err)
+	}
+}
+
+// lw --check builds every plugin, so a bad option fails it, but starts none:
+// the port a valid sink names stays free.
+func TestCheckBuildsWithoutStarting(t *testing.T) {
+	testLogger(t)
+	path := filepath.Join(t.TempDir(), "empty.toml")
+	testutil.WriteFile(t, path, "")
+	if code := checkConfig(loadTestConfig(t, path, "--source", "null", "--sink", "http,host=127.0.0.1,port=15862")); code != 0 {
+		t.Fatalf("valid configuration: exit %d", code)
+	}
+	ln, err := net.Listen("tcp4", "127.0.0.1:15862")
+	if err != nil {
+		t.Fatalf("check bound the sink's port: %v", err)
+	}
+	ln.Close()
+	if code := checkConfig(loadTestConfig(t, path, "--source", "null", "--sink", "http,port=15862,tls.enabled=true")); code != 1 {
+		t.Fatalf("listener TLS without a certificate: exit %d, want 1", code)
 	}
 }

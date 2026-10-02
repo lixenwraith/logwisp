@@ -11,11 +11,12 @@ const helpText = `LogWisp %s - log collection, processing, and distribution
 
 Usage:
   lw [options]
+  lw --check [options]          Build every pipeline and plugin, report, exit
   lw help | -h | --help
   lw --version
 
 Subcommands:
-  lw auth <command>        SCRAM credentials files, bearer tokens and tcp
+  lw auth <command>             SCRAM credentials files, bearer tokens and tcp
                                 sink viewing; lw auth -h lists commands
 
 Scalar configuration keys are settable as flags using their TOML paths:

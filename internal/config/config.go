@@ -6,6 +6,7 @@ package config
 type Config struct {
 	// Top-level flags for application control
 	ShowVersion bool `toml:"version"`
+	Check       bool `toml:"check"` // build every plugin, report, exit: lw --check
 	Quiet       bool `toml:"quiet"`
 
 	// Runtime behavior flags

@@ -53,6 +53,9 @@ func main() {
 		fmt.Println(version.String())
 		os.Exit(0)
 	}
+	if cfg.Check {
+		os.Exit(checkConfig(cfg))
+	}
 
 	if err := initializeLogger(cfg); err != nil {
 		FatalError(1, "Failed to initialize logger: %v\n", err)
@@ -63,9 +66,13 @@ func main() {
 		FatalError(1, "Failed to start logger: %v\n", err)
 	}
 
+	configFile := cfg.ConfigFile
+	if _, err := os.Stat(configFile); err != nil {
+		configFile = "none" // flags, environment and built-in defaults only
+	}
 	logger.Info("msg", "LogWisp starting",
 		"version", version.String(),
-		"config_file", cfg.ConfigFile,
+		"config_file", configFile,
 		"log_output", cfg.Logging.Output,
 		"status_reporter", cfg.StatusReporter,
 		"auto_reload", cfg.ConfigAutoReload)

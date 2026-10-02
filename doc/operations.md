@@ -70,16 +70,16 @@ File-watch errors do not restart services, and queued changes are combined.
 
 ### Checking a configuration
 
-There is no validate-only mode. To check a file, start it with debug logging and
-watch for pipeline startup:
+`lw --check` builds every pipeline and plugin as a start would, without binding
+or reading anything, prints the startup warnings, and exits 0 or 1:
 
 ```bash
-lw -c candidate.toml --logging.level=debug --logging.output=stderr
+lw --check -c candidate.toml
 ```
 
-Success looks like `Created source instance`, `Created sink instance`, and
-`Starting pipeline` for each pipeline. Failures name the pipeline and the
-offending key:
+Before a reload, check the edited file this way: a failed reload keeps the
+running service, but `--check` says why without touching it. Failures name the
+pipeline and the offending key:
 
 ```
 ERROR msg="Failed to create pipeline" pipeline=app error="failed to create sink out: port: must be 1-65535, got 0"

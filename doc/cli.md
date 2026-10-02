@@ -232,8 +232,15 @@ lw
 lw -c /etc/logwisp/logwisp.toml --logging.level=debug
 ```
 
-There is no dry-run or validate-only mode. The closest approximation is starting
-with debug logging and stopping once the pipelines report as started.
+`lw --check` validates without running: it builds every pipeline and plugin as
+a start would (options, TLS files, credentials files, startup warnings), binds
+and reads nothing, prints `configuration ok` and exits 0, or the error and
+exits 1:
+
+```bash
+lw --check -c /etc/logwisp/logwisp.toml
+lw --check --source file,directory=/var/log/app --sink http,port=8080
+```
 
 **Production**
 
