@@ -274,6 +274,14 @@ open stream outlives its token; a reconnect after expiry gets `401`. `/auth`
 takes only `application/json`, which a cross-origin page cannot send without a
 preflight nobody answers.
 
+**Token mode.** A proof step without `"session"` gets the token in the answer
+body, in proxy mode as everywhere else, so a browser that keeps no cookies needs
+no server change. `scram.js` asks for it with `{session: "token"}`, reads the
+stream through `fetch` with the bearer (`EventSource` cannot send one), and
+revokes it with `logout(base, {token})`. The viewer falls back to it when a
+cookie would not stick or a fresh cookie login still gets `401`, and keeps the
+token in a page variable only: it lasts no longer than the page or its lifetime.
+
 **Endpoints.** `/auth` and every path under it are reserved; every URL in the
 pages is relative, so a proxy prefix works unchanged.
 
@@ -288,20 +296,22 @@ Files carry `default-src 'none'; script-src 'self'; connect-src 'self';
 style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
 `nosniff` and `no-referrer`; nothing is inline. The viewer learns a custom
 `status_path` from a meta tag the sink fills in, renders entries as text, and
-sends a signed-out visitor to `login?next=view`; the login page follows `next`
-only within its origin. The `proxy_tls` capability satisfies the pipeline's
-"auth needs TLS" check.
+sends a signed-out visitor to `login?next=view` (or, without cookies, shows its
+own sign-in form); the login page follows `next` only within its origin. The
+`proxy_tls` capability satisfies the pipeline's "auth needs TLS" check.
 
 **Client library.** `internal/sink/http/web/scram.js`, embedded with `go:embed`,
 is one dependency-free ES module, so a site with its own CSP can copy it into
-its bundle. It exports `login(base, username, password, {onProgress})` and
-`logout(base)`. BLAKE2b and Argon2id are plain JS (no WebAssembly, which would
-need `'wasm-unsafe-eval'`), yielding to the page every 50 ms; SHA-256 and HMAC
-come from WebCrypto, so it needs a secure context. It checks the challenge as
-the Go client does (nonce, salt, cost limits and the dialer's Argon2 floor),
-refuses redirects, and reports success only after verifying the server's
-signature. A 64 MiB login takes about 2 s on a desktop. The wire protocol above
-is the contract: a site may implement its own client.
+its bundle. It exports `login(base, username, password, {onProgress, session})`,
+`logout(base, {token})`, `stream(url, {token, signal, onEvent})` (an event
+stream parsed as the HTML standard does) and `cookiesUsable()`. BLAKE2b and
+Argon2id are plain JS (no WebAssembly, which would need `'wasm-unsafe-eval'`),
+yielding to the page every 50 ms; SHA-256 and HMAC come from WebCrypto, so it
+needs a secure context. It checks the challenge as the Go client does (nonce,
+salt, cost limits and the dialer's Argon2 floor), refuses redirects, and reports
+success only after verifying the server's signature. A 64 MiB login takes about
+2 s on a desktop. The wire protocol above is the contract: a site may implement
+its own client.
 
 **CLI.** `lw auth token -unbound` logs in through the proxy, still pinning
 its certificate across the two requests; only then may `-url` carry the mount
@@ -336,7 +346,8 @@ their types and CSP, direct peers refused, pages only in proxy mode, and the
 CLI: private files with a matching verifier, no password replaced without a
 source, mode, decoy key and symlink kept across rewrites, an empty file filled,
 last-user refusal. Under node, `scram.js` against the RFC 9106 vector, Go's
-`argon2.IDKey`, and `auth`'s known-answer proof.
+`argon2.IDKey`, and `auth`'s known-answer proof; the event-stream line breaks
+and fields, the bearer, refusals and abort; a token-mode login and logout.
 
 `test/scram-chain-test.sh --auto` (ports 15821-15825): a relay with SCRAM on all
 four listener types plus one `client_auth` + SCRAM port; authorized edges over
@@ -349,7 +360,10 @@ last. `test/scram-proxy-test.sh --auto` (ports 15831-15832): a Go reverse proxy
 ending TLS in front of a plaintext `http` sink mounted at `/logs/`; headless
 Chromium sent to the login page, refused a wrong password, streaming events
 after login, with the cookie scoped to `/logs` and hidden from scripts, cleared
-by sign-out, and no CSP violations; `token -unbound` and curl through the
+by sign-out, and no CSP violations; a cookie the browser drops leading to the
+viewer's own form, not a loop; a profile blocking every cookie signing in on the
+viewer, streaming with a bearer and storing nothing, sign-out revoking the
+token, and a reload's `401` asking again; `token -unbound` and curl through the
 proxy; direct peers and plaintext-forwarded requests `403`. The existing
 scripts keep passing.
 

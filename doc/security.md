@@ -541,28 +541,50 @@ location /logs/ {
   could relay a login. Keep that hop on loopback or a trusted network, or
   enable `tls` on the sink; a plaintext hop to a proxy off this host is
   warned about at startup. `identity` cannot be combined with proxy mode.
-- **Sessions.** The page asks for a cookie: `logwisp_session`, `HttpOnly`,
-  `Secure`, `SameSite=Strict`, `Max-Age` the token lifetime, and no `Path`, so
-  it scopes itself to the mount (`/logs` above). Stream and status accept it or
-  a bearer token, so `new EventSource("/logs/stream")` works on any page of the
-  site, beside the site's own Basic auth too, and `lw auth token -unbound`
-  keeps working. `POST /auth` with
-  `{"logout": true}` clears the cookie and revokes the token until it expires.
-  `/auth` takes only `application/json`, which a cross-origin page cannot send
-  without a preflight.
+- **Sessions.** The login page asks for a cookie: `logwisp_session`,
+  `HttpOnly`, `Secure`, `SameSite=Strict`, `Max-Age` the token lifetime, and no
+  `Path`, so it scopes itself to the mount (`/logs` above). Stream and status
+  accept it or a bearer token, so `new EventSource("/logs/stream")` works on any
+  page of the site, beside the site's own Basic auth too, and `lw auth token
+  -unbound` keeps working. `POST /auth` with `{"logout": true}` clears the
+  cookie and revokes the token until it expires. `/auth` takes only
+  `application/json`, which a cross-origin page cannot send without a preflight.
+- **Private windows.** A private or incognito window keeps cookies in memory,
+  apart from normal windows: it signs in on its own, and its session ends at the
+  token lifetime or when the private window closes.
+- **Cookies disabled.** The viewer runs in token mode when the browser keeps no
+  cookie for the site.
+  - It notices from `navigator.cookieEnabled`, from a throwaway cookie with the
+    session's attributes that does not come back (Chromium blocking every cookie
+    still reports `cookieEnabled`), or from a `401` right after a cookie login,
+    and shows its own sign-in form.
+  - The token lives in a page variable only, never in storage or the URL. It
+    lasts as long as the page and at most the token lifetime: a reload, another
+    tab, or a reconnect after expiry asks again; sign out revokes it.
+  - The login page says that cookies are unavailable and links to the viewer.
+- **Integrating `scram.js`.** A site with its own CSP can copy `scram.js` from
+  `internal/sink/http/web/` into its bundle: one dependency-free ES module,
+  where `base` is the mount URL ending in `/`. It needs a secure context for
+  WebCrypto and takes about 2 s of Argon2 per login on a desktop.
+  - Cookie mode, the default: `login(base, username, password, {onProgress})`,
+    then `EventSource` and `fetch` as for any same-origin resource;
+    `logout(base)`.
+  - Token mode: `login(..., {session: "token"})` resolves to `{username,
+    expiresIn, token}`. Keep the token in memory; `stream(url, {token, signal,
+    onEvent})` reads the event stream through `fetch` with the bearer, status
+    takes `Authorization: Bearer`, and `logout(base, {token})` revokes it. The
+    bearer replaces the Basic credentials a browser would send, so token mode
+    cannot pass a proxy that asks for its own Basic auth.
+  - `cookiesUsable()` tells which applies: false when the session cookie would
+    not stick.
 - **Pages.** Under `/auth/` the sink serves `scram.js` always, and with
   `login_page` / `viewer_page` the login page and a minimal live viewer with
   their script and style, under `default-src 'none'; script-src 'self';
   connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors
-  'none'; base-uri 'none'`. A site with its own CSP can copy `scram.js` from
-  `internal/sink/http/web/` into its bundle: one dependency-free ES module
-  exporting `login(base, username, password, {onProgress})` and
-  `logout(base)`, where `base` is the mount URL ending in `/`. It needs a
-  secure context for WebCrypto and takes about 2 s of Argon2 per login on a
-  desktop.
+  'none'; base-uri 'none'`.
 
 `test/scram-proxy-test.sh --auto` logs in from headless Chromium through such a
-proxy.
+proxy, with cookies and with every cookie blocked.
 
 ## What Each Layer Enforces
 
