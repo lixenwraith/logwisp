@@ -185,19 +185,24 @@ run_in() { # FILE COMMAND...: COMMAND reads FILE on stdin
 trun() { if [ -n "$JAIL" ]; then run jexec "$JAIL" "$@"; else run "$@"; fi; }
 tprobe() { if [ -n "$JAIL" ]; then jexec "$JAIL" "$@"; else "$@"; fi; }
 
-put_file() { # PATH MODE < CONTENT
+# put_file writes stdin, or SOURCE, to PATH in the target: a jail's own
+# symlinks then resolve inside the jail, never on the host.
+put_file() { # PATH MODE [SOURCE]
 	if [ "$DRY_RUN" = 1 ]; then
-		printf '+ write %s (mode %s):\n' "$(shquote "$1")" "$2"
-		sed 's/^/    | /'
+		if [ -n "${3:-}" ]; then
+			printf '+ copy %s to %s (mode %s)%s\n' "$(shquote "$3")" "$(shquote "$1")" "$2" "${JAIL:+ in jail $JAIL}"
+		else
+			printf '+ write %s (mode %s)%s:\n' "$(shquote "$1")" "$2" "${JAIL:+ in jail $JAIL}"
+			sed 's/^/    | /'
+		fi
 		return 0
 	fi
-	_tmp=$1.lw-deploy.$$
-	if cat >"$_tmp" && chmod "$2" "$_tmp" && mv -f "$_tmp" "$1"; then
-		note "wrote $1"
-	else
-		rm -f "$_tmp"
-		die "cannot write $1"
-	fi
+	[ -z "${3:-}" ] || { put_file "$1" "$2" <"$3"; return; }
+	# shellcheck disable=SC2016 # expanded by the inner shell
+	tprobe /bin/sh -c 'umask 077 && t=$1.lw-deploy.$$ &&
+		{ cat >"$t" && chmod "$2" "$t" && mv -f "$t" "$1" || { rm -f "$t"; exit 1; }; }' put_file "$1" "$2" ||
+		die "cannot write $1${JAIL:+ in jail $JAIL}"
+	note "wrote $1${JAIL:+ in jail $JAIL}"
 }
 
 # --- prompts: a value given as a flag is validated, never asked again ---
@@ -324,7 +329,7 @@ v_port() {
 	bad "not a port (1-65535): $1"
 }
 v_abs() {
-	case $1 in *:*) bad "':' cannot appear in a mounted path: $1" ;; /*) return 0 ;; *) bad "not an absolute path: $1" ;; esac
+	case $1 in *:* | *"$NL"*) bad "':' or a newline cannot appear in a mounted path: $1" ;; /*) return 0 ;; *) bad "not an absolute path: $1" ;; esac
 }
 v_ident() { case $1 in '' | *[!A-Za-z0-9._@-]*) bad "use letters, digits and . _ @ -: $1" ;; esac; }
 v_cname() { case $1 in [A-Za-z0-9]*) case $1 in *[!A-Za-z0-9_.-]*) ;; *) return 0 ;; esac ;; esac; bad "not a container name: $1"; }
@@ -682,6 +687,9 @@ resolve() {
 		fi
 		[ -z "$BUILD_CA" ] || v_file "$BUILD_CA" || exit 1
 		[ -z "$NETWORK" ] || v_word "$NETWORK" || exit 1
+		if [ "$NETWORK" != host ] && [ "$ROLE" != edge ]; then
+			case $LISTEN in *:*) ;; *[!0-9.]*) die "--listen $LISTEN: a container publishes its ports on an IP address, not a host name" ;; esac
+		fi
 	fi
 	[ -z "$BIN" ] || v_file "$BIN" || exit 1
 	for _var in CERT_FILE KEY_FILE CA_FILE PASSWORD_FILE BUILD_CA BIN; do
@@ -698,6 +706,7 @@ resolve() {
 derive() {
 	C_CERT=$CONF_LW/tls/node.crt C_KEY=$CONF_LW/tls/node.key C_CA=$CONF_LW/tls/ca.crt
 	C_PASS=$CONF_LW/chain.pass C_USERS=$CONF_LW/users.toml C_VIEWERS=$CONF_LW/viewers.toml
+	CONF_T=${CONF_HOST#"$ROOT"} # CONF_HOST as seen from inside the target
 	LISTEN=${LISTEN:-0.0.0.0}
 	BIND=$LISTEN
 	[ "$RUNTIME" = docker ] && [ "$NETWORK" != host ] && BIND=0.0.0.0
@@ -868,7 +877,7 @@ equivalent() {
 	eq_list --add-viewer "$ADD_VIEWERS"
 	eq_opt --secrets-dir "$SECRETS_DIR"
 	[ "$RUNTIME" = manual ] || { if [ "$START" = yes ]; then eq --start; else eq --no-start; fi; }
-	printf '%s%s \\\n    --yes\n' "$0" "$EQ"
+	printf '%s%s \\\n    --yes\n' "$(shquote "$0")" "$EQ"
 }
 
 plan() {
@@ -905,13 +914,11 @@ own() { OWNED=$(add_item "$OWNED" "$1"); }
 
 install_copy() { # SRC REL MODE: a copy inside the configuration directory
 	own "$2"
-	[ "$1" = "$CONF_HOST/$2" ] && return 0
-	run install -m "$3" "$1" "$CONF_HOST/$2" || die "cannot copy $1"
+	[ "$1" = "$CONF_HOST/$2" ] || put_file "$CONF_T/$2" "$3" "$1"
 }
 
 apply_owner() {
-	_base=$CONF_LW
-	[ "$RUNTIME" = docker ] && _base=$CONF_HOST
+	_base=$CONF_T
 	set --
 	IFS=$NL
 	for _r in $OWNED; do set -- "$@" "$_base/$_r"; done
@@ -939,7 +946,7 @@ output_dir() {
 		esac
 		return 0
 	fi
-	run install -d -m 0750 "$ROOT$FILE_DIR" || die "cannot create $FILE_DIR"
+	trun install -d -m 0750 "$FILE_DIR" || die "cannot create $FILE_DIR"
 	case $RUNTIME in
 	docker) [ "$CHOWN_IMAGE" = 0 ] || run chown "$_owner" "$FILE_DIR" ;;
 	native) trun chown "$_owner" "$FILE_DIR" ;;
@@ -950,10 +957,10 @@ write_files() {
 	if [ -d "$CONF_HOST" ] && [ ! -f "$CONF_HOST/logwisp.toml" ] && [ -n "$(ls -A "$CONF_HOST" 2>/dev/null)" ] && [ "$RUNTIME" != native ]; then
 		die "$CONF_HOST holds other files; choose an empty or a LogWisp --config-dir"
 	fi
-	run install -d -m 0750 "$CONF_HOST" || die "cannot create $CONF_HOST"
+	trun install -d -m 0750 "$CONF_T" || die "cannot create $CONF_HOST"
 	if [ -n "$CERT_FILE$CA_FILE" ]; then
 		own tls
-		run install -d -m 0750 "$CONF_HOST/tls" || die "cannot create $CONF_HOST/tls"
+		trun install -d -m 0750 "$CONF_T/tls" || die "cannot create $CONF_HOST/tls"
 	fi
 	[ -z "$CERT_FILE" ] || install_copy "$CERT_FILE" tls/node.crt "$FILE_MODE"
 	[ -z "$KEY_FILE" ] || install_copy "$KEY_FILE" tls/node.key "$SECRET_MODE"
@@ -965,14 +972,14 @@ write_files() {
 	for _f in $_creds; do
 		own "$_f"
 		# lw auth keeps an existing file's owner and mode.
-		[ -f "$CONF_HOST/$_f" ] || put_file "$CONF_HOST/$_f" "$SECRET_MODE" </dev/null
+		[ -f "$CONF_HOST/$_f" ] || put_file "$CONF_T/$_f" "$SECRET_MODE" </dev/null
 	done
 	if [ -f "$CONF_HOST/logwisp.toml" ] && [ "$DRY_RUN" = 0 ]; then
-		run cp -p "$CONF_HOST/logwisp.toml" "$CONF_HOST/logwisp.toml.bak"
+		trun cp -p "$CONF_T/logwisp.toml" "$CONF_T/logwisp.toml.bak" || die "cannot keep a backup"
 	fi
 	own logwisp.toml
 	_text=$(gen_config)
-	put_file "$CONF_HOST/logwisp.toml" "$FILE_MODE" <<EOF
+	put_file "$CONF_T/logwisp.toml" "$FILE_MODE" <<EOF
 $_text
 EOF
 	apply_owner
@@ -984,6 +991,15 @@ gen_password() { # FILE: kept when it exists, so a rerun keeps the password
 	printf '+ generate a password into %s\n' "$(shquote "$1")"
 	[ "$DRY_RUN" = 1 ] && return 0
 	(umask 077 && od -An -tx1 -N16 /dev/urandom | tr -d ' \n' >"$1" && echo >>"$1") || die "cannot write $1"
+}
+
+keep_passwords() { # CREDENTIALS(rel) NAMES: a new password would lock out an existing user
+	IFS=$NL
+	for _u in $2; do
+		[ -s "$SECRETS_DIR/$_u.pass" ] || ! grep -qxF "username = \"$_u\"" "$CONF_HOST/$1" 2>/dev/null ||
+			die "user $_u exists in $1, but $SECRETS_DIR/$_u.pass does not: give the --secrets-dir holding it, or remove the user (lw auth remove-user)"
+	done
+	IFS=$OIFS
 }
 
 add_users() { # CREDENTIALS(rel) NAMES
@@ -1060,7 +1076,7 @@ EOF
 
 	_dropin=''
 	case $FILE_DIR in '' | /var/log/logwisp | /var/lib/logwisp) ;; *) _dropin="${_dropin}ReadWritePaths=\"$FILE_DIR\"$NL" ;; esac
-	case $NL$LOG_DIRS in *"$NL/home"* | *"$NL/root"* | *"$NL/run/user"*) _dropin="${_dropin}ProtectHome=read-only$NL" ;; esac
+	case $NL$LOG_DIRS$NL$FILE_DIR in *"$NL/home"* | *"$NL/root"* | *"$NL/run/user"*) _dropin="${_dropin}ProtectHome=read-only$NL" ;; esac
 	[ -z "$LOG_GROUP" ] || _dropin="${_dropin}SupplementaryGroups=$LOG_GROUP$NL"
 	for _p in $CHAIN_PORT $HTTP_PORT $TCP_PORT; do
 		[ "$ROLE" = edge ] && break
@@ -1084,15 +1100,15 @@ EOF
 
 freebsd_prepare() {
 	pick_bin /usr/local/bin
-	[ -z "$BIN_SRC" ] || run install -m 0755 "$BIN_SRC" "$ROOT/usr/local/bin/lw" || die "cannot install lw"
+	trun install -d -m 0755 /usr/local/bin /usr/local/etc/rc.d || exit 1
+	[ -z "$BIN_SRC" ] || put_file /usr/local/bin/lw 0755 "$BIN_SRC"
 	if [ "$DRY_RUN" = 1 ] || ! tprobe pw usershow logwisp >/dev/null 2>&1; then
 		trun pw useradd logwisp -d /nonexistent -s /usr/sbin/nologin -c "LogWisp log transport" ||
 			die "cannot create the logwisp user"
 	fi
 	[ -z "$LOG_GROUP" ] || trun pw groupmod "$LOG_GROUP" -m logwisp || die "cannot add logwisp to $LOG_GROUP"
 	_rc=$(pkg_text logwisp.rc 's|%%PREFIX%%|/usr/local|g') || exit 1
-	run install -d -m 0755 "$ROOT/usr/local/etc/rc.d" || exit 1
-	put_file "$ROOT/usr/local/etc/rc.d/logwisp" 0555 <<EOF
+	put_file /usr/local/etc/rc.d/logwisp 0555 <<EOF
 $_rc
 EOF
 }
@@ -1208,7 +1224,7 @@ next_steps() {
 			note "  status:  curl $_c$_u/status"
 			;;
 		mtls) note "  status:  curl --cacert CA --cert CERT --key KEY $_u/status" ;;
-		scram) note "  status:  curl with a bearer token from: lw auth token -url $_u -user USER -password-file FILE (doc/cli.md)" ;;
+		scram) note "  status:  curl with a bearer token from: lw auth token -url $_u -user USER -password-file FILE -ca-file CA (doc/cli.md)" ;;
 		esac
 		note "  stream:  $_u/stream"
 	fi
@@ -1217,8 +1233,8 @@ next_steps() {
 		note "           there: $PROG --role edge --tls --auth scram --username USER --password-file FILE ..."
 	fi
 	[ -z "$ADD_VIEWERS" ] || note "  viewers: lw auth token / lw auth stream with $SECRETS_DIR/USER.pass (doc/cli.md)"
-	if [ "$ROLE" = edge ] && [ "$AUTH" = none ]; then
-		note "  without an auth block the aggregator trusts any node label a peer claims"
+	if [ "$ROLE" != standalone ] && [ "$AUTH" = none ]; then
+		note "  without chain auth the aggregator admits any peer and trusts the node label it claims"
 	fi
 	if [ "$SINK_AUTH" = none ] && [ -n "$HTTP_PORT$TCP_PORT" ]; then
 		note "  the http/tcp outputs admit anyone who reaches them: bind --listen to a trusted address"
@@ -1240,6 +1256,8 @@ main() {
 		die "${OLD_CONF:-container $NAME} exists (--force replaces it)"
 	fi
 
+	keep_passwords users.toml "$ADD_USERS"
+	keep_passwords viewers.toml "$ADD_VIEWERS"
 	case $RUNTIME in
 	docker)
 		[ "$DRY_RUN" = 1 ] || "$ENGINE" info >/dev/null 2>&1 || die "cannot reach $ENGINE"
