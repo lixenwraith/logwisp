@@ -296,9 +296,10 @@ Files carry `default-src 'none'; script-src 'self'; connect-src 'self';
 style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
 `nosniff` and `no-referrer`; nothing is inline. The viewer learns a custom
 `status_path` from a meta tag the sink fills in, renders entries as text, and
-sends a signed-out visitor to `login?next=view` (or, without cookies, shows its
-own sign-in form); the login page follows `next` only within its origin. The
-`proxy_tls` capability satisfies the pipeline's "auth needs TLS" check.
+sends a signed-out visitor to `login?next=view%23signed-in` (the fragment marks
+a fresh cookie login; without cookies it shows its own sign-in form); the login
+page follows `next` only within its origin. The `proxy_tls` capability
+satisfies the pipeline's "auth needs TLS" check.
 
 **Client library.** `internal/sink/http/web/scram.js`, embedded with `go:embed`,
 is one dependency-free ES module, so a site with its own CSP can copy it into
@@ -361,11 +362,11 @@ ending TLS in front of a plaintext `http` sink mounted at `/logs/`; headless
 Chromium sent to the login page, refused a wrong password, streaming events
 after login, with the cookie scoped to `/logs` and hidden from scripts, cleared
 by sign-out, and no CSP violations; a cookie the browser drops leading to the
-viewer's own form, not a loop; a profile blocking every cookie signing in on the
-viewer, streaming with a bearer and storing nothing, sign-out revoking the
-token, and a reload's `401` asking again; `token -unbound` and curl through the
-proxy; direct peers and plaintext-forwarded requests `403`. The existing
-scripts keep passing.
+viewer's own form, not a loop, its token kept out of storage and the URL; a
+profile blocking every cookie signing in on the viewer, streaming with a bearer
+and storing nothing, sign-out revoking the token, and a reload's `401` asking
+again; `token -unbound` and curl through the proxy; direct peers and
+plaintext-forwarded requests `403`. The existing scripts keep passing.
 
 ## Not Implemented
 

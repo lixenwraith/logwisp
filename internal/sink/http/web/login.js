@@ -44,8 +44,8 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-// A cookie session cannot outlive this page without cookies; the viewer, when
-// the sink serves it, keeps a token in memory instead
+// A sign-in here only sets a cookie; the viewer, when the sink serves it,
+// signs in by itself and keeps a token in memory instead
 async function cookiesUnavailable() {
   status.textContent = "This browser keeps no cookie for this site, so a sign-in here would not last.";
   const viewer = await fetch("view", { method: "HEAD", cache: "no-store", redirect: "error" }).catch(() => null);

@@ -549,9 +549,9 @@ location /logs/ {
   -unbound` keeps working. `POST /auth` with `{"logout": true}` clears the
   cookie and revokes the token until it expires. `/auth` takes only
   `application/json`, which a cross-origin page cannot send without a preflight.
-- **Private windows.** A private or incognito window keeps cookies in memory,
-  apart from normal windows: it signs in on its own, and its session ends at the
-  token lifetime or when the private window closes.
+- **Private windows.** Private or incognito windows keep cookies in memory,
+  apart from normal windows: they sign in on their own, and the session ends at
+  the token lifetime or when the last private window closes.
 - **Cookies disabled.** The viewer runs in token mode when the browser keeps no
   cookie for the site.
   - It notices from `navigator.cookieEnabled`, from a throwaway cookie with the
