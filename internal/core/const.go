@@ -1,8 +1,27 @@
 package core
 
 import (
+	"fmt"
+	"net/netip"
+	"strings"
 	"time"
 )
+
+// Network is what a listener on, or a dialer to, host uses: tcp4 for an IPv4
+// literal or "" (the IPv4 wildcard, as the default 0.0.0.0), tcp6 for an IPv6
+// literal, which Go binds IPv6-only, and tcp for a hostname, which resolves.
+func Network(host string) (string, error) {
+	addr, err := netip.ParseAddr(host)
+	switch {
+	case host == "" || err == nil && addr.Is4():
+		return "tcp4", nil
+	case err == nil:
+		return "tcp6", nil
+	case strings.ContainsAny(host, "[]:"):
+		return "", fmt.Errorf("%q is neither an address nor a hostname (write an IPv6 address without brackets or port)", host)
+	}
+	return "tcp", nil
+}
 
 const (
 	MaxLogEntryBytes = 1024 * 1024
