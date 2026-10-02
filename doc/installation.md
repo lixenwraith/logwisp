@@ -30,7 +30,8 @@ The Makefile works with GNU make and BSD make alike. Targets:
     `main`, linux and freebsd cross builds for amd64 and arm64, and the web
     client's `node --test` when node is installed
   - `make e2e`: builds, then runs every `test/*-test.sh --auto` in turn and
-    reports; `E2E='test/scram-*-test.sh'` runs a subset
+    reports passes, failures and skips; `E2E='test/scram-*-test.sh'` runs a
+    subset; see [Test Scripts](#test-scripts)
 - Container
   - `make image`, `make image-check`: see [Container Image](#container-image)
 - Install
@@ -135,6 +136,8 @@ rc.conf variables:
 - `logwisp_user`: the account (default `logwisp`)
 - `logwisp_chdir`: the working directory (default `/var/db/logwisp`, created
   for `logwisp_user` when missing)
+- `logwisp_args`: extra `lw` options, e.g. `--logging.level=debug` (default
+  empty); `logwisp_flags` goes to `daemon(8)`, not to `lw`
 
 ### Uninstall
 
@@ -157,9 +160,8 @@ make image-check
 
 `image-check` runs the image the way it should run in production: read-only,
 `--network none`, `--cap-drop ALL`, `no-new-privileges`, as 65532. It prints
-`--version`, then starts `config/logwisp.toml` (or `IMAGE_CHECK_CONFIG`)
-mounted read-only and requires it to be running after three seconds and to
-exit 0 on `SIGTERM`.
+`--version`, then runs `--check` on `config/logwisp.toml` (or
+`IMAGE_CHECK_CONFIG`) mounted read-only.
 
 Building behind a proxy:
 
@@ -249,7 +251,26 @@ starting it, run `lw --check -c FILE`; see
 ## Test Scripts
 
 The end-to-end scripts in `test/` run against `bin/lw`; `make e2e` runs them
-all with `--auto`. Without `--auto`, the chain scripts leave the relay in the
-foreground for inspection, and `--keep` skips the teardown after a pass. Each
-script names its port range and its run directory under `test/` in its
-header, and the run directories are gitignored.
+all with `--auto` and reports skips separately from passes and failures.
+Without `--auto`, a script keeps its daemons up for inspection (the chain
+scripts run the relay in the foreground), and `--keep` skips the teardown
+after a pass. Each script names its port range and its run directory under
+`test/` in its header, and the run directories are gitignored.
+
+- `chain-test.sh`: two edges into a relay, one pipeline per chain transport;
+  ports 15801-15804
+- `chain-aggregate-test.sh`: the same edges, with the relay fanning both into
+  both sinks; ports 15801-15804
+- `passthrough-test.sh`: `file` source to `file` sink, byte-exact; no ports
+- `mtls-chain-test.sh`: mTLS chain edges and viewers, allow lists, node
+  binding; ports 15811-15814
+- `scram-chain-test.sh`: SCRAM chain edges and viewers with `lw auth`
+  credentials; ports 15821-15825
+- `scram-proxy-test.sh`: browser and CLI logins to an `http` sink behind a
+  TLS-terminating proxy; ports 15831-15832; the browser checks need node with
+  playwright and are skipped without it
+- `ipv6-test.sh`: a relay on `::1` over both chain transports, IPv6 SANs,
+  per-family listeners; ports 15851-15855; skips (exit 77) without an IPv6
+  loopback
+- `deploy-test.sh`: the configurations `deploy/lw-deploy.sh` writes, deployed
+  and checked; ports 15871-15879
