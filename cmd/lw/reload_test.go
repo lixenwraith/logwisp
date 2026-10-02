@@ -106,3 +106,19 @@ func TestEveryPluginRejectsUnknownKeys(t *testing.T) {
 		check("sink", name, err)
 	}
 }
+
+// A misspelled spec key reaches the plugin as the nested key it names, so the
+// sink refuses to build instead of starting without the TLS it was asked for.
+func TestMisspelledSpecKeyFailsPluginConstruction(t *testing.T) {
+	testLogger(t)
+	path := filepath.Join(t.TempDir(), "empty.toml")
+	testutil.WriteFile(t, path, "")
+	cfg := loadTestConfig(t, path, "--source", "null", "--sink", "http,host=127.0.0.1,port=15861,tls.enabeld=true")
+	svc, err := bootstrapService(context.Background(), cfg)
+	if err == nil {
+		svc.Shutdown()
+	}
+	if err == nil || !strings.Contains(err.Error(), `unknown key "tls.enabeld"`) {
+		t.Fatalf("misspelled spec key accepted: %v", err)
+	}
+}
