@@ -163,7 +163,8 @@ One small package, mirroring `internal/tlsx`, is the single seam between the
 against the sibling TLS config and returns `(nil, nil)` when auth is disabled;
 every method tolerates a nil receiver, so call sites never branch on config.
 Listeners admit only through `Admit` (TCP) and `AuthorizeRequest` (HTTP); the
-current API, including SCRAM, is in [scram-auth-plan.md](scram-auth-plan.md#the-authz-seam).
+current API, including SCRAM, is in
+[scram-auth-plan.md](scram-auth-plan.md#the-authz-seam).
 
 ### Enforcement Points
 
@@ -171,18 +172,19 @@ current API, including SCRAM, is in [scram-auth-plan.md](scram-auth-plan.md#the-
 
 Handshake → `Admit` (authorize, then read hello) → `ResolveNode` → create
 session. Under `mtls` the certificate is checked before the hello is read, so
-an unauthorized peer never gets a preamble parsed on its behalf. `chain.DecodeEntry` is then
-called with `auth.TrustsEntryNode(trust_node)` rather than `trust_node` itself.
+an unauthorized peer never gets a preamble parsed on its behalf.
+`chain.DecodeEntry` is then called with `auth.TrustsEntryNode(trust_node)`
+rather than `trust_node` itself.
 
 **`http_chain` source** (`internal/source/httpchain/httpchain.go`, `handleIngest`)
 
-Per request, through `AuthorizeRequest`, before the body is read — an unauthorized sender does
-not get to stream `max_body_bytes` into the process. Rejection is `403`,
-distinct from the `400` used for protocol errors, so a sender can tell "you are
-not allowed" from "your batch was malformed". `ResolveNode` then governs the
-`X-Logwisp-Node` header exactly as it governs the TCP hello. The session cache
-key includes the identity, so two peers sharing a remote address never share a
-session.
+Per request, through `AuthorizeRequest`, before the body is read — an
+unauthorized sender does not get to stream `max_body_bytes` into the process.
+Rejection is `403`, distinct from the `400` used for protocol errors, so a
+sender can tell "you are not allowed" from "your batch was malformed".
+`ResolveNode` then governs the `X-Logwisp-Node` header exactly as it governs the
+TCP hello. The session cache key includes the identity, so two peers sharing a
+remote address never share a session.
 
 **`tcp` sink** (`internal/sink/tcp/tcp.go`, `handleConn`)
 

@@ -37,8 +37,9 @@ no certificates: see [Security](security.md#enabling-mtls).
     reach an aggregator by container name; `host` publishes nothing
   - `--image` defaults to `logwisp:dev`, the `make image` tag; `--build` builds
     it from the repository. Behind an HTTPS-intercepting proxy add
-    `--build-ca FILE` and, for a proxy on loopback, `--build-flags "--network host"`;
-    the environment's proxy variables pass through as build arguments
+    `--build-ca FILE` and, for a proxy on loopback,
+    `--build-flags "--network host"`; the environment's proxy variables pass
+    through as build arguments
   - rootful engines need root to give the files to 65532; rootless podman maps
     the caller to 65532 with `--userns keep-id`
   - SELinux hosts must label the mounted directories for containers; the
@@ -52,8 +53,9 @@ no certificates: see [Security](security.md#enabling-mtls).
   - writes `/etc/logwisp/logwisp.toml`, `root:logwisp`, mode 0640
   - adds `logwisp.service.d/deploy.conf` when the node needs it:
     `ReadWritePaths` for an output outside `/var/log/logwisp`,
-    `ProtectHome=read-only` for logs or output under `/home`, `SupplementaryGroups` for
-    `--log-group`, `CAP_NET_BIND_SERVICE` for a port below 1024
+    `ProtectHome=read-only` for logs or output under `/home`,
+    `SupplementaryGroups` for `--log-group`, `CAP_NET_BIND_SERVICE` for a port
+    below 1024
 - `native`, FreeBSD
   - installs `deploy/package/logwisp.rc` as `/usr/local/etc/rc.d/logwisp`,
     creates the `logwisp` user with `pw`, enables it with `sysrc`; LogWisp logs
