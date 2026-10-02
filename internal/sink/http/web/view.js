@@ -1,6 +1,8 @@
 import { logout } from "./scram.js";
 
 const base = new URL("..", location.href);
+// The server writes its status path here, relative to the mount
+const statusPath = document.querySelector('meta[name="logwisp-status"]').content;
 const MAX_LINES = 5000;
 const log = document.getElementById("log");
 const state = document.getElementById("state");
@@ -20,7 +22,7 @@ function append(line) {
 async function connect() {
   let res;
   try {
-    res = await fetch(new URL("status", base), { credentials: "same-origin", cache: "no-store", redirect: "error" });
+    res = await fetch(new URL("./" + statusPath, base), { credentials: "same-origin", cache: "no-store", redirect: "error" });
   } catch {
     return retry("server unreachable");
   }

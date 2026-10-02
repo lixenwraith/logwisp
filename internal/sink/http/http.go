@@ -76,6 +76,7 @@ type HTTPSink struct {
 
 	// Authorization
 	auth *authz.Policy
+	web  map[string]http.Handler // proxy mode: GET /auth/... browser files
 
 	// Runtime
 	done      chan struct{}
@@ -127,8 +128,10 @@ func NewHTTPSinkPlugin(
 	if opts.StreamPath == opts.StatusPath {
 		return nil, fmt.Errorf("stream_path and status_path must differ")
 	}
-	if opts.StreamPath == chain.AuthPath || opts.StatusPath == chain.AuthPath {
-		return nil, fmt.Errorf("%s is reserved for authentication", chain.AuthPath)
+	for _, p := range []string{opts.StreamPath, opts.StatusPath} {
+		if p == chain.AuthPath || strings.HasPrefix(p, chain.AuthPath+"/") {
+			return nil, fmt.Errorf("%s and the paths under it are reserved for authentication", chain.AuthPath)
+		}
 	}
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultHTTPBufferSize
@@ -144,6 +147,18 @@ func NewHTTPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
+	switch {
+	case (opts.LoginPage || opts.ViewerPage) && !authPolicy.BehindProxy():
+		return nil, errors.New("login_page and viewer_page need auth.trusted_proxies: browsers log in only behind a TLS-terminating proxy")
+	case opts.ViewerPage && !opts.LoginPage:
+		return nil, errors.New("viewer_page needs login_page, where it sends a signed-out viewer")
+	}
+	var web map[string]http.Handler
+	if authPolicy.BehindProxy() {
+		if web, err = webHandlers(opts); err != nil {
+			return nil, err
+		}
+	}
 
 	h := &HTTPSink{
 		id:           id,
@@ -158,6 +173,7 @@ func NewHTTPSinkPlugin(
 		keepalive:    core.StreamKeepaliveInterval,
 		tlsConfig:    tlsCfg,
 		auth:         authPolicy,
+		web:          web,
 	}
 	h.lastProcessed.Store(time.Time{})
 
@@ -170,7 +186,9 @@ func NewHTTPSinkPlugin(
 		"status_path", opts.StatusPath,
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
-		"auth", authPolicy.Describe())
+		"auth", authPolicy.Describe(),
+		"login_page", opts.LoginPage,
+		"viewer_page", opts.ViewerPage)
 	tlsx.LogWarnings(logger, "http_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_sink", id, false)
 	return h, nil
@@ -181,6 +199,9 @@ func (h *HTTPSink) Capabilities() []core.Capability {
 	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
 	if h.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
+	}
+	if h.auth.BehindProxy() {
+		caps = append(caps, core.CapProxyTLS)
 	}
 	if h.auth.Enabled() {
 		caps = append(caps, core.CapAuth) // authorizes clients, not just the CA
@@ -222,13 +243,20 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	mux.HandleFunc(http.MethodHead+" "+h.config.StreamPath, streamHeadNotAllowed)
 
 	// One wrapper covers stream and status, and keeps the handlers themselves
-	// unaware of authorization. The login endpoint must sit outside it.
+	// unaware of authorization. Login and its browser files sit outside it;
+	// in proxy mode everything sits behind the proxy gate.
 	var handler http.Handler = mux
 	if h.auth.Enabled() {
 		outer := http.NewServeMux()
 		outer.HandleFunc(http.MethodPost+" "+chain.AuthPath, h.handleAuth)
+		for p, file := range h.web {
+			outer.Handle(http.MethodGet+" "+p, file)
+		}
 		outer.Handle("/", h.authMiddleware(mux))
 		handler = outer
+		if h.auth.BehindProxy() {
+			handler = h.proxyGate(outer)
+		}
 	}
 
 	h.server = &http.Server{
@@ -370,7 +398,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rc := http.NewResponseController(w)
-	remote := r.RemoteAddr
+	remote := clientAddr(r)
 
 	meta := map[string]any{
 		"type": "http_client",
@@ -572,7 +600,7 @@ func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 			h.logger.Warn("msg", "Request rejected by auth policy",
 				"component", "http_sink",
 				"instance_id", h.id,
-				"remote_addr", r.RemoteAddr,
+				"remote_addr", clientAddr(r),
 				"path", r.URL.Path,
 				"error", err)
 			authz.Refuse(w, status)
@@ -590,13 +618,13 @@ func (h *HTTPSink) handleAuth(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("msg", "Login rejected",
 			"component", "http_sink",
 			"instance_id", h.id,
-			"remote_addr", r.RemoteAddr,
+			"remote_addr", clientAddr(r),
 			"error", err)
 	case ident.Name != "":
 		h.logger.Info("msg", "Login accepted",
 			"component", "http_sink",
 			"instance_id", h.id,
-			"remote_addr", r.RemoteAddr,
+			"remote_addr", clientAddr(r),
 			"auth_identity", ident.Name)
 	}
 }

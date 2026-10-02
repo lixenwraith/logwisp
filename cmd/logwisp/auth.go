@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 
 	"logwisp/internal/authz"
@@ -230,18 +231,26 @@ func defineRemoveUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 }
 
 func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
-	rawURL := fs.String("url", "", "listener `URL`, https://HOST:PORT")
+	rawURL := fs.String("url", "", "listener `URL`, https://HOST:PORT (with -unbound, a proxy's mount URL may carry a path)")
 	user := fs.String("user", "", "user `name`")
 	passwordFile := fs.String("password-file", "", "`file` holding the password")
+	unbound := fs.Bool("unbound", false, "log in without channel binding, to an http sink behind a TLS-terminating proxy (auth.trusted_proxies)")
 	tlsOpts := tlsFlags(fs)
 	return func(stdout, _ io.Writer) error {
 		u, err := url.Parse(*rawURL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-			return usageError("-url must be https://HOST:PORT, without a path")
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+			return usageError("-url must be https://HOST:PORT")
+		}
+		if u.Path = strings.TrimSuffix(u.Path, "/"); u.Path != "" && !*unbound {
+			// TLS passthrough cannot route by path: only a terminating proxy can
+			return usageError("-url takes a path only with -unbound")
 		}
 		tlsCfg, policy, err := dialPolicy(tlsOpts, u.Hostname(), *user, *passwordFile, authz.HTTP)
 		if err != nil {
 			return err
+		}
+		if *unbound {
+			policy.Unbind()
 		}
 		client := &http.Client{
 			Transport: &http.Transport{
@@ -255,7 +264,7 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			// A redirect would carry the login to another endpoint
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
-		token, err := policy.Token(context.Background(), client, "https://"+u.Host)
+		token, err := policy.Token(context.Background(), client, "https://"+u.Host+u.Path)
 		if err != nil {
 			return err
 		}

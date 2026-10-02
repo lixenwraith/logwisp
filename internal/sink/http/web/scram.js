@@ -43,8 +43,14 @@ export async function login(base, username, password, { onProgress } = {}) {
   return { username, expiresIn };
 }
 
+// Logout posts to auth itself: a clearing cookie from any other path would
+// get another default path and miss the session cookie
 export async function logout(base) {
-  const res = await send(new URL("auth/logout", base), { method: "POST" });
+  const res = await send(new URL("auth", base), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ logout: true }),
+  });
   if (res.status !== 200 && res.status !== 204) {
     throw new Error(`logout failed: ${res.status}`);
   }

@@ -282,6 +282,8 @@ type HTTPSinkOptions struct {
 	ClientBufferSize int64        `toml:"client_buffer_size"` // per-client send queue
 	WriteTimeoutMS   int64        `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
 	MaxConnections   int64        `toml:"max_connections"`    // 0 = unlimited
+	LoginPage        bool         `toml:"login_page"`         // GET /auth/login, needs auth.trusted_proxies
+	ViewerPage       bool         `toml:"viewer_page"`        // GET /auth/view, needs login_page
 	Auth             *AuthOptions `toml:"auth"`
 }
 
@@ -349,6 +351,10 @@ type AuthOptions struct {
 	// the bearer token lifetime on HTTP listeners (default 15 minutes)
 	CredentialsFile string `toml:"credentials_file"`
 	TokenLifetimeMS int64  `toml:"token_lifetime_ms"`
+
+	// scram http sink: addresses or CIDRs of the reverse proxies that end the
+	// browsers' TLS; logins are then unbound and sessions may be cookies
+	TrustedProxies []string `toml:"trusted_proxies"`
 
 	// scram dialers: the identity presented and the file holding its password
 	Username     string `toml:"username"`

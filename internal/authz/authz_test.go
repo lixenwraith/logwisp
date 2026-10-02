@@ -113,6 +113,7 @@ func TestNewValidation(t *testing.T) {
 	pw := f.write(t, "pw", "edge-01-secret\n")
 	scram := func(o config.AuthOptions) *config.AuthOptions { o.Type = MethodSCRAM; return &o }
 	listener := func(o config.AuthOptions) *config.AuthOptions { o.CredentialsFile = f.creds; return scram(o) }
+	proxies := []string{"127.0.0.1", "10.0.0.0/8"}
 	dialer := func(o config.AuthOptions) *config.AuthOptions {
 		o.Username, o.PasswordFile = "edge-01", pw
 		return scram(o)
@@ -149,6 +150,13 @@ func TestNewValidation(t *testing.T) {
 		{"scram dialer without a password", scram(config.AuthOptions{Username: "edge-01"}), &tls.Config{}, RoleDialer, TCP, "requires username and password_file"},
 		{"scram dialer with credentials", dialer(config.AuthOptions{CredentialsFile: f.creds}), &tls.Config{}, RoleDialer, TCP, "only to listeners"},
 		{"scram dialer skips verify", dialer(config.AuthOptions{}), &tls.Config{InsecureSkipVerify: true}, RoleDialer, TCP, "insecure_skip_verify"},
+		{"trusted proxies without a type", &config.AuthOptions{TrustedProxies: proxies}, nil, RoleListener, HTTP, "trusted_proxies is set"},
+		{"trusted proxies under mtls", &config.AuthOptions{Type: MethodMTLS, TrustedProxies: proxies}, mtlsListenerTLS(), RoleListener, HTTP, "trusted_proxies applies only"},
+		{"trusted proxies on a chain source", listener(config.AuthOptions{TrustedProxies: proxies}), nil, RoleChainListener, HTTP, "only to the http sink"},
+		{"trusted proxies on tcp", listener(config.AuthOptions{TrustedProxies: proxies}), nil, RoleListener, TCP, "only to the http sink"},
+		{"trusted proxies with certificate binding", listener(config.AuthOptions{TrustedProxies: proxies, Identity: "cn"}), f.serverTLS, RoleListener, HTTP, "TLS-terminating proxy"},
+		{"malformed trusted proxy", listener(config.AuthOptions{TrustedProxies: []string{"localhost"}}), nil, RoleListener, HTTP, "neither an address"},
+		{"trusted proxies on a dialer", dialer(config.AuthOptions{TrustedProxies: proxies}), &tls.Config{}, RoleDialer, HTTP, "only to listeners"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,6 +175,10 @@ func TestNewValidation(t *testing.T) {
 	}
 	if _, err := New(listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, RoleListener, HTTP); err != nil {
 		t.Fatalf("scram listener rejected: %v", err)
+	}
+	// Behind proxies TLS ends at the proxy, so the hop may be plaintext
+	if _, err := New(listener(config.AuthOptions{TrustedProxies: proxies}), nil, RoleListener, HTTP); err != nil {
+		t.Fatalf("proxy-mode listener rejected: %v", err)
 	}
 }
 

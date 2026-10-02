@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -66,6 +67,8 @@ type authStep struct {
 	Final     *auth.ServerFinalMessage `json:"final,omitempty"`
 	Token     string                   `json:"token,omitempty"`
 	ExpiresIn int64                    `json:"expires_in,omitempty"`
+	Session   string                   `json:"session,omitempty"` // "cookie": proxy mode, token in a cookie
+	Logout    bool                     `json:"logout,omitempty"`
 }
 
 // Credentials is a parsed credentials file: the verifiers a listener accepts,
@@ -185,9 +188,10 @@ func ReadPassword(path string) (string, error) {
 
 type scramListener struct {
 	creds    *Credentials
-	cb       []byte    // SHA-256 of this listener's certificate, the channel binding
+	cb       []byte    // SHA-256 of this listener's certificate, the channel binding; nil behind proxies
 	tokens   *auth.JWT // HTTP listeners; a per-instance key, so a reload revokes every token
 	lifetime time.Duration
+	proxy    *proxyMode
 	server   atomic.Pointer[auth.ScramServer]
 	limit    limiter
 
@@ -213,6 +217,10 @@ func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
 			MinTokenLifetime.Milliseconds(), MinTokenLifetime, MaxTokenLifetime.Milliseconds(), MaxTokenLifetime)
 	case o.TokenLifetimeMS > 0 && p.transport != HTTP:
 		return errors.New("auth: token_lifetime_ms applies only to HTTP listeners")
+	case len(o.TrustedProxies) > 0 && (p.role != RoleListener || p.transport != HTTP):
+		return errors.New("auth: trusted_proxies applies only to the http sink")
+	case len(o.TrustedProxies) > 0 && o.Identity != "":
+		return errors.New("auth: identity binds a client certificate, which a TLS-terminating proxy does not pass on; drop it or trusted_proxies")
 	}
 	if o.Identity != "" {
 		// Binds the certificate to the user: a peer needs its own of both
@@ -224,15 +232,23 @@ func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
 			return err
 		}
 	}
-	if len(tlsCfg.Certificates) == 0 || len(tlsCfg.Certificates[0].Certificate) == 0 {
-		return errors.New("auth: type scram needs the listener certificate for channel binding")
+	l := &scramListener{}
+	var err error
+	if len(o.TrustedProxies) > 0 {
+		if l.proxy, err = parseProxies(o.TrustedProxies); err != nil {
+			return err
+		}
+		l.proxy.plaintext = tlsCfg == nil
+	} else {
+		if len(tlsCfg.Certificates) == 0 || len(tlsCfg.Certificates[0].Certificate) == 0 {
+			return errors.New("auth: type scram needs the listener certificate for channel binding")
+		}
+		cb := sha256.Sum256(tlsCfg.Certificates[0].Certificate[0])
+		l.cb = cb[:]
 	}
-	cb := sha256.Sum256(tlsCfg.Certificates[0].Certificate[0])
-	creds, err := LoadCredentials(o.CredentialsFile)
-	if err != nil {
+	if l.creds, err = LoadCredentials(o.CredentialsFile); err != nil {
 		return err
 	}
-	l := &scramListener{creds: creds, cb: cb[:]}
 	if p.transport == HTTP {
 		l.lifetime = DefaultTokenLifetime
 		if o.TokenLifetimeMS > 0 {
@@ -326,13 +342,20 @@ func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState
 		l.busy.Add(1)
 		return auth.ServerFinalMessage{}, errors.New("auth: scram server is not running")
 	}
-	final, err := s.ProcessClientFinalMessage(nonce, step.Proof.ClientProof, auth.WithChannelBinding(l.cb))
+	var bind auth.ExchangeOption // nil, so unbound, behind proxies
+	if l.cb != nil {
+		bind = auth.WithChannelBinding(l.cb)
+	}
+	final, err := s.ProcessClientFinalMessage(nonce, step.Proof.ClientProof, bind)
 	if err == nil {
 		err = p.bindCertificate(cs, final.Username)
 	}
 	if err != nil {
 		p.rejected.Add(1)
-		if step.Binding != "" && step.Binding != base64.StdEncoding.EncodeToString(l.cb) {
+		switch {
+		case step.Binding != "" && l.proxy != nil:
+			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (logwisp auth token -unbound)", err)
+		case step.Binding != "" && step.Binding != base64.StdEncoding.EncodeToString(l.cb):
 			l.bindingMismatch.Add(1)
 			err = fmt.Errorf("%w; the client saw another server certificate: TLS interception or a terminating proxy", err)
 		}
@@ -402,13 +425,26 @@ func (p *Policy) exchangeTCP(a *Admission, cs *tls.ConnectionState) (Identity, [
 }
 
 // ServeAuth answers POST /auth on an HTTP scram listener: a hello gets a
-// challenge, a proof gets the server-final message and a bearer token. It
-// returns the identity of a completed login, or the refusal, for the plugin's
-// log; a challenge alone returns neither.
+// challenge, a proof gets the server-final message and a bearer token (in
+// proxy mode, a session cookie on request), a logout ends a session. It
+// returns the identity of a completed login, or the refusal, for the
+// plugin's log; other steps return neither.
 func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, error) {
 	if p == nil || p.listener == nil || p.listener.tokens == nil {
 		http.NotFound(w, r)
 		return Identity{}, nil
+	}
+	l := p.listener
+	ip, err := p.ClientAddr(r)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, authStep{Error: "forbidden"})
+		return Identity{}, err
+	}
+	// A cross-origin page cannot send JSON without a preflight nobody answers
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		p.rejected.Add(1)
+		writeJSON(w, http.StatusUnsupportedMediaType, authStep{Error: "malformed request"})
+		return Identity{}, errors.New("auth request: Content-Type is not application/json")
 	}
 	rc := http.NewResponseController(w)
 	rc.SetReadDeadline(time.Now().Add(ExchangeTimeout))
@@ -427,8 +463,14 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 		}
 		return Identity{}, fmt.Errorf("auth request: %w", err)
 	}
-	ip := remoteIP(r.RemoteAddr)
+	cookie := req.Session == "cookie"
 	switch {
+	case cookie && l.proxy == nil, req.Session != "" && !cookie, req.Logout && l.proxy == nil:
+		p.rejected.Add(1)
+		writeJSON(w, http.StatusBadRequest, authStep{Error: "sessions and logout need trusted_proxies"})
+		return Identity{}, errors.New("auth request: a browser session outside proxy mode")
+	case req.Logout:
+		return Identity{}, p.logout(w, r)
 	case len(req.Scram) > 0 && req.LogWisp == chain.ProtocolVersion:
 		challenge, status, public, err := p.begin(ip, req.Scram)
 		if err != nil {
@@ -447,13 +489,18 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 			writeJSON(w, status, authStep{Error: "authentication failed"})
 			return Identity{}, err
 		}
-		l := p.listener
 		token, err := l.tokens.GenerateToken(final.Username, nil)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, authStep{Error: "token unavailable"})
 			return Identity{}, err
 		}
-		writeJSON(w, http.StatusOK, authStep{Final: &final, Token: token, ExpiresIn: int64(l.lifetime / time.Second)})
+		answer := authStep{Final: &final, ExpiresIn: int64(l.lifetime / time.Second)}
+		if cookie {
+			http.SetCookie(w, sessionCookie(token, int(l.lifetime/time.Second)))
+		} else {
+			answer.Token = token
+		}
+		writeJSON(w, http.StatusOK, answer)
 		return Identity{Name: final.Username, Method: MethodSCRAM}, nil
 	}
 	p.rejected.Add(1)
@@ -462,22 +509,23 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 }
 
 func (p *Policy) authorizeToken(r *http.Request) (Identity, int, error) {
-	tokens := p.listener.tokens
-	if tokens == nil {
+	l := p.listener
+	if l.tokens == nil {
 		p.rejected.Add(1)
 		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: no token issuer on this listener", ErrRefused)
 	}
-	header := r.Header.Get("Authorization")
-	if header == "" {
-		p.rejected.Add(1)
-		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: no bearer token", ErrRefused)
+	if _, err := p.ClientAddr(r); err != nil {
+		return Identity{}, http.StatusForbidden, err
 	}
-	token, err := auth.ParseBearerToken(header)
+	token, err := p.presentedToken(r)
 	if err != nil {
 		p.rejected.Add(1)
-		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: malformed bearer token", ErrRefused)
+		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: %w", ErrRefused, err)
 	}
-	user, _, err := tokens.ValidateToken(token)
+	user, _, err := l.tokens.ValidateToken(token)
+	if err == nil && l.proxy != nil && l.proxy.isRevoked(token) {
+		err = errors.New("token ended by logout")
+	}
 	if err != nil {
 		p.rejected.Add(1)
 		return Identity{}, http.StatusUnauthorized, fmt.Errorf("%w: bearer %w", ErrRefused, err)
@@ -497,6 +545,13 @@ func (l *scramListener) stats(d map[string]any) {
 	if l.tokens != nil {
 		d["auth_token_lifetime_ms"] = l.lifetime.Milliseconds()
 	}
+	if l.proxy != nil {
+		proxies := make([]string, len(l.proxy.trusted))
+		for i, p := range l.proxy.trusted {
+			proxies[i] = p.String()
+		}
+		d["auth_trusted_proxies"] = proxies
+	}
 }
 
 // --- Dialer ---
@@ -504,6 +559,7 @@ func (l *scramListener) stats(d map[string]any) {
 type scramDialer struct {
 	username string
 	password string
+	unbound  bool // HTTP logins to a listener behind a TLS-terminating proxy
 	token    atomic.Pointer[string]
 	renewAt  atomic.Int64           // unix nanoseconds; Prepare logs in again from then
 	pin      atomic.Pointer[[]byte] // HTTP: certificate the token's login was bound to
@@ -513,8 +569,8 @@ type scramDialer struct {
 
 func (p *Policy) compileSCRAMDialer(o *config.AuthOptions) error {
 	switch {
-	case o.CredentialsFile != "", o.TokenLifetimeMS != 0:
-		return errors.New("auth: credentials_file and token_lifetime_ms apply only to listeners")
+	case o.CredentialsFile != "", o.TokenLifetimeMS != 0, len(o.TrustedProxies) > 0:
+		return errors.New("auth: credentials_file, token_lifetime_ms and trusted_proxies apply only to listeners")
 	case o.Identity != "":
 		return fmt.Errorf("auth: identity on a dialer pins the server and applies only to type %q", MethodMTLS)
 	case o.Username == "" || o.PasswordFile == "":
@@ -531,6 +587,14 @@ func (p *Policy) compileSCRAMDialer(o *config.AuthOptions) error {
 	p.dialer = d
 	p.secrets = append(p.secrets, secretFile{"auth.password_file", o.PasswordFile})
 	return nil
+}
+
+// Unbind makes a dialer's HTTP logins unbound, for an http sink behind a
+// TLS-terminating proxy whose certificate logwisp never sees
+func (p *Policy) Unbind() {
+	if p != nil && p.dialer != nil {
+		p.dialer.unbound = true
+	}
 }
 
 func (d *scramDialer) client() *auth.ScramClient {
@@ -631,12 +695,17 @@ func (p *Policy) Token(ctx context.Context, client *http.Client, baseURL string)
 		return "", errors.New("auth: no challenge over TLS")
 	}
 	cb := certHash(*resp.TLS)
-	d.pin.Store(&cb)
-	proof, err := c.ProcessServerFirstMessage(*step.Challenge, auth.WithChannelBinding(cb))
+	d.pin.Store(&cb) // unbound too: both requests must reach the same server
+	var bind auth.ExchangeOption
+	var binding string
+	if !d.unbound {
+		bind, binding = auth.WithChannelBinding(cb), base64.StdEncoding.EncodeToString(cb)
+	}
+	proof, err := c.ProcessServerFirstMessage(*step.Challenge, bind)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrRefused, err)
 	}
-	body, err := json.Marshal(authStep{Proof: &proof, Binding: base64.StdEncoding.EncodeToString(cb)})
+	body, err := json.Marshal(authStep{Proof: &proof, Binding: binding})
 	if err != nil {
 		return "", err
 	}

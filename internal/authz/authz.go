@@ -126,10 +126,10 @@ func New(o *config.AuthOptions, tlsCfg *tls.Config, role Role, transport Transpo
 	default:
 		return nil, fmt.Errorf("auth: type %q (valid: %q, %q, %q)", o.Type, MethodNone, MethodMTLS, MethodSCRAM)
 	}
-	if tlsCfg == nil {
+	if tlsCfg == nil && (o.Type != MethodSCRAM || len(o.TrustedProxies) == 0) {
 		return nil, fmt.Errorf("auth: type %q requires tls.enabled", o.Type)
 	}
-	if role == RoleDialer && tlsCfg.InsecureSkipVerify {
+	if role == RoleDialer && tlsCfg != nil && tlsCfg.InsecureSkipVerify {
 		// An unverified server makes identities claims and exposes credentials
 		return nil, fmt.Errorf("auth: type %q cannot be used with tls.insecure_skip_verify", o.Type)
 	}
@@ -227,6 +227,8 @@ func scramKey(o *config.AuthOptions) string {
 		return "username"
 	case o.PasswordFile != "":
 		return "password_file"
+	case len(o.TrustedProxies) > 0:
+		return "trusted_proxies"
 	}
 	return ""
 }
@@ -546,6 +548,12 @@ func (p *Policy) LogStartup(l *log.Logger, component, id string, trustNode bool)
 	if p.role == RoleDialer {
 		return
 	}
+	if p.BehindProxy() && p.listener.proxy.exposedHop() {
+		l.Warn("msg", "Trusted proxies may be on other hosts and the hop from them is plaintext: anyone on that path can relay logins and read sessions",
+			"component", component,
+			"instance_id", id,
+			"hint", "keep the proxies on loopback, or enable tls on this listener")
+	}
 	if p.Unrestricted() {
 		l.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
 			"component", component,
@@ -608,6 +616,9 @@ func (p *Policy) Describe() string {
 		cert := "independent"
 		if p.identity != "" {
 			cert = p.identity + "=username"
+		}
+		if p.BehindProxy() {
+			return fmt.Sprintf("%s users=%d unbound behind %d trusted proxy range(s)", MethodSCRAM, len(p.listener.creds.Users), len(p.listener.proxy.trusted))
 		}
 		return fmt.Sprintf("%s users=%d certificate=%s node_binding=%s", MethodSCRAM, len(p.listener.creds.Users), cert, p.binding)
 	}
