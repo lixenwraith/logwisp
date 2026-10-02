@@ -153,7 +153,7 @@ in at ingest.
 
 - `tcp_chain`: per line, each held across reconnects.
   - On failure it retries with exponential backoff plus ±20 % jitter until
-    the line is written or shutdown.
+    the line is written or the sink shuts down.
   - Back-pressure appears upstream as `total_dropped_by_sink`.
 - `http_chain`: at least once per batch.
   - It retries transport errors, `408`, `429`, `5xx` and, under `scram`, failed
