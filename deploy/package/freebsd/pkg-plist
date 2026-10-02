@@ -1,0 +1,3 @@
+bin/lw
+@sample %%ETCDIR%%/logwisp.toml.sample
+share/man/man1/lw.1.gz
