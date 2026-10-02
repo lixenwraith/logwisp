@@ -10,6 +10,7 @@ streams, or downstream LogWisp nodes.
 | Document | Contents |
 |----------|----------|
 | [Installation](installation.md) | Building, installing, and running as a service |
+| [Deployment](deployment.md) | `deploy/lw-deploy.sh`: edges, aggregators, containers, services, jails |
 | [Architecture](architecture.md) | Component model, data flow, concurrency, back-pressure |
 | [Configuration](configuration.md) | TOML structure, precedence, environment and CLI overrides |
 | [Sources](sources.md) | Every input plugin and its options |
