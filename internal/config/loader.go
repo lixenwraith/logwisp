@@ -18,9 +18,10 @@ var ErrConfigNotFound = lconfig.ErrConfigNotFound
 // Manager owns the configuration sources and watcher for one application instance.
 // Its snapshots are detached from each other and from the running service.
 type Manager struct {
-	config *lconfig.Config
-	path   string
-	specs  []pipelineSpec // command-line or environment pipelines, kept across reloads
+	config   *lconfig.Config
+	path     string
+	explicit bool
+	specs    []pipelineSpec // command-line or environment pipelines, kept across reloads
 }
 
 // Load reads the startup sources and validates the initial configuration.
@@ -40,7 +41,7 @@ func Load(args []string) (*Manager, error) {
 	if _, err := buildPipelines(specs); err != nil {
 		return nil, err
 	}
-	m := &Manager{path: configPath, specs: specs}
+	m := &Manager{path: configPath, explicit: isExplicit, specs: specs}
 	initial := defaults()
 	cfg, err := lconfig.NewBuilder().
 		WithTarget(initial).
@@ -109,7 +110,10 @@ func (m *Manager) usePipelines(cfg *Config) error {
 // Reload rereads the selected file, retaining the startup CLI/environment sources.
 // Signals must call this even when automatic watching is disabled.
 func (m *Manager) Reload() (*Config, error) {
-	if err := m.config.LoadFile(m.path); err != nil {
+	// As at startup, a missing discovered default keeps the other sources, so a
+	// file-less instance still rebuilds and rotates its certificates.
+	err := m.config.LoadFile(m.path)
+	if err != nil && (m.explicit || !errors.Is(err, ErrConfigNotFound)) {
 		return nil, fmt.Errorf("reload %q: %w", m.path, err)
 	}
 	return m.Snapshot()

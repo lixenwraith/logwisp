@@ -268,7 +268,8 @@ or send `SIGHUP` / `SIGUSR1`. Signals reread the selected file even when watchin
 is disabled and always rebuild, allowing certificate and credentials rotation
 without TOML edits; `auto_reload` watches only the configuration file.
 CLI and environment overrides, pipelines included, are captured at startup and
-keep their precedence.
+keep their precedence. As at startup, a missing discovered default file is not
+an error, so an instance configured by flags or variables alone still rebuilds.
 
 Reload rebuilds the whole service: a new service is constructed from the new
 configuration first, and only if that succeeds is the old one shut down. Each

@@ -140,20 +140,21 @@ func TestSpecPipelinesReplaceFilePipelines(t *testing.T) {
 	}
 }
 
+// Without a file a reload still rebuilds; once the discovered default
+// appears it is read, and its pipelines still yield to the specs.
 func TestReloadKeepsSpecPipelines(t *testing.T) {
 	isolateConfig(t)
-	testutil.WriteFile(t, "reload.toml", "status_reporter = true\n")
-	m, err := Load([]string{"-c", "reload.toml", "--source", "random,special=true", "--sink", "null"})
+	m, err := Load([]string{"--source", "random,special=true", "--sink", "null"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	first, err := m.Snapshot()
-	if err != nil {
-		t.Fatal(err)
+	first, err := m.Reload()
+	if err != nil || !first.StatusReporter {
+		t.Fatalf("reload without a file: %+v %v", first, err)
 	}
 	first.Pipelines[0].PluginSources[0].Config["special"] = "mutated"
-	testutil.WriteFile(t, "reload.toml", "status_reporter = false\n[[pipelines]]\nname = \"file\"\n")
+	testutil.WriteFile(t, "logwisp.toml", "status_reporter = false\n[[pipelines]]\nname = \"file\"\n")
 	next, err := m.Reload()
 	if err != nil || next.StatusReporter || len(next.Pipelines) != 1 || next.Pipelines[0].Name != "cli" ||
 		next.Pipelines[0].PluginSources[0].Config["special"] != "true" {
