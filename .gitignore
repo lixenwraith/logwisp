@@ -18,3 +18,4 @@ test/run-mtls/
 test/run-scram/
 test/run-proxy/
 test/run-ipv6/
+test/run-deploy/
