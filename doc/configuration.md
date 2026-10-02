@@ -38,11 +38,14 @@ runtime metadata and cannot be redirected by a `config_file` key inside the file
 
 ## Global Settings
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `quiet` | bool | `false` | Disable all application logging and console diagnostics |
-| `status_reporter` | bool | `true` | Emit a periodic status report every 30 s at DEBUG level |
-| `auto_reload` | bool | `false` | Watch the config file and reload pipelines on change |
+Top-level keys, each as type and default:
+
+- `quiet` (bool, `false`): disable all application logging and console
+  diagnostics.
+- `status_reporter` (bool, `true`): emit a status report every 30 s at DEBUG
+  level.
+- `auto_reload` (bool, `false`): watch the config file and reload pipelines on
+  change.
 
 `--version` prints version information and exits; it is not a persistent
 setting.
@@ -71,14 +74,12 @@ retention_hours   = 168.0
 
 ### Output modes
 
-| Mode | Behaviour |
-|------|-----------|
-| `file` | Files only |
-| `stdout` | Standard output only |
-| `stderr` | Standard error only |
-| `split` | DEBUG/INFO to stdout, WARN/ERROR to stderr |
-| `all` | Files plus split console |
-| `none` | No application logging |
+- `file`: files only.
+- `stdout`: standard output only.
+- `stderr`: standard error only.
+- `split`: DEBUG/INFO to stdout, WARN/ERROR to stderr.
+- `all`: files plus split console.
+- `none`: no application logging.
 
 `[logging.file]` applies only to the `file` and `all` modes.
 
@@ -133,32 +134,34 @@ port = 8080
 
 Every source and sink is a plugin instance with three keys:
 
-| Key | Meaning |
-|-----|---------|
-| `id` | Instance identifier, unique within the pipeline; appears in logs and stats |
-| `type` | Registered plugin type |
-| `config` | Plugin-specific table; see [Sources](sources.md) and [Sinks](sinks.md) |
+- `id`: instance identifier, unique within the pipeline; appears in logs and
+  stats.
+- `type`: registered plugin type.
+- `config`: plugin-specific table; see [Sources](sources.md) and
+  [Sinks](sinks.md).
 
 `config_file` is reserved on both structures for a future include mechanism and
 is not implemented.
 
 ### Flow stages
 
-| Block | Optional | Reference |
-|-------|----------|-----------|
-| `flow.rate_limit` | yes | below |
-| `flow.filters` | yes | [Filters](filters.md) |
-| `flow.format` | yes (defaults to `raw`) | [Formatters](formatters.md) |
-| `flow.heartbeat` | yes | below |
+Every stage is optional:
+
+- `flow.rate_limit`: see [Rate limiting](#rate-limiting).
+- `flow.filters`: see [Filters](filters.md).
+- `flow.format`: defaults to `raw`; see [Formatters](formatters.md).
+- `flow.heartbeat`: see [Heartbeat](#heartbeat).
 
 #### Rate limiting
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `rate` | float | `0` | Entries per second; `<= 0` disables the limiter entirely |
-| `burst` | float | `rate` | Token bucket capacity |
-| `policy` | string | `pass` | `pass` allows everything through, `drop` discards over-limit entries |
-| `max_entry_size_bytes` | int | `0` | Per-entry byte cap; `0` = unlimited |
+Options, each as type and default:
+
+- `rate` (float, `0`): entries per second; `<= 0` disables the limiter
+  entirely.
+- `burst` (float, `rate`): token bucket capacity.
+- `policy` (string, `pass`): `pass` allows everything through, `drop` discards
+  over-limit entries.
+- `max_entry_size_bytes` (int, `0`): per-entry byte cap; `0` = unlimited.
 
 Two behaviours are easy to trip over:
 
@@ -169,13 +172,15 @@ Two behaviours are easy to trip over:
 
 #### Heartbeat
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable heartbeat generation |
-| `interval_ms` | int | `1000` | Interval; minimum `100` |
-| `include_timestamp` | bool | `false` | `false` formats with level only, no timestamp |
-| `include_stats` | bool | `false` | Attach `beat_count` and measured `interval_ms` as fields |
-| `format` | string | `txt` | `txt`, `json`, or `raw` |
+Options, each as type and default:
+
+- `enabled` (bool, `false`): enable heartbeat generation.
+- `interval_ms` (int, `1000`): interval; minimum `100`.
+- `include_timestamp` (bool, `false`): `false` formats with level only, no
+  timestamp.
+- `include_stats` (bool, `false`): attach `beat_count` and measured
+  `interval_ms` as fields.
+- `format` (string, `txt`): `txt`, `json`, or `raw`.
 
 Heartbeats are ordinary entries with source `heartbeat` and level `INFO`. They
 are generated after the flow's filter and rate-limit stages, so filters do not
@@ -188,14 +193,14 @@ suppress them, and they reach every sink in the pipeline.
 ## Environment Variables
 
 Environment overrides are derived from the TOML path: `.` becomes `_`, the
-result is uppercased, and `LOGWISP_` is prepended.
+result is uppercased, and `LOGWISP_` is prepended:
 
-| TOML path | Environment variable |
-|-----------|---------------------|
-| `quiet` | `LOGWISP_QUIET` |
-| `status_reporter` | `LOGWISP_STATUS_REPORTER` |
-| `logging.level` | `LOGWISP_LOGGING_LEVEL` |
-| `logging.file.directory` | `LOGWISP_LOGGING_FILE_DIRECTORY` |
+```
+quiet                   LOGWISP_QUIET
+status_reporter         LOGWISP_STATUS_REPORTER
+logging.level           LOGWISP_LOGGING_LEVEL
+logging.file.directory  LOGWISP_LOGGING_FILE_DIRECTORY
+```
 
 Migration: the old custom transform accidentally read bare names such as `QUIET`
 and `LOGGING_LEVEL`. Rename those variables to their prefixed forms; bare names
@@ -283,25 +288,30 @@ without rebuilding. Queued path changes are combined, and unchanged pipelines
 and status settings do not trigger another rebuild. Removed file keys fall back
 to the remaining sources on the next successful load.
 
-| Reloaded | Not reloaded |
-|----------|--------------|
-| Pipelines, sources, sinks | `logging.*` (applied once at startup) |
-| Filters, formatters, rate limits, heartbeats | `quiet` |
-| `status_reporter` | `auto_reload` (the watcher is not restarted) |
+What a reload applies:
+
+- Reloaded:
+  - pipelines, sources, sinks
+  - filters, formatters, rate limits, heartbeats
+  - `status_reporter`
+- Not reloaded:
+  - `logging.*`: applied once at startup
+  - `quiet`
+  - `auto_reload`: the watcher is not restarted
 
 Because the rebuild is total, listeners close and reopen and every connected
 client is disconnected. Chain sinks reconnect on their own backoff schedule.
 
 ## Type Reference
 
-| TOML type | Go type | Command-line / environment form |
-|-----------|---------|-------------------------------|
-| String | `string` | Plain text |
-| Integer | `int64` | Decimal string |
-| Float | `float64` | Decimal string |
-| Boolean | `bool` | `true` / `false`, or a bare flag for `true` |
-| Array | `[]T` | Only in [pipeline specs](cli.md#pipelines): a repeated key |
-| Table | struct | Nested path with `.` (flags) or `_` (environment) |
+Each TOML type, its Go type, and its command-line / environment form:
+
+- String (`string`): plain text.
+- Integer (`int64`): decimal string.
+- Float (`float64`): decimal string.
+- Boolean (`bool`): `true` / `false`, or a bare flag for `true`.
+- Array (`[]T`): only in [pipeline specs](cli.md#pipelines), as a repeated key.
+- Table (struct): nested path with `.` (flags) or `_` (environment).
 
 Integer fields reject fractions, overflow and negative unsigned values. Non-finite
 floats and integer-to-float precision loss are rejected too. This applies to plugin
