@@ -184,7 +184,9 @@ const signIn = async (page, pass) => {
   await page.fill('#login input[name="password"]', pass);
   await page.click('#login button[type="submit"]');
 };
-const inlineLogin = (page) => page.waitForSelector("#login:not([hidden])", { timeout: 30000 });
+// The viewer's own form: the login page has a visible #login too, but no #log
+const inlineLogin = (page) => page.waitForFunction(() =>
+  document.getElementById("log") && !document.getElementById("login").hidden, null, { timeout: 30000 });
 
 const scenarios = {
   async cookie(context, page) {
@@ -229,7 +231,12 @@ const scenarios = {
     await page.waitForURL(/\/auth\/view$/, { timeout: 30000 });
     await inlineLogin(page);
     out.inline_login = 1;
-    out.url = page.url();
+    const streamed = page.waitForRequest(/\/stream$/, { timeout: 30000 });
+    await signIn(page, password);
+    const token = ((await streamed).headers().authorization ?? "").replace(/^Bearer /, "");
+    await page.waitForFunction(() => document.getElementById("state").textContent === "live", null, { timeout: 30000 });
+    out.token_in_page_only = await page.evaluate((t) => t !== "" && localStorage.length === 0 &&
+      sessionStorage.length === 0 && !location.href.includes(t) && !document.cookie.includes(t), token) ? 1 : 0;
   },
 
   async blocked(context, page) {
@@ -367,6 +374,7 @@ if (( BROWSER )); then
 	browser dropped
 	check "browser: a session cookie the browser dropped brings the viewer's own sign-in form, not a loop" \
 		$(is "$(val inline_login)" 1)
+	check "browser: its token stays out of storage, the URL and cookies" $(is "$(val token_in_page_only)" 1)
 else
 	echo "SKIP: browser checks (node with playwright not found)"
 fi
