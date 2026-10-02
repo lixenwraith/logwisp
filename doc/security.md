@@ -248,14 +248,14 @@ was shown instead; see [Channel binding](#channel-binding).
 
 Misconfiguration fails at plugin construction, before the pipeline starts:
 
-- `type` `mtls` or `scram` without `tls.enabled` (proxy mode aside), or on a dialer with
-  `tls.insecure_skip_verify`: an identity read from an unverified chain is a
-  claim, and an unverified server could relay a login
+- `type` `mtls` or `scram` without `tls.enabled` (proxy mode aside), or on a
+  dialer with `tls.insecure_skip_verify`: an identity read from an unverified
+  chain is a claim, and an unverified server could relay a login
 - `type = "mtls"` on a listener without `tls.client_auth`
 - a block naming peers or credentials (`allow`, `allow_patterns`,
   `credentials_file`, `token_lifetime_ms`, `username`, `password_file`,
-  `trusted_proxies`) whose
-  `type` is `none` or unset: auth was intended and the type forgotten
+  `trusted_proxies`) whose `type` is `none` or unset: auth was intended and the
+  type forgotten
 - a key of the other method: `allow` or `allow_patterns` under `scram`, a
   `scram` key under `mtls`
 - a `scram` listener without a loadable `credentials_file` (see
@@ -475,16 +475,17 @@ exchange.
 
 Logins are throttled per remote socket address or, on an `http` sink in proxy
 mode, per forwarded client (an IPv6 client per /64); forwarded headers are read
-only from `trusted_proxies`. Each exchange takes a token from a bucket of 10 that refills at one per
-second, and a successful login gives it back, so only failed or abandoned
-attempts drain it. At most 4 exchanges per address may be unfinished: an HTTP
-challenge never answered holds its slot for up to 30 s, a TCP connection that
-ends mid-exchange frees it at once. A refused start answers `too many attempts`
-(HTTP `429`) and counts `auth_throttled`; the table holds 65,536 addresses and
-refuses new ones when full. Separately, at most 4,096 exchanges may be in flight
-per listener; beyond that, or while the plugin stops, a login gets `busy` (HTTP
-`503`) and counts `auth_busy`. Peers behind one NAT or one passthrough proxy
-share a bucket: there, one client can exhaust every other client's logins.
+only from `trusted_proxies`. Each exchange takes a token from a bucket of 10
+that refills at one per second, and a successful login gives it back, so only
+failed or abandoned attempts drain it. At most 4 exchanges per address may be
+unfinished: an HTTP challenge never answered holds its slot for up to 30 s, a
+TCP connection that ends mid-exchange frees it at once. A refused start answers
+`too many attempts` (HTTP `429`) and counts `auth_throttled`; the table holds
+65,536 addresses and refuses new ones when full. Separately, at most 4,096
+exchanges may be in flight per listener; beyond that, or while the plugin
+stops, a login gets `busy` (HTTP `503`) and counts `auth_busy`. Peers behind
+one NAT or one passthrough proxy share a bucket: there, one client can exhaust
+every other client's logins.
 
 ### Credentials file
 

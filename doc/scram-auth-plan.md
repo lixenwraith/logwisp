@@ -94,8 +94,9 @@ Validation at construction:
   CA-issued certificate plus any valid password (`clientcert=verify-ca`).
 - `token_lifetime_ms` only on HTTP listeners; default 15 minutes.
 - `/auth` and every path under it are reserved.
-- `mtls` rejects the four SCRAM keys. A block that names peers or credentials
-  with `type = "none"` is refused: the type was forgotten, not the block.
+- `mtls` rejects every SCRAM key, `trusted_proxies` included. A block that
+  names peers or credentials with `type = "none"` is refused: the type was
+  forgotten, not the block.
 
 **Credentials file** (TOML, written by the CLI, mode 0600):
 
@@ -113,12 +114,12 @@ username = "edge-01"
 
 `decoy_key` keeps unknown-user challenges stable across restarts and edits, so
 a single probe cannot tell a real user from an unknown one (a real user's salt
-changes when it is added, rotated or removed). It is created by the first `add-user` and
-preserved by every rewrite. An empty user set, a duplicate user, a missing or
-short `decoy_key`, an unknown key, or users differing in KDF profile or salt
-length are configuration errors. The file is read at construction; the SCRAM
-server starts in the plugin's `Start` and stops in `Stop`, so a rejected reload
-leaks nothing.
+changes when it is added, rotated or removed). It is created by the first
+`add-user` and preserved by every rewrite. An empty user set, a duplicate
+user, a missing or short `decoy_key`, an unknown key, or users differing in KDF
+profile or salt length are configuration errors. The file is read at
+construction; the SCRAM server starts in the plugin's `Start` and stops in
+`Stop`, so a rejected reload leaks nothing.
 
 ## Wire Protocol
 
@@ -160,20 +161,20 @@ checked at connect and outlives its token; a reload ends it.
 batch is held under backoff); `404`/`405` from `/auth` reads "no auth endpoint
 at <url> (older logwisp, or not a scram listener)"; an ingest `401` clears the
 token and is retried (tokens are renewed ahead of expiry, so this follows a
-listener reload); `403` drops
-the batch; a pin mismatch clears token and pin. Refusals are logged at WARN on
-every attempt, paced by the backoff (`Chain connect refused` on `tcp_chain`,
-`Chain batch delivery failed` on `http_chain`), and failed logins are counted
-in `auth_failures` / `last_auth_error`.
+listener reload); `403` drops the batch; a pin mismatch clears token and pin.
+Refusals are logged at WARN on every attempt, paced by the backoff (`Chain
+connect refused` on `tcp_chain`, `Chain batch delivery failed` on
+`http_chain`), and failed logins are counted in `auth_failures` /
+`last_auth_error`.
 
 ## Throttling
 
 Per remote IP (the socket address; in proxy mode the forwarded client, an IPv6
-one per /64), on handshake
-starts: a token bucket (burst 10, 1/s) refunded on success, and at most 4
-unfinished exchanges. An unanswered HTTP challenge holds its slot for the
-`auth` handshake timeout (30 s); abandoned TCP exchanges release their slot,
-and their entry in the `auth` handshake table, immediately. The address table
+one per /64), on handshake starts: a token bucket (burst 10, 1/s) refunded on
+success, and at most 4 unfinished exchanges. An unanswered HTTP challenge holds
+its slot for the `auth` handshake timeout (30 s); abandoned TCP exchanges
+release their slot, and their entry in the `auth` handshake table,
+immediately. The address table
 holds 65,536 entries, drops one idle for a minute once its challenges have
 expired, and fails closed when full; the SCRAM server itself caps in-flight
 handshakes at 4,096 (`busy`).
@@ -269,13 +270,13 @@ SameSite=Strict; Max-Age=<lifetime>`) and carries no token in the body. It has
 no `Path`: RFC 6265 defaults it to the directory of `POST <mount>/auth`, which
 is the mount behind any proxy prefix. Stream and status accept the cookie or
 `Authorization: Bearer`; another `Authorization` scheme, such as the site's own
-Basic auth, leaves the cookie in charge. Logout is `{"logout": true}` on `POST /auth` itself,
-because a clearing cookie set from `/auth/logout` would default to another path
-and miss the login cookie. It clears the cookie and revokes a valid token until
-it expires (a set of at most 65,536 hashes, gone on reload like every token). An
-open stream outlives its token; a reconnect after expiry gets `401`. `/auth`
-takes only `application/json`, which a cross-origin page cannot send without a
-preflight nobody answers.
+Basic auth, leaves the cookie in charge. Logout is `{"logout": true}` on
+`POST /auth` itself, because a clearing cookie set from `/auth/logout` would
+default to another path and miss the login cookie. It clears the cookie and
+revokes a valid token until it expires (a set of at most 65,536 hashes, gone on
+reload like every token). An open stream outlives its token; a reconnect after
+expiry gets `401`. `/auth` takes only `application/json`, which a cross-origin
+page cannot send without a preflight nobody answers.
 
 **Token mode.** A proof step without `"session"` gets the token in the answer
 body, in proxy mode as everywhere else, so a browser that keeps no cookies needs
