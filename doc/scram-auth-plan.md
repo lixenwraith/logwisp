@@ -140,12 +140,15 @@ silent, and the dialer gives up after its deadline with "no challenge within
 
 **HTTP** (`http_chain` source, `http` sink): `POST /auth`, outside the auth
 middleware, with its own 10 s read/write deadline. It answers `404` unless the
-policy is `scram`.
+policy is `scram`. Each step, by its request body:
 
-| Step | Request body | Success | Failure |
-|------|--------------|---------|---------|
-| 1 | hello | `200` challenge | `429` throttled, `503` busy, `400` malformed, `413` oversized |
-| 2 | proof | `200` final, token, expires_in | `401 {"error":"authentication failed"}`, `503` if the server stopped |
+- Step 1, the hello
+  - Success: `200` with the challenge.
+  - Failure: `429` throttled, `503` busy, `400` malformed, `413` oversized.
+- Step 2, the proof
+  - Success: `200` with the final, `token` and `expires_in`.
+  - Failure: `401 {"error":"authentication failed"}`, or `503` if the server
+    stopped.
 
 Protected endpoints take `Authorization: Bearer <token>`: missing or invalid is
 `401` with `WWW-Authenticate: Bearer realm="logwisp"`, a certificate-binding miss
@@ -285,12 +288,11 @@ token in a page variable only: it lasts no longer than the page or its lifetime.
 **Endpoints.** `/auth` and every path under it are reserved; every URL in the
 pages is relative, so a proxy prefix works unchanged.
 
-| Path | Purpose |
-|------|---------|
-| `POST /auth` | SCRAM hello, proof, or logout; unbound in proxy mode |
-| `GET /auth/scram.js` | the client library, always in proxy mode |
-| `GET /auth/login`, `login.js`, `style.css` | login page (`login_page`) |
-| `GET /auth/view`, `view.js` | minimal live viewer (`viewer_page`, needs `login_page`) |
+- `POST /auth`: SCRAM hello, proof or logout; unbound in proxy mode.
+- `GET /auth/scram.js`: the client library, always served in proxy mode.
+- `GET /auth/login`, `login.js`, `style.css`: the login page (`login_page`).
+- `GET /auth/view`, `view.js`: a minimal live viewer (`viewer_page`, needs
+  `login_page`).
 
 Files carry `default-src 'none'; script-src 'self'; connect-src 'self';
 style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
