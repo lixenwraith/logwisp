@@ -353,6 +353,9 @@ func writeAtomic(path string, data []byte) error {
 		path = resolved
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
+	} else if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		// Replacing the link would leave its target, what the daemon reads, unwritten
+		return fmt.Errorf("%s is a symlink to a missing file; create the target first", path)
 	}
 	mode, uid, gid := os.FileMode(0o600), -1, -1
 	if fi, err := os.Stat(path); err == nil {

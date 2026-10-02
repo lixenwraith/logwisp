@@ -50,7 +50,7 @@ even one the CA trusts, makes the server reject the proof, so it never obtains a
 link or a token. A mismatch is indistinguishable from a wrong password on the
 wire by design; the client also sends its hash as a diagnostic field, so the
 listener logs "TLS interception or a terminating proxy" and counts it. TLS must
-terminate at logwisp.
+terminate at logwisp, except in [proxy mode](#browser-viewers-behind-a-tls-terminating-proxy).
 
 **HTTP pinning.** HTTP auth takes two requests and every later request may use a
 new pooled connection, so binding the exchange is not enough. Once the challenge
@@ -79,7 +79,8 @@ password_file = "/etc/logwisp/edge-01.pass"
 
 Validation at construction:
 
-- `scram` requires TLS; a dialer also forbids `insecure_skip_verify`.
+- `scram` requires TLS, except on an `http` sink in proxy mode; a dialer also
+  forbids `insecure_skip_verify`.
 - Listeners require `credentials_file` and reject `allow`/`allow_patterns` (the
   credentials file is the allow list), `username` and `password_file`. Use one
   file per listener when listeners admit different users.
@@ -92,7 +93,7 @@ Validation at construction:
   `clientcert=verify-full`). Without it the factors are independent: any
   CA-issued certificate plus any valid password (`clientcert=verify-ca`).
 - `token_lifetime_ms` only on HTTP listeners; default 15 minutes.
-- `/auth` is reserved; no configured path may equal it.
+- `/auth` and every path under it are reserved.
 - `mtls` rejects the four SCRAM keys. A block that names peers or credentials
   with `type = "none"` is refused: the type was forgotten, not the block.
 
@@ -164,7 +165,8 @@ in `auth_failures` / `last_auth_error`.
 
 ## Throttling
 
-Per remote IP (the socket address, never a forwarded header), on handshake
+Per remote IP (the socket address; in proxy mode the forwarded client, an IPv6
+one per /64), on handshake
 starts: a token bucket (burst 10, 1/s) refunded on success, and at most 4
 unfinished exchanges. An unanswered HTTP challenge holds its slot for the
 `auth` handshake timeout (30 s); abandoned TCP exchanges release their slot,
@@ -201,7 +203,7 @@ closed.
 ```
 logwisp auth add-user    -credentials F -user U [-password-file P] [-generate]
 logwisp auth remove-user -credentials F -user U
-logwisp auth token  -url https://host:port -user U -password-file P [TLS flags]
+logwisp auth token  -url https://host:port[/path] -user U -password-file P [-unbound] [TLS flags]
 logwisp auth stream -addr host:port        -user U -password-file P [TLS flags]
 ```
 
@@ -210,14 +212,15 @@ logwisp auth stream -addr host:port        -user U -password-file P [TLS flags]
   that file (0600) or printed once. Rotating an existing user needs the file or
   `-generate`, so a mistyped path cannot replace a password. The file's KDF
   profile and decoy key are reused, the result is validated with the daemon's
-  own parser, and the rewrite (temp file in the same directory, rename) keeps the
-  existing mode and, where permitted, owner.
+  own parser, and the rewrite (temp file beside the file or a symlink's target,
+  rename) keeps the existing mode and owner, or fails.
 - `remove-user` refuses to remove the last user.
 - Both print that changes apply on `SIGHUP`: `auto_reload` does not watch the
   credentials file.
 - `token` prints a bearer token for curl (`-H @<(...)` keeps it out of argv);
   `stream` authenticates to a `tcp` sink and copies the stream to stdout until
-  interrupted. `-url` takes no path, and redirects are not followed.
+  interrupted. `-url` takes a path only with `-unbound`, and redirects are not
+  followed.
 - TLS flags: `-ca-file`, `-server-name`, `-cert-file`, `-key-file`. There is no
   insecure flag.
 - Exit status: 0 success, 1 failure, 2 usage error.
@@ -246,8 +249,10 @@ sink into proxy mode; it is refused on every other plugin and with `identity`.
 - `X-Forwarded-Proto` must be `https` on every hop, so a site served in
   plaintext by mistake fails closed instead of exposing sessions.
 - The client is the rightmost `X-Forwarded-For` hop that is not a proxy (hops to
-  its left are the client's own claims); throttling, sessions and logs use it.
-  Outside proxy mode forwarded headers stay ignored.
+  its left are the client's own claims), or the leftmost when every hop is
+  inside a proxy range; throttling (an IPv6 client per /64, as one host holds
+  it whole), sessions and logs use it. Outside proxy mode forwarded headers
+  stay ignored.
 - SCRAM runs unbound: a browser cannot read the site's certificate, and LogWisp
   sees none. The proof and the session ride on the site's TLS; a party on the
   proxy-to-LogWisp hop could relay a login, hence the address restriction and a
@@ -260,7 +265,8 @@ mode only). The answer sets `logwisp_session` (`HttpOnly; Secure;
 SameSite=Strict; Max-Age=<lifetime>`) and carries no token in the body. It has
 no `Path`: RFC 6265 defaults it to the directory of `POST <mount>/auth`, which
 is the mount behind any proxy prefix. Stream and status accept the cookie or
-`Authorization: Bearer`. Logout is `{"logout": true}` on `POST /auth` itself,
+`Authorization: Bearer`; another `Authorization` scheme, such as the site's own
+Basic auth, leaves the cookie in charge. Logout is `{"logout": true}` on `POST /auth` itself,
 because a clearing cookie set from `/auth/logout` would default to another path
 and miss the login cookie. It clears the cookie and revokes a valid token until
 it expires (a set of at most 65,536 hashes, gone on reload like every token). An
@@ -318,9 +324,12 @@ a challenge below its Argon2 floor; the HTTP exchange on a TLS test server
 (token accepted, garbage and foreign tokens `401`, forged final yields no token,
 a different certificate after the challenge refused before the proof is sent,
 renewal ahead of expiry); `Authorize` failing closed under SCRAM; password
-trimming. Proxy mode: trusted peers, https and the client hop; an unbound
-browser login with the cookie's attributes, the cookie opening endpoints until
-logout revokes it; only unbound logins behind a proxy; `/auth` taking only JSON.
+trimming; refused hellos freeing their slot; unbound logins pinned too. Proxy
+mode: trusted peers, https and the client hop; throttling on the forwarded
+client and IPv6 /64; an unbound browser login with the cookie's attributes, the
+cookie opening endpoints (beside Basic auth) until logout revokes it, cookie
+sessions refused elsewhere; only unbound logins behind a proxy; `/auth` taking
+only JSON. In the `http` sink, every SSE line break framed as data.
 In the plugins: `/auth` outside the `http` sink's gate, the pages served with
 their types and CSP, direct peers refused, pages only in proxy mode, and the
 `http_chain` sink logging in again after a `401` and delivering once. In the

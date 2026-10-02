@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -584,7 +585,8 @@ func TestForgedFinalYieldsNoToken(t *testing.T) {
 }
 
 // After the first answer every connection must present the bound certificate:
-// a second, equally CA-valid server never sees the proof.
+// a second, equally CA-valid server never sees the proof, unbound logins
+// (through a proxy) included.
 func TestPinnedCertificateAcrossConnections(t *testing.T) {
 	f := newFixture(t)
 	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
@@ -593,27 +595,58 @@ func TestPinnedCertificateAcrossConnections(t *testing.T) {
 	otherTLS.Certificates = []tls.Certificate{f.serverLeaf(t, "relay-b")}
 	b, bHits := f.httpListener(t, l, otherTLS)
 
-	d := f.dialer(t, "edge-01", "edge-01-secret")
-	client := f.httpClient(d)
-	var dials atomic.Int64
-	tr := client.Transport.(*http.Transport)
-	tr.DisableKeepAlives = true
-	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
-		target := a.Listener.Addr().String()
-		if dials.Add(1) > 1 {
-			target = b.Listener.Addr().String() // every later connection lands on b
+	for _, unbound := range []bool{false, true} {
+		d := f.dialer(t, "edge-01", "edge-01-secret")
+		if unbound {
+			d.Unbind()
 		}
-		return (&net.Dialer{}).DialContext(ctx, network, target)
-	}
-	_, err := d.Token(t.Context(), client, a.URL)
-	if !errors.Is(err, errPinMismatch) {
-		t.Fatalf("login across certificates: %v", err)
+		client := f.httpClient(d)
+		var dials atomic.Int64
+		tr := client.Transport.(*http.Transport)
+		tr.DisableKeepAlives = true
+		tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+			target := a.Listener.Addr().String()
+			if dials.Add(1) > 1 {
+				target = b.Listener.Addr().String() // every later connection lands on b
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, target)
+		}
+		_, err := d.Token(t.Context(), client, a.URL)
+		if !errors.Is(err, errPinMismatch) {
+			t.Fatalf("unbound %v: login across certificates: %v", unbound, err)
+		}
+		if !d.Invalidate(0, err) {
+			t.Fatalf("unbound %v: a pin mismatch did not drop the login", unbound)
+		}
 	}
 	if bHits.Load() != 0 || l.allowed.Load() != 0 {
 		t.Fatal("the proof reached a server with another certificate")
 	}
-	if !d.Invalidate(0, err) {
-		t.Fatal("a pin mismatch did not drop the login")
+}
+
+// A hello refused after it was admitted, such as a malformed username, frees
+// its pending slot: otherwise four of them would lock the address out.
+func TestRefusedHellosFreeTheirSlot(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	srv, _ := f.httpListener(t, l, f.serverTLS)
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: f.clientTLS}}
+	hello := func(user string) int {
+		body := fmt.Sprintf(`{"logwisp":1,"scram":{"username":%q,"client_nonce":%q}}`, user, strings.Repeat("n", 32))
+		resp, err := client.Post(srv.URL+chain.AuthPath, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for range limitPending + 1 {
+		if got := hello("edge,01"); got != http.StatusBadRequest {
+			t.Fatalf("malformed username: %d, want 400", got)
+		}
+	}
+	if got := hello("edge-01"); got != http.StatusOK {
+		t.Fatalf("a valid hello after refused ones: %d, want 200", got)
 	}
 }
 

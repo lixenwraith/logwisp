@@ -139,6 +139,22 @@ func TestRewriteKeepsFileModeDecoyKeyAndLink(t *testing.T) {
 	}
 }
 
+// A dangling link is refused rather than replaced: its missing target is the
+// file the daemon would read
+func TestAddUserRefusesADanglingLink(t *testing.T) {
+	dir := t.TempDir()
+	creds := filepath.Join(dir, "users.toml")
+	if err := os.Symlink(filepath.Join(dir, "missing", "users.toml"), creds); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := runAuthTest(t, "add-user", "-credentials", creds, "-user", "edge-01"); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if fi, err := os.Lstat(creds); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link replaced (%v)", err)
+	}
+}
+
 // An empty file is how an operator picks the owner before the first user
 func TestAddUserFillsAnEmptyFile(t *testing.T) {
 	creds := filepath.Join(t.TempDir(), "users.toml")

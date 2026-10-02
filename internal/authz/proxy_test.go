@@ -43,7 +43,8 @@ func (f *fixture) proxyListener(t *testing.T) (*Policy, *httptest.Server) {
 
 // Behind trusted proxies only they may connect, only requests they received
 // over https pass, and the client is the rightmost forwarded hop that is not
-// a proxy: hops to its left are the client's own claims.
+// a proxy (hops to its left are the client's own claims), or the leftmost
+// when every hop is inside a proxy range.
 func TestProxyModeTrustsOnlyItsProxies(t *testing.T) {
 	f := newFixture(t)
 	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1", "10.0.0.0/8"}}, nil, RoleListener, HTTP)
@@ -56,6 +57,9 @@ func TestProxyModeTrustsOnlyItsProxies(t *testing.T) {
 		{"malformed client", "127.0.0.1:5000", "not-an-address", "https", ""},
 		{"spoofed hop", "127.0.0.1:5000", "198.51.100.1, 203.0.113.7", "https", "203.0.113.7"},
 		{"proxy chain", "127.0.0.1:5000", "203.0.113.7, 10.1.2.3", "https", "203.0.113.7"},
+		{"proxy hop with a port", "127.0.0.1:5000", "203.0.113.7, 10.1.2.3:443", "https", "203.0.113.7"},
+		{"bracketed IPv6 client", "127.0.0.1:5000", "[2001:db8::1]", "https", "2001:db8::1"},
+		{"client inside a proxy range", "127.0.0.1:5000", "10.9.9.9, 10.1.2.3", "https", "10.9.9.9"},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "/status", nil)
 		r.RemoteAddr = tc.peer
@@ -76,8 +80,9 @@ func TestProxyModeTrustsOnlyItsProxies(t *testing.T) {
 }
 
 // A browser logs in unbound and gets its session only as a cookie that
-// scopes itself to the mount; the cookie opens the endpoints until logout
-// revokes it. Outside proxy mode a cookie session is refused.
+// scopes itself to the mount; the cookie opens the endpoints, beside the
+// site's own Basic auth too, until logout revokes it. Outside proxy mode
+// cookie sessions and logout are refused.
 func TestBrowserSessionBehindProxy(t *testing.T) {
 	f := newFixture(t)
 	l, srv := f.proxyListener(t)
@@ -112,9 +117,12 @@ func TestBrowserSessionBehindProxy(t *testing.T) {
 		}
 		return post(url, authStep{Proof: &proof, Session: "cookie"}, nil)
 	}
-	open := func(cookie *http.Cookie) int {
+	open := func(cookie *http.Cookie, basic bool) int {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/protected", nil)
 		req.AddCookie(cookie)
+		if basic {
+			req.SetBasicAuth("site-user", "site-password")
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -133,14 +141,24 @@ func TestBrowserSessionBehindProxy(t *testing.T) {
 		c.Path != "" || c.MaxAge != int(DefaultTokenLifetime.Seconds()) {
 		t.Fatalf("session cookie %+v", c)
 	}
-	if got := open(c); got != http.StatusOK {
-		t.Fatalf("with the cookie: %d", got)
+	for _, basic := range []bool{false, true} {
+		if got := open(c, basic); got != http.StatusOK {
+			t.Fatalf("with the cookie (Basic auth %v): %d", basic, got)
+		}
 	}
-	resp, _ = post(srv.URL, authStep{Logout: true}, c)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+chain.AuthPath, strings.NewReader(`{"logout":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("site-user", "site-password")
+	req.AddCookie(c)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
 	if cleared := resp.Cookies(); resp.StatusCode != http.StatusNoContent || len(cleared) != 1 || cleared[0].MaxAge >= 0 {
 		t.Fatalf("logout: %d, cookies %+v", resp.StatusCode, cleared)
 	}
-	if got := open(c); got != http.StatusUnauthorized {
+	if got := open(c, false); got != http.StatusUnauthorized {
 		t.Fatalf("after logout: %d, want 401", got)
 	}
 	if l.allowed.Load() != 1 {
@@ -150,14 +168,16 @@ func TestBrowserSessionBehindProxy(t *testing.T) {
 	direct := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
 	ds, _ := f.httpListener(t, direct, f.serverTLS)
 	client = f.httpClient(f.dialer(t, "edge-01", "edge-01-secret"))
-	if resp, _ := post(ds.URL, authStep{Logout: true}, nil); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("logout outside proxy mode: %d, want 400", resp.StatusCode)
+	proof := &auth.ClientFinalRequest{FullNonce: strings.Repeat("n", 32), ClientProof: "AAAA"}
+	for _, step := range []authStep{{Proof: proof, Session: "cookie"}, {Logout: true}} {
+		if resp, _ := post(ds.URL, step, nil); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%+v outside proxy mode: %d, want 400", step, resp.StatusCode)
+		}
 	}
 }
 
 // Behind a proxy logwisp never sees the certificate a client binds to, so
-// only unbound proofs (logwisp auth token -unbound) log in; the dialer still
-// pins the proxy's certificate across its two requests.
+// only unbound proofs (logwisp auth token -unbound) log in.
 func TestOnlyUnboundLoginsBehindProxy(t *testing.T) {
 	f := newFixture(t)
 	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1"}}, f.serverTLS, RoleListener, HTTP)
@@ -176,6 +196,47 @@ func TestOnlyUnboundLoginsBehindProxy(t *testing.T) {
 	}
 	if l.allowed.Load() != 1 || l.Rejected() != 1 {
 		t.Fatalf("logins %d, refusals %d; want 1 and 1", l.allowed.Load(), l.Rejected())
+	}
+}
+
+// Behind a proxy the limiter counts the forwarded client, and an IPv6 client
+// by its /64, so neither one proxy address nor one host's many addresses
+// share or escape a budget.
+func TestProxyModeThrottlesTheForwardedClient(t *testing.T) {
+	f := newFixture(t)
+	_, srv := f.proxyListener(t)
+	hello := func(client string) int {
+		first, _ := auth.NewScramClient("edge-01", "edge-01-secret").StartAuthentication()
+		scram, _ := json.Marshal(first)
+		body, _ := json.Marshal(chain.Hello{LogWisp: chain.ProtocolVersion, Scram: scram})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+chain.AuthPath, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-For", client)
+		req.Header.Set("X-Forwarded-Proto", "https")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, tc := range []struct {
+		name          string
+		clients       []string
+		next, another string
+	}{
+		{"one client", []string{"203.0.113.7"}, "203.0.113.7", "198.51.100.1"},
+		{"one IPv6 /64", []string{"2001:db8::1", "2001:db8::2", "2001:db8::3", "2001:db8::4"}, "2001:db8::5", "2001:db8:0:1::1"},
+	} {
+		for i := range limitPending {
+			hello(tc.clients[i%len(tc.clients)]) // unanswered: each holds a slot
+		}
+		if got := hello(tc.next); got != http.StatusTooManyRequests {
+			t.Errorf("%s past its pending cap: %d, want 429", tc.name, got)
+		}
+		if got := hello(tc.another); got != http.StatusOK {
+			t.Errorf("%s: another client %s: %d, want 200", tc.name, tc.another, got)
+		}
 	}
 }
 

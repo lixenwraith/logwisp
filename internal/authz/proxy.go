@@ -47,13 +47,17 @@ func parseProxies(entries []string) (*proxyMode, error) {
 	return m, nil
 }
 
-func (m *proxyMode) trusts(s string) bool {
-	addr, err := netip.ParseAddr(s)
-	if err != nil {
-		return false
-	}
-	addr = addr.Unmap()
+func (m *proxyMode) trusts(addr netip.Addr) bool {
 	return slices.ContainsFunc(m.trusted, func(p netip.Prefix) bool { return p.Contains(addr) })
+}
+
+// parseHop reads a forwarded or peer address, with or without a port
+func parseHop(s string) (netip.Addr, bool) {
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return ap.Addr().Unmap(), true
+	}
+	addr, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"))
+	return addr.Unmap(), err == nil
 }
 
 // exposedHop reports a plaintext hop from a proxy that may be on another host
@@ -62,9 +66,10 @@ func (m *proxyMode) exposedHop() bool {
 }
 
 // client is the rightmost X-Forwarded-For hop that is not a trusted proxy:
-// hops to its left come from the client and prove nothing.
+// hops to its left come from the client and prove nothing. When every hop is
+// trusted, the client sits inside a proxy range and the leftmost hop is it.
 func (m *proxyMode) client(peer string, h http.Header) (string, error) {
-	if !m.trusts(peer) {
+	if addr, ok := parseHop(peer); !ok || !m.trusts(addr) {
 		return "", fmt.Errorf("%s is not a trusted proxy", peer)
 	}
 	protos := headerList(h, "X-Forwarded-Proto")
@@ -72,19 +77,18 @@ func (m *proxyMode) client(peer string, h http.Header) (string, error) {
 		return "", fmt.Errorf("proxy forwarded X-Forwarded-Proto %q; sessions need https", strings.Join(protos, ","))
 	}
 	hops := headerList(h, "X-Forwarded-For")
-	for i := len(hops) - 1; i >= 0; i-- {
-		if m.trusts(hops[i]) {
-			continue
-		}
-		if addr, err := netip.ParseAddr(hops[i]); err == nil {
-			return addr.Unmap().String(), nil
-		}
-		if ap, err := netip.ParseAddrPort(hops[i]); err == nil {
-			return ap.Addr().Unmap().String(), nil
-		}
-		return "", fmt.Errorf("malformed X-Forwarded-For hop %q", hops[i])
+	if len(hops) == 0 {
+		return "", errors.New("proxy sent no client address in X-Forwarded-For")
 	}
-	return "", errors.New("proxy sent no client address in X-Forwarded-For")
+	for i := len(hops) - 1; ; i-- {
+		addr, ok := parseHop(hops[i])
+		if !ok {
+			return "", fmt.Errorf("malformed X-Forwarded-For hop %q", hops[i])
+		}
+		if i == 0 || !m.trusts(addr) {
+			return addr.String(), nil
+		}
+	}
 }
 
 func headerList(h http.Header, key string) []string {
@@ -150,9 +154,15 @@ func (p *Policy) ClientAddr(r *http.Request) (string, error) {
 	return addr, nil
 }
 
-// presentedToken is the bearer token or, in proxy mode, the session cookie
+// presentedToken is the bearer token or, in proxy mode, the session cookie.
+// There another scheme, such as the site's own Basic auth, leaves the cookie
+// in charge.
 func (p *Policy) presentedToken(r *http.Request) (string, error) {
-	if h := r.Header.Get("Authorization"); h != "" {
+	h := r.Header.Get("Authorization")
+	if scheme, _, _ := strings.Cut(h, " "); p.BehindProxy() && !strings.EqualFold(scheme, "Bearer") {
+		h = ""
+	}
+	if h != "" {
 		token, err := auth.ParseBearerToken(h)
 		if err != nil {
 			return "", errors.New("malformed bearer token")

@@ -63,7 +63,8 @@ exponential backoff and jitter.
   (exact or RE2) rather than everything the CA issued, gates the `http` sink's
   stream and status endpoints, and lets a dialer pin the server it talks to
 - Password authentication (Argon2id-SCRAM) on the same block: listeners hold
-  verifiers, never passwords, and do no KDF work; every login is bound to the
+  verifiers, never passwords, and do no KDF work; every login outside proxy
+  mode is bound to the
   listener's certificate, so no relay presenting another one can use it; HTTP
   listeners issue short-lived bearer tokens. `logwisp auth` manages credentials
   files and logs viewers in; behind a site's TLS-terminating proxy, browsers

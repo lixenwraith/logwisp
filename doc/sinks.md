@@ -163,8 +163,9 @@ allow = ["viewer-01"]
   `auth_identity`.
 - On connect the client receives an `event: connected` frame carrying its
   client id, session id, sink instance id, endpoint paths, and buffer size.
-- Payloads are framed per the SSE spec, one `data:` line per newline in the
-  payload, so multi-line entries stream correctly.
+- Payloads are framed per the SSE spec, one `data:` line per line break in the
+  payload (CRLF, LF or a lone CR), so multi-line entries stream correctly and
+  no entry can inject an `event:`, `id:` or `retry:` field.
 - The server sets no `WriteTimeout` (that would kill long-lived streams);
   per-write deadlines come from `write_timeout_ms` via `http.ResponseController`
   and cover the connected frame, every payload, and the idle comment.

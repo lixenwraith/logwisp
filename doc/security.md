@@ -431,8 +431,9 @@ exchange.
 
 ### Throttling
 
-Logins are throttled per remote socket address; forwarded headers are never
-read. Each exchange takes a token from a bucket of 10 that refills at one per
+Logins are throttled per remote socket address or, on an `http` sink in proxy
+mode, per forwarded client (an IPv6 client per /64); forwarded headers are read
+only from `trusted_proxies`. Each exchange takes a token from a bucket of 10 that refills at one per
 second, and a successful login gives it back, so only failed or abandoned
 attempts drain it. At most 4 exchanges per address may be unfinished: an HTTP
 challenge never answered holds its slot for up to 30 s, a TCP connection that
@@ -533,7 +534,8 @@ location /logs/ {
 - **Trust.** Every other peer gets `403` on every path. `X-Forwarded-Proto`
   must be `https` on every hop, so a site accidentally served in plaintext fails
   closed. The client is the rightmost `X-Forwarded-For` hop that is not a
-  proxy; throttling, sessions and logs use it.
+  proxy; throttling, sessions and logs use it. List only the proxies: a client
+  inside a listed range is trusted to name its own hops.
 - **Unbound logins.** The browser cannot see a certificate LogWisp could bind
   to, so proofs are unbound and a party on the hop between proxy and LogWisp
   could relay a login. Keep that hop on loopback or a trusted network, or
@@ -542,8 +544,9 @@ location /logs/ {
 - **Sessions.** The page asks for a cookie: `logwisp_session`, `HttpOnly`,
   `Secure`, `SameSite=Strict`, `Max-Age` the token lifetime, and no `Path`, so
   it scopes itself to the mount (`/logs` above). Stream and status accept it or
-  a bearer token, so `new EventSource("stream")` works on any page of the site
-  and `logwisp auth token -unbound` keeps working. `POST /auth` with
+  a bearer token, so `new EventSource("/logs/stream")` works on any page of the
+  site, beside the site's own Basic auth too, and `logwisp auth token -unbound`
+  keeps working. `POST /auth` with
   `{"logout": true}` clears the cookie and revokes the token until it expires.
   `/auth` takes only `application/json`, which a cross-origin page cannot send
   without a preflight.
@@ -574,8 +577,8 @@ a single peer can be withdrawn without touching the others.
 
 **`auth` with `type = "scram"`** — a password check, per listener: only the
 users in its credentials file may connect, the login cannot be relayed through
-another certificate, and with `identity` each user is tied to its own
-certificate.
+another certificate (proxy mode, where TLS ends at the site's proxy, aside),
+and with `identity` each user is tied to its own certificate.
 
 Under either method the chain `node` label can be bound to the identity, so a
 compromised edge cannot attribute its entries to another host, and the `http`
@@ -605,8 +608,8 @@ to a trusted interface or front them with an authenticating proxy.
 `max_connections` bounds concurrency on all of them but does not distinguish
 callers.
 
-Both methods require TLS, so there is no way to authenticate a plaintext
-listener; `mtls` also requires `client_auth`.
+Both methods require TLS on the listener, except an `http` sink in proxy mode,
+where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 
 ## Operational Guidance
 

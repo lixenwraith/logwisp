@@ -204,7 +204,7 @@ Both file commands rewrite atomically (a temporary file in the same directory
 as the file, or a symlink's target, then a rename), create files `0600`, keep an
 existing file's mode and owner, and refuse to write anything the daemon would
 not load. A change that cannot keep the owner fails: run it as root or as the
-owner.
+owner. A symlink to a missing file is refused: create the target first.
 Neither touches a running LogWisp: send `SIGHUP`, since `auto_reload` does not
 watch the credentials file.
 

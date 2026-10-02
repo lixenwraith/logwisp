@@ -206,14 +206,15 @@ headers, and entry encoding.
   between the peers terminates TLS. Pass TLS through to LogWisp; the login
   cannot work otherwise, except on an `http` sink in proxy mode
   (`auth.trusted_proxies`), where `the client bound its proof to the proxy's
-  certificate` means a client that needs `logwisp auth token -unbound`.
+  certificate` means a client that needs `logwisp auth token -unbound`, and
+  `the client sent an unbound proof` the reverse. On an `http_chain` sink,
+  `server certificate differs from the one the SCRAM login was bound to` means
+  the certificate changed after the login: a rotation (the retry binds anew),
+  several backends, or interception.
 - `403` from an `http` sink in proxy mode, with `not a trusted proxy` or
   `X-Forwarded-Proto` in its WARN line — the request did not come from a listed
   proxy, or the proxy did not forward `X-Forwarded-Proto: https` and
-  `X-Forwarded-For`. On an `http_chain` sink, `server certificate differs
-  from the one the SCRAM login was bound to` means the certificate changed after
-  the login: a rotation (the retry binds anew), several backends, or
-  interception.
+  `X-Forwarded-For`.
 - `too many attempts` — the address failed or abandoned logins faster than one
   per second beyond a burst of 10, or has 4 unfinished; it clears within seconds
   once the failing peer stops. Peers behind one NAT share the budget. `busy` —
@@ -241,7 +242,8 @@ headers, and entry encoding.
   behind one address, a proxy that strips `Authorization`, or a
   `token_lifetime_ms` shorter than a request takes. A token used with `curl`
   dies with every listener reload.
-- `403` is not the token: it is the `identity` binding or node binding.
+- `403` is not the token: it is the `identity` binding, node binding or, in
+  proxy mode, the proxy gate.
 
 **Entries not arriving over a chain link**
 - Check the sink's `connected` statistic and its `reconnects` count.

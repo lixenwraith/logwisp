@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -635,7 +636,7 @@ func streamHeadNotAllowed(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
-// writeSSE frames a payload per the W3C SSE spec (multi-line safe)
+// writeSSE frames a payload per the W3C SSE spec, one data: line per line
 func writeSSE(w http.ResponseWriter, payload []byte) error {
 	for _, line := range splitLines(payload) {
 		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
@@ -646,27 +647,28 @@ func writeSSE(w http.ResponseWriter, payload []byte) error {
 	return err
 }
 
-// splitLines splits payload by newlines, trimming a single trailing newline
+// splitLines splits on every break SSE recognises (CRLF, LF and a lone CR),
+// so no payload byte can end a data: line and start an event: or retry:
+// field. One trailing break is dropped.
 func splitLines(data []byte) [][]byte {
 	if len(data) == 0 {
 		return nil
 	}
-	if data[len(data)-1] == '\n' {
+	if bytes.HasSuffix(data, []byte("\r\n")) {
+		data = data[:len(data)-2]
+	} else if data[len(data)-1] == '\n' || data[len(data)-1] == '\r' {
 		data = data[:len(data)-1]
 	}
 	var lines [][]byte
-	start := 0
-	for i := 0; i < len(data); i++ {
-		if data[i] == '\n' {
-			lines = append(lines, data[start:i])
-			start = i + 1
+	for {
+		i := bytes.IndexAny(data, "\r\n")
+		if i < 0 {
+			return append(lines, data)
 		}
+		lines = append(lines, data[:i])
+		if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+			i++
+		}
+		data = data[i+1:]
 	}
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-	if len(lines) == 0 {
-		return [][]byte{data}
-	}
-	return lines
 }

@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -35,8 +36,8 @@ const (
 	ExchangeTimeout = 10 * time.Second
 	// DefaultTokenLifetime is how long a bearer token from /auth stays valid
 	DefaultTokenLifetime = 15 * time.Minute
-	// Token lifetime bounds: tokens expire on whole seconds and dialers renew
-	// 5 s ahead, so shorter ones arrive already expired
+	// Token lifetime bounds: exp has whole seconds, a sub-second expires_in
+	// reads as unknown, and 10 s leaves room for renewal ahead of expiry
 	MinTokenLifetime = 10 * time.Second
 	MaxTokenLifetime = 24 * time.Hour
 
@@ -355,6 +356,8 @@ func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState
 		switch {
 		case step.Binding != "" && l.proxy != nil:
 			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (logwisp auth token -unbound)", err)
+		case step.Binding == "" && l.cb != nil:
+			err = fmt.Errorf("%w; the client sent an unbound proof (-unbound), but this listener binds logins to its certificate", err)
 		case step.Binding != "" && step.Binding != base64.StdEncoding.EncodeToString(l.cb):
 			l.bindingMismatch.Add(1)
 			err = fmt.Errorf("%w; the client saw another server certificate: TLS interception or a terminating proxy", err)
@@ -383,7 +386,7 @@ func (p *Policy) bindCertificate(cs *tls.ConnectionState, username string) error
 // line for Accept. An exchange abandoned after its challenge is released from
 // the auth table at once rather than holding a slot for its timeout.
 func (p *Policy) exchangeTCP(a *Admission, cs *tls.ConnectionState) (Identity, []byte, error) {
-	ip := remoteIP(a.conn.RemoteAddr().String())
+	ip := throttleKey(remoteIP(a.conn.RemoteAddr().String()))
 	challenge, _, public, err := p.begin(ip, a.Hello.Scram)
 	if err != nil {
 		writeStep(a.conn, authStep{Error: public})
@@ -435,11 +438,12 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 		return Identity{}, nil
 	}
 	l := p.listener
-	ip, err := p.ClientAddr(r)
+	client, err := p.ClientAddr(r)
 	if err != nil {
 		writeJSON(w, http.StatusForbidden, authStep{Error: "forbidden"})
 		return Identity{}, err
 	}
+	ip := throttleKey(client)
 	// A cross-origin page cannot send JSON without a preflight nobody answers
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
 		p.rejected.Add(1)
@@ -882,6 +886,16 @@ func remoteIP(addr string) string {
 }
 
 // --- Throttling ---
+
+// throttleKey is what the limiter counts: an address, or for IPv6 its /64,
+// which one host usually holds whole
+func throttleKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Is4() {
+		return ip
+	}
+	return netip.PrefixFrom(addr, 64).Masked().String()
+}
 
 // limiter bounds SCRAM attempts per remote address: failed or abandoned
 // exchanges drain a token bucket (successes are refunded) and at most
