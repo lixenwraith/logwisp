@@ -213,7 +213,8 @@ headers, and entry encoding.
   is not covered by the server certificate's SANs; set `server_name`.
 - `protocol version not supported` — one side is pinned to `min_version = "1.3"`
   and the other cannot negotiate it.
-- Handshake failures appear as WARN with the remote address, and increment
+- Listeners log handshake failures at WARN with the remote address (the `tcp`
+  sink at DEBUG); the `tcp` sink and `tcp_chain` source count them in
   `tls_handshake_errors`.
 
 **Rejected after a successful handshake**
@@ -254,8 +255,9 @@ headers, and entry encoding.
   `X-Forwarded-For`.
 - `too many attempts` — the address failed or abandoned logins faster than one
   per second beyond a burst of 10, or has 4 unfinished; it clears within seconds
-  once the failing peer stops. Peers behind one NAT share the budget. `busy` —
-  4,096 logins in flight, or the listener is stopping.
+  once the failing peer stops. Peers behind one NAT or one passthrough proxy
+  share the budget. `busy` — 4,096 logins in flight, or the listener is
+  stopping.
 - `authentication not enabled` — the dialer has `scram`; the listener's
   `auth.type` is `none` or `mtls`.
 - `no challenge within 10s (older logwisp, or not a scram listener)` — the
@@ -281,6 +283,19 @@ headers, and entry encoding.
   dies with every listener reload.
 - `403` is not the token: it is the `identity` binding, node binding or, in
   proxy mode, the proxy gate.
+
+**Behind an L4 proxy**
+- Every connection through the proxy fails: it sends a PROXY header (nginx
+  `stream` with `proxy_protocol on`, HAProxy `send-proxy`) to a LogWisp TLS
+  listener, which cannot read one yet. The header lands in front of the TLS
+  handshake, logged from the proxy's address as `first record does not look
+  like a TLS handshake`. Route LogWisp without it: see
+  [Behind nginx or another proxy](security.md#behind-nginx-or-another-proxy).
+- All peers share one throttling budget behind a passthrough proxy: without
+  PROXY every peer arrives from the proxy's address, so one client failing
+  logins makes every other login answer `too many attempts` until it stops
+  ([Throttling](security.md#throttling)). Expose the chain ports directly, or
+  keep the proxy hop on a trusted network.
 
 **Entries not arriving over a chain link**
 - Check the sink's `connected` statistic and its `reconnects` count.
