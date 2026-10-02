@@ -373,10 +373,8 @@ plaintext-forwarded requests `403`. The existing scripts keep passing.
 
 ## Not Implemented
 
-1. **PROXY protocol behind TLS passthrough.** Every client then shares the
-   proxy's address, and so one throttling budget that a single client can
-   exhaust. Accepting PROXY v2 from listed proxies would restore per-client
-   throttling on the TCP listeners and on HTTP listeners outside proxy mode.
+1. **PROXY protocol behind TLS passthrough**: planned in
+   [To Do, 1.2](todo.md#12-proxy-protocol-deferred-gap-of-scram-see-scram-auth-planmd).
 
 ## mTLS Hardening
 
