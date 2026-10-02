@@ -87,6 +87,10 @@ change touches.
 - TLS tests over `net.Pipe` close the raw pipe ends: `tls.Conn.Close` waits up
   to 5 s writing close_notify nobody reads. authz tests lower the dialer's
   Argon2 floor in `TestMain`; elsewhere every login costs the 64 MiB default.
+- `internal/sink/http/web/` is embedded by the `http` sink. `scram.js` stays one
+  dependency-free ES module (sites copy it into their bundles) and the pages
+  stay free of inline script and style (their CSP); `node --test` there checks
+  it against Go's Argon2 and `auth`'s known answer.
 - Listeners and dialers are IPv4-only (`tcp4`). E2E scripts in `test/` need
   `bin/logwisp` and `--auto`, and each owns a port range and a gitignored run
   directory.

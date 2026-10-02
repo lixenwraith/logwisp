@@ -64,7 +64,8 @@ endpoint), `tcp` (broadcast server), `null`, and the chain forwarders
 - Authorization by certificate identity, per listener: named peers rather than
   everything the CA issued, with the `http` sink's endpoints gated too
 - Password authentication (Argon2id-SCRAM) bound to the listener's certificate,
-  with bearer tokens on HTTP listeners and a `logwisp auth` CLI
+  with bearer tokens on HTTP listeners and a `logwisp auth` CLI, and browser
+  logins behind a TLS-terminating proxy
 - Node binding, so a chain source labels entries from the sender's certificate
   identity or username rather than from what the sender claims
 

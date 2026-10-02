@@ -204,7 +204,13 @@ headers, and entry encoding.
 - `the client saw another server certificate: TLS interception or a terminating
   proxy` in the listener's log, with `auth_binding_mismatch` rising — something
   between the peers terminates TLS. Pass TLS through to LogWisp; the login
-  cannot work otherwise. On an `http_chain` sink, `server certificate differs
+  cannot work otherwise, except on an `http` sink in proxy mode
+  (`auth.trusted_proxies`), where `the client bound its proof to the proxy's
+  certificate` means a client that needs `logwisp auth token -unbound`.
+- `403` from an `http` sink in proxy mode, with `not a trusted proxy` or
+  `X-Forwarded-Proto` in its WARN line — the request did not come from a listed
+  proxy, or the proxy did not forward `X-Forwarded-Proto: https` and
+  `X-Forwarded-For`. On an `http_chain` sink, `server certificate differs
   from the one the SCRAM login was bound to` means the certificate changed after
   the login: a rotation (the retry binds anew), several backends, or
   interception.

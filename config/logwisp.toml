@@ -143,6 +143,8 @@ name = "default"
 ### token_lifetime_ms = 0   scram, http sink and http_chain source: 10 s to 24 h, 0 = 15 minutes
 ### username = ""           scram dialers
 ### password_file = ""      scram dialers: one trailing line break is trimmed
+### trusted_proxies = []    scram http sink: TLS-terminating reverse proxies
+###                         (addresses or CIDRs); browsers log in through them
 ###============================================================================
 
 ###============================================================================
@@ -284,6 +286,8 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # client_buffer_size = 256              # Per-client send queue
 # write_timeout_ms = 0                  # Per-event deadline, 0 = none
 # max_connections = 0                   # 0 = unlimited
+# login_page = false                    # GET /auth/login; needs auth.trusted_proxies
+# viewer_page = false                   # GET /auth/view; needs login_page
 # [pipelines.plugin_sinks.config.tls]
 # enabled = true                        # example
 # cert_file = "/etc/logwisp/tls/server.crt"
@@ -291,12 +295,13 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # client_auth = false
 # client_ca_file = ""
 # [pipelines.plugin_sinks.config.auth]  # gates BOTH stream_path and status_path
-# type = "none"                         # none | mtls | scram; browsers need mtls
+# type = "none"                         # none | mtls | scram; browsers: mtls, or scram behind a proxy
 # identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # credentials_file = ""                 # scram: log in with `logwisp auth token`
 # token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
+# trusted_proxies = []                  # scram: proxies ending the browsers' TLS; tls may then be off
 
 ## TCP sink (streaming server, IPv4 clients only)
 # [[pipelines.plugin_sinks]]

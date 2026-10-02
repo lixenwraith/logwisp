@@ -14,6 +14,7 @@ configure it, and — equally important — what it does not yet do.
 | Authorization from certificate identity (allow-lists, node binding) | Implemented — see [The Auth Block](#the-auth-block) |
 | Password (Argon2id-SCRAM) authentication, bound to the TLS channel | Implemented — see [Password Authentication](#password-authentication-scram) |
 | Authentication on the `http` sink's stream and status endpoints | Implemented: client certificate or bearer token |
+| Browser logins behind a site's TLS-terminating proxy | Implemented — see [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy) |
 | Server pinning by dialers | Implemented: certificate identity (`mtls`), bound certificate (`scram`) |
 | Startup warnings for expiring certificates and risky settings | Implemented — see [Startup Warnings](#startup-warnings) |
 | Unknown configuration keys rejected | Implemented — a typo in `tls`, `auth` or a table path fails startup |
@@ -95,6 +96,7 @@ credentials_file  = ""                    # scram listeners
 token_lifetime_ms = 0                     # scram, HTTP listeners; 10 s to 24 h, 0 = 15 minutes
 username          = ""                    # scram dialers
 password_file     = ""                    # scram dialers
+trusted_proxies   = []                    # scram http sink behind a TLS-terminating proxy
 ```
 
 | Option | Applies to | Default | Description |
@@ -108,6 +110,7 @@ password_file     = ""                    # scram dialers
 | `token_lifetime_ms` | `scram` on the `http` sink and `http_chain` source | 15 minutes | Bearer token lifetime, 10 s to 24 h |
 | `username` | `scram` dialers | — | User to log in as |
 | `password_file` | `scram` dialers | — | File holding the password; one trailing line break is trimmed |
+| `trusted_proxies` | `scram` on the `http` sink | `[]` | Addresses or CIDRs of the reverse proxies that end the browsers' TLS; see [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy) |
 
 **Roles by plugin:**
 
@@ -203,12 +206,13 @@ was shown instead; see [Channel binding](#channel-binding).
 
 Misconfiguration fails at plugin construction, before the pipeline starts:
 
-- `type` `mtls` or `scram` without `tls.enabled`, or on a dialer with
+- `type` `mtls` or `scram` without `tls.enabled` (proxy mode aside), or on a dialer with
   `tls.insecure_skip_verify`: an identity read from an unverified chain is a
   claim, and an unverified server could relay a login
 - `type = "mtls"` on a listener without `tls.client_auth`
 - a block naming peers or credentials (`allow`, `allow_patterns`,
-  `credentials_file`, `token_lifetime_ms`, `username`, `password_file`) whose
+  `credentials_file`, `token_lifetime_ms`, `username`, `password_file`,
+  `trusted_proxies`) whose
   `type` is `none` or unset: auth was intended and the type forgotten
 - a key of the other method: `allow` or `allow_patterns` under `scram`, a
   `scram` key under `mtls`
@@ -217,8 +221,12 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
   with a `token_lifetime_ms` outside 10 s to 24 h or on a TCP listener, or with
   `identity` but no `tls.client_auth`
 - a `scram` dialer without `username` and `password_file`, with
-  `credentials_file`, `token_lifetime_ms` or `identity` (server pinning is
-  `mtls` only), or with a password file that is empty or over 1024 bytes
+  `credentials_file`, `token_lifetime_ms`, `trusted_proxies` or `identity`
+  (server pinning is `mtls` only), or with a password file that is empty or
+  over 1024 bytes
+- `trusted_proxies` on anything but the `http` sink, with `identity`, or with
+  an entry that is neither an address nor a CIDR; `login_page` or
+  `viewer_page` without `trusted_proxies`, `viewer_page` without `login_page`
 - an `identity` that is not one of the four modes
 - an `allow_patterns` entry that does not compile
 - a `node_binding` that is not one of the three values, or one set on a plugin
@@ -341,9 +349,9 @@ end to end — run it with `--auto` to see each guarantee asserted.
 
 `type = "scram"` authenticates peers by username and password with
 Argon2id-SCRAM from `lixenwraith/auth`. It needs TLS but no client
-certificates, works on all six network plugins, and is LogWisp-to-LogWisp only:
-viewers use the [`logwisp auth`](cli.md#logwisp-auth) CLI, not standard SASL
-clients.
+certificates, works on all six network plugins, and is LogWisp's own protocol,
+not standard SASL: viewers use the [`logwisp auth`](cli.md#logwisp-auth) CLI or,
+behind a TLS-terminating proxy, the shipped browser client.
 
 ```toml
 # Listener: tcp_chain/http_chain source, tcp/http sink
@@ -481,18 +489,77 @@ different users.
 
 ### Limits
 
-- TLS must terminate at LogWisp. Behind a terminating proxy or load balancer
-  every login fails by design; pass TLS through instead (TCP or SNI routing).
-  All clients then share the proxy's address, and so one throttling budget.
+- TLS must terminate at LogWisp, except on an `http` sink in proxy mode. Behind
+  any other terminating proxy or load balancer every login fails by design;
+  pass TLS through instead (TCP or SNI routing). All clients then share the
+  proxy's address, and so one throttling budget.
 - One process per HTTP address. Handshake state and the token key live in one
   instance, so behind a balancer the proof or the token can reach an instance
   that never saw the login.
-- Browsers cannot log in: `EventSource` sends no `Authorization` header and runs
-  no Argon2. Use `mtls` on an `http` sink meant for browsers.
+- Browsers log in only to an `http` sink in proxy mode, below; elsewhere use
+  `mtls` for browsers.
 - `nc` and `openssl s_client` cannot read a `scram` `tcp` sink; use
   `logwisp auth stream`.
 
 `test/scram-chain-test.sh --auto` exercises these guarantees end to end.
+
+### Browsers behind a TLS-terminating proxy
+
+A site that serves the log stream inside its own pages ends TLS at its reverse
+proxy and need not give LogWisp a private key. `trusted_proxies` puts the `http`
+sink in proxy mode, where browsers log in with the client LogWisp ships; the
+password reaches neither the proxy nor LogWisp.
+
+```toml
+[pipelines.plugin_sinks.config]
+host        = "127.0.0.1"
+port        = 8081
+login_page  = true                     # GET /auth/login
+viewer_page = true                     # GET /auth/view, needs login_page
+[pipelines.plugin_sinks.config.auth]
+type             = "scram"
+credentials_file = "/etc/logwisp/users.toml"
+trusted_proxies  = ["127.0.0.1"]       # addresses or CIDRs
+```
+
+```nginx
+location /logs/ {
+    proxy_pass       http://127.0.0.1:8081/;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+- **Trust.** Every other peer gets `403` on every path. `X-Forwarded-Proto`
+  must be `https` on every hop, so a site accidentally served in plaintext fails
+  closed. The client is the rightmost `X-Forwarded-For` hop that is not a
+  proxy; throttling, sessions and logs use it.
+- **Unbound logins.** The browser cannot see a certificate LogWisp could bind
+  to, so proofs are unbound and a party on the hop between proxy and LogWisp
+  could relay a login. Keep that hop on loopback or a trusted network, or
+  enable `tls` on the sink; a plaintext hop to a proxy off this host is
+  warned about at startup. `identity` cannot be combined with proxy mode.
+- **Sessions.** The page asks for a cookie: `logwisp_session`, `HttpOnly`,
+  `Secure`, `SameSite=Strict`, `Max-Age` the token lifetime, and no `Path`, so
+  it scopes itself to the mount (`/logs` above). Stream and status accept it or
+  a bearer token, so `new EventSource("stream")` works on any page of the site
+  and `logwisp auth token -unbound` keeps working. `POST /auth` with
+  `{"logout": true}` clears the cookie and revokes the token until it expires.
+  `/auth` takes only `application/json`, which a cross-origin page cannot send
+  without a preflight.
+- **Pages.** Under `/auth/` the sink serves `scram.js` always, and with
+  `login_page` / `viewer_page` the login page and a minimal live viewer with
+  their script and style, under `default-src 'none'; script-src 'self';
+  connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors
+  'none'; base-uri 'none'`. A site with its own CSP can copy `scram.js` from
+  `internal/sink/http/web/` into its bundle: one dependency-free ES module
+  exporting `login(base, username, password, {onProgress})` and
+  `logout(base)`, where `base` is the mount URL ending in `/`. It needs a
+  secure context for WebCrypto and takes about 2 s of Argon2 per login on a
+  desktop.
+
+`test/scram-proxy-test.sh --auto` logs in from headless Chromium through such a
+proxy.
 
 ## What Each Layer Enforces
 

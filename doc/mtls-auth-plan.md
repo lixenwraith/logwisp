@@ -213,7 +213,9 @@ still reports `CapTLS`, the `mtls=true` field on the startup log line, and the
 
 `Pipeline.initSourceCapabilities` and `initSinkCapabilities` treat this as a
 cross-cutting check: a plugin advertising `CapAuth` without `CapTLS` is a
-contradiction and fails pipeline construction rather than starting.
+contradiction and fails pipeline construction rather than starting. An `http`
+sink in SCRAM proxy mode reports `CapProxyTLS` instead: TLS ends at a trusted
+proxy.
 
 ### Observability
 

@@ -135,6 +135,8 @@ allow = ["viewer-01"]
 | `client_buffer_size` | int | `256` | Per-client send queue depth |
 | `write_timeout_ms` | int | `0` | Per-event write deadline; `0` = none |
 | `max_connections` | int | `0` | Concurrent stream cap; `0` = unlimited |
+| `login_page` | bool | `false` | Serve the browser login page at `/auth/login`; needs `auth.trusted_proxies` |
+| `viewer_page` | bool | `false` | Serve a minimal live viewer at `/auth/view`; needs `login_page` |
 | `tls` | table | — | Listener TLS; see [Security](security.md) |
 | `auth` | table | — | Client authentication (`mtls` or `scram`); see [Security](security.md#the-auth-block) |
 
@@ -150,8 +152,12 @@ allow = ["viewer-01"]
   `Authorization: Bearer <token>`; a missing, invalid or expired token gets
   `401` with `WWW-Authenticate`, a certificate that does not match the token's
   user `403`. A stream is checked when it connects and outlives its token; a
-  reload ends it. Browsers cannot log in, so use `mtls` for `EventSource`
-  viewers.
+  reload ends it. `/auth` and every path under it are reserved.
+- With `auth.trusted_proxies` (proxy mode) the sink sits behind a site's
+  TLS-terminating reverse proxy: only the proxies may connect, browsers log in
+  through `/auth/login` or the site's own copy of `/auth/scram.js`, and stream
+  and status also accept the `logwisp_session` cookie. See
+  [Browsers behind a TLS-terminating proxy](security.md#browsers-behind-a-tls-terminating-proxy).
 - Refusals are logged at WARN and counted in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
   `auth_identity`.
@@ -186,7 +192,8 @@ counters.
 
 **Statistics**: `dropped_writes`, `rejected_clients`, `auth`, `auth_allowed`,
 `auth_rejected`; under `scram` also `auth_users`, `auth_throttled`,
-`auth_busy`, `auth_binding_mismatch` and `auth_token_lifetime_ms`.
+`auth_busy`, `auth_binding_mismatch` and `auth_token_lifetime_ms`, and in
+proxy mode `auth_trusted_proxies`.
 
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read

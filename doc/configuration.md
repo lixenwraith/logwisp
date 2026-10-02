@@ -250,7 +250,7 @@ not declare, at any depth, is such a failure (`unknown key "tls.enabeld"`): a
 misspelled option must not silently fall back to its default. For the same
 reason an `auth` block that names peers or credentials (`allow`,
 `allow_patterns`, `credentials_file`, `token_lifetime_ms`, `username`,
-`password_file`) while its `type` is `none` or unset is refused: auth was
+`password_file`, `trusted_proxies`) while its `type` is `none` or unset is refused: auth was
 intended and the type forgotten. See [Security](security.md#the-auth-block).
 
 There is **no** cross-pipeline port-conflict detection. Two sinks bound to the

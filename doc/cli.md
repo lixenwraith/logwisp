@@ -185,7 +185,7 @@ them as a viewer. See
 |---------|------|
 | `add-user -credentials FILE -user NAME [-password-file FILE] [-generate]` | Adds a user, or replaces its password |
 | `remove-user -credentials FILE -user NAME` | Removes a user; refuses the last one |
-| `token -url https://HOST:PORT -user NAME -password-file FILE [TLS flags]` | Logs in to an `http` sink or `http_chain` source and prints a bearer token |
+| `token -url https://HOST:PORT[/PATH] -user NAME -password-file FILE [-unbound] [TLS flags]` | Logs in to an `http` sink or `http_chain` source and prints a bearer token |
 | `stream -addr HOST:PORT -user NAME -password-file FILE [TLS flags]` | Logs in to a `tcp` sink and copies its stream to stdout until interrupted |
 
 `logwisp auth <command> -h` lists a command's flags. The exit status is `0` on
@@ -212,7 +212,10 @@ watch the credentials file.
 sink. TLS flags: `-ca-file` (default: system roots), `-server-name` (default:
 the host), and `-cert-file` / `-key-file` for a listener with `tls.client_auth`.
 There is no flag to skip verification: an unverified server could relay the
-login. `-url` takes no path, and redirects are not followed. `stream` exits `0`
+login. Redirects are not followed. `-unbound` logs in to an `http` sink behind
+a TLS-terminating proxy (`auth.trusted_proxies`), still pinning the proxy's
+certificate across the two requests; only then may `-url` carry the path the
+proxy mounts LogWisp at. `stream` exits `0`
 on `SIGINT` or `SIGTERM`, and `1` when the server ends the stream (a reload or
 shutdown).
 

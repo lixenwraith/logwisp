@@ -66,7 +66,8 @@ exponential backoff and jitter.
   verifiers, never passwords, and do no KDF work; every login is bound to the
   listener's certificate, so no relay presenting another one can use it; HTTP
   listeners issue short-lived bearer tokens. `logwisp auth` manages credentials
-  files and logs viewers in
+  files and logs viewers in; behind a site's TLS-terminating proxy, browsers
+  log in through a shipped login page and a dependency-free JS client
 - Node binding: a chain source can label entries from the sender's certificate
   identity or username instead of from what the sender claims, so origin
   attribution is not forgeable
