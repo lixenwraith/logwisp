@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-// helpText is the CLI usage reference. Flags map 1:1 to TOML config paths.
+// helpText is the CLI usage reference. Scalar flags map 1:1 to TOML config paths.
 const helpText = `LogWisp %s - log collection, processing, and distribution
 
 Usage:
@@ -32,14 +32,26 @@ Logging:
       --logging.level=<level>   debug|info|warn|error
       --logging.file.directory=<path>
 
-Pipelines, plugins and filters are configured in TOML; array-indexed CLI and
-environment overrides are unsupported. -- ends option parsing.
+Pipelines (replace the file's pipelines; see doc/cli.md):
+      --pipeline <name>         Start a pipeline; earlier specs go to "cli"
+      --source <spec>           TYPE[,key=value...], repeatable
+      --sink <spec>             e.g. http,host=0.0.0.0,port=8080, repeatable
+      --filter <spec>           include|exclude,patterns=RE[,...], repeatable
+      --format <spec>           json|txt|raw[,key=value...]
+      --rate-limit <spec>       rate=N[,burst=N,policy=drop|pass]
+      --heartbeat <spec>        interval_ms=N[,include_stats=true,...]
+  Keys nest with '.' (tls.cert_file=...), a repeated key makes a list, and
+  '\' escapes ',' '=' '\' in values. -- ends option parsing.
 
 Environment:
   LOGWISP_<PATH>                Config path, '.' -> '_', uppercase
                                 e.g. LOGWISP_LOGGING_LEVEL=debug
   LOGWISP_CONFIG_FILE           Configuration file path
   LOGWISP_CONFIG_DIR            Configuration directory
+  LOGWISP_PIPELINE, LOGWISP_SOURCE[_N], LOGWISP_SINK[_N], LOGWISP_FILTER[_N],
+  LOGWISP_FORMAT, LOGWISP_RATE_LIMIT, LOGWISP_HEARTBEAT
+                                One pipeline, specs as the flags (_N adds
+                                more); ignored when a pipeline flag is given
 
 Signals:
   SIGINT, SIGTERM               Graceful shutdown

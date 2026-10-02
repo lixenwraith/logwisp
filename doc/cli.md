@@ -13,7 +13,8 @@ lw --version
 
 ## Options
 
-Any scalar configuration key is settable as a flag using its TOML path:
+Any scalar configuration key is settable as a flag using its TOML path;
+pipelines have [their own flags](#pipelines):
 
 ```
 --<path>=<value>        e.g. --logging.level=debug
@@ -55,17 +56,62 @@ destination is derived from `--logging.output`.
 
 ### Pipelines
 
-Pipelines, sources, sinks, and filters **cannot** be configured from the command
-line. Array-indexed paths such as `--pipelines.0.name=app` or
-`--pipelines.0.plugin_sinks.0.type=null` are reported as unrecognized and
-ignored:
+Pipeline flags define whole pipelines. They replace the configuration file's
+pipelines and the built-in default; every other key keeps its precedence.
+
+- `--pipeline NAME` starts a pipeline; specs before the first one go to a
+  pipeline named `cli`
+- `--source SPEC`, `--sink SPEC` and `--filter SPEC` add a stage, repeatable
+- `--format SPEC`, `--rate-limit SPEC` and `--heartbeat SPEC`, once per pipeline
+- both `--flag SPEC` and `--flag=SPEC` work; `--` ends options
+
+A SPEC is a comma-separated list:
+
+- source, sink, filter and format specs start with a TYPE
+  - the plugin type: [Sources](sources.md), [Sinks](sinks.md)
+  - `include` or `exclude`: [Filters](filters.md)
+  - `json`, `txt` or `raw`: [Formatters](formatters.md)
+- rate-limit and heartbeat specs have no TYPE
+- the rest are `key=value` pairs with the TOML keys of the plugin's `config`
+  table or of the [flow stage](configuration.md#flow-stages)
+  - a dotted key reaches a nested table: `tls.cert_file=...`, `auth.type=scram`
+  - a repeated key makes a list: `patterns=ERROR,patterns=WARN`
+  - a plugin's list option given once splits at commas: `auth.allow=a\,b` is
+    two entries; a filter's `patterns` value is always one regex
+  - values convert to the option's type: `port=8080`, `raw=true`
+- `\` escapes `,`, `=` and `\` in a value; any other backslash stays, so regex
+  escapes such as `\d` pass unchanged
+- `id=NAME` names a source or sink; the default is its TYPE, then `TYPE_2`,
+  `TYPE_3`, ...
+- naming a stage turns it on: `--rate-limit` defaults `policy` to `drop`,
+  `--heartbeat` defaults `enabled` to `true`
+
+Errors name the flag and the offending part, and nothing starts:
 
 ```
-Warning: unrecognized flags ignored: [pipelines.0.name]
+--sink http,port: missing "="
+--rate-limit rate=100,polcy=drop: unknown key "polcy"
 ```
 
-Use a configuration file. Older documentation described CLI pipeline overrides
-that the current loader does not implement.
+A misspelled plugin key fails when the plugin is built, before any listener
+opens: `failed to create sink http: ... unknown key "tls.enabeld"`.
+
+```bash
+# tail a directory, serve it over SSE
+lw --source 'file,directory=/var/log/app,pattern=*.log' \
+   --sink http,host=0.0.0.0,port=8080
+
+# errors and warnings as JSON, over TLS with SCRAM logins
+lw --source file,directory=/var/log/app \
+   --filter include,patterns=ERROR,patterns=WARN --format json \
+   --sink "http,port=8443,auth.type=scram,auth.credentials_file=/etc/logwisp/users.toml,\
+tls.enabled=true,tls.cert_file=/etc/logwisp/server.crt,tls.key_file=/etc/logwisp/server.key"
+
+# two pipelines
+lw --pipeline app --source file,directory=/var/log/app --sink console \
+   --pipeline relay --source tcp_chain,port=9000 \
+   --sink file,directory=/var/log/relay,name=relay
+```
 
 ## Environment Variables
 
@@ -88,14 +134,44 @@ The path resolver reads these variables directly:
 | `LOGWISP_CONFIG_FILE` | Configuration file path; joined onto `LOGWISP_CONFIG_DIR` when both are set |
 | `LOGWISP_CONFIG_DIR` | Configuration directory; alone, implies `<dir>/logwisp.toml` |
 
-As with flags, array elements cannot be set this way.
+### Pipeline Variables
+
+One pipeline can come from the environment, with the [SPEC](#pipelines) syntax.
+Any pipeline flag on the command line makes LogWisp ignore all of them.
+
+- `LOGWISP_PIPELINE`: the pipeline's name, default `cli`
+- `LOGWISP_SOURCE`, `LOGWISP_SINK`, `LOGWISP_FILTER`: one stage each
+  - `LOGWISP_SOURCE_1` .. `LOGWISP_SOURCE_N` add more, after the unnumbered
+    one in numeric order; likewise `LOGWISP_SINK_N` and `LOGWISP_FILTER_N`
+- `LOGWISP_FORMAT`, `LOGWISP_RATE_LIMIT`, `LOGWISP_HEARTBEAT`
+- an empty variable counts as unset
+
+A container needs no configuration file:
+
+```bash
+docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
+  -e LOGWISP_PIPELINE=app \
+  -e LOGWISP_SOURCE='file,directory=/logs,pattern=*.log' \
+  -e LOGWISP_FILTER='exclude,patterns=DEBUG' \
+  -e LOGWISP_SINK='http,host=0.0.0.0,port=8080' \
+  -e LOGWISP_SINK_1=console \
+  logwisp
+```
 
 ## Precedence
 
-1. Command-line flags
-2. Environment variables
-3. Configuration file
-4. Built-in defaults
+- Pipelines
+  - pipeline flags, if any are given
+  - else pipeline variables, if any are set
+  - else the configuration file's `[[pipelines]]`
+  - else the built-in default
+- Every other key
+  1. command-line flags
+  2. environment variables
+  3. configuration file
+  4. built-in defaults
+
+A reload rereads the file and keeps the command-line or environment pipelines.
 
 ## Signals
 
@@ -133,8 +209,9 @@ a rate limit of 5 entries/second with a burst of 10 and `policy = "drop"`, and a
 `console` sink on stdout. It is a self-demonstrating idle mode, not a useful
 production configuration.
 
-Note that as soon as your file defines `[[pipelines]]`, that entire default
-pipeline — rate limit included — is replaced rather than merged.
+As soon as the file defines `[[pipelines]]`, or pipeline flags or variables are
+given, that entire default pipeline — rate limit included — is replaced rather
+than merged.
 
 ## Usage Patterns
 
@@ -145,7 +222,7 @@ pipeline — rate limit included — is replaced rather than merged.
 lw -c dev.toml --logging.output=stderr --logging.level=debug
 
 # no config at all: synthetic generator to stdout
-logwisp
+lw
 ```
 
 **Configuration check**

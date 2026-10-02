@@ -5,16 +5,18 @@ and its default ships as [`config/logwisp.toml`](../config/logwisp.toml).
 
 ## Configuration Precedence
 
-Sources are merged in this order, highest priority first:
-
-1. Command-line flags
-2. Environment variables
-3. Configuration file
-4. Built-in defaults
-
-The `pipelines` array is replaced wholesale, not merged: as soon as your file
-defines `[[pipelines]]`, the built-in default pipeline (and its default rate
-limit and formatter) disappears entirely.
+- Pipelines come from the first of these that defines any, replacing the rest
+  wholesale (the default pipeline's rate limit and formatter included):
+  1. pipeline flags: `--source`, `--sink`, ... ([CLI](cli.md#pipelines))
+  2. pipeline variables: `LOGWISP_SOURCE`, ...
+     ([CLI](cli.md#pipeline-variables))
+  3. the file's `[[pipelines]]`
+  4. the built-in default pipeline
+- Every other key merges, highest priority first:
+  1. command-line flags
+  2. environment variables
+  3. configuration file
+  4. built-in defaults
 
 ## File Location
 
@@ -201,7 +203,8 @@ are now ignored. `LOGWISP_CONFIG_FILE` and `LOGWISP_CONFIG_DIR` still select the
 file directly.
 
 Only scalar paths that exist in the configuration schema can be set this way.
-Array elements cannot: `LOGWISP_PIPELINES_0_NAME` has no effect.
+Array elements cannot: `LOGWISP_PIPELINES_0_NAME` has no effect. A whole
+pipeline can: see [pipeline variables](cli.md#pipeline-variables).
 
 ## Command-Line Overrides
 
@@ -220,11 +223,8 @@ ignored:
 Warning: unrecognized flags ignored: [pipelines.0.name]
 ```
 
-> Array-indexed paths are **not** settable from the command line.
-> `--pipelines.0.name=x`, `--pipelines.0.plugin_sinks.0.type=null`, and similar
-> flags are reported as unrecognized and ignored. Pipelines, sources, sinks, and
-> filters can only be defined in the configuration file. Older documentation
-> claimed otherwise.
+Array-indexed paths such as `--pipelines.0.name=x` are unrecognized; whole
+pipelines have [their own flags](cli.md#pipelines).
 
 ## Validation
 
@@ -236,6 +236,8 @@ Startup validation is intentionally split.
   `config` table: `config file "…": unknown key
   "pipelines[0].plugin_sinks[0].confg"`. A misspelled table path would otherwise
   drop the whole table it heads. A top-level `config_file` is ignored
+- pipeline [specs](cli.md#pipelines): syntax, and unknown flow-stage keys such
+  as `--rate-limit rate=1,polcy=drop`
 - at least one pipeline
 - unique, non-empty pipeline names
 - at least one source and one sink per pipeline
@@ -265,7 +267,8 @@ auto_reload = true
 or send `SIGHUP` / `SIGUSR1`. Signals reread the selected file even when watching
 is disabled and always rebuild, allowing certificate and credentials rotation
 without TOML edits; `auto_reload` watches only the configuration file.
-CLI and environment overrides are captured at startup and keep their precedence.
+CLI and environment overrides, pipelines included, are captured at startup and
+keep their precedence.
 
 Reload rebuilds the whole service: a new service is constructed from the new
 configuration first, and only if that succeeds is the old one shut down. Each
@@ -296,7 +299,7 @@ client is disconnected. Chain sinks reconnect on their own backoff schedule.
 | Integer | `int64` | Decimal string |
 | Float | `float64` | Decimal string |
 | Boolean | `bool` | `true` / `false`, or a bare flag for `true` |
-| Array | `[]T` | Not settable outside the file |
+| Array | `[]T` | Only in [pipeline specs](cli.md#pipelines): a repeated key |
 | Table | struct | Nested path with `.` (flags) or `_` (environment) |
 
 Integer fields reject fractions, overflow and negative unsigned values. Non-finite
