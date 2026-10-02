@@ -252,10 +252,10 @@ starting it, run `lw --check -c FILE`; see
 
 The end-to-end scripts in `test/` run against `bin/lw`; `make e2e` runs them
 all with `--auto` and reports skips separately from passes and failures.
-Without `--auto`, a script keeps its daemons up for inspection (the chain
-scripts run the relay in the foreground), and `--keep` skips the teardown
-after a pass. Each script names its port range and its run directory under
-`test/` in its header, and the run directories are gitignored.
+Without `--auto`, every script but `passthrough-test.sh` keeps its daemons up
+for inspection (the chain scripts run the relay in the foreground), and
+`--keep` skips the teardown after a pass. The scripts work in gitignored
+run directories under `test/`.
 
 - `chain-test.sh`: two edges into a relay, one pipeline per chain transport;
   ports 15801-15804
