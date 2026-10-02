@@ -8,7 +8,7 @@
 #   logwisp_enable  "YES" starts LogWisp at boot (default "NO")
 #   logwisp_config  configuration file (default %%PREFIX%%/etc/logwisp/logwisp.toml)
 #   logwisp_user    account lw runs as (default "logwisp")
-# Output goes to syslog under the tag logwisp; "service logwisp reload" sends SIGHUP.
+#   logwisp_chdir   working directory (default /var/db/logwisp)
 
 . /etc/rc.subr
 
@@ -23,7 +23,8 @@ load_rc_config $name
 : ${logwisp_user:="logwisp"}
 : ${logwisp_chdir:="/var/db/logwisp"}
 
-# daemon(8) records the child's pid, so stop and reload signal lw itself.
+# daemon(8) records the child's pid, so stop and reload (SIGHUP) signal lw
+# itself, and sends its output to syslog under the tag logwisp.
 pidfile="/var/run/${name}/${name}.pid"
 procname="%%PREFIX%%/bin/lw"
 command="/usr/sbin/daemon"
