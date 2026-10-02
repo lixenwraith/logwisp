@@ -41,14 +41,17 @@ Every listener and dialer keeps strictly to the family of its `host`:
 
 ## Network Plugins
 
-| Plugin | Role | Protocol | Purpose |
-|--------|------|----------|---------|
-| `tcp` sink | Listener | Raw stream | Broadcast formatted payloads to clients |
-| `http` sink | Listener | HTTP SSE | Browser-friendly live stream plus status JSON |
-| `tcp_chain` source | Listener | Chain v1 | Ingest a persistent NDJSON stream |
-| `http_chain` source | Listener | Chain v1 | Ingest NDJSON batches over POST |
-| `tcp_chain` sink | Dialer | Chain v1 | Forward entries over a persistent connection |
-| `http_chain` sink | Dialer | Chain v1 | Forward entries as batched POSTs |
+Listeners:
+
+- `tcp` sink: raw stream; broadcasts formatted payloads to clients.
+- `http` sink: HTTP SSE; a browser-friendly live stream plus status JSON.
+- `tcp_chain` source: chain v1; ingests a persistent NDJSON stream.
+- `http_chain` source: chain v1; ingests NDJSON batches over POST.
+
+Dialers:
+
+- `tcp_chain` sink: chain v1; forwards entries over a persistent connection.
+- `http_chain` sink: chain v1; forwards entries as batched POSTs.
 
 There is no port registry and no default port: `port` is required on every
 network plugin. There is also no cross-pipeline conflict detection — two sinks
@@ -60,30 +63,36 @@ ERROR msg="Failed to start sink" error="tcp sink bind 0.0.0.0:9090: listen tcp4 
 
 ## Timeouts
 
-Every network plugin exposes the deadlines relevant to its role. Zero means "no
-deadline" wherever the table says so.
+Every network plugin exposes the deadlines relevant to its role. `0` means no
+deadline where the default is `0` (none); elsewhere it selects the default.
 
-| Plugin | Option | Default | Bounds |
-|--------|--------|---------|--------|
-| `tcp` sink | `write_timeout_ms` | `5000` | One write to one client; a miss disconnects that client |
-| `http` sink | `write_timeout_ms` | `0` (none) | One SSE event write |
-| `tcp_chain` source | `hello_timeout_ms` | `10000` | Reading the protocol preamble, and under `scram` the whole login |
-| `tcp_chain` source | `read_timeout_ms` | `0` (none) | Idle time between entries |
-| `http_chain` source | `read_timeout_ms` | `30000` | Reading a whole request body |
-| `tcp_chain` sink | `dial_timeout_ms` | `5000` | TCP connect |
-| `tcp_chain` sink | `write_timeout_ms` | `5000` | One line write |
-| `http_chain` sink | `request_timeout_ms` | `10000` | Dial plus write plus response, and a SCRAM login when one is due |
+- `tcp` sink
+  - `write_timeout_ms`, default `5000`: one write to one client; a miss
+    disconnects that client.
+- `http` sink
+  - `write_timeout_ms`, default `0` (none): one SSE event write.
+- `tcp_chain` source
+  - `hello_timeout_ms`, default `10000`: reading the protocol preamble, and
+    under `scram` the whole login.
+  - `read_timeout_ms`, default `0` (none): idle time between entries.
+- `http_chain` source
+  - `read_timeout_ms`, default `30000`: reading a whole request body.
+- `tcp_chain` sink
+  - `dial_timeout_ms`, default `5000`: TCP connect.
+  - `write_timeout_ms`, default `5000`: one line write.
+- `http_chain` sink
+  - `request_timeout_ms`, default `10000`: dial plus write plus response, and
+    a SCRAM login when one is due.
 
 Fixed, non-configurable bounds:
 
-| Bound | Value | Applies to |
-|-------|-------|------------|
-| TLS handshake | 10 s | All TLS listeners and dialers |
-| HTTP read-header timeout | 10 s | `http` sink, `http_chain` source |
-| HTTP server shutdown grace | 2 s | `http` sink, `http_chain` source |
-| Max single entry line | 1 MiB | Chain listeners |
-| SCRAM login | 10 s | `tcp` sink, chain sinks, `lw auth`, each `/auth` request |
-| SCRAM line or `/auth` body | 4 KiB | `scram` listeners and dialers |
+- TLS handshake: 10 s, on all TLS listeners and dialers.
+- HTTP read-header timeout: 10 s, on the `http` sink and `http_chain` source.
+- HTTP server shutdown grace: 2 s, on the `http` sink and `http_chain` source.
+- Single entry line: at most 1 MiB, on chain listeners.
+- SCRAM login: 10 s, on the `tcp` sink, chain sinks, `lw auth`, and each
+  `/auth` request.
+- SCRAM line or `/auth` body: at most 4 KiB, on `scram` listeners and dialers.
 
 The `http` sink deliberately leaves the server's `WriteTimeout` unset, since it
 would terminate long-lived SSE streams; per-event deadlines come from
