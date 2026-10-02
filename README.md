@@ -64,11 +64,13 @@ exponential backoff and jitter.
   stream and status endpoints, and lets a dialer pin the server it talks to
 - Node binding: a chain source can label entries from the sender's certificate
   instead of from what the sender claims, so origin attribution is not forgeable
+- Fail-closed configuration: unknown keys are rejected, and startup warns about
+  expiring certificates, disabled verification and unanchored allow patterns
 
 See [Security](doc/security.md) for configuration and the exact boundary, and
 the [mTLS authentication design](doc/mtls-auth-plan.md) for the rationale and
-what is deliberately left out. Password, token, and SCRAM authentication were
-removed during the restructure and are not currently available.
+what is deliberately left out. Password authentication (Argon2id-SCRAM) is
+planned; see the [SCRAM design](doc/scram-auth-plan.md).
 
 ## Documentation
 
@@ -85,6 +87,7 @@ removed during the restructure and are not currently available.
 | [Networking](doc/networking.md) | Listeners, dialers, timeouts, connection limits |
 | [Security](doc/security.md) | TLS, mTLS, and peer authorization; threat model and current limits |
 | [mTLS Authentication](doc/mtls-auth-plan.md) | Design and rationale for certificate-based authorization |
+| [Password Authentication](doc/scram-auth-plan.md) | Planned Argon2id-SCRAM design; mTLS hardening |
 | [CLI](doc/cli.md) | Flags, signals, exit codes |
 | [Operations](doc/operations.md) | Running, monitoring, tuning, troubleshooting |
 

@@ -48,10 +48,10 @@ back to authenticated peers.
 
 ## Non-Goals
 
-- Reviving password, token, or SCRAM authentication. The reserved hooks
-  (`chain.Hello.Auth`, the `Authorization` header comment in the `http_chain`
-  sink, the "Future: password auth block" comments in the network options
-  structs) stay reserved.
+- Password authentication. It is designed separately in
+  [scram-auth-plan.md](scram-auth-plan.md), reusing the `auth` block and the
+  reserved hooks (`chain.Hello`, the `Authorization` header in the `http_chain`
+  sink, the "Future: password auth block" comments in the options structs).
 - IP allow/deny lists and per-peer rate limits. Related, but a separate feature
   with its own config surface.
 - OCSP. See [Revocation](#revocation) for what is done instead.
@@ -341,16 +341,13 @@ The remaining phase-4 items, in rough order of value:
    operators with existing CRL infrastructure. The allow-list covers the same
    ground with fewer moving parts, so this is only worth doing for a fleet whose
    revocation already flows through a CRL.
-2. **Certificate expiry warnings** at startup and on reload — a leaf expiring
-   inside 30 days logged at WARN. Nothing warns today; expiry shows up as a
-   handshake failure.
-3. **Per-identity rate limits.** The natural follow-on now that identity exists,
+2. **Per-identity rate limits.** The natural follow-on now that identity exists,
    and the natural home for the per-IP limiting that was also removed. Kept out
    of scope here so this feature stayed reviewable.
-4. **Per-client identity in the `http` sink's status output.** The endpoint
+3. **Per-client identity in the `http` sink's status output.** The endpoint
    reports the policy and counters, but not which identities are currently
    connected; session metadata has the data.
-5. **A list of `identity` modes** (try `san_uri`, fall back to `cn`) for
+4. **A list of `identity` modes** (try `san_uri`, fall back to `cn`) for
    heterogeneous PKI. A single mode is simpler and covers a uniform CA.
 
 ## Decisions Taken

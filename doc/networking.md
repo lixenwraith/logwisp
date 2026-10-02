@@ -140,7 +140,8 @@ retry. Browsers reconnect SSE streams automatically.
 TLS is enabled. Only `GET` is routed to the stream and status paths. Each event
 is framed as one `data:` line per newline in the payload, so multi-line entries
 stream intact. Response headers set `Cache-Control: no-cache`,
-`X-Accel-Buffering: no`, and `Access-Control-Allow-Origin: *`.
+`X-Accel-Buffering: no`, and, without an auth policy,
+`Access-Control-Allow-Origin: *`.
 
 **TCP sink** — raw payload bytes, no framing added by the sink. Whether entries
 are newline-delimited depends on the formatter.
@@ -149,6 +150,11 @@ are newline-delimited depends on the formatter.
 headers, and entry encoding.
 
 ## Troubleshooting
+
+**Plugin fails to start with `unknown key "..."`**
+- The key is misspelled or belongs to another plugin type. Every plugin rejects
+  keys it does not declare, nested tables included, so a typo in `tls` or `auth`
+  cannot leave a protection silently off.
 
 **Connection refused**
 - Confirm the pipeline started; a bind failure is logged at ERROR.
