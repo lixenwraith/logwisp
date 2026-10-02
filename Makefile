@@ -133,13 +133,30 @@ verify: test
 		echo "node not found: web client tests skipped"; \
 	fi
 
+# A script exits 0 (passed), 77 (skipped: the host lacks what it tests) or
+# anything else (failed); only failures fail the target.
 e2e: build
-	@pass=0; fail=0; failed=; \
+	@if [ "$${FORCE_COLOR:-0}" != 0 ] || { [ -t 1 ] && [ -z "$${NO_COLOR:-}" ]; }; then \
+		g=$$(printf '\033[1;32m'); r=$$(printf '\033[1;31m'); y=$$(printf '\033[1;33m'); \
+		b=$$(printf '\033[1m'); o=$$(printf '\033[0m'); \
+	else g=; r=; y=; b=; o=; fi; \
+	pass=0; fail=0; skip=0; results=; \
 	for t in $(E2E); do \
-		echo "=== $$t --auto"; \
-		if "$$t" --auto; then pass=$$((pass + 1)); else fail=$$((fail + 1)); failed="$$failed $$t"; fi; \
+		echo; "$$t" --auto; rc=$$?; \
+		case $$rc in \
+		0) pass=$$((pass + 1)); results="$$results PASS:$$t" ;; \
+		77) skip=$$((skip + 1)); results="$$results SKIP:$$t" ;; \
+		*) fail=$$((fail + 1)); results="$$results FAIL:$$t:$$rc" ;; \
+		esac; \
 	done; \
-	echo "e2e: $$pass passed, $$fail failed$${failed:+:$$failed}"; \
+	printf '\n%se2e summary%s\n' "$$b" "$$o"; \
+	for x in $$results; do \
+		st=$${x%%:*}; t=$${x#*:}; c=$$g; note=; \
+		case $$st in SKIP) c=$$y ;; FAIL) c=$$r; note=" (exit $${t##*:})"; t=$${t%:*} ;; esac; \
+		printf '  %s%s%s  %s%s\n' "$$c" "$$st" "$$o" "$$t" "$$note"; \
+	done; \
+	c=$$g; [ "$$fail" -eq 0 ] || c=$$r; \
+	printf '%se2e: %d passed, %d failed, %d skipped%s\n' "$$c" "$$pass" "$$fail" "$$skip" "$$o"; \
 	[ "$$fail" -eq 0 ]
 
 image:
