@@ -5,21 +5,34 @@ configure it, and — equally important — what it does not yet do.
 
 ## Current State
 
-| Capability | Status |
-|------------|--------|
-| TLS 1.2 / 1.3 on all network sources and sinks | Implemented |
-| Server certificate verification by dialers | Implemented |
-| Mutual TLS (client certificate required and verified) | Implemented at the transport layer |
-| Peer identity recorded per session | Implemented |
-| Authorization from certificate identity (allow-lists, node binding) | Implemented — see [The Auth Block](#the-auth-block) |
-| Password (Argon2id-SCRAM) authentication, bound to the TLS channel | Implemented — see [Password Authentication](#password-authentication-scram) |
-| Authentication on the `http` sink's stream and status endpoints | Implemented: client certificate or bearer token |
-| Browser logins behind a site's TLS-terminating proxy | Implemented — see [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy) |
-| Server pinning by dialers | Implemented: certificate identity (`mtls`), bound certificate (`scram`) |
-| Startup warnings for expiring certificates and risky settings | Implemented — see [Startup Warnings](#startup-warnings) |
-| Unknown configuration keys rejected | Implemented — a typo in `tls`, `auth` or a table path fails startup |
-| Certificate revocation lists (CRL) or OCSP | **Not implemented** — revoke by editing the allow-list or credentials file |
-| IP allow/deny lists, per-IP connection or request limits | **Not implemented** — only SCRAM logins are throttled per address |
+**Implemented:**
+
+- TLS 1.2 / 1.3 on all network sources and sinks.
+- Server certificate verification by dialers.
+- Mutual TLS (client certificate required and verified), at the transport
+  layer.
+- Peer identity recorded per session.
+- Authorization from certificate identity (allow-lists, node binding): see
+  [The Auth Block](#the-auth-block).
+- Password (Argon2id-SCRAM) authentication, bound to the TLS channel: see
+  [Password Authentication](#password-authentication-scram).
+- Authentication on the `http` sink's stream and status endpoints: client
+  certificate or bearer token.
+- Browser logins behind a site's TLS-terminating proxy: see
+  [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy).
+- Server pinning by dialers: certificate identity (`mtls`), bound certificate
+  (`scram`).
+- Startup warnings for expiring certificates and risky settings: see
+  [Startup Warnings](#startup-warnings).
+- Unknown configuration keys rejected: a typo in `tls`, `auth` or a table path
+  fails startup.
+
+**Not implemented:**
+
+- Certificate revocation lists (CRL) or OCSP: revoke by editing the allow-list
+  or credentials file.
+- IP allow/deny lists, per-IP connection or request limits: only SCRAM logins
+  are throttled per address.
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
@@ -46,17 +59,23 @@ insecure_skip_verify = false
 min_version          = "1.3"
 ```
 
-| Option | Role | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | both | `false` | Master switch; when false the whole block is ignored |
-| `cert_file` | both | — | Local certificate. **Required** for listeners; optional client identity for dialers |
-| `key_file` | both | — | Private key for `cert_file`. Must be set together with it |
-| `client_auth` | listener | `false` | Require and verify a client certificate (mTLS) |
-| `client_ca_file` | listener | — | CA bundle used to verify client certificates. **Required** when `client_auth` is true |
-| `ca_file` | dialer | system store | CA bundle used to verify the server certificate |
-| `server_name` | dialer | the configured `host` | SNI and certificate name to verify against |
-| `insecure_skip_verify` | dialer | `false` | Disable server verification |
-| `min_version` | both | `"1.3"` | `"1.2"` or `"1.3"` |
+Options by role, each with its default:
+
+- Both roles
+  - `enabled` (`false`): master switch; when false the whole block is ignored.
+  - `cert_file`: local certificate; **required** for listeners, an optional
+    client identity for dialers.
+  - `key_file`: private key for `cert_file`; set the two together.
+  - `min_version` (`"1.3"`): `"1.2"` or `"1.3"`.
+- Listeners
+  - `client_auth` (`false`): require and verify a client certificate (mTLS).
+  - `client_ca_file`: CA bundle that verifies client certificates; **required**
+    when `client_auth` is true.
+- Dialers
+  - `ca_file` (system store): CA bundle that verifies the server certificate.
+  - `server_name` (the configured `host`): SNI and certificate name to verify
+    against.
+  - `insecure_skip_verify` (`false`): disable server verification.
 
 Listeners are the `tcp` and `http` sinks and the `tcp_chain` and `http_chain`
 sources; dialers are the `tcp_chain` and `http_chain` sinks.
@@ -99,26 +118,44 @@ password_file     = ""                    # scram dialers
 trusted_proxies   = []                    # scram http sink behind a TLS-terminating proxy
 ```
 
-| Option | Applies to | Default | Description |
-|--------|------------|---------|-------------|
-| `type` | all | `none` | `none` ignores the block; `mtls` authorizes by certificate identity; `scram` by password |
-| `identity` | `mtls`; `scram` listeners | `cn` (`mtls`), unset (`scram`) | Certificate field carrying the identity. Under `scram` it binds the client certificate to the user |
-| `allow` | `mtls` | `[]` | Exact identities to admit |
-| `allow_patterns` | `mtls` | `[]` | RE2 patterns matched against the identity; anchor them yourself |
-| `node_binding` | chain sources | `force` | `none`, `assert`, or `force` |
-| `credentials_file` | `scram` listeners | — | Verifiers written by [`lw auth add-user`](cli.md#lw-auth) |
-| `token_lifetime_ms` | `scram` on the `http` sink and `http_chain` source | 15 minutes | Bearer token lifetime, 10 s to 24 h |
-| `username` | `scram` dialers | — | User to log in as |
-| `password_file` | `scram` dialers | — | File holding the password; one trailing line break is trimmed |
-| `trusted_proxies` | `scram` on the `http` sink | `[]` | Addresses or CIDRs of the reverse proxies that end the browsers' TLS; see [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy) |
+Options by where they apply, each with its default:
 
-**Roles by plugin:**
+- Every plugin
+  - `type` (`none`): `none` ignores the block; `mtls` authorizes by
+    certificate identity, `scram` by password.
+- Chain sources
+  - `node_binding` (`force`): `none`, `assert` or `force`.
+- `mtls`, and `scram` listeners
+  - `identity`: the certificate field carrying the identity; `cn` under
+    `mtls`, unset under `scram`, where it binds the client certificate to the
+    user.
+- `mtls`
+  - `allow` (`[]`): exact identities to admit.
+  - `allow_patterns` (`[]`): RE2 patterns matched against the identity; anchor
+    them yourself.
+- `scram` listeners
+  - `credentials_file`: verifiers written by
+    [`lw auth add-user`](cli.md#lw-auth).
+  - `token_lifetime_ms` (15 minutes): bearer token lifetime, 10 s to 24 h; the
+    `http` sink and `http_chain` source only.
+  - `trusted_proxies` (`[]`): addresses or CIDRs of the reverse proxies that
+    end the browsers' TLS; the `http` sink only, see
+    [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy).
+- `scram` dialers
+  - `username`: user to log in as.
+  - `password_file`: file holding the password; one trailing line break is
+    trimmed.
 
-| Plugin | Role | Decides |
-|--------|------|---------|
-| `tcp_chain` source, `http_chain` source | Listener | Which senders may ingest, and what node label their entries carry |
-| `tcp` sink, `http` sink | Listener | Which clients may read the stream (and, on `http`, the status endpoint) |
-| `tcp_chain` sink, `http_chain` sink | Dialer | `mtls`: which server identity to accept, beyond hostname verification. `scram`: which user to log in as |
+**Roles by plugin**, and what the block decides:
+
+- Listeners
+  - `tcp_chain` and `http_chain` sources: which senders may ingest, and what
+    node label their entries carry.
+  - `tcp` and `http` sinks: which clients may read the stream (and, on
+    `http`, the status endpoint).
+- Dialers: the `tcp_chain` and `http_chain` sinks.
+  - `mtls`: which server identity to accept, beyond hostname verification.
+  - `scram`: which user to log in as.
 
 ### Identity
 
@@ -127,12 +164,13 @@ certificate; under `scram` it is the username. The handshake has already
 checked the chain, signature, and validity window, so this is pure field
 selection.
 
-| Mode | Source | Typical use |
-|------|--------|-------------|
-| `cn` (default) | `Subject.CommonName` | Matches the existing `tls_peer_cn` metadata |
-| `san_dns` | first DNS SAN | Host identities |
-| `san_uri` | first URI SAN | SPIFFE-style IDs |
-| `san_email` | first email SAN | Operator identities |
+Modes, each with the field it reads and its typical use:
+
+- `cn` (default): `Subject.CommonName`; matches the existing `tls_peer_cn`
+  metadata.
+- `san_dns`: the first DNS SAN; host identities.
+- `san_uri`: the first URI SAN; SPIFFE-style IDs.
+- `san_email`: the first email SAN; operator identities.
 
 A certificate with no usable value in the chosen field is rejected. An empty
 identity is a refusal, not an empty match.
@@ -161,11 +199,15 @@ reported at startup.
 
 `node_binding` applies only to the chain sources, and it overrides `trust_node`.
 
-| Value | Connection label | Per-entry `node` field |
-|-------|------------------|------------------------|
-| `none` | `trust_node` governs | `trust_node` governs |
-| `assert` | Must equal the identity; a mismatch or an omission is rejected | `trust_node` governs |
-| `force` | Ignored; the identity is used | Overwritten with the identity |
+- `none`: `trust_node` governs both the connection label and the per-entry
+  `node` field.
+- `assert`
+  - Connection label: must equal the identity; a mismatch or an omission is
+    rejected.
+  - Per-entry `node` field: `trust_node` governs.
+- `force`
+  - Connection label: ignored; the identity is used.
+  - Per-entry `node` field: overwritten with the identity.
 
 Use **`force`** on an ingest boundary you do not trust. Every entry is
 relabelled, so a compromised edge cannot smuggle a foreign origin through the
@@ -620,12 +662,17 @@ would add.
 An `auth` block (`mtls` or `scram`) closes each of these. Without one, bind them
 to a trusted interface or front them with an authenticating proxy.
 
-| Surface | Exposure when `auth.type = "none"` |
-|---------|-----------------------------------|
-| `http` sink `stream_path` | Full log stream, with `Access-Control-Allow-Origin: *`, so any browser origin can read it (the header is omitted once an auth policy is set) |
-| `http` sink `status_path` | Host, port, TLS flag, uptime, client counts, throughput counters |
-| `tcp` sink | Full log stream to any client that connects |
-| `tcp_chain` / `http_chain` source | Ingest from any peer that can connect (with `client_auth`, any the CA vouches for), under any node label it claims |
+What each exposes when `auth.type = "none"`:
+
+- `http` sink `stream_path`: the full log stream, with
+  `Access-Control-Allow-Origin: *`, so any browser origin can read it (the
+  header is omitted once an auth policy is set).
+- `http` sink `status_path`: host, port, TLS flag, uptime, client counts,
+  throughput counters.
+- `tcp` sink: the full log stream to any client that connects.
+- `tcp_chain` and `http_chain` sources: ingest from any peer that can connect
+  (with `client_auth`, any the CA vouches for), under any node label it
+  claims.
 
 `max_connections` bounds concurrency on all of them but does not distinguish
 callers.
