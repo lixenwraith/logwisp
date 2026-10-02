@@ -85,7 +85,7 @@ func NewHTTPChainSourcePlugin(
 		Host:      "0.0.0.0",
 		TrustNode: true,
 	}
-	if err := lconfig.ScanMap(configMap, opts); err != nil {
+	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	if err := lconfig.Port(opts.Port); err != nil {
@@ -135,19 +135,8 @@ func NewHTTPChainSourcePlugin(
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
 		"auth", authPolicy.Describe())
-	if authPolicy.Unrestricted() {
-		logger.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
-			"component", "http_chain_source",
-			"instance_id", id,
-			"hint", "set auth.allow or auth.allow_patterns to authorize named peers")
-	}
-	if authPolicy.BindsNode() {
-		logger.Info("msg", "Node labels bound to peer identity; trust_node is ignored",
-			"component", "http_chain_source",
-			"instance_id", id,
-			"node_binding", authPolicy.NodeBinding(),
-			"trust_node", opts.TrustNode)
-	}
+	tlsx.LogWarnings(logger, "http_chain_source", id, opts.TLS, true)
+	authPolicy.LogStartup(logger, "http_chain_source", id, opts.TrustNode)
 	return s, nil
 }
 

@@ -296,3 +296,22 @@ func TestVerifyConnectionPinsServer(t *testing.T) {
 		t.Error("unpinned server accepted")
 	}
 }
+
+// Only patterns whose every alternative is pinned at both ends stay silent at
+// startup; "^a|b$" reads as anchored but admits "a..." and "...b".
+func TestAllowPatternAnchoring(t *testing.T) {
+	for pattern, want := range map[string]bool{
+		`^edge-\d{2}$`:        true,
+		`^(edge-01|edge-02)$`: true,
+		`^edge-a$|^edge-bc$`:  true, // the parser factors this into ^edge-(?:a$|bc$)
+		`\Aedge\z`:            true,
+		`edge-\d{2}`:          false,
+		`^a|b$`:               false,
+		`^ab$|^ac`:            false,
+		`^a$|`:                false,
+	} {
+		if got := anchored(pattern); got != want {
+			t.Errorf("anchored(%q) = %v, want %v", pattern, got, want)
+		}
+	}
+}

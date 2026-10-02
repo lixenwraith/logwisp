@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"logwisp/internal/config"
 	"logwisp/internal/core"
 	"logwisp/internal/plugin"
 	"logwisp/internal/session"
@@ -47,6 +48,9 @@ func NewNullSourcePlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
+	if err := config.Scan(configMap, &config.NullSourceOptions{}); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
 	ns := &NullSource{
 		id:          id,
 		proxy:       proxy,

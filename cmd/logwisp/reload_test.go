@@ -3,8 +3,12 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"logwisp/internal/plugin"
+	"logwisp/internal/session"
 	"logwisp/internal/testutil"
 
 	lconfig "github.com/lixenwraith/config"
@@ -75,5 +79,30 @@ func TestInvalidReloadLeavesStatusReporterRunning(t *testing.T) {
 				t.Fatalf("invalid reload affected running state: svc=%v cfg=%v cancelled=%v error=%v", svc, next, cancelled, err)
 			}
 		})
+	}
+}
+
+// Every registered plugin decodes through the checked decoder, so a typo in
+// any plugin's config, security tables included, refuses to start.
+func TestEveryPluginRejectsUnknownKeys(t *testing.T) {
+	testLogger(t)
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	proxy := session.NewProxy(manager, "typo")
+	bad := map[string]any{"no_such_key": true}
+	check := func(kind, name string, err error) {
+		if err == nil || !strings.Contains(err.Error(), "no_such_key") {
+			t.Errorf("%s %q accepted an unknown key: %v", kind, name, err)
+		}
+	}
+	for _, name := range plugin.ListSources() {
+		factory, _ := plugin.GetSource(name)
+		_, err := factory("typo", bad, logger, proxy)
+		check("source", name, err)
+	}
+	for _, name := range plugin.ListSinks() {
+		factory, _ := plugin.GetSink(name)
+		_, err := factory("typo", bad, logger, proxy)
+		check("sink", name, err)
 	}
 }

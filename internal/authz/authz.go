@@ -12,11 +12,14 @@ import (
 	"crypto/tls"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 	"sync/atomic"
 
 	"logwisp/internal/config"
 	"logwisp/internal/tlsx"
+
+	"github.com/lixenwraith/log"
 )
 
 // Authentication methods
@@ -274,6 +277,73 @@ func (p *Policy) Enabled() bool { return p != nil }
 // silent one would be a footgun.
 func (p *Policy) Unrestricted() bool {
 	return p != nil && len(p.allow) == 0 && len(p.patterns) == 0
+}
+
+// LogStartup reports, once per plugin construction, what a listener policy
+// admits, how it labels nodes, and allow patterns that admit more than they
+// appear to. trustNode matters only for chain sources.
+func (p *Policy) LogStartup(l *log.Logger, component, id string, trustNode bool) {
+	if p == nil || p.role == RoleDialer {
+		return
+	}
+	if p.Unrestricted() {
+		l.Warn("msg", "Auth policy admits any identity the configured CA vouches for",
+			"component", component,
+			"instance_id", id,
+			"hint", "set auth.allow or auth.allow_patterns to authorize named peers")
+	}
+	if p.BindsNode() {
+		l.Info("msg", "Node labels bound to peer identity; trust_node is ignored",
+			"component", component,
+			"instance_id", id,
+			"node_binding", p.binding,
+			"trust_node", trustNode)
+	}
+	for _, re := range p.patterns {
+		if !anchored(re.String()) {
+			l.Warn("msg", "auth.allow_patterns entry is not anchored and matches any identity containing it",
+				"component", component,
+				"instance_id", id,
+				"pattern", re.String(),
+				"hint", "anchor every alternative, e.g. ^(edge-01|edge-02)$")
+		}
+	}
+}
+
+// anchored reports whether every match of pattern spans the whole identity:
+// each alternative must start with ^ and end with $. "^a|b$" is the classic
+// miss, admitting "a..." and "...b".
+func anchored(pattern string) bool {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return false
+	}
+	re = re.Simplify()
+	return anchoredAt(re, syntax.OpBeginText) && anchoredAt(re, syntax.OpEndText)
+}
+
+// anchoredAt follows the matching edge of re (first or last element of a
+// concatenation, every branch of an alternation) down to the anchor op.
+func anchoredAt(re *syntax.Regexp, anchor syntax.Op) bool {
+	switch re.Op {
+	case anchor:
+		return true
+	case syntax.OpCapture:
+		return anchoredAt(re.Sub[0], anchor)
+	case syntax.OpConcat:
+		if anchor == syntax.OpBeginText {
+			return anchoredAt(re.Sub[0], anchor)
+		}
+		return anchoredAt(re.Sub[len(re.Sub)-1], anchor)
+	case syntax.OpAlternate:
+		for _, sub := range re.Sub {
+			if !anchoredAt(sub, anchor) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // Describe renders the policy for a startup log line

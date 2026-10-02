@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"math/rand/v2"
 	"net"
 	"os"
 	"strconv"
@@ -88,7 +87,7 @@ func NewTCPChainSinkPlugin(
 	opts := &config.TCPChainSinkOptions{
 		KeepAlive: true,
 	}
-	if err := lconfig.ScanMap(configMap, opts); err != nil {
+	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	if err := lconfig.NonEmpty(opts.Host); err != nil {
@@ -179,6 +178,7 @@ func NewTCPChainSinkPlugin(
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && len(tlsCfg.Certificates) > 0,
 		"auth", authPolicy.Describe())
+	tlsx.LogWarnings(logger, "tcp_chain_sink", id, opts.TLS, false)
 	return t, nil
 }
 
@@ -299,24 +299,6 @@ func (t *TCPChainSink) runLoop(ctx context.Context) {
 	}
 }
 
-// toEntry extracts the structured entry, stamping node identity at first hop
-func (t *TCPChainSink) toEntry(event core.TransportEvent) core.LogEntry {
-	entry := event.Entry
-	if entry.Time.IsZero() {
-		// Defensive: event without structured entry, wrap formatted payload
-		t.synthesized.Add(1)
-		entry = core.LogEntry{
-			Time:    event.Time,
-			Source:  t.id,
-			Message: string(event.Payload),
-		}
-	}
-	if entry.Node == "" {
-		entry.Node = t.node
-	}
-	return entry
-}
-
 // deliver writes one line, holding it across reconnects until sent or shutdown.
 // Backpressure during outage propagates to the pipeline dispatch drop counter.
 func (t *TCPChainSink) deliver(ctx context.Context, line []byte) bool {
@@ -426,18 +408,4 @@ func (t *TCPChainSink) waitBackoff(ctx context.Context, failures int) bool {
 	case <-t.done:
 		return false
 	}
-}
-
-// backoffDelay computes exponential backoff with ±20% jitter
-func (t *TCPChainSink) backoffDelay(failures int) time.Duration {
-	minD := time.Duration(t.config.BackoffMinMS) * time.Millisecond
-	maxD := time.Duration(t.config.BackoffMaxMS) * time.Millisecond
-
-	d := maxD
-	if failures < 63 {
-		if v := minD << uint(failures-1); v > 0 && v < maxD {
-			d = v
-		}
-	}
-	return d - d/5 + time.Duration(rand.Int64N(int64(2*d/5)+1))
 }
