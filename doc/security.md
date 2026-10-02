@@ -33,6 +33,9 @@ configure it, and — equally important — what it does not yet do.
   or credentials file.
 - IP allow/deny lists, per-IP connection or request limits: only SCRAM logins
   are throttled per address.
+- PROXY protocol: behind a proxy that passes TLS through, every peer shares the
+  proxy's address; see
+  [Behind nginx or another proxy](#behind-nginx-or-another-proxy).
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
@@ -536,7 +539,8 @@ different users.
 - TLS must terminate at LogWisp, except on an `http` sink in proxy mode. Behind
   any other terminating proxy or load balancer every login fails by design;
   pass TLS through instead (TCP or SNI routing). All clients then share the
-  proxy's address, and so one throttling budget.
+  proxy's address, and so one throttling budget: see
+  [Behind nginx or another proxy](#behind-nginx-or-another-proxy).
 - One process per HTTP address. Handshake state and the token key live in one
   instance, so behind a balancer the proof or the token can reach an instance
   that never saw the login.
@@ -628,6 +632,118 @@ location /logs/ {
 
 `test/scram-proxy-test.sh --auto` logs in from headless Chromium through such a
 proxy, with cookies and with every cookie blocked.
+
+### Behind nginx or another proxy
+
+A proxy in front of LogWisp works at one of two layers:
+
+- **L7, ending TLS** (nginx `http` block, HAProxy `mode http`): the `http` sink
+  in [proxy mode](#browsers-behind-a-tls-terminating-proxy).
+  - `trusted_proxies` lists the proxy's address.
+  - The proxy sends `X-Forwarded-Proto: https` and `X-Forwarded-For`. It may
+    overwrite `X-Forwarded-For` with the real client: the rightmost hop that is
+    not a proxy is the client either way.
+- **L4, passing TLS through to LogWisp's own TLS** (nginx `stream` with
+  `ssl_preread`, HAProxy `mode tcp`): whatever needs TLS to end at LogWisp.
+  - Chain links (`tcp_chain`, `http_chain`).
+  - `lw auth stream` viewers of a `tcp` sink.
+  - An `http` sink that keeps its own TLS, and with it SCRAM channel binding
+    or client certificates.
+
+A common shape serves both from port 443:
+
+```
+:443              nginx stream: ssl_preread routes by SNI, proxy_protocol on
+  logs.example.org    -> 127.0.0.1:8443   nginx http
+  relay.example.org   -> a LogWisp TLS listener, without PROXY (below)
+127.0.0.1:8443    nginx http: listens with proxy_protocol, ends TLS
+  /logs/              -> 127.0.0.1:8081   LogWisp http sink, proxy mode
+```
+
+**The `http` sink behind the `http` block** works in proxy mode as is:
+`trusted_proxies` is the `http` block's address, usually `127.0.0.1`, and the
+block names the client from the PROXY header.
+
+```nginx
+server {
+    listen      127.0.0.1:8443 ssl proxy_protocol;
+    server_name logs.example.org;
+    # ssl_certificate, ssl_certificate_key: the site's own
+    location /logs/ {
+        proxy_pass       http://127.0.0.1:8081/;
+        proxy_set_header X-Real-IP         $proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For   $proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+`$proxy_add_x_forwarded_for` does not fit this shape: it appends the stream
+server's address, not the client's. LogWisp would name that address as every
+client or, when it is trusted (both on `127.0.0.1`), the hop to its left, which
+the client wrote. LogWisp ignores `X-Real-IP`.
+
+**LogWisp's own TLS listeners take no PROXY header.** LogWisp cannot read the
+PROXY protocol yet; it is planned first in the ACL work
+([To Do, 1.2](todo.md#12-proxy-protocol-deferred-gap-of-scram-see-scram-auth-planmd)).
+A stream route that sends `proxy_protocol` straight to a LogWisp TLS listener
+breaks every connection: the header lands in front of the TLS handshake. nginx
+sets `proxy_protocol` per stream `server`, so route LogWisp SNIs without it:
+
+- Route 1: LogWisp gets its own stream `server` and port, without
+  `proxy_protocol`.
+- Route 2: port 443 sends LogWisp SNIs to an internal stream `server` that
+  `listen`s with `proxy_protocol` and proxy_passes to LogWisp without it; that
+  hop consumes the header.
+- Either way dialers must send the name: a `host` that is one, or
+  `tls.server_name` (`-server-name` for `lw auth`); an IP literal sends no SNI.
+- With HAProxy, leave `send-proxy` off the LogWisp backends.
+
+```nginx
+stream {
+    map $ssl_preread_server_name $route {
+        relay.example.org  127.0.0.1:10443;   # route 2: the internal hop
+        tail.example.org   127.0.0.1:10443;
+        default            127.0.0.1:8443;    # the http block, logs.example.org
+    }
+    map $ssl_preread_server_name $logwisp {
+        relay.example.org  127.0.0.1:9001;    # tcp_chain source
+        tail.example.org   127.0.0.1:9002;    # tcp sink, for lw auth stream
+    }
+    server {
+        listen 443;
+        ssl_preread    on;
+        proxy_protocol on;                    # on every route of this server
+        proxy_pass     $route;
+    }
+    server {                                  # route 1: its own port, no header
+        listen 9443;
+        ssl_preread on;
+        proxy_pass  $logwisp;
+    }
+    server {                                  # route 2: consumes the header
+        listen 127.0.0.1:10443 proxy_protocol;
+        ssl_preread on;
+        proxy_pass  $logwisp;
+    }
+}
+```
+
+**Passthrough without PROXY** brings every peer from the proxy's address:
+
+- All peers share one SCRAM [throttling](#throttling) budget: 10 failed or
+  abandoned logins, then one per second, and 4 unfinished at once. One client
+  that keeps failing logins makes every other client's logins answer
+  `too many attempts` until it stops.
+- Established links keep flowing; a reconnect or an `http_chain` token renewal
+  waits for the budget.
+- Logs and sessions name the proxy, not the peer.
+- Proxy mode is unaffected: it throttles on the forwarded client.
+- Until LogWisp reads PROXY, mitigate:
+  - expose the chain ports directly, without the proxy, where you can;
+  - keep the proxy hop on a trusted network, so only trusted clients share the
+    budget;
+  - or accept the shared budget.
 
 ## What Each Layer Enforces
 
