@@ -15,8 +15,9 @@ RUN --mount=type=secret,id=build_ca,target=/run/build-ca/ca.pem \
 
 COPY . .
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+# No defaults: a declared default would override the platform BuildKit passes.
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=dev
 ARG REVISION=unknown
 # REVISION identifies the commit: the context has no .git, so no VCS stamping.
