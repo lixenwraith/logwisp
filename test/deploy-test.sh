@@ -248,7 +248,8 @@ for want in "--name $CONTAINER" "--restart unless-stopped" "--read-only" "--cap-
 	[[ $cmd == *" $want"* ]] || { ok=0; info "the docker run command lacks: $want"; }
 done
 said dry-docker '| host = "0.0.0.0"' || ok=0
-[[ $(snapshot) != "$before" ]] && ok=0
+# The snapshot leaves out $OUT, where its --file-dir lies
+[[ -e $OUT/docker || $(snapshot) != "$before" ]] && ok=0
 check "docker: a hardened docker run publishing on --listen, the container binding 0.0.0.0, nothing written (exit $rc)" $ok
 
 section "Docker runtime"
