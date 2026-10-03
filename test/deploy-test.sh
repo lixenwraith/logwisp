@@ -218,6 +218,13 @@ ok=$((rc != 0))
 said fail-auth '--add-user needs --auth scram' || ok=0
 [[ -e $RUN/fail-auth ]] && ok=0
 check "an --add-user that --auth none contradicts stops before writing anything (exit $rc)" $ok
+deploy fail-pattern --runtime manual --role standalone --config-dir "$RUN/fail-pattern" --bin "$BIN" --log-dir "$APP" \
+	--file-dir "$RUN/fail-pattern/out" --log-pattern $'*.log\nfrom = "start"'
+rc=$?
+ok=$((rc != 0))
+said fail-pattern 'invalid --log-pattern' || ok=0
+[[ -e $RUN/fail-pattern ]] && ok=0
+check "a --log-pattern with a newline stops before writing anything (exit $rc)" $ok
 # A failing install stands in for the real one: a regression must not install onto this host
 mkdir -p "$RUN/stub"
 printf '#!/bin/sh\nexit 1\n' >"$RUN/stub/install"

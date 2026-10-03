@@ -67,8 +67,8 @@ no certificates: see [Security](security.md#enabling-mtls).
   - a non-root user binds a port below 1024 only with
     `sysctl net.inet.ip.portrange.reservedhigh` lowered or `mac_portacl`
 - `manual`
-  - writes into `--config-dir` (default `~/logwisp-ROLE`), adds users with the
-    local `lw`, and prints the `lw -c` command
+  - writes into `--config-dir`, an absolute path (default `~/logwisp-ROLE`),
+    adds users with the local `lw`, and prints the `lw -c` command
 
 FreeBSD runs no Docker, and podman there runs FreeBSD images only while the
 LogWisp image is Linux: on FreeBSD the script offers `native` instead, on the

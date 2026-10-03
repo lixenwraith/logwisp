@@ -326,7 +326,8 @@ drop() { # VAR FLAG [NEEDS]
 	eval "$1=''"
 }
 
-# --- validators: print why and fail ---
+# --- validators: print why and fail; free text rejects control characters, which
+# would break out of a TOML string ---
 
 bad() { printf '  %s\n' "$*" >&2; return 1; }
 v_port() {
@@ -334,14 +335,14 @@ v_port() {
 	bad "not a port (1-65535): $1"
 }
 v_abs() {
-	case $1 in *:* | *"$NL"*) bad "':' or a newline cannot appear in a mounted path: $1" ;; /*) return 0 ;; *) bad "not an absolute path: $1" ;; esac
+	case $1 in *:* | *[[:cntrl:]]*) bad "':' (a mount separator) or a control character in a path: $1" ;; /*) return 0 ;; *) bad "not an absolute path: $1" ;; esac
 }
 v_ident() { case $1 in '' | *[!A-Za-z0-9._@-]*) bad "use letters, digits and . _ @ -: $1" ;; esac; }
 v_cname() { case $1 in [A-Za-z0-9]*) case $1 in *[!A-Za-z0-9_.-]*) ;; *) return 0 ;; esac ;; esac; bad "not a container name: $1"; }
 v_host() { case $1 in '' | *[!A-Za-z0-9.:%_-]*) bad "not a host name or address: $1" ;; esac; }
-v_glob() { case $1 in */* | '') bad "a file name pattern, without '/': $1" ;; esac; }
+v_glob() { case $1 in */* | *[[:cntrl:]]* | '') bad "a file name pattern, without '/' or control characters: $1" ;; esac; }
 v_word() { case $1 in '' | *[!A-Za-z0-9_./:@-]*) bad "unexpected characters: $1" ;; esac; }
-v_any() { [ -n "$1" ] || bad "an empty value"; }
+v_any() { case $1 in '' | *[[:cntrl:]]*) bad "an empty value or a control character: $1" ;; esac; }
 v_file() {
 	[ -f "$1" ] && [ -r "$1" ] && return 0
 	[ "$DRY_RUN" = 1 ] && { warn "not a readable file here: $1"; return 0; }
@@ -520,8 +521,7 @@ resolve() {
 		CONF_HOST=$ROOT$CONF_LW
 		;;
 	manual)
-		ask CONF_DIR --config-dir "Directory for the configuration" "$HOME_DIR/logwisp-$ROLE"
-		case $CONF_DIR in /*) ;; *) CONF_DIR=$PWD/$CONF_DIR ;; esac
+		ask CONF_DIR --config-dir "Directory for the configuration" "$HOME_DIR/logwisp-$ROLE" v_abs
 		CONF_HOST=$CONF_DIR CONF_LW=$CONF_DIR
 		;;
 	esac
