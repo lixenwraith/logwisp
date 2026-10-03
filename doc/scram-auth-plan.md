@@ -365,10 +365,10 @@ Chromium sent to the login page, refused a wrong password, streaming events
 after login, with the cookie scoped to `/logs` and hidden from scripts, cleared
 by sign-out, and no CSP violations; a cookie the browser drops leading to the
 viewer's own form, not a loop, its token kept out of storage and the URL; a
-profile blocking every cookie signing in on the viewer, streaming with a bearer
-and storing nothing, sign-out revoking the token, and a reload's `401` asking
-again; `token -unbound` and curl through the proxy; direct peers and
-plaintext-forwarded requests `403`. The existing scripts keep passing.
+profile blocking every cookie signing in on the viewer, its proofs asking for
+no cookie, streaming with a bearer, sign-out revoking the token, and a reload's
+`401` asking again; `token -unbound` and curl through the proxy; direct peers
+and plaintext-forwarded requests `403`. The existing scripts keep passing.
 
 ## Not Implemented
 

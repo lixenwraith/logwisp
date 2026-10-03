@@ -190,6 +190,12 @@ const scenarios = {
   },
 
   async blocked(context, page) {
+    out.proofs = out.proofs_with_session = 0;
+    page.on("request", (r) => {
+      const body = r.method() === "POST" && /\/auth$/.test(r.url()) ? JSON.parse(r.postData() ?? "{}") : {};
+      if (body.proof) out.proofs++;
+      if (body.proof && "session" in body) out.proofs_with_session++;
+    });
     await page.goto(base + "auth/login");
     out.cookie_enabled = await page.evaluate(() => navigator.cookieEnabled);
     out.document_cookie_kept = JSON.stringify(await page.evaluate(() => { document.cookie = "t=1"; return document.cookie; }));
@@ -205,7 +211,6 @@ const scenarios = {
     out.stream_bearer = /^Bearer \S+$/.test(bearer) ? 1 : 0;
     await linesAtLeast(page, 3);
     out.events = await lines(page);
-    out.cookies_stored = (await context.cookies()).length;
     const statusWith = () => page.evaluate(async ([b, h]) =>
       (await fetch(b + "status", { headers: { Authorization: h } })).status, [base, bearer]);
     out.token_status = await statusWith();
@@ -330,7 +335,9 @@ if ((BROWSER)); then
 	n=$(val events)
 	check "no cookies: the viewer streamed events with a bearer token (${n:-0} lines)" \
 		$((${n:-0} >= 3 && $(is "$(val stream_bearer)" 1)))
-	check "no cookies: the browser stored no cookie ($(val cookies_stored))" $(is "$(val cookies_stored)" 0)
+	n=$(val proofs)
+	check "no cookies: the viewer's proofs asked for no cookie (${n:-0} sent, $(val proofs_with_session) with a session)" \
+		$((${n:-0} >= 1 && $(is "$(val proofs_with_session)" 0)))
 	check "no cookies: the page's token opened status (HTTP $(val token_status))" $(is "$(val token_status)" 200)
 	check "no cookies: sign out revoked it (HTTP $(val token_status_after_logout))" \
 		$(is "$(val token_status_after_logout)" 401)
