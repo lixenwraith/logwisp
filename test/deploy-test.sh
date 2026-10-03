@@ -40,8 +40,9 @@ generate() { deploy "$1" --runtime manual --config-dir "$RUN/$1" --bin "$BIN" "$
 section "Setup"
 need curl openssl
 [[ -x $DEPLOY ]] || abort "no $(short "$DEPLOY")"
-ports_free $PORTS
+# A container an earlier run left (--keep) holds its published ports
 if [[ -d $RUN/docker ]] && command -v docker >/dev/null; then docker rm -f "$CONTAINER" >/dev/null 2>&1; fi
+ports_free $PORTS
 rm -rf "$RUN"
 mkdir -p "$LOG" "$APP" "$OUT"
 pki_ca
