@@ -1,4 +1,4 @@
-import { cookiesUsable, login } from "./scram.js";
+import { cookiesUsable, login, loginUnavailable } from "./scram.js";
 
 const base = new URL("..", location.href);
 const form = document.getElementById("login");
@@ -57,5 +57,7 @@ async function cookiesUnavailable() {
 }
 
 // Enabled only once this script runs, so a failed load cannot submit the form natively
-if (cookiesUsable()) button.disabled = false;
+const unavailable = loginUnavailable();
+if (unavailable) status.textContent = unavailable;
+else if (cookiesUsable()) button.disabled = false;
 else cookiesUnavailable();

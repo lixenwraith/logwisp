@@ -611,6 +611,8 @@ location /logs/ {
     lasts as long as the page and at most the token lifetime: a reload, another
     tab, or a reconnect after expiry asks again; sign out revokes it.
   - The login page says that cookies are unavailable and links to the viewer.
+    A page not served over HTTPS keeps no `Secure` cookie either: both pages
+    name HTTPS instead and offer no sign-in.
 - **Integrating `scram.js`.** A site with its own CSP can copy `scram.js` from
   `internal/sink/http/web/` into its bundle: one dependency-free ES module,
   where `base` is the mount URL ending in `/`. It needs a secure context for
@@ -625,7 +627,8 @@ location /logs/ {
     bearer replaces the Basic credentials a browser would send, so token mode
     cannot pass a proxy that asks for its own Basic auth.
   - `cookiesUsable()` tells which applies: false when the session cookie would
-    not stick.
+    not stick. `loginUnavailable()`, asked first, names why neither can run
+    (no secure context), or is empty.
 - **Pages.** Under `/auth/` the sink serves `scram.js` always, and with
   `login_page` / `viewer_page` the login page and a minimal live viewer with
   their script and style, under `default-src 'none'; script-src 'self';

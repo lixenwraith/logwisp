@@ -64,6 +64,12 @@ export async function logout(base, { token } = {}) {
   }
 }
 
+// Why no login can run on this page, or "": an insecure page refuses the probe's
+// Secure cookie too, so a page asks this before cookiesUsable().
+export function loginUnavailable() {
+  return globalThis.crypto?.subtle ? "" : "WebCrypto unavailable: the page must be served over HTTPS";
+}
+
 // Whether the session cookie would stick. Chromium blocking every cookie still
 // reports navigator.cookieEnabled, so a cookie with the session's attributes
 // must also come back.
@@ -247,9 +253,9 @@ function bearer(token) {
 }
 
 function subtle() {
-  const s = globalThis.crypto?.subtle;
-  if (!s) throw new Error("WebCrypto unavailable: the page must be served over HTTPS");
-  return s;
+  const reason = loginUnavailable();
+  if (reason) throw new Error(reason);
+  return crypto.subtle;
 }
 
 async function hmac(key, message) {

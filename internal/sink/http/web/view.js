@@ -1,4 +1,4 @@
-import { cookiesUsable, login, logout, stream } from "./scram.js";
+import { cookiesUsable, login, loginUnavailable, logout, stream } from "./scram.js";
 
 const base = new URL("..", location.href);
 // The server writes its status path here, relative to the mount
@@ -11,9 +11,10 @@ const form = document.getElementById("login");
 const progress = document.getElementById("progress");
 const status = document.getElementById("status");
 
+const unavailable = loginUnavailable();
 // Without cookies the session is a token in this variable only: never stored,
 // so it ends with the page, or earlier with its lifetime or sign-out
-let tokenMode = !cookiesUsable();
+let tokenMode = !unavailable && !cookiesUsable();
 let token = null;
 // The login page comes back with this fragment: a 401 now means the browser
 // dropped the session cookie
@@ -162,4 +163,10 @@ signOut.addEventListener("click", async () => {
   showLogin("Signed out.");
 });
 
-connect();
+// No session of either kind can start on this page, so it offers no form
+if (unavailable) {
+  state.textContent = unavailable;
+  signOut.hidden = true;
+} else {
+  connect();
+}

@@ -307,14 +307,14 @@ satisfies the pipeline's "auth needs TLS" check.
 is one dependency-free ES module, so a site with its own CSP can copy it into
 its bundle. It exports `login(base, username, password, {onProgress, session})`,
 `logout(base, {token})`, `stream(url, {token, signal, onEvent})` (an event
-stream parsed as the HTML standard does) and `cookiesUsable()`. BLAKE2b and
-Argon2id are plain JS (no WebAssembly, which would need `'wasm-unsafe-eval'`),
-yielding to the page every 50 ms; SHA-256 and HMAC come from WebCrypto, so it
-needs a secure context. It checks the challenge as the Go client does (nonce,
-salt, cost limits and the dialer's Argon2 floor), refuses redirects, and reports
-success only after verifying the server's signature. A 64 MiB login takes about
-2 s on a desktop. The wire protocol above is the contract: a site may implement
-its own client.
+stream parsed as the HTML standard does), `cookiesUsable()` and
+`loginUnavailable()`. BLAKE2b and Argon2id are plain JS (no WebAssembly, which
+would need `'wasm-unsafe-eval'`), yielding to the page every 50 ms; SHA-256 and
+HMAC come from WebCrypto, so it needs a secure context. It checks the challenge
+as the Go client does (nonce, salt, cost limits and the dialer's Argon2 floor),
+refuses redirects, and reports success only after verifying the server's
+signature. A 64 MiB login takes about 2 s on a desktop. The wire protocol above
+is the contract: a site may implement its own client.
 
 **CLI.** `lw auth token -unbound` logs in through the proxy, still pinning
 its certificate across the two requests; only then may `-url` carry the mount
