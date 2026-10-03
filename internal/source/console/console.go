@@ -2,8 +2,11 @@ package console
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +34,61 @@ func init() {
 	}
 }
 
+// One reader serves the process: after a reload the new source continues
+// where the old one stopped, and no line is read twice. The channel is
+// unbuffered, so a busy pipeline stops the reading of stdin, not its lines.
+var (
+	stdinOnce  sync.Once
+	stdinLines chan string
+	stdinErr   error // set before stdinLines closes
+)
+
+func lines() <-chan string {
+	stdinOnce.Do(func() {
+		stdinLines = make(chan string)
+		go func() {
+			stdinErr = readLines(os.Stdin, stdinLines)
+			close(stdinLines)
+		}()
+	})
+	return stdinLines
+}
+
+// readLines sends r's lines without their terminator (\n or \r\n), the last
+// one too when unterminated, until the end of input. A line longer than
+// core.MaxLogEntryBytes continues in the next one.
+func readLines(r io.Reader, out chan<- string) error {
+	br := bufio.NewReaderSize(r, 64*1024)
+	var line []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		line = append(line, chunk...)
+		for len(line) > core.MaxLogEntryBytes {
+			out <- string(line[:core.MaxLogEntryBytes])
+			line = append(line[:0], line[core.MaxLogEntryBytes:]...)
+		}
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case err == nil:
+			line = line[:len(line)-1]
+			if n := len(line); n > 0 && line[n-1] == '\r' {
+				line = line[:n-1]
+			}
+		}
+		if len(line) > 0 || err == nil {
+			out <- string(line)
+		}
+		line = line[:0]
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
 // ConsoleSource reads log entries from the standard input stream
 type ConsoleSource struct {
 	// Plugin identity and session management
@@ -46,13 +104,14 @@ type ConsoleSource struct {
 	logger      *log.Logger
 
 	// Runtime
-	done chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
 
 	// Statistics
-	totalEntries   atomic.Uint64
-	droppedEntries atomic.Uint64
-	startTime      time.Time
-	lastEntryTime  atomic.Value // time.Time
+	totalEntries  atomic.Uint64
+	startTime     time.Time
+	lastEntryTime atomic.Value // time.Time
+	ended         atomic.Bool  // standard input reached its end
 }
 
 const (
@@ -122,7 +181,7 @@ func (s *ConsoleSource) Subscribe() <-chan core.LogEntry {
 // Start begins reading from the standard input.
 func (s *ConsoleSource) Start() error {
 	s.startTime = time.Now()
-	go s.readLoop()
+	go s.readLoop(lines())
 
 	// Update session activity
 	s.proxy.UpdateActivity(s.session.ID)
@@ -133,18 +192,13 @@ func (s *ConsoleSource) Start() error {
 	return nil
 }
 
-// Stop signals the source to stop reading.
+// Stop signals the source to stop reading; readLoop closes the subscribers.
 func (s *ConsoleSource) Stop() {
-	close(s.done)
+	s.stopOnce.Do(func() { close(s.done) })
 
 	// Remove session
 	if s.session != nil {
 		s.proxy.RemoveSession(s.session.ID)
-	}
-
-	// Close subscriber channels
-	for _, ch := range s.subscribers {
-		close(ch)
 	}
 
 	s.logger.Info("msg", "Console source stopped",
@@ -157,67 +211,71 @@ func (s *ConsoleSource) GetStats() source.SourceStats {
 	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
 
 	return source.SourceStats{
-		Type:           "console",
-		TotalEntries:   s.totalEntries.Load(),
-		DroppedEntries: s.droppedEntries.Load(),
-		StartTime:      s.startTime,
-		LastEntryTime:  lastEntry,
-		Details:        map[string]any{},
+		ID:            s.id,
+		Type:          "console",
+		TotalEntries:  s.totalEntries.Load(),
+		StartTime:     s.startTime,
+		LastEntryTime: lastEntry,
+		Details:       map[string]any{"ended": s.ended.Load()},
 	}
 }
 
-// readLoop continuously reads lines from stdin and publishes them
-func (s *ConsoleSource) readLoop() {
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
+// readLoop publishes stdin's lines until Stop or the end of input, then
+// closes the subscriber channels: it is their only sender.
+func (s *ConsoleSource) readLoop(lines <-chan string) {
+	defer func() {
+		for _, ch := range s.subscribers {
+			close(ch)
+		}
+	}()
+	for {
 		select {
 		case <-s.done:
 			return
-		default:
-			// Update session activity on each read
-			s.proxy.UpdateActivity(s.session.ID)
-
-			// Get raw line
-			lineBytes := scanner.Bytes()
-			if len(lineBytes) == 0 {
+		case line, ok := <-lines:
+			if !ok {
+				s.ended.Store(true)
+				if stdinErr != nil {
+					s.logger.Error("msg", "Failed to read standard input",
+						"component", "console_source",
+						"instance_id", s.id,
+						"error", stdinErr)
+				}
+				s.logger.Info("msg", "Standard input ended",
+					"component", "console_source",
+					"instance_id", s.id)
+				return
+			}
+			if line == "" {
 				continue
 			}
-
-			// Add newline back (scanner strips it)
-			lineWithNewline := append(lineBytes, '\n')
-
+			s.proxy.UpdateActivity(s.session.ID)
 			entry := core.LogEntry{
 				Time:    time.Now(),
 				Source:  "console",
-				Message: string(lineWithNewline), // Keep newline
-				Level:   source.ExtractLogLevel(string(lineBytes)),
-				RawSize: int64(len(lineWithNewline)),
+				Message: line,
+				Level:   source.ExtractLogLevel(line),
+				RawSize: int64(len(line)),
 			}
-
-			s.publish(entry)
+			if !s.publish(entry) {
+				return
+			}
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		s.logger.Error("msg", "Scanner error reading stdin",
-			"component", "console_source",
-			"instance_id", s.id,
-			"error", err)
 	}
 }
 
-// publish sends a log entry to all subscribers
-func (s *ConsoleSource) publish(entry core.LogEntry) {
+// publish waits for every subscriber: stdin is pulled, so a full pipeline
+// slows the reading instead of losing lines. False when stopped meanwhile.
+func (s *ConsoleSource) publish(entry core.LogEntry) bool {
 	s.totalEntries.Add(1)
 	s.lastEntryTime.Store(entry.Time)
 
 	for _, ch := range s.subscribers {
 		select {
 		case ch <- entry:
-		default:
-			s.droppedEntries.Add(1)
-			s.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
-				"component", "console_source")
+		case <-s.done:
+			return false
 		}
 	}
+	return true
 }
