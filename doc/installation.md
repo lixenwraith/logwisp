@@ -288,7 +288,8 @@ or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
   ports 15801-15804
 - `chain-aggregate-test.sh`: the same edges, with the relay fanning both into
   both sinks; ports 15801-15804
-- `passthrough-test.sh`: `file` source to `file` sink, byte-exact; no ports
+- `passthrough-test.sh`: `file` source to `file` sink, a wide envelope byte
+  for byte (`raw = true`) and, parsed, with no key dropped; no ports
 - `mtls-chain-test.sh`: mTLS chain edges and viewers, allow lists, node
   binding; ports 15811-15814
 - `scram-chain-test.sh`: SCRAM chain edges and viewers with `lw auth`
