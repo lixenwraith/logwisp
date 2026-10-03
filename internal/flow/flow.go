@@ -161,4 +161,3 @@ func (f *Flow) GetStats() map[string]any {
 
 	return stats
 }
-
