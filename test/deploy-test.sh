@@ -218,6 +218,17 @@ ok=$((rc != 0))
 said fail-auth '--add-user needs --auth scram' || ok=0
 [[ -e $RUN/fail-auth ]] && ok=0
 check "an --add-user that --auth none contradicts stops before writing anything (exit $rc)" $ok
+# A failing install stands in for the real one: a regression must not install onto this host
+mkdir -p "$RUN/stub"
+printf '#!/bin/sh\nexit 1\n' >"$RUN/stub/install"
+chmod +x "$RUN/stub/install"
+PATH="$RUN/stub:$PATH" deploy fail-os --runtime native --os freebsd --role standalone --log-dir "$APP" \
+	--file-dir "$RUN/fail-os" --bin "$BIN"
+rc=$?
+ok=$((rc != 0))
+said fail-os 'needs a freebsd host' || ok=0
+said fail-os '+ install' && ok=0
+check "--os freebsd --runtime native on this Linux host stops before changing anything (exit $rc)" $ok
 
 section "--dry-run changes nothing"
 # What a dry run could touch: the run directory (minus what the daemons write)

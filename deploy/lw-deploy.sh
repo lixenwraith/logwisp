@@ -483,6 +483,9 @@ resolve() {
 		[ "$_sw" = yes ] || exit 1
 		RUNTIME=native
 	fi
+	if [ "$RUNTIME" = native ] && [ "$TARGET_OS" != "$HOST_OS" ] && [ "$DRY_RUN" = 0 ]; then
+		die "--os $TARGET_OS with --runtime native needs a $TARGET_OS host (or --dry-run, or --runtime manual)"
+	fi
 	[ -n "$ENGINE" ] || ENGINE=docker
 	case $ENGINE in docker | podman) ;; *) die "invalid --engine: $ENGINE (docker|podman)" ;; esac
 	[ "$RUNTIME" = native ] && [ -n "$CONF_DIR" ] && die "a native install keeps its configuration in SYSCONFDIR/logwisp; --config-dir is for containers and manual"

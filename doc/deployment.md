@@ -72,7 +72,9 @@ no certificates: see [Security](security.md#enabling-mtls).
 
 FreeBSD runs no Docker, and podman there runs FreeBSD images only while the
 LogWisp image is Linux: on FreeBSD the script offers `native` instead, on the
-host or in a jail.
+host or in a jail. A `native` install needs a host of its `--os`; for another
+one, `--dry-run` shows the install and `--runtime manual` writes the
+configuration.
 
 Re-running the same command updates the node: an existing `logwisp.toml` is
 kept as `logwisp.toml.bak`, the container is replaced, generated passwords are
