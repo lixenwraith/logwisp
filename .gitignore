@@ -8,6 +8,7 @@ bin/
 script/
 build/
 *.log
+*.pass
 *.toml
 !config/*.toml
 build.sh
@@ -17,3 +18,5 @@ test/run/
 test/run-mtls/
 test/run-scram/
 test/run-proxy/
+test/run-ipv6/
+test/run-deploy/

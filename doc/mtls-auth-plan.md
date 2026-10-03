@@ -65,14 +65,13 @@ back to authenticated peers.
 The authenticated identity is a single string derived from the peer's verified
 leaf certificate. Because `tls.RequireAndVerifyClientCert` has already validated
 the chain, signature, and validity window by the time we look, extraction is
-pure field selection — `tlsx.PeerIdentity`.
+pure field selection — `tlsx.PeerIdentity`. The `identity` modes:
 
-| `identity` mode | Source | Notes |
-|-----------------|--------|-------|
-| `cn` (default) | `Subject.CommonName` | Matches the existing `tls_peer_cn` metadata |
-| `san_dns` | first `DNSNames` entry | Preferred for host identities |
-| `san_uri` | first `URIs` entry | SPIFFE-style IDs |
-| `san_email` | first `EmailAddresses` entry | Operator identities |
+- `cn` (default): `Subject.CommonName`, matching the existing `tls_peer_cn`
+  metadata.
+- `san_dns`: the first `DNSNames` entry; preferred for host identities.
+- `san_uri`: the first `URIs` entry; SPIFFE-style IDs.
+- `san_email`: the first `EmailAddresses` entry; operator identities.
 
 An empty identity is a rejection, not an empty match: a certificate with no
 usable identity field cannot satisfy any policy.
@@ -96,13 +95,14 @@ allow_patterns = ["^edge-\\d{2}$"]       # RE2, anchored by the author
 node_binding   = "force"                 # none | assert | force
 ```
 
-| Option | Type | Default | Meaning |
-|--------|------|---------|---------|
-| `type` | string | `none` | `none` preserves pre-auth behaviour exactly; `mtls` enables the policy |
-| `identity` | string | `cn` | Which certificate field is the identity |
-| `allow` | []string | `[]` | Exact identity matches |
-| `allow_patterns` | []string | `[]` | RE2 patterns matched against the identity |
-| `node_binding` | string | `force` when `type = "mtls"` | Chain sources only; see below |
+- `type`, string, default `none`: `none` preserves pre-auth behaviour
+  exactly; `mtls` enables the policy.
+- `identity`, string, default `cn`: which certificate field is the identity.
+- `allow`, []string, default `[]`: exact identity matches.
+- `allow_patterns`, []string, default `[]`: RE2 patterns matched against the
+  identity.
+- `node_binding`, string, default `force` when `type = "mtls"`: chain sources
+  only; see below.
 
 Empty `allow` **and** empty `allow_patterns` under `type = "mtls"` means "any
 identity the CA vouches for" — that is, the pre-auth behaviour, but with the
@@ -111,13 +111,15 @@ default rather than a silent deny-all, and the plugin logs a WARN at startup
 saying so.
 
 `node_binding` applies only to the chain sources, where a `node` label is
-declared. Setting it on any other plugin is a configuration error.
+declared. Setting it to anything but `none` on any other plugin is a
+configuration error. Its values:
 
-| Value | Connection label | Per-entry `node` field |
-|-------|------------------|------------------------|
-| `none` | `trust_node` governs, as before | `trust_node` governs |
-| `assert` | Must equal the identity; a mismatch or an omission is rejected | `trust_node` governs |
-| `force` | The declared label is ignored and the identity is used | Overwritten with the identity |
+- `none`: `trust_node` governs the connection label, as before, and the
+  per-entry `node` field.
+- `assert`: the connection label must equal the identity, and a mismatch or an
+  omission is rejected; `trust_node` governs the per-entry `node` field.
+- `force`: the declared label is ignored and the identity is used; every
+  per-entry `node` field is overwritten with the identity.
 
 The split between `assert` and `force` is what makes both worth having:
 
@@ -131,8 +133,9 @@ The split between `assert` and `force` is what makes both worth having:
   it forwards keep the origin labels stamped at the first hop, so multi-hop
   attribution survives.
 
-`node_binding` overrides `trust_node`; when binding is active the constructor
-logs that `trust_node` is being ignored.
+`node_binding` overrides `trust_node` for the connection label. Under `force`
+the constructor logs that `trust_node` is ignored; under `assert`, that it still
+governs the per-entry labels.
 
 Dialer-side plugins (`tcp_chain` and `http_chain` sinks) accept the same block
 to pin the *server's* identity beyond hostname verification. There
@@ -161,7 +164,8 @@ One small package, mirroring `internal/tlsx`, is the single seam between the
 against the sibling TLS config and returns `(nil, nil)` when auth is disabled;
 every method tolerates a nil receiver, so call sites never branch on config.
 Listeners admit only through `Admit` (TCP) and `AuthorizeRequest` (HTTP); the
-current API, including SCRAM, is in [scram-auth-plan.md](scram-auth-plan.md#the-authz-seam).
+current API, including SCRAM, is in
+[scram-auth-plan.md](scram-auth-plan.md#the-authz-seam).
 
 ### Enforcement Points
 
@@ -169,18 +173,19 @@ current API, including SCRAM, is in [scram-auth-plan.md](scram-auth-plan.md#the-
 
 Handshake → `Admit` (authorize, then read hello) → `ResolveNode` → create
 session. Under `mtls` the certificate is checked before the hello is read, so
-an unauthorized peer never gets a preamble parsed on its behalf. `chain.DecodeEntry` is then
-called with `auth.TrustsEntryNode(trust_node)` rather than `trust_node` itself.
+an unauthorized peer never gets a preamble parsed on its behalf.
+`chain.DecodeEntry` is then called with `auth.TrustsEntryNode(trust_node)`
+rather than `trust_node` itself.
 
 **`http_chain` source** (`internal/source/httpchain/httpchain.go`, `handleIngest`)
 
-Per request, through `AuthorizeRequest`, before the body is read — an unauthorized sender does
-not get to stream `max_body_bytes` into the process. Rejection is `403`,
-distinct from the `400` used for protocol errors, so a sender can tell "you are
-not allowed" from "your batch was malformed". `ResolveNode` then governs the
-`X-Logwisp-Node` header exactly as it governs the TCP hello. The session cache
-key includes the identity, so two peers sharing a remote address never share a
-session.
+Per request, through `AuthorizeRequest`, before the body is read — an
+unauthorized sender does not get to stream `max_body_bytes` into the process.
+Rejection is `403`, distinct from the `400` used for protocol errors, so a
+sender can tell "you are not allowed" from "your batch was malformed".
+`ResolveNode` then governs the `X-Logwisp-Node` header exactly as it governs the
+TCP hello. The session cache key includes the identity, so two peers sharing a
+remote address never share a session.
 
 **`tcp` sink** (`internal/sink/tcp/tcp.go`, `handleConn`)
 

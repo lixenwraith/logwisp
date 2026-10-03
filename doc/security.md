@@ -5,21 +5,37 @@ configure it, and — equally important — what it does not yet do.
 
 ## Current State
 
-| Capability | Status |
-|------------|--------|
-| TLS 1.2 / 1.3 on all network sources and sinks | Implemented |
-| Server certificate verification by dialers | Implemented |
-| Mutual TLS (client certificate required and verified) | Implemented at the transport layer |
-| Peer identity recorded per session | Implemented |
-| Authorization from certificate identity (allow-lists, node binding) | Implemented — see [The Auth Block](#the-auth-block) |
-| Password (Argon2id-SCRAM) authentication, bound to the TLS channel | Implemented — see [Password Authentication](#password-authentication-scram) |
-| Authentication on the `http` sink's stream and status endpoints | Implemented: client certificate or bearer token |
-| Browser logins behind a site's TLS-terminating proxy | Implemented — see [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy) |
-| Server pinning by dialers | Implemented: certificate identity (`mtls`), bound certificate (`scram`) |
-| Startup warnings for expiring certificates and risky settings | Implemented — see [Startup Warnings](#startup-warnings) |
-| Unknown configuration keys rejected | Implemented — a typo in `tls`, `auth` or a table path fails startup |
-| Certificate revocation lists (CRL) or OCSP | **Not implemented** — revoke by editing the allow-list or credentials file |
-| IP allow/deny lists, per-IP connection or request limits | **Not implemented** — only SCRAM logins are throttled per address |
+**Implemented:**
+
+- TLS 1.2 / 1.3 on all network sources and sinks.
+- Server certificate verification by dialers.
+- Mutual TLS (client certificate required and verified), at the transport
+  layer.
+- Peer identity recorded per session.
+- Authorization from certificate identity (allow-lists, node binding): see
+  [The Auth Block](#the-auth-block).
+- Password (Argon2id-SCRAM) authentication, bound to the TLS channel: see
+  [Password Authentication](#password-authentication-scram).
+- Authentication on the `http` sink's stream and status endpoints: client
+  certificate or bearer token.
+- Browser logins behind a site's TLS-terminating proxy: see
+  [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy).
+- Server pinning by dialers: certificate identity (`mtls`), bound certificate
+  (`scram`).
+- Startup warnings for expiring certificates and risky settings: see
+  [Startup Warnings](#startup-warnings).
+- Unknown configuration keys rejected: a typo in `tls`, `auth` or a table path
+  fails startup.
+
+**Not implemented:**
+
+- Certificate revocation lists (CRL) or OCSP: revoke by editing the allow-list
+  or credentials file.
+- IP allow/deny lists, per-IP connection or request limits: only SCRAM logins
+  are throttled per address.
+- PROXY protocol: behind a proxy that passes TLS through, every peer shares the
+  proxy's address; see
+  [Behind nginx or another proxy](#behind-nginx-or-another-proxy).
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
@@ -46,17 +62,23 @@ insecure_skip_verify = false
 min_version          = "1.3"
 ```
 
-| Option | Role | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | both | `false` | Master switch; when false the whole block is ignored |
-| `cert_file` | both | — | Local certificate. **Required** for listeners; optional client identity for dialers |
-| `key_file` | both | — | Private key for `cert_file`. Must be set together with it |
-| `client_auth` | listener | `false` | Require and verify a client certificate (mTLS) |
-| `client_ca_file` | listener | — | CA bundle used to verify client certificates. **Required** when `client_auth` is true |
-| `ca_file` | dialer | system store | CA bundle used to verify the server certificate |
-| `server_name` | dialer | the configured `host` | SNI and certificate name to verify against |
-| `insecure_skip_verify` | dialer | `false` | Disable server verification |
-| `min_version` | both | `"1.3"` | `"1.2"` or `"1.3"` |
+Options by role, each with its default:
+
+- Both roles
+  - `enabled` (`false`): master switch; when false the whole block is ignored.
+  - `cert_file`: local certificate; **required** for listeners, an optional
+    client identity for dialers.
+  - `key_file`: private key for `cert_file`; set the two together.
+  - `min_version` (`"1.3"`): `"1.2"` or `"1.3"`.
+- Listeners
+  - `client_auth` (`false`): require and verify a client certificate (mTLS).
+  - `client_ca_file`: CA bundle that verifies client certificates; **required**
+    when `client_auth` is true.
+- Dialers
+  - `ca_file` (system store): CA bundle that verifies the server certificate.
+  - `server_name` (the configured `host`): SNI and certificate name to verify
+    against.
+  - `insecure_skip_verify` (`false`): disable server verification.
 
 Listeners are the `tcp` and `http` sinks and the `tcp_chain` and `http_chain`
 sources; dialers are the `tcp_chain` and `http_chain` sinks.
@@ -99,26 +121,44 @@ password_file     = ""                    # scram dialers
 trusted_proxies   = []                    # scram http sink behind a TLS-terminating proxy
 ```
 
-| Option | Applies to | Default | Description |
-|--------|------------|---------|-------------|
-| `type` | all | `none` | `none` ignores the block; `mtls` authorizes by certificate identity; `scram` by password |
-| `identity` | `mtls`; `scram` listeners | `cn` (`mtls`), unset (`scram`) | Certificate field carrying the identity. Under `scram` it binds the client certificate to the user |
-| `allow` | `mtls` | `[]` | Exact identities to admit |
-| `allow_patterns` | `mtls` | `[]` | RE2 patterns matched against the identity; anchor them yourself |
-| `node_binding` | chain sources | `force` | `none`, `assert`, or `force` |
-| `credentials_file` | `scram` listeners | — | Verifiers written by [`logwisp auth add-user`](cli.md#logwisp-auth) |
-| `token_lifetime_ms` | `scram` on the `http` sink and `http_chain` source | 15 minutes | Bearer token lifetime, 10 s to 24 h |
-| `username` | `scram` dialers | — | User to log in as |
-| `password_file` | `scram` dialers | — | File holding the password; one trailing line break is trimmed |
-| `trusted_proxies` | `scram` on the `http` sink | `[]` | Addresses or CIDRs of the reverse proxies that end the browsers' TLS; see [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy) |
+Options by where they apply, each with its default:
 
-**Roles by plugin:**
+- Every plugin
+  - `type` (`none`): `none` ignores the block; `mtls` authorizes by
+    certificate identity, `scram` by password.
+- Chain sources
+  - `node_binding` (`force`): `none`, `assert` or `force`.
+- `mtls`, and `scram` listeners
+  - `identity`: the certificate field carrying the identity; `cn` under
+    `mtls`, unset under `scram`, where it binds the client certificate to the
+    user.
+- `mtls`
+  - `allow` (`[]`): exact identities to admit.
+  - `allow_patterns` (`[]`): RE2 patterns matched against the identity; anchor
+    them yourself.
+- `scram` listeners
+  - `credentials_file`: verifiers written by
+    [`lw auth add-user`](cli.md#lw-auth).
+  - `token_lifetime_ms` (15 minutes): bearer token lifetime, 10 s to 24 h; the
+    `http` sink and `http_chain` source only.
+  - `trusted_proxies` (`[]`): addresses or CIDRs of the reverse proxies that
+    end the browsers' TLS; the `http` sink only, see
+    [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy).
+- `scram` dialers
+  - `username`: user to log in as.
+  - `password_file`: file holding the password; one trailing line break is
+    trimmed.
 
-| Plugin | Role | Decides |
-|--------|------|---------|
-| `tcp_chain` source, `http_chain` source | Listener | Which senders may ingest, and what node label their entries carry |
-| `tcp` sink, `http` sink | Listener | Which clients may read the stream (and, on `http`, the status endpoint) |
-| `tcp_chain` sink, `http_chain` sink | Dialer | `mtls`: which server identity to accept, beyond hostname verification. `scram`: which user to log in as |
+**Roles by plugin**, and what the block decides:
+
+- Listeners
+  - `tcp_chain` and `http_chain` sources: which senders may ingest, and what
+    node label their entries carry.
+  - `tcp` and `http` sinks: which clients may read the stream (and, on
+    `http`, the status endpoint).
+- Dialers: the `tcp_chain` and `http_chain` sinks.
+  - `mtls`: which server identity to accept, beyond hostname verification.
+  - `scram`: which user to log in as.
 
 ### Identity
 
@@ -127,12 +167,13 @@ certificate; under `scram` it is the username. The handshake has already
 checked the chain, signature, and validity window, so this is pure field
 selection.
 
-| Mode | Source | Typical use |
-|------|--------|-------------|
-| `cn` (default) | `Subject.CommonName` | Matches the existing `tls_peer_cn` metadata |
-| `san_dns` | first DNS SAN | Host identities |
-| `san_uri` | first URI SAN | SPIFFE-style IDs |
-| `san_email` | first email SAN | Operator identities |
+Modes, each with the field it reads and its typical use:
+
+- `cn` (default): `Subject.CommonName`; matches the existing `tls_peer_cn`
+  metadata.
+- `san_dns`: the first DNS SAN; host identities.
+- `san_uri`: the first URI SAN; SPIFFE-style IDs.
+- `san_email`: the first email SAN; operator identities.
 
 A certificate with no usable value in the chosen field is rejected. An empty
 identity is a refusal, not an empty match.
@@ -159,13 +200,19 @@ reported at startup.
 
 ### Node binding
 
-`node_binding` applies only to the chain sources, and it overrides `trust_node`.
+`node_binding` applies only to the chain sources. `assert` and `force` take the
+connection label over from `trust_node`; only `force` also overrides the
+per-entry labels.
 
-| Value | Connection label | Per-entry `node` field |
-|-------|------------------|------------------------|
-| `none` | `trust_node` governs | `trust_node` governs |
-| `assert` | Must equal the identity; a mismatch or an omission is rejected | `trust_node` governs |
-| `force` | Ignored; the identity is used | Overwritten with the identity |
+- `none`: `trust_node` governs both the connection label and the per-entry
+  `node` field.
+- `assert`
+  - Connection label: must equal the identity; a mismatch or an omission is
+    rejected.
+  - Per-entry `node` field: `trust_node` governs.
+- `force`
+  - Connection label: ignored; the identity is used.
+  - Per-entry `node` field: overwritten with the identity.
 
 Use **`force`** on an ingest boundary you do not trust. Every entry is
 relabelled, so a compromised edge cannot smuggle a foreign origin through the
@@ -206,14 +253,14 @@ was shown instead; see [Channel binding](#channel-binding).
 
 Misconfiguration fails at plugin construction, before the pipeline starts:
 
-- `type` `mtls` or `scram` without `tls.enabled` (proxy mode aside), or on a dialer with
-  `tls.insecure_skip_verify`: an identity read from an unverified chain is a
-  claim, and an unverified server could relay a login
+- `type` `mtls` or `scram` without `tls.enabled` (proxy mode aside), or on a
+  dialer with `tls.insecure_skip_verify`: an identity read from an unverified
+  chain is a claim, and an unverified server could relay a login
 - `type = "mtls"` on a listener without `tls.client_auth`
 - a block naming peers or credentials (`allow`, `allow_patterns`,
   `credentials_file`, `token_lifetime_ms`, `username`, `password_file`,
-  `trusted_proxies`) whose
-  `type` is `none` or unset: auth was intended and the type forgotten
+  `trusted_proxies`) whose `type` is `none` or unset: auth was intended and the
+  type forgotten
 - a key of the other method: `allow` or `allow_patterns` under `scram`, a
   `scram` key under `mtls`
 - a `scram` listener without a loadable `credentials_file` (see
@@ -350,7 +397,7 @@ end to end — run it with `--auto` to see each guarantee asserted.
 `type = "scram"` authenticates peers by username and password with
 Argon2id-SCRAM from `lixenwraith/auth`. It needs TLS but no client
 certificates, works on all six network plugins, and is LogWisp's own protocol,
-not standard SASL: viewers use the [`logwisp auth`](cli.md#logwisp-auth) CLI or,
+not standard SASL: viewers use the [`lw auth`](cli.md#lw-auth) CLI or,
 behind a TLS-terminating proxy, the shipped browser client.
 
 ```toml
@@ -405,7 +452,7 @@ connection. After the challenge the dialer pins the certificate it was bound to:
 the proof and every ingest request must meet the same certificate, or the TLS
 handshake fails before anything is sent. The `http_chain` sink then drops token
 and pin and logs in again, which also covers a rotated server certificate. A
-token printed by `logwisp auth token` is not pinned.
+token printed by `lw auth token` is not pinned.
 
 ### Certificates and users
 
@@ -433,21 +480,22 @@ exchange.
 
 Logins are throttled per remote socket address or, on an `http` sink in proxy
 mode, per forwarded client (an IPv6 client per /64); forwarded headers are read
-only from `trusted_proxies`. Each exchange takes a token from a bucket of 10 that refills at one per
-second, and a successful login gives it back, so only failed or abandoned
-attempts drain it. At most 4 exchanges per address may be unfinished: an HTTP
-challenge never answered holds its slot for up to 30 s, a TCP connection that
-ends mid-exchange frees it at once. A refused start answers `too many attempts`
-(HTTP `429`) and counts `auth_throttled`; the table holds 65,536 addresses and
-refuses new ones when full. Separately, at most 4,096 exchanges may be in flight
-per listener; beyond that, or while the plugin stops, a login gets `busy` (HTTP
-`503`) and counts `auth_busy`. Peers behind one NAT or one passthrough proxy
-share a bucket: there, one client can exhaust every other client's logins.
+only from `trusted_proxies`. Each exchange takes a token from a bucket of 10
+that refills at one per second, and a successful login gives it back, so only
+failed or abandoned attempts drain it. At most 4 exchanges per address may be
+unfinished: an HTTP challenge never answered holds its slot for up to 30 s, a
+TCP connection that ends mid-exchange frees it at once. A refused start answers
+`too many attempts` (HTTP `429`) and counts `auth_throttled`; the table holds
+65,536 addresses and refuses new ones when full. Separately, at most 4,096
+exchanges may be in flight per listener; beyond that, or while the plugin
+stops, a login gets `busy` (HTTP `503`) and counts `auth_busy`. Peers behind
+one NAT or one passthrough proxy share a bucket: there, one client can exhaust
+every other client's logins.
 
 ### Credentials file
 
 ```toml
-# logwisp SCRAM verifiers, written by `logwisp auth add-user`. Keep it private.
+# logwisp SCRAM verifiers, written by `lw auth add-user`. Keep it private.
 decoy_key = "<base64, 32 random bytes>"
 
 [[users]]
@@ -460,7 +508,7 @@ stored_key = "<base64>"
 username = "edge-01"
 ```
 
-Write it with [`logwisp auth add-user`](cli.md#logwisp-auth) rather than by
+Write it with [`lw auth add-user`](cli.md#lw-auth) rather than by
 hand. The whole file is validated when the plugin is built: a `decoy_key` of at
 least 32 bytes, at least one user, unique names, no unknown keys, and one Argon2
 profile and salt length for every user, since mixed profiles would tell a prober
@@ -477,14 +525,14 @@ different users.
 - **Rollout.** Turning `scram` on cuts off every dialer of that listener that
   has no credentials. Upgrade every binary first, then add a second listener
   with `scram` on another port, move the dialers to it, and remove the old one.
-- **Password rotation.** `logwisp auth add-user -generate` with the user's
+- **Password rotation.** `lw auth add-user -generate` with the user's
   `-password-file` replaces verifier and password together. `SIGHUP` the
   listener, deploy the password file, `SIGHUP` the dialer. Logins fail in
   between and the dialer retries under backoff, holding its current entry or
   batch while its input queue fills. To avoid the gap, add a second user, move
   the dialer to it, then remove the first; under `node_binding = "force"` the
   node label follows the username.
-- **Revocation.** `logwisp auth remove-user`, then `SIGHUP`. The reload drops
+- **Revocation.** `lw auth remove-user`, then `SIGHUP`. The reload drops
   every connection and revokes every token; other dialers log in again on
   their own.
 
@@ -493,14 +541,15 @@ different users.
 - TLS must terminate at LogWisp, except on an `http` sink in proxy mode. Behind
   any other terminating proxy or load balancer every login fails by design;
   pass TLS through instead (TCP or SNI routing). All clients then share the
-  proxy's address, and so one throttling budget.
+  proxy's address, and so one throttling budget: see
+  [Behind nginx or another proxy](#behind-nginx-or-another-proxy).
 - One process per HTTP address. Handshake state and the token key live in one
   instance, so behind a balancer the proof or the token can reach an instance
   that never saw the login.
 - Browsers log in only to an `http` sink in proxy mode, below; elsewhere use
   `mtls` for browsers.
 - `nc` and `openssl s_client` cannot read a `scram` `tcp` sink; use
-  `logwisp auth stream`.
+  `lw auth stream`.
 
 `test/scram-chain-test.sh --auto` exercises these guarantees end to end.
 
@@ -541,28 +590,169 @@ location /logs/ {
   could relay a login. Keep that hop on loopback or a trusted network, or
   enable `tls` on the sink; a plaintext hop to a proxy off this host is
   warned about at startup. `identity` cannot be combined with proxy mode.
-- **Sessions.** The page asks for a cookie: `logwisp_session`, `HttpOnly`,
-  `Secure`, `SameSite=Strict`, `Max-Age` the token lifetime, and no `Path`, so
-  it scopes itself to the mount (`/logs` above). Stream and status accept it or
-  a bearer token, so `new EventSource("/logs/stream")` works on any page of the
-  site, beside the site's own Basic auth too, and `logwisp auth token -unbound`
-  keeps working. `POST /auth` with
-  `{"logout": true}` clears the cookie and revokes the token until it expires.
-  `/auth` takes only `application/json`, which a cross-origin page cannot send
-  without a preflight.
+- **Sessions.** The login page asks for a cookie: `logwisp_session`,
+  `HttpOnly`, `Secure`, `SameSite=Strict`, `Max-Age` the token lifetime, and no
+  `Path`, so it scopes itself to the mount (`/logs` above). Stream and status
+  accept it or a bearer token, so `new EventSource("/logs/stream")` works on any
+  page of the site, beside the site's own Basic auth too, and `lw auth token
+  -unbound` keeps working. `POST /auth` with `{"logout": true}` clears the
+  cookie and revokes the token until it expires. `/auth` takes only
+  `application/json`, which a cross-origin page cannot send without a preflight.
+- **Private windows.** Private or incognito windows keep cookies in memory,
+  apart from normal windows: they sign in on their own, and the session ends at
+  the token lifetime or when the last private window closes.
+- **Cookies disabled.** The viewer runs in token mode when the browser keeps no
+  cookie for the site.
+  - It notices from `navigator.cookieEnabled`, from a throwaway cookie with the
+    session's attributes that does not come back (Chromium blocking every cookie
+    still reports `cookieEnabled`), or from a `401` right after a cookie login,
+    and shows its own sign-in form.
+  - The token lives in a page variable only, never in storage or the URL. It
+    lasts as long as the page and at most the token lifetime: a reload, another
+    tab, or a reconnect after expiry asks again; sign out revokes it.
+  - The login page says that cookies are unavailable and links to the viewer.
+    A page not served over HTTPS keeps no `Secure` cookie either: both pages
+    name HTTPS instead and offer no sign-in.
+- **Integrating `scram.js`.** A site with its own CSP can copy `scram.js` from
+  `internal/sink/http/web/` into its bundle: one dependency-free ES module,
+  where `base` is the mount URL ending in `/`. It needs a secure context for
+  WebCrypto and takes about 2 s of Argon2 per login on a desktop.
+  - Cookie mode, the default: `login(base, username, password, {onProgress})`,
+    then `EventSource` and `fetch` as for any same-origin resource;
+    `logout(base)`.
+  - Token mode: `login(..., {session: "token"})` resolves to `{username,
+    expiresIn, token}`. Keep the token in memory; `stream(url, {token, signal,
+    onEvent})` reads the event stream through `fetch` with the bearer, status
+    takes `Authorization: Bearer`, and `logout(base, {token})` revokes it. The
+    bearer replaces the Basic credentials a browser would send, so token mode
+    cannot pass a proxy that asks for its own Basic auth.
+  - `cookiesUsable()` tells which applies: false when the session cookie would
+    not stick. `loginUnavailable()`, asked first, names why neither can run
+    (no secure context), or is empty.
 - **Pages.** Under `/auth/` the sink serves `scram.js` always, and with
   `login_page` / `viewer_page` the login page and a minimal live viewer with
   their script and style, under `default-src 'none'; script-src 'self';
   connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors
-  'none'; base-uri 'none'`. A site with its own CSP can copy `scram.js` from
-  `internal/sink/http/web/` into its bundle: one dependency-free ES module
-  exporting `login(base, username, password, {onProgress})` and
-  `logout(base)`, where `base` is the mount URL ending in `/`. It needs a
-  secure context for WebCrypto and takes about 2 s of Argon2 per login on a
-  desktop.
+  'none'; base-uri 'none'`.
 
 `test/scram-proxy-test.sh --auto` logs in from headless Chromium through such a
-proxy.
+proxy, with cookies and with every cookie blocked.
+
+### Behind nginx or another proxy
+
+A proxy in front of LogWisp works at one of two layers:
+
+- **L7, ending TLS** (nginx `http` block, HAProxy `mode http`): the `http` sink
+  in [proxy mode](#browsers-behind-a-tls-terminating-proxy).
+  - `trusted_proxies` lists the proxy's address.
+  - The proxy sends `X-Forwarded-Proto: https` and `X-Forwarded-For`. It may
+    overwrite `X-Forwarded-For` with the real client: the rightmost hop that is
+    not a proxy is the client either way.
+- **L4, passing TLS through to LogWisp's own TLS** (nginx `stream` with
+  `ssl_preread`, HAProxy `mode tcp`): whatever needs TLS to end at LogWisp.
+  - Chain links (`tcp_chain`, `http_chain`).
+  - `lw auth stream` viewers of a `tcp` sink.
+  - An `http` sink that keeps its own TLS, and with it SCRAM channel binding
+    or client certificates.
+
+A common shape serves both from port 443:
+
+```
+:443              nginx stream: ssl_preread routes by SNI, proxy_protocol on
+  logs.example.org    -> 127.0.0.1:8443   nginx http
+  relay.example.org   -> a LogWisp TLS listener, without PROXY (below)
+127.0.0.1:8443    nginx http: listens with proxy_protocol, ends TLS
+  /logs/              -> 127.0.0.1:8081   LogWisp http sink, proxy mode
+```
+
+**The `http` sink behind the `http` block** works in proxy mode as is:
+`trusted_proxies` is the `http` block's address, usually `127.0.0.1`, and the
+block names the client from the PROXY header.
+
+```nginx
+server {
+    listen      127.0.0.1:8443 ssl proxy_protocol;
+    server_name logs.example.org;
+    # ssl_certificate, ssl_certificate_key: the site's own
+    location /logs/ {
+        proxy_pass       http://127.0.0.1:8081/;
+        proxy_set_header X-Real-IP         $proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For   $proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+`$proxy_add_x_forwarded_for` does not fit this shape: it appends the stream
+server's address, not the client's. LogWisp would name that address as every
+client or, when it is trusted (both on `127.0.0.1`), the hop to its left: one
+the client wrote, so the client picks its own throttling address. LogWisp
+ignores `X-Real-IP`.
+
+**LogWisp's own TLS listeners take no PROXY header.** LogWisp cannot read the
+PROXY protocol yet; it is planned first in the ACL work
+([To Do, 1.2](todo.md#12-proxy-protocol-deferred-gap-of-scram-see-scram-auth-planmd)).
+A stream route that sends `proxy_protocol` straight to a LogWisp TLS listener
+breaks every connection: the header lands in front of the TLS handshake. nginx
+sets `proxy_protocol` per stream `server`, so route LogWisp SNIs without it:
+
+- Route 1: LogWisp gets its own stream `server` and port, without
+  `proxy_protocol`.
+- Route 2: port 443 sends LogWisp SNIs to an internal stream `server` that
+  `listen`s with `proxy_protocol` and proxy_passes to LogWisp without it; that
+  hop consumes the header.
+- Either way dialers must send the name: a `host` that is one, or
+  `tls.server_name` (`-server-name` for `lw auth`); an IP literal sends no SNI.
+- With HAProxy, leave `send-proxy` off the LogWisp backends.
+
+```nginx
+stream {
+    map $ssl_preread_server_name $route {
+        relay.example.org  127.0.0.1:10443;   # route 2: the internal hop
+        tail.example.org   127.0.0.1:10443;
+        default            127.0.0.1:8443;    # the http block, logs.example.org
+    }
+    map $ssl_preread_server_name $logwisp {
+        relay.example.org  127.0.0.1:9001;    # tcp_chain source
+        tail.example.org   127.0.0.1:9002;    # tcp sink, for lw auth stream
+    }
+    server {
+        listen 443;
+        ssl_preread    on;
+        proxy_protocol on;                    # on every route of this server
+        proxy_pass     $route;
+    }
+    server {                                  # route 1: its own port, no header
+        listen 9443;
+        ssl_preread on;
+        proxy_pass  $logwisp;
+    }
+    server {                                  # route 2: consumes the header
+        listen 127.0.0.1:10443 proxy_protocol;
+        ssl_preread on;
+        proxy_pass  $logwisp;
+    }
+}
+```
+
+**Passthrough without PROXY** brings every peer from the proxy's address:
+
+- All peers share one SCRAM [throttling](#throttling) budget: 10 failed or
+  abandoned logins, then one per second, and 4 unfinished at once. One client
+  that keeps failing logins makes every other client's logins answer
+  `too many attempts` until it stops.
+- Established `tcp_chain` links and open streams keep flowing; a reconnect
+  waits for the budget. An `http_chain` sink whose early renewal is put off
+  (`too many attempts` or `busy`) keeps sending on its token to the server it
+  pinned, retrying every few seconds, and holds its batches only once that
+  token has expired; any other refusal ends the token at once.
+- Logs and sessions name the proxy, not the peer.
+- Proxy mode is unaffected: it throttles on the forwarded client.
+- Until LogWisp reads PROXY, mitigate:
+  - expose the chain ports directly, without the proxy, where you can;
+  - keep the proxy hop on a trusted network, so only trusted clients share the
+    budget;
+  - or accept the shared budget.
 
 ## What Each Layer Enforces
 
@@ -598,12 +788,17 @@ would add.
 An `auth` block (`mtls` or `scram`) closes each of these. Without one, bind them
 to a trusted interface or front them with an authenticating proxy.
 
-| Surface | Exposure when `auth.type = "none"` |
-|---------|-----------------------------------|
-| `http` sink `stream_path` | Full log stream, with `Access-Control-Allow-Origin: *`, so any browser origin can read it (the header is omitted once an auth policy is set) |
-| `http` sink `status_path` | Host, port, TLS flag, uptime, client counts, throughput counters |
-| `tcp` sink | Full log stream to any client that connects |
-| `tcp_chain` / `http_chain` source | Ingest from any peer that can connect (with `client_auth`, any the CA vouches for), under any node label it claims |
+What each exposes when `auth.type = "none"`:
+
+- `http` sink `stream_path`: the full log stream, with
+  `Access-Control-Allow-Origin: *`, so any browser origin can read it (the
+  header is omitted once an auth policy is set).
+- `http` sink `status_path`: host, port, TLS flag, uptime, client counts,
+  throughput counters.
+- `tcp` sink: the full log stream to any client that connects.
+- `tcp_chain` and `http_chain` sources: ingest from any peer that can connect
+  (with `client_auth`, any the CA vouches for), under any node label it
+  claims.
 
 `max_connections` bounds concurrency on all of them but does not distinguish
 callers.
@@ -618,7 +813,7 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 - Use a dedicated CA for LogWisp so its trust decisions stay independent.
 - Keep leaf lifetimes short (90–825 days) and automate renewal.
 - Key, credentials and password files should be `0600` and owned by the service
-  account; a world-readable one is reported at startup. `logwisp auth` creates
+  account; a world-readable one is reported at startup. `lw auth` creates
   them `0600` and keeps the mode of an existing file.
 - Rotation requires a reload (`SIGHUP`), because certificates and credentials
   are loaded once at plugin construction; there is no on-disk watch for them.

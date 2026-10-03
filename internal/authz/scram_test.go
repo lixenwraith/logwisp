@@ -417,6 +417,15 @@ func TestDialerRefusesACheapChallenge(t *testing.T) {
 	}
 }
 
+// Link-local peers share one budget per link, not one across every link: the
+// zone names the link and stays in the key.
+func TestLinkLocalBudgetIsPerLink(t *testing.T) {
+	a, b, other := throttleKey("fe80::1%eth0"), throttleKey("fe80::2%eth0"), throttleKey("fe80::1%eth1")
+	if a != b || a == other {
+		t.Fatalf("keys %q, %q on one link, %q on another", a, b, other)
+	}
+}
+
 // Only failed attempts drain an address's budget; beyond it the listener
 // answers "too many attempts" without running the exchange.
 func TestOnlyFailedAttemptsAreThrottled(t *testing.T) {
@@ -732,5 +741,82 @@ func TestTokenIsRenewedBeforeExpiry(t *testing.T) {
 	prepare()
 	if n := l.allowed.Load(); n != 2 {
 		t.Fatalf("logins after the renewal point = %d, want 2", n)
+	}
+}
+
+// A renewal put off (throttled, or the server busy) keeps the link sending on
+// the token it still holds, and retries soon, but only to the pinned server;
+// any other refusal, or the token's expiry, ends it.
+func TestPutOffRenewalKeepsTheValidToken(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: MinTokenLifetime.Milliseconds()}, f.serverTLS, RoleListener, HTTP)
+	srv, _ := f.httpListener(t, l, f.serverTLS)
+	// An impostor with another certificate of the same CA
+	var answer, stolen atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+chain.AuthPath, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, int(answer.Load()), authStep{Error: "no"})
+	})
+	mux.HandleFunc("GET /protected", func(w http.ResponseWriter, r *http.Request) { stolen.Add(1) })
+	imp := httptest.NewUnstartedServer(mux)
+	imp.TLS = f.serverTLS.Clone()
+	imp.TLS.Certificates = []tls.Certificate{f.serverLeaf(t, "impostor")}
+	imp.StartTLS()
+	t.Cleanup(imp.Close)
+
+	d := f.dialer(t, "edge-01", "edge-01-secret")
+	client := f.httpClient(d)
+	var reroute atomic.Pointer[string]
+	client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if to := reroute.Load(); to != nil {
+			addr = *to
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+	prepare := func(renew bool) (*http.Request, error) {
+		if renew {
+			d.dialer.renewAt.Store(time.Now().UnixNano())
+		}
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/protected", nil)
+		return req, d.Prepare(t.Context(), client, srv.URL, req)
+	}
+	held := func() string {
+		req, err := prepare(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return req.Header.Get("Authorization")
+	}
+
+	first := held()
+	client.CloseIdleConnections()
+	to := imp.Listener.Addr().String()
+	reroute.Store(&to)
+	answer.Store(http.StatusTooManyRequests)
+	req, err := prepare(true)
+	if err != nil || req.Header.Get("Authorization") != first {
+		t.Fatalf("put-off renewal: header %q, %v; want the held token", req.Header.Get("Authorization"), err)
+	}
+	if ahead := time.Until(time.Unix(0, d.dialer.renewAt.Load())); ahead <= 0 || ahead > 5*time.Second {
+		t.Fatalf("next renewal %v ahead, want within 5 s", ahead)
+	}
+	if _, err := client.Do(req); !errors.Is(err, errPinMismatch) || stolen.Load() != 0 {
+		t.Fatalf("the held token went to a server the pin never checked: %v, %d requests", err, stolen.Load())
+	}
+	answer.Store(http.StatusUnauthorized)
+	if _, err := prepare(true); err == nil || d.dialer.token.Load() != nil {
+		t.Fatalf("a refused renewal kept the token: %v", err)
+	}
+
+	client.CloseIdleConnections()
+	reroute.Store(nil)
+	first = held()
+	l.Close() // every further login answers busy
+	if req, err := prepare(true); err != nil || req.Header.Get("Authorization") != first {
+		t.Fatalf("busy renewal: %v; want the held token", err)
+	}
+	d.dialer.expires.Store(time.Now().UnixNano())
+	if _, err := prepare(true); err == nil {
+		t.Fatal("an expired token was kept after a put-off renewal")
 	}
 }

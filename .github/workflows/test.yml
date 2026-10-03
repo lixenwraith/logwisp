@@ -11,7 +11,44 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - run: go test -timeout 60s -race ./...
       - run: go vet ./...
-      - run: go build ./cmd/logwisp
-      - run: GOOS=freebsd GOARCH=amd64 go build -o /tmp/logwisp-freebsd ./cmd/logwisp
+      - run: go build ./cmd/lw
+      - run: GOOS=freebsd GOARCH=amd64 go build -o /tmp/lw-freebsd ./cmd/lw
+      - run: node --test
+        working-directory: internal/sink/http/web
+  # The end-to-end scripts on a host with an IPv6 loopback and playwright's
+  # Chromium; the docker run needs root, so it skips
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FORCE_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # "chromium" fetches the headless shell and full Chromium, which the
+      # cookie-blocking profile needs; the driver's require reads NODE_PATH
+      - run: |
+          npm i -g playwright
+          npx playwright install --with-deps chromium
+          echo "NODE_PATH=$(npm root -g)" >> "$GITHUB_ENV"
+      - run: make build
+      - run: make e2e 2>&1 | tee "$RUNNER_TEMP/e2e.out"
+        shell: bash # adds pipefail: the step fails with make, not with tee
+      # ipv6-test.sh skips without ::1, which would leave the job green untested
+      - name: Require an IPv6 loopback
+        run: grep -q '^0\{31\}1 ' /proc/net/if_inet6
+      # scram-proxy-test.sh skips its browser checks without playwright's Chromium
+      - name: Require the browser checks
+        run: |
+          grep -q 'scram-proxy-test.sh --auto' "$RUNNER_TEMP/e2e.out"
+          if grep 'SKIP.*browser checks' "$RUNNER_TEMP/e2e.out"; then exit 1; fi

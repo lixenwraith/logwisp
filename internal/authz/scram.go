@@ -167,12 +167,12 @@ func (c *Credentials) Marshal() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	header := "# logwisp SCRAM verifiers, written by `logwisp auth add-user`. Keep it private.\n"
+	header := "# logwisp SCRAM verifiers, written by `lw auth add-user`. Keep it private.\n"
 	return append([]byte(header), body...), nil
 }
 
 // ReadPassword reads a password file, trimming one trailing line break so a
-// file from an editor and one from `logwisp auth add-user` agree.
+// file from an editor and one from `lw auth add-user` agree.
 func ReadPassword(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -355,7 +355,7 @@ func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState
 		p.rejected.Add(1)
 		switch {
 		case step.Binding != "" && l.proxy != nil:
-			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (logwisp auth token -unbound)", err)
+			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (lw auth token -unbound)", err)
 		case step.Binding == "" && l.cb != nil:
 			err = fmt.Errorf("%w; the client sent an unbound proof (-unbound), but this listener binds logins to its certificate", err)
 		case step.Binding != "" && step.Binding != base64.StdEncoding.EncodeToString(l.cb):
@@ -566,6 +566,7 @@ type scramDialer struct {
 	unbound  bool // HTTP logins to a listener behind a TLS-terminating proxy
 	token    atomic.Pointer[string]
 	renewAt  atomic.Int64           // unix nanoseconds; Prepare logs in again from then
+	expires  atomic.Int64           // unix nanoseconds; 0 = lifetime unknown
 	pin      atomic.Pointer[[]byte] // HTTP: certificate the token's login was bound to
 	failures atomic.Uint64
 	lastErr  atomic.Pointer[string]
@@ -722,7 +723,12 @@ func (p *Policy) Token(ctx context.Context, client *http.Client, baseURL string)
 	if step.Token == "" {
 		return "", errors.New("auth: server issued no token")
 	}
-	d.renewAt.Store(renewAt(time.Now(), time.Duration(step.ExpiresIn)*time.Second).UnixNano())
+	now, lifetime := time.Now(), time.Duration(step.ExpiresIn)*time.Second
+	d.renewAt.Store(renewAt(now, lifetime).UnixNano())
+	d.expires.Store(0)
+	if lifetime > 0 {
+		d.expires.Store(now.Add(lifetime).UnixNano())
+	}
 	d.token.Store(&step.Token)
 	return step.Token, nil
 }
@@ -770,6 +776,12 @@ func (d *scramDialer) stats(m map[string]any) {
 	}
 }
 
+// putOff marks a login the server deferred (throttled, busy) rather than
+// refused: a token still held stays usable meanwhile.
+type putOff struct{ error }
+
+func (e putOff) Unwrap() error { return e.error }
+
 // postStep sends one /auth request; any answer but 200 is a refusal
 func postStep(ctx context.Context, client *http.Client, url string, body []byte) (authStep, *http.Response, error) {
 	var step authStep
@@ -796,7 +808,11 @@ func postStep(ctx context.Context, client *http.Client, url string, body []byte)
 		if msg == "" {
 			msg = resp.Status
 		}
-		return step, resp, fmt.Errorf("%w: server: %s", ErrRefused, msg)
+		err := fmt.Errorf("%w: server: %s", ErrRefused, msg)
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			err = putOff{err}
+		}
+		return step, resp, err
 	case decodeErr != nil:
 		return step, resp, fmt.Errorf("auth: malformed answer: %w", decodeErr)
 	}
@@ -888,13 +904,18 @@ func remoteIP(addr string) string {
 // --- Throttling ---
 
 // throttleKey is what the limiter counts: an address, or for IPv6 its /64,
-// which one host usually holds whole
+// which one host usually holds whole. Link-local too, per zone: a peer picks
+// any fe80::/64 address, so per address it would escape its budget.
 func throttleKey(ip string) string {
 	addr, err := netip.ParseAddr(ip)
 	if err != nil || addr.Is4() {
 		return ip
 	}
-	return netip.PrefixFrom(addr, 64).Masked().String()
+	key := netip.PrefixFrom(addr, 64).Masked().String()
+	if zone := addr.Zone(); zone != "" {
+		key += "%" + zone
+	}
+	return key
 }
 
 // limiter bounds SCRAM attempts per remote address: failed or abandoned

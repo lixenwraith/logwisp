@@ -2,231 +2,304 @@
 
 ## Requirements
 
-- **Operating systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
-- **Architecture**: amd64
-- **Go**: 1.27.1 or newer, to build from source
+- Operating systems: Linux (kernel 6.10+), FreeBSD (14.0+)
+- Architecture: amd64; arm64 builds but is untested
+- To build: Go 1.27.1 or newer (FreeBSD: the `go127` package), and GNU make
+  or BSD make
+- For `make e2e`: bash 5+, coreutils, curl, openssl and go (the proxy test
+  builds its reverse proxy). Optional, else those checks SKIP: node with
+  playwright and the Chromium builds `playwright install chromium` fetches
+  (browser checks), an IPv6 loopback (`ipv6-test.sh`), docker as root with the
+  `logwisp:dev` image (`deploy-test.sh`'s container run)
 
 ## Building from Source
 
 ```bash
 git clone https://github.com/lixenwraith/logwisp.git
 cd logwisp
-make
-sudo make install          # installs to $PREFIX/bin, default /usr/local/bin
+make build              # bin/lw; plain `make` only lists the targets
 ```
 
-The Makefile works with both GNU make and BSD make. Targets:
+The Makefile works with GNU make and BSD make alike. Targets:
 
-| Target | Effect |
-|--------|--------|
-| `make` / `make build` | Build `bin/logwisp` with version metadata |
-| `make dev` | Build with the race detector enabled |
-| `make install` | Install the binary to `$(PREFIX)/bin` (default `/usr/local`) |
-| `make uninstall` | Remove `$(BINDIR)/logwisp` |
-| `make clean` | Remove the built binary |
-| `make version` | Print the version, commit, and build time that would be embedded |
+- Build
+  - `make build`: `bin/lw`, with version, commit and build time from git
+  - `make release`: the same, static (`CGO_ENABLED=0`), `-trimpath`, stripped
+  - `make dev`: built with the race detector
+  - `make version`: the metadata a build would embed
+  - `make clean`: remove `bin/`
+- Check
+  - `make test`: the Go tests
+  - `make verify`: tests, `go vet`, `gofmt -l` on the Go files changed since
+    `main`, linux and freebsd cross builds for amd64 and arm64, and the web
+    client's `node --test` when node is installed
+  - `make e2e`: builds, then runs every `test/*-test.sh --auto` in turn and
+    reports passes, failures and skips; `E2E='test/scram-*-test.sh'` runs a
+    subset; see [Test Scripts](#test-scripts)
+- Container
+  - `make image`, `make image-check`: see [Container Image](#container-image)
+- Install
+  - `make install`, `make uninstall`: see [Installing](#installing)
 
-Version, commit hash, and build time are injected via `-ldflags` from `git
-describe` and `git rev-parse`. A plain `go build` produces a working binary that
-reports `dev` for all three:
+Variables:
+
+- `GO`: the toolchain. On FreeBSD the default is the versioned package that
+  `go.mod` asks for (`go127`); `make GO=/path/to/go` overrides it, and
+  `check-go` names the package to install when it is missing.
+- `GO_BUILDFLAGS`, `GO_LDFLAGS`: extra `go build` and linker flags for
+  packagers. They are distinct from `GOFLAGS` and `LDFLAGS`, which the go
+  command and the C linker read themselves.
+- `SOURCE_DATE_EPOCH`: when set, the embedded build time comes from it, so
+  package builds are reproducible.
+
+A plain `go build -o bin/lw ./cmd/lw` works too, and reports `dev` for the
+version metadata. `go install github.com/lixenwraith/logwisp/cmd/lw@latest`
+does not work until the module is renamed to its canonical path.
+
+## Installing
+
+`make install` copies what a package ships and compiles nothing, so build
+first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `BINDIR` (default
+`$PREFIX/bin`, the path the systemd unit and the rc.d script run `lw` from):
+
+- Linux defaults: `PREFIX=/usr`, `SYSCONFDIR=/etc`. Outside a package
+  manager, prefer `PREFIX=/usr/local`; systemd reads units, sysusers and
+  tmpfiles from there too.
+- FreeBSD defaults: `PREFIX=/usr/local`, `SYSCONFDIR=/usr/local/etc`.
+- `INSTALL_OS` (default: `uname -s`) picks the layout, so
+  `INSTALL_OS=FreeBSD DESTDIR=...` stages the FreeBSD one on another system.
 
 ```bash
-go build -o bin/logwisp ./cmd/logwisp
+make release
+sudo make install PREFIX=/usr/local
 ```
 
-`go install github.com/lixenwraith/logwisp/cmd/logwisp@latest` also works, with
-the same loss of version metadata.
+Every system gets:
 
-## Container Image
-
-The root `Dockerfile` builds the same package into `scratch` under UID 65532,
-static and stripped. There is no shell and no config in the image: mount one and
-name it, as the binary has no daemon mode and no built-in defaults worth running.
-
-```bash
-REV=$(git rev-parse HEAD)
-docker build -t "logwisp:$(git rev-parse --short HEAD)" \
-  --build-arg VERSION="$(git describe --tags --always)" \
-  --build-arg REVISION="$REV" .
-docker run --rm -v /etc/logwisp:/etc/logwisp:ro logwisp:... -c /etc/logwisp/logwisp.toml
-```
-
-Sinks that listen (`http`, `tcp`) need their ports published; the read-only
-root filesystem and dropped capabilities a restricted runtime imposes are all
-compatible with it, provided a `file` sink's directory is writable by 65532.
-
-## Configuration
-
-Copy the annotated reference configuration and edit it:
-
-```bash
-sudo mkdir -p /etc/logwisp
-sudo cp config/logwisp.toml /etc/logwisp/logwisp.toml
-```
-
-LogWisp searches, in order: `-c <path>` / `--config <path>` (also `=<path>`),
-`$LOGWISP_CONFIG_DIR`/`$LOGWISP_CONFIG_FILE`, `~/.config/logwisp/logwisp.toml`,
-`./logwisp.toml`. See [Configuration](configuration.md).
-
-## Running as a Service
-
-LogWisp has no daemon mode; run it in the foreground under a supervisor.
+- `$BINDIR/lw` and the manual `$PREFIX/share/man/man1/lw.1`
+- `$PREFIX/share/doc/logwisp/` (this documentation) and
+  `$PREFIX/share/licenses/logwisp/LICENSE`
 
 ### Linux (systemd)
 
-`/etc/systemd/system/logwisp.service`:
-
-```ini
-[Unit]
-Description=LogWisp Log Transport Service
-After=network.target
-
-[Service]
-Type=simple
-User=logwisp
-Group=logwisp
-ExecStart=/usr/local/bin/logwisp -c /etc/logwisp/logwisp.toml
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=10
-WorkingDirectory=/var/lib/logwisp
-StandardOutput=journal
-StandardError=journal
-
-# Hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/log/logwisp /var/lib/logwisp
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`ExecReload` gives you `systemctl reload logwisp` for configuration and
-certificate rotation without dropping the process.
-
-If a pipeline binds a port below 1024, add
-`AmbientCapabilities=CAP_NET_BIND_SERVICE` rather than running as root.
-
-Setup:
+- `$SYSCONFDIR/logwisp/logwisp.toml`: the annotated sample configuration,
+  kept when one is already there. Edit it before starting the service.
+- `$PREFIX/lib/systemd/system/logwisp.service`: runs
+  `lw -c $SYSCONFDIR/logwisp/logwisp.toml` as the `logwisp` user, from
+  `/var/lib/logwisp`; `systemctl reload` sends `SIGHUP`.
+- `$PREFIX/lib/sysusers.d/logwisp.conf`: the `logwisp` account.
+- `$PREFIX/lib/tmpfiles.d/logwisp.conf`: `/var/lib/logwisp` and
+  `/var/log/logwisp`, owned by it.
 
 ```bash
-sudo useradd -r -s /usr/sbin/nologin logwisp
-sudo mkdir -p /etc/logwisp /var/lib/logwisp /var/log/logwisp
-sudo chown logwisp:logwisp /var/lib/logwisp /var/log/logwisp
+sudo systemd-sysusers logwisp.conf
+sudo systemd-tmpfiles --create logwisp.conf
 sudo systemctl daemon-reload
 sudo systemctl enable --now logwisp
 ```
 
-The service account needs **read** access to every directory a `file` source
-watches and **write** access to every directory a `file` sink or
-`logging.file` writes to.
+The unit is hardened: no capabilities, a read-only view of the system with
+only its two directories writable, `/home` hidden, and IPv4, IPv6 and Unix
+sockets only. Widen it with a drop-in (`systemctl edit logwisp`) rather than
+editing the unit:
+
+- A `file` sink or `logging.file` elsewhere: `ReadWritePaths=/srv/logs`
+- A `file` source under `/home`: `ProtectHome=read-only`
+- A port below 1024: `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` and
+  `AmbientCapabilities=CAP_NET_BIND_SERVICE`
+
+The service must read every key, credentials and password file it names.
+Create a credentials file with its owner and mode first; `lw auth` keeps
+both:
+
+```bash
+sudo install -m 0600 -o logwisp -g logwisp /dev/null /etc/logwisp/users.toml
+sudo lw auth add-user -credentials /etc/logwisp/users.toml -user <name> \
+  -password-file <file>
+sudo systemctl reload logwisp
+```
 
 ### FreeBSD (rc.d)
 
-`/usr/local/etc/rc.d/logwisp`:
-
-```sh
-#!/bin/sh
-
-# PROVIDE: logwisp
-# REQUIRE: DAEMON NETWORKING
-# KEYWORD: shutdown
-
-. /etc/rc.subr
-
-name="logwisp"
-rcvar="${name}_enable"
-pidfile="/var/run/${name}.pid"
-procname="/usr/local/bin/logwisp"
-command="/usr/sbin/daemon"
-command_args="-p ${pidfile} -f ${procname} -c /usr/local/etc/logwisp/logwisp.toml"
-
-load_rc_config $name
-: ${logwisp_enable:="NO"}
-
-run_rc_command "$1"
-```
-
-Setup:
+- `$SYSCONFDIR/logwisp/logwisp.toml.sample`, copied to `logwisp.toml` when
+  none exists and `DESTDIR` is empty
+- `$PREFIX/etc/rc.d/logwisp`: runs `lw` through `daemon(8)` as
+  `logwisp_user`, with its output in syslog under the tag `logwisp`;
+  `service logwisp reload` sends `SIGHUP`
 
 ```bash
-sudo chmod +x /usr/local/etc/rc.d/logwisp
-sudo pw useradd logwisp -d /nonexistent -s /usr/sbin/nologin
-sudo mkdir -p /usr/local/etc/logwisp /var/log/logwisp
-sudo chown logwisp:logwisp /var/log/logwisp
-sudo sysrc logwisp_enable="YES"
+sudo pw useradd logwisp -d /nonexistent -s /usr/sbin/nologin -c "LogWisp log transport"
+sudo sysrc logwisp_enable=YES
 sudo service logwisp start
 ```
 
-## Directory Layout
+rc.conf variables:
 
-| Purpose | Linux | FreeBSD |
-|---------|-------|---------|
-| Binary | `/usr/local/bin/logwisp` | `/usr/local/bin/logwisp` |
-| Configuration | `/etc/logwisp/` | `/usr/local/etc/logwisp/` |
-| TLS material | `/etc/logwisp/tls/` | `/usr/local/etc/logwisp/tls/` |
-| Working directory | `/var/lib/logwisp/` | `/var/db/logwisp/` |
-| Application logs | `/var/log/logwisp/` | `/var/log/logwisp/` |
+- `logwisp_enable`: `YES` to start at boot (default `NO`)
+- `logwisp_config`: the configuration (default
+  `/usr/local/etc/logwisp/logwisp.toml`)
+- `logwisp_user`: the account (default `logwisp`)
+- `logwisp_chdir`: the working directory (default `/var/db/logwisp`, created
+  for `logwisp_user` when missing)
+- `logwisp_args`: extra `lw` options, e.g. `--logging.level=debug` (default
+  empty); `logwisp_flags` goes to `daemon(8)`, not to `lw`
 
-Key files should be mode `0600` and owned by the service account.
+### Uninstall
+
+`sudo make uninstall` (with the `PREFIX` used to install) removes everything
+`make install` wrote except `$SYSCONFDIR/logwisp`, which holds configuration
+and credentials. Remove that, the working directories and the account by
+hand.
+
+## Container Image
+
+The `Dockerfile` builds `lw` in a Go builder and copies it alone, static and
+stripped, into `scratch`: `/lw` running as UID 65532, plus the CA bundle that
+TLS dialers without a `ca_file` verify against. There is no shell and no
+configuration in the image.
+
+```bash
+make image                    # logwisp:dev; IMAGE=, IMAGE_TAG= rename it
+make image-check
+```
+
+`image-check` runs the image the way it should run in production: read-only,
+`--network none`, `--cap-drop ALL`, `no-new-privileges`, as 65532. It prints
+`--version`, then runs `--check` on `config/logwisp.toml` (or
+`IMAGE_CHECK_CONFIG`) mounted read-only.
+
+Building behind a proxy:
+
+- A TLS-intercepting proxy: `make image BUILD_CA=/path/to/ca-bundle.pem`.
+  The bundle reaches only the module download, as a BuildKit secret.
+- An explicit proxy: pass Docker's predefined proxy build arguments, which
+  never reach an image layer, e.g.
+  `IMAGE_BUILD_FLAGS='--network host --build-arg HTTPS_PROXY=http://127.0.0.1:<port>'`.
+- `CONTAINER_ENGINE=podman` works too.
+
+### Running it securely
+
+```bash
+docker run -d --name logwisp \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -v /etc/logwisp:/etc/logwisp:ro \
+  -v /srv/logwisp/secrets:/run/secrets:ro \
+  -p 8443:8443 \
+  -e LOGWISP_LOGGING_LEVEL=info \
+  logwisp:<tag> -c /etc/logwisp/logwisp.toml
+```
+
+- Configuration: mount it read-only at `/etc/logwisp` and name it with `-c`.
+  The files must be readable by UID 65532.
+- Scalar settings: environment variables, `LOGWISP_<PATH>`.
+- Pipelines without a file: the pipeline variables, in the `--source` and
+  `--sink` syntax (see [CLI](cli.md)); they replace the file's pipelines:
+
+  ```bash
+  -e LOGWISP_PIPELINE=relay \
+  -e LOGWISP_SOURCE=tcp_chain,port=9000,tls.enabled=true,tls.cert_file=/run/secrets/tls.crt,tls.key_file=/run/secrets/tls.key,auth.type=scram,auth.credentials_file=/run/secrets/users.toml \
+  -e LOGWISP_SINK=console
+  ```
+
+- Secrets: only as mounted files, at `/run/secrets` (Docker or Compose
+  secrets, a Kubernetes secret volume), named by `tls.key_file`,
+  `auth.credentials_file` and `auth.password_file`. Never put a password in
+  the environment: `docker inspect` and `/proc` show it. Make each file
+  readable by 65532 only (`chown 65532` and mode `0400`).
+- Privileges: keep the image's non-root user, a read-only root filesystem,
+  `--cap-drop ALL` and `no-new-privileges`. Without capabilities a listener
+  needs a port of 1024 or above; publish it on any host port.
+- Listeners bind `0.0.0.0` inside the container; `127.0.0.1` would be
+  unreachable through `-p`.
+- Writable data: a `file` sink or `logging.file` needs a volume writable by
+  65532; nothing else is written.
+- Reload: `docker kill -s HUP logwisp`.
+- `lw auth` runs from the image too, with directories writable by 65532.
+  Keep the generated passwords out of the directory the server mounts: it
+  needs only `users.toml` (verifiers) and the TLS files, while a `.pass` file
+  is the client's plaintext password.
+
+  ```bash
+  docker run --rm --read-only --cap-drop ALL --network none \
+    -v /srv/logwisp/secrets:/work -v /srv/logwisp/passwords:/pw logwisp:<tag> \
+    auth add-user -credentials /work/users.toml -user <name> -password-file /pw/<name>.pass
+  ```
+
+## Packaging Status
+
+The foundation for distribution packages is in place:
+
+- the `lw` binary name, and `make install` with `DESTDIR`, `PREFIX` and
+  `SYSCONFDIR`
+- the `doc/lw.1` manual
+- service files in `deploy/package/`: `logwisp.service`, `logwisp.sysusers`,
+  `logwisp.tmpfiles` and the FreeBSD `logwisp.rc`
+- skeletons: `deploy/package/arch/PKGBUILD` and a `sysutils/logwisp` port in
+  `deploy/package/freebsd/`
+
+Still missing: tagged, signed release tarballs; the module rename to
+`github.com/lixenwraith/logwisp`, which `go install` and FreeBSD's
+`go:modules` need; finishing and submitting the AUR package and the port;
+Debian packaging. [To Do](todo.md) has the steps.
 
 ## Verification
 
 ```bash
-logwisp --version
-
-# start in the foreground with debug logging and watch pipelines come up
-logwisp -c /etc/logwisp/logwisp.toml --logging.level=debug --logging.output=stderr
-
+lw --version
+lw -c /etc/logwisp/logwisp.toml --logging.level=debug --logging.output=stderr
 sudo systemctl status logwisp      # Linux
 sudo service logwisp status        # FreeBSD
 ```
 
-Expect `Created source instance`, `Created sink instance`, and
-`Starting pipeline` for each configured pipeline. There is no validate-only
-mode; see [Operations](operations.md#checking-a-configuration).
+Expect `Created source instance`, `Created sink instance` and
+`Starting pipeline` for each pipeline. To validate a configuration without
+starting it, run `lw --check -c FILE`; see
+[Operations](operations.md#checking-a-configuration).
 
 ## Test Scripts
 
-End-to-end scripts under `test/` run against a local build:
+The end-to-end scripts in `test/` run against `bin/lw` and share
+`test/lib.sh`. `make e2e` runs each with `--auto` and reports it as PASS, FAIL
+or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
 
-```bash
-make
-./test/chain-test.sh --auto             # two independent relay pipelines
-./test/chain-aggregate-test.sh --auto   # fan-in: both edges into one pipeline
-./test/mtls-chain-test.sh --auto        # the same fan-in under mTLS
-./test/scram-chain-test.sh --auto       # SCRAM logins on every network plugin
-./test/passthrough-test.sh              # file source relays a wide envelope intact
+- Modes:
+  - without flags: start the daemons, print a guide of the ports and one-line
+    commands (run `. test/run-X/env` first for `$LW`, `$CA` and the token
+    helper), and wait for Ctrl-C
+  - `--auto`: run the checks and tear down; `--keep` leaves the daemons up
+    after a pass
+  - `--follow`: show only WARN, ERROR and key events from the daemons
+- Daemons log only to `test/run*/log/NAME.out`, never to the terminal.
+- Colour only on a terminal; `NO_COLOR` turns it off, `FORCE_COLOR=1` on.
+- Exit status: 0 all passed, 1 a failure, 77 skipped.
+- Each script owns a port range and a gitignored run directory:
+
+```
+15801-15804  chain-test.sh, chain-aggregate-test.sh  test/run/
+(no ports)   passthrough-test.sh                     test/run/passthrough/
+15811-15814  mtls-chain-test.sh                      test/run-mtls/
+15821-15825  scram-chain-test.sh                     test/run-scram/
+15831-15832  scram-proxy-test.sh                     test/run-proxy/
+15851-15855  ipv6-test.sh                            test/run-ipv6/
+15871-15879  deploy-test.sh                          test/run-deploy/
 ```
 
-Without `--auto` the chain scripts run the relay in the foreground for
-interactive inspection. They need bash 5+, coreutils, and curl (the mTLS and
-SCRAM scripts also openssl). The plain chain scripts bind ports 15801–15804 and
-write to `test/run/`; the mTLS script uses 15811–15814 and `test/run-mtls/`, the
-SCRAM script 15821–15825 and `test/run-scram/`. The pass-through test binds
-nothing.
-
-## Uninstall
-
-### Linux
-
-```bash
-sudo systemctl disable --now logwisp
-sudo rm /usr/local/bin/logwisp /etc/systemd/system/logwisp.service
-sudo systemctl daemon-reload
-sudo rm -rf /etc/logwisp /var/lib/logwisp /var/log/logwisp
-sudo userdel logwisp
-```
-
-### FreeBSD
-
-```bash
-sudo service logwisp stop
-sudo sysrc -x logwisp_enable
-sudo rm /usr/local/bin/logwisp /usr/local/etc/rc.d/logwisp
-sudo rm -rf /usr/local/etc/logwisp /var/db/logwisp /var/log/logwisp
-sudo pw userdel logwisp
-```
+- `chain-test.sh`: two edges into a relay, one pipeline per chain transport;
+  ports 15801-15804
+- `chain-aggregate-test.sh`: the same edges, with the relay fanning both into
+  both sinks; ports 15801-15804
+- `passthrough-test.sh`: `file` source to `file` sink, a wide envelope byte
+  for byte (`raw = true`) and, parsed, with no key dropped; no ports
+- `mtls-chain-test.sh`: mTLS chain edges and viewers, allow lists, node
+  binding; ports 15811-15814
+- `scram-chain-test.sh`: SCRAM chain edges and viewers with `lw auth`
+  credentials; ports 15821-15825
+- `scram-proxy-test.sh`: browser and CLI logins to an `http` sink behind a
+  TLS-terminating proxy; ports 15831-15832; the browser checks skip without
+  node and playwright's Chromium: the headless shell for the scenarios with
+  cookies, full Chromium for the profile that blocks them
+- `ipv6-test.sh`: a relay on `::1` over both chain transports, IPv6 SANs,
+  per-family listeners; ports 15851-15855; skips (exit 77) without an IPv6
+  loopback
+- `deploy-test.sh`: the configurations `deploy/lw-deploy.sh` writes, deployed
+  and checked; ports 15871-15879

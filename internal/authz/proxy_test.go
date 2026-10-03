@@ -177,7 +177,7 @@ func TestBrowserSessionBehindProxy(t *testing.T) {
 }
 
 // Behind a proxy logwisp never sees the certificate a client binds to, so
-// only unbound proofs (logwisp auth token -unbound) log in.
+// only unbound proofs (lw auth token -unbound) log in.
 func TestOnlyUnboundLoginsBehindProxy(t *testing.T) {
 	f := newFixture(t)
 	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1"}}, f.serverTLS, RoleListener, HTTP)

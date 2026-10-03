@@ -40,8 +40,19 @@ func WriteFile(t testing.TB, path, contents string) {
 	}
 }
 
-// PKI is a throwaway CA with a server certificate for 127.0.0.1 and one client
-// certificate, written as PEM files for plugins that load TLS from disk.
+// RequireIPv6 skips a test on a host without an IPv6 loopback
+func RequireIPv6(t testing.TB) {
+	t.Helper()
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	ln.Close()
+}
+
+// PKI is a throwaway CA with a server certificate for 127.0.0.1 and ::1 and
+// one client certificate, written as PEM files for plugins that load TLS from
+// disk.
 type PKI struct {
 	CA, ServerCert, ServerKey, ClientCert, ClientKey string
 
@@ -80,7 +91,7 @@ func NewPKI(t testing.TB, clientCN string) *PKI {
 }
 
 // Leaf issues another certificate from the same CA: a client certificate, or
-// a server certificate valid for 127.0.0.1.
+// a server certificate valid for 127.0.0.1 and ::1.
 func (p *PKI) Leaf(t testing.TB, name, cn string, client bool) (certFile, keyFile string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -93,7 +104,7 @@ func (p *PKI) Leaf(t testing.TB, name, cn string, client bool) (certFile, keyFil
 		SerialNumber: big.NewInt(p.serial), Subject: pkix.Name{CommonName: cn},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 	}
 	if client {
 		tmpl.ExtKeyUsage, tmpl.IPAddresses = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, nil

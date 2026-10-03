@@ -137,12 +137,10 @@ func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent
 		// Use flow's formatter for consistent formatting
 		if adapter, ok := hg.formatter.(*format.FormatterAdapter); ok {
 			// Customize flags for heartbeat if needed
-			customFlags := int64(0)
+			// The formatter shows a timestamp unless told otherwise
+			customFlags := formatter.FlagDefault
 			if !hg.config.IncludeTimestamp {
-				// Remove timestamp flag if not wanted
-				customFlags = formatter.FlagShowLevel
-			} else {
-				customFlags = formatter.FlagDefault
+				customFlags = formatter.FlagShowLevel | formatter.FlagNoTimestamp
 			}
 			payload, err = adapter.FormatWithFlags(entry, customFlags)
 		} else {

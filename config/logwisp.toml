@@ -10,7 +10,7 @@
 ### http_client/tcp_client sinks are not available in this version. TLS is
 ### available on every network source and sink (the [...tls] blocks below), and
 ### the [...auth] blocks authenticate peers by certificate (mtls) or password
-### (scram; credentials via `logwisp auth`). Unknown keys anywhere in this file
+### (scram; credentials via `lw auth`). Unknown keys anywhere in this file
 ### or in any plugin config are rejected at startup.
 ###
 ### Environment overrides use the LOGWISP_ prefix
@@ -87,7 +87,7 @@ name = "default"
 # interval_ms = 1000                    # Minimum 100
 # include_timestamp = false
 # include_stats = false
-# format = "txt"                        # txt|json|raw ("comment" is rejected)
+# format = "txt"                        # accepted, no effect: heartbeats use flow.format
 
 ###============================================================================
 ### TLS (shared shape; applies to every network source and sink)
@@ -119,7 +119,7 @@ name = "default"
 ### On the http sink the block gates stream_path AND status_path.
 ### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
 ###   mtls  authorizes the client certificate; REQUIRES tls.client_auth.
-###   scram admits the users in credentials_file (`logwisp auth add-user`).
+###   scram admits the users in credentials_file (`lw auth add-user`).
 ### Dialers    (tcp_chain/http_chain sinks):
 ###   mtls  pins the server identity.
 ###   scram logs in as username with the password in password_file.
@@ -192,7 +192,7 @@ from = "end"                            # "end" or "start" of a newly discovered
 # id = "chain_in"
 # type = "tcp_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only
+# host = "0.0.0.0"                      # IPv4 only; "::" or "::1": IPv6 only
 # port = 9440                           # Required
 # buffer_size = 1000
 # max_connections = 0                   # 0 = unlimited
@@ -212,14 +212,14 @@ from = "end"                            # "end" or "start" of a newly discovered
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
-# credentials_file = ""                 # scram: written by `logwisp auth add-user`
+# credentials_file = ""                 # scram: written by `lw auth add-user`
 
 ## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
 # [[pipelines.plugin_sources]]
 # id = "hchain_in"
 # type = "http_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"
+# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
 # port = 9441                           # Required
 # ingest_path = "/ingest"               # Must start with "/"
 # buffer_size = 1000
@@ -238,7 +238,7 @@ from = "end"                            # "end" or "start" of a newly discovered
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
-# credentials_file = ""                 # scram: written by `logwisp auth add-user`
+# credentials_file = ""                 # scram: written by `lw auth add-user`
 # token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 
 ###============================================================================
@@ -271,14 +271,14 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # buffer_size = 1000
 # flush_interval_ms = 100
 
-## HTTP sink (SSE streaming server + JSON status endpoint; IPv4 clients only)
+## HTTP sink (SSE streaming server + JSON status endpoint)
 ## Without an auth block both endpoints are UNAUTHENTICATED and the stream sends
 ## Access-Control-Allow-Origin: *. Bind to a trusted interface.
 # [[pipelines.plugin_sinks]]
 # id = "http_out"
 # type = "http"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"
+# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
 # port = 8081                           # Required
 # stream_path = "/stream"               # Must start with "/"
 # status_path = "/status"               # Must differ from stream_path
@@ -299,16 +299,16 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
-# credentials_file = ""                 # scram: log in with `logwisp auth token`
+# credentials_file = ""                 # scram: log in with `lw auth token`
 # token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 # trusted_proxies = []                  # scram: proxies ending the browsers' TLS; tls may then be off
 
-## TCP sink (streaming server, IPv4 clients only)
+## TCP sink (streaming server)
 # [[pipelines.plugin_sinks]]
 # id = "tcp_out"
 # type = "tcp"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"
+# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
 # port = 9090                           # Required
 # buffer_size = 1000
 # client_buffer_size = 256
@@ -327,7 +327,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
-# credentials_file = ""                 # scram: readers use `logwisp auth stream`
+# credentials_file = ""                 # scram: readers use `lw auth stream`
 
 ## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
 ## Do NOT point a chain sink at a chain source in the SAME pipeline: entries
@@ -336,7 +336,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # id = "chain_out"
 # type = "tcp_chain"
 # [pipelines.plugin_sinks.config]
-# host = "10.0.0.1"                     # Required
+# host = "10.0.0.1"                     # Required; IPv6 bare, e.g. "fd00::1"
 # port = 9440                           # Required
 # node = ""                             # origin label, default hostname; preserved across hops
 # buffer_size = 1000
@@ -367,7 +367,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # id = "hchain_out"
 # type = "http_chain"
 # [pipelines.plugin_sinks.config]
-# host = "10.0.0.1"                     # Required
+# host = "10.0.0.1"                     # Required; IPv6 bare, e.g. "fd00::1"
 # port = 9441                           # Required
 # ingest_path = "/ingest"
 # node = ""                             # origin label, default hostname; preserved across hops

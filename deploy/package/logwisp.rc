@@ -1,0 +1,47 @@
+#!/bin/sh
+
+# PROVIDE: logwisp
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+
+# Add to /etc/rc.conf (sysrc logwisp_enable=YES):
+#   logwisp_enable  "YES" starts LogWisp at boot (default "NO")
+#   logwisp_config  configuration file (default %%PREFIX%%/etc/logwisp/logwisp.toml)
+#   logwisp_user    account lw runs as (default "logwisp")
+#   logwisp_chdir   working directory (default /var/db/logwisp)
+#   logwisp_args    extra lw options, e.g. --logging.level=debug (default empty);
+#                   rc.subr hands logwisp_flags to daemon(8), not to lw
+
+. /etc/rc.subr
+
+name=logwisp
+rcvar=logwisp_enable
+desc="LogWisp log transport"
+
+load_rc_config $name
+
+: ${logwisp_enable:="NO"}
+: ${logwisp_config:="%%PREFIX%%/etc/logwisp/logwisp.toml"}
+: ${logwisp_user:="logwisp"}
+: ${logwisp_chdir:="/var/db/logwisp"}
+: ${logwisp_args:=""}
+
+# daemon(8) records the child's pid, so stop and reload (SIGHUP) signal lw
+# itself, and sends its output to syslog under the tag logwisp.
+pidfile="/var/run/${name}/${name}.pid"
+procname="%%BINDIR%%/lw"
+command="/usr/sbin/daemon"
+command_args="-f -S -T ${name} -p ${pidfile} ${procname} -c ${logwisp_config} ${logwisp_args}"
+required_files="${logwisp_config}"
+extra_commands="reload"
+start_precmd="${name}_prestart"
+
+# rc.subr starts daemon(8) as logwisp_user, which must own the pidfile directory.
+# An existing logwisp_chdir keeps its owner: it may be a shared directory.
+logwisp_prestart()
+{
+	install -d -o "${logwisp_user}" -m 0755 "/var/run/${name}"
+	[ -d "${logwisp_chdir}" ] || install -d -o "${logwisp_user}" -m 0750 "${logwisp_chdir}"
+}
+
+run_rc_command "$1"

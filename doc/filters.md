@@ -12,11 +12,11 @@ patterns = ["ERROR", "WARN"]
 
 ## Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `type` | string | `include` | `include` (only matches pass) or `exclude` (matches are dropped) |
-| `logic` | string | `or` | `or` (any pattern matches) or `and` (every pattern matches) |
-| `patterns` | []string | `[]` | Go RE2 regular expressions |
+- `type`, string, default `include`: `include` (only matches pass) or
+  `exclude` (matches are dropped).
+- `logic`, string, default `or`: `or` (any pattern matches) or `and` (every
+  pattern matches).
+- `patterns`, []string, default `[]`: Go RE2 regular expressions.
 
 A filter with no patterns passes everything. Invalid patterns fail at startup
 with the filter index and the offending pattern in the message.
@@ -33,10 +33,8 @@ Empty parts are omitted, so an entry with no detected level matches
 `"<source> <message>"`. This means a pattern can target the source name or the
 level as easily as the message body:
 
-| Pattern | Matches |
-|---------|---------|
-| `"^app\\.log "` | Entries whose source is `app.log` |
-| `"ERROR"` | Level `ERROR`, or the word `ERROR` anywhere in the message |
+- `"^app\\.log "` matches entries whose source is `app.log`.
+- `"ERROR"` matches level `ERROR`, or the word `ERROR` anywhere in the message.
 
 The structured `fields` payload is **not** part of the match text.
 
@@ -121,15 +119,13 @@ so later ones evaluate fewer entries.
 Go's RE2 syntax. No backreferences and no lookaround — RE2 guarantees linear
 time, which is exactly what you want in a log hot path.
 
-| Need | Pattern |
-|------|---------|
-| Literal substring | `ERROR` |
-| Case-insensitive | `(?i)error` |
-| Whole word | `\\berror\\b` |
-| Alternation | `ERROR\|WARN\|FATAL` |
-| Character class | `[0-9]{3}` |
-| Anchors | `^ERROR`, `ERROR$` |
-| Any characters | `.*exception.*` |
+- Literal substring: `ERROR`
+- Case-insensitive: `(?i)error`
+- Whole word: `\berror\b`
+- Alternation: `ERROR|WARN|FATAL`
+- Character class: `[0-9]{3}`
+- Anchors: `^ERROR`, `ERROR$`
+- Any characters: `.*exception.*`
 
 Remember that TOML basic strings process escapes, so a regex backslash needs
 doubling: `"\\berror\\b"`. TOML literal strings avoid the issue:
@@ -137,7 +133,7 @@ doubling: `"\\berror\\b"`. TOML literal strings avoid the issue:
 
 Anchors apply to the assembled match text, which begins with the source name —
 so `^ERROR` will not match an entry whose source is non-empty. Use
-`\\bERROR\\b` instead unless you mean to anchor on the source.
+`\bERROR\b` instead unless you mean to anchor on the source.
 
 ## Common Recipes
 

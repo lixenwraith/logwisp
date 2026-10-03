@@ -1,0 +1,46 @@
+# Maintainer: <name> <email>
+# Skeleton: source and checksum wait for a tagged release; run namcap and
+# makepkg --printsrcinfo > .SRCINFO before publishing to the AUR.
+
+pkgname=logwisp
+pkgver=0.21.0
+pkgrel=1
+pkgdesc='Pipeline-based log transport with TLS and SCRAM authentication'
+arch=('x86_64' 'aarch64')
+url='https://github.com/lixenwraith/logwisp'
+license=('BSD-3-Clause')
+depends=('glibc')
+makedepends=('go')
+backup=('etc/logwisp/logwisp.toml')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export GOPATH="$srcdir/gopath"
+  go mod download -modcacherw
+}
+
+# The Go package guidelines' flags; -linkmode=external goes through GO_LDFLAGS
+# because the Makefile's own -ldflags (the version) would override GOFLAGS'.
+build() {
+  cd "$pkgname-$pkgver"
+  export GOPATH="$srcdir/gopath"
+  export CGO_CPPFLAGS="$CPPFLAGS"
+  export CGO_CFLAGS="$CFLAGS"
+  export CGO_CXXFLAGS="$CXXFLAGS"
+  export CGO_LDFLAGS="$LDFLAGS"
+  export GOFLAGS='-buildmode=pie -trimpath -mod=readonly -modcacherw'
+  make build VERSION="$pkgver" GIT_COMMIT="v$pkgver" GO_LDFLAGS='-linkmode=external'
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export GOPATH="$srcdir/gopath"
+  go test ./...
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  make install DESTDIR="$pkgdir" PREFIX=/usr SYSCONFDIR=/etc
+}

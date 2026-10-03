@@ -24,4 +24,3 @@ type TransportEvent struct {
 	// Structured entry for re-serializing sinks (chain links). Zero Time => absent
 	Entry LogEntry
 }
-

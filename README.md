@@ -64,11 +64,11 @@ exponential backoff and jitter.
   stream and status endpoints, and lets a dialer pin the server it talks to
 - Password authentication (Argon2id-SCRAM) on the same block: listeners hold
   verifiers, never passwords, and do no KDF work; every login outside proxy
-  mode is bound to the
-  listener's certificate, so no relay presenting another one can use it; HTTP
-  listeners issue short-lived bearer tokens. `logwisp auth` manages credentials
-  files and logs viewers in; behind a site's TLS-terminating proxy, browsers
-  log in through a shipped login page and a dependency-free JS client
+  mode is bound to the listener's certificate, so no relay presenting another
+  one can use it; HTTP listeners issue short-lived bearer tokens. `lw auth`
+  manages credentials files and logs viewers in; behind a site's
+  TLS-terminating proxy, browsers log in through a shipped login page and a
+  dependency-free JS client
 - Node binding: a chain source can label entries from the sender's certificate
   identity or username instead of from what the sender claims, so origin
   attribution is not forgeable
@@ -82,22 +82,30 @@ authentication designs for the rationale and what is deliberately left out.
 
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [Installation](doc/installation.md) | Building, installing, running as a service |
-| [Architecture](doc/architecture.md) | Component model, data flow, concurrency, back-pressure |
-| [Configuration](doc/configuration.md) | TOML structure, precedence, environment and CLI overrides |
-| [Sources](doc/sources.md) | Every input plugin and its options |
-| [Sinks](doc/sinks.md) | Every output plugin and its options |
-| [Filters](doc/filters.md) | Pattern-based inclusion and exclusion |
-| [Formatters](doc/formatters.md) | Output shaping and sanitization |
-| [Chaining](doc/chaining.md) | Multi-node topologies and the chain wire protocol |
-| [Networking](doc/networking.md) | Listeners, dialers, timeouts, connection limits |
-| [Security](doc/security.md) | TLS, mTLS, and peer authorization; threat model and current limits |
-| [mTLS Authentication](doc/mtls-auth-plan.md) | Design and rationale for certificate-based authorization |
-| [Password Authentication](doc/scram-auth-plan.md) | Design and rationale for Argon2id-SCRAM authentication; mTLS hardening |
-| [CLI](doc/cli.md) | Flags, signals, exit codes, `logwisp auth` |
-| [Operations](doc/operations.md) | Running, monitoring, tuning, troubleshooting |
+- [Installation](doc/installation.md): building, installing, services,
+  the container image, packaging
+- [Deployment](doc/deployment.md): `deploy/lw-deploy.sh` for edges,
+  aggregators, containers, services, jails
+- [Architecture](doc/architecture.md): component model, data flow,
+  concurrency, back-pressure
+- [Configuration](doc/configuration.md): TOML structure, precedence,
+  environment and CLI overrides
+- [Sources](doc/sources.md) and [Sinks](doc/sinks.md): every plugin and its
+  options
+- [Filters](doc/filters.md) and [Formatters](doc/formatters.md): pattern
+  matching, output shaping and sanitization
+- [Chaining](doc/chaining.md): multi-node topologies and the wire protocol
+- [Networking](doc/networking.md): listeners, dialers, timeouts, limits
+- [Security](doc/security.md): TLS, mTLS, peer authorization, threat model
+- Design notes: [mTLS](doc/mtls-auth-plan.md) and
+  [password](doc/scram-auth-plan.md) authentication
+- [CLI](doc/cli.md): flags, pipeline specifications, signals, exit codes,
+  `lw auth`; also the `lw(1)` manual, [`doc/lw.1`](doc/lw.1)
+- [Operations](doc/operations.md): running, monitoring, tuning,
+  troubleshooting
+- [To Do](doc/todo.md): planned work in priority order: network access
+  control and the PROXY protocol, a hardening review of the config libraries,
+  packaging
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](config/logwisp.toml).
@@ -105,8 +113,12 @@ A fully annotated configuration covering every option ships as
 ## Quick Start
 
 ```bash
-make
+make build                      # plain `make` lists the targets
+./bin/lw --source 'file,directory=/var/log/myapp,pattern=*.log' \
+    --format json,sanitizer_policy=json --sink console
 ```
+
+Or as a configuration file:
 
 ```toml
 # logwisp.toml
@@ -132,11 +144,23 @@ target = "stdout"
 ```
 
 ```bash
-logwisp -c logwisp.toml
+./bin/lw -c logwisp.toml
 ```
 
-Running with no configuration file starts a self-demonstrating pipeline: a
-synthetic generator writing JSON to stdout.
+Running with neither starts a self-demonstrating pipeline: a synthetic
+generator writing JSON to stdout.
+
+In a container, read-only and without capabilities:
+
+```bash
+make image
+docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+    -v /etc/logwisp:/etc/logwisp:ro logwisp:dev -c /etc/logwisp/logwisp.toml
+```
+
+`sudo make install` installs the binary, the manual, a sample configuration
+and a systemd unit or FreeBSD rc.d script; see
+[Installation](doc/installation.md).
 
 ## System Requirements
 
@@ -144,7 +168,8 @@ synthetic generator writing JSON to stdout.
 - **Architecture**: amd64
 - **Go**: 1.27.1+ to build from source
 
-Network sources and sinks bind and dial over IPv4 only.
+Network sources and sinks use IPv4 or IPv6, following the address family of
+the configured host.
 
 ## License
 

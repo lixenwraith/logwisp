@@ -36,24 +36,25 @@ Chained entries carry a `node` label identifying where they originated.
   The label comes from the `node` option, defaulting to `os.Hostname()`.
 - A chain **source** either honours the sender's label or overrides it,
   according to `trust_node`:
-
-| `trust_node` | Behaviour |
-|--------------|-----------|
-| `true` (default) | Keep the label the sender declared; fall back to the remote address when absent |
-| `false` | Always overwrite with the sender's remote address |
+  - `true` (default): keep the label the sender declared; fall back to the
+    remote address when absent.
+  - `false`: always overwrite with the sender's remote address.
 
 Relays preserve `node`, so a label survives any number of hops and identifies
 the original producer rather than the last relay.
 
 With an `auth` block the source can instead bind the label to the sender's
 authenticated identity — its certificate identity under `mtls`, its username
-under `scram` — which overrides `trust_node` entirely:
+under `scram`. `assert` and `force` take the connection label over from
+`trust_node`; only `force` also overrides the per-entry labels.
+`auth.node_binding`:
 
-| `auth.node_binding` | Connection label | Per-entry `node` field |
-|---------------------|------------------|------------------------|
-| `none` | `trust_node` governs | `trust_node` governs |
-| `assert` | Must equal the identity, or the peer is rejected | `trust_node` governs |
-| `force` (default with an `auth` block) | The identity | Overwritten with the identity |
+- `none`: `trust_node` governs the connection label and the per-entry `node`
+  field.
+- `assert`: the connection label must equal the identity, or the peer is
+  rejected; `trust_node` governs the per-entry `node` field.
+- `force` (default with an `auth` block): the identity is the connection label
+  and overwrites every per-entry `node` field.
 
 Pick `force` at an ingest boundary you do not trust — it is the only setting
 where a compromised edge cannot mislabel its entries, including through the
@@ -116,13 +117,13 @@ binary ignores it and the dialer gives up after 10 s.
 
 Batches of NDJSON delivered by `POST`, with the preamble expressed as headers.
 
-| Header | Direction | Meaning |
-|--------|-----------|---------|
-| `X-Logwisp-Protocol` | request | Protocol version; must be `1` |
-| `X-Logwisp-Node` | request | Origin node label |
-| `Content-Type` | request | `application/x-ndjson` |
-| `Authorization` | request | `Bearer <token>`, under `scram` |
-| `X-Logwisp-Accepted` | response | Number of entries ingested |
+- Request headers
+  - `X-Logwisp-Protocol`: the protocol version; must be `1`.
+  - `X-Logwisp-Node`: the origin node label.
+  - `Content-Type`: `application/x-ndjson`.
+  - `Authorization`: `Bearer <token>`, under `scram`.
+- Response header
+  - `X-Logwisp-Accepted`: the number of entries ingested.
 
 Responses: `204` on success, `400` for a bad protocol version or a malformed
 body, `413` when the body cap is exceeded, `405` for a non-`POST` method, `401`
@@ -152,10 +153,14 @@ in at ingest.
 
 ## Delivery Semantics
 
-| Transport | Guarantee | Failure behaviour |
-|-----------|-----------|-------------------|
-| `tcp_chain` | Per-line, held across reconnects | Retries with exponential backoff plus ±20 % jitter until written or shutdown; back-pressure appears upstream as `total_dropped_by_sink` |
-| `http_chain` | At-least-once per batch | Retries transport errors, `408`, `429`, `5xx` and, under `scram`, failed logins and `401`; drops on any other non-2xx (`dropped_batches`) |
+- `tcp_chain`: per line, each held across reconnects.
+  - On failure it retries with exponential backoff plus ±20 % jitter until
+    the line is written or the sink shuts down.
+  - Back-pressure appears upstream as `total_dropped_by_sink`.
+- `http_chain`: at least once per batch.
+  - It retries transport errors, `408`, `429`, `5xx` and, under `scram`, failed
+    logins and `401`.
+  - It drops the batch on any other non-2xx, counted in `dropped_batches`.
 
 `http_chain` batches can be delivered twice when a successful request's response
 is lost. There is no de-duplication downstream; design your consumers to
@@ -266,5 +271,5 @@ optional, and entries are labelled with the username. See
   otherwise-idle links and their sessions warm.
 - **Ports** used by the bundled test scripts: `15801` tcp_chain ingest, `15802`
   http_chain ingest, `15803` tcp sink, `15804` http sink.
-- **Use `127.0.0.1`, not `localhost`**, when testing locally: all listeners and
-  dialers are IPv4-only, and `localhost` may resolve to `::1`.
+- **Dial the listener's own literal** when testing locally: a listener on
+  `127.0.0.1` takes IPv4 only, and `localhost` may resolve to `::1`.

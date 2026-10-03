@@ -27,10 +27,10 @@ target      = "stdout"
 buffer_size = 1000
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `target` | string | `stdout` | `stdout` or `stderr` |
-| `buffer_size` | int | `1000` | Sink input queue depth |
+Options, each as type and default:
+
+- `target` (string, `stdout`): `stdout` or `stderr`.
+- `buffer_size` (int, `1000`): sink input queue depth.
 
 > `split` is **not** a valid target for this sink and is rejected at startup.
 > Level-based splitting exists only for LogWisp's own application log
@@ -60,16 +60,16 @@ buffer_size       = 1000
 flush_interval_ms = 100
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `directory` | string | **required** | Output directory |
-| `name` | string | **required** | Base filename |
-| `max_size_mb` | int | `100` | Rotate when the active file reaches this size |
-| `max_total_size_mb` | int | `1000` | Cap across all rotated files |
-| `min_disk_free_mb` | int | `0` | Free-space floor before writing; `0` = no floor |
-| `retention_hours` | float | `168.0` | Delete rotated files older than this |
-| `buffer_size` | int | `1000` | Sink input queue depth |
-| `flush_interval_ms` | int | `100` | Forced flush interval |
+Options, each as type and default:
+
+- `directory` (string, **required**): output directory.
+- `name` (string, **required**): base filename.
+- `max_size_mb` (int, `100`): rotate when the active file reaches this size.
+- `max_total_size_mb` (int, `1000`): cap across all rotated files.
+- `min_disk_free_mb` (int, `0`): free-space floor before writing; `0` = none.
+- `retention_hours` (float, `168.0`): delete rotated files older than this.
+- `buffer_size` (int, `1000`): sink input queue depth.
+- `flush_interval_ms` (int, `100`): forced flush interval.
 
 > `min_disk_free_mb` has an unusual default. The constructor replaces only
 > *negative* values with `100`; leaving the key unset yields `0`, which means no
@@ -125,20 +125,25 @@ type  = "mtls"
 allow = ["viewer-01"]
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
-| `port` | int | **required** | Listen port |
-| `stream_path` | string | `/stream` | SSE endpoint; must start with `/` |
-| `status_path` | string | `/status` | Status endpoint; must start with `/` and differ from `stream_path` |
-| `buffer_size` | int | `1000` | Sink input queue depth |
-| `client_buffer_size` | int | `256` | Per-client send queue depth |
-| `write_timeout_ms` | int | `0` | Per-event write deadline; `0` = none |
-| `max_connections` | int | `0` | Concurrent stream cap; `0` = unlimited |
-| `login_page` | bool | `false` | Serve the browser login page at `/auth/login`; needs `auth.trusted_proxies` |
-| `viewer_page` | bool | `false` | Serve a minimal live viewer at `/auth/view`; needs `login_page` |
-| `tls` | table | — | Listener TLS; see [Security](security.md) |
-| `auth` | table | — | Client authentication (`mtls` or `scram`); see [Security](security.md#the-auth-block) |
+Options, each as type and default:
+
+- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the listener
+  keeps to its family ([Networking](networking.md#address-family)).
+- `port` (int, **required**): listen port.
+- `stream_path` (string, `/stream`): SSE endpoint; must start with `/`.
+- `status_path` (string, `/status`): status endpoint; must start with `/` and
+  differ from `stream_path`.
+- `buffer_size` (int, `1000`): sink input queue depth.
+- `client_buffer_size` (int, `256`): per-client send queue depth.
+- `write_timeout_ms` (int, `0`): per-event write deadline; `0` = none.
+- `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited.
+- `login_page` (bool, `false`): serve the browser login page at `/auth/login`;
+  needs `auth.trusted_proxies`.
+- `viewer_page` (bool, `false`): serve a minimal live viewer at `/auth/view`;
+  needs `login_page`.
+- `tls` (table): listener TLS; see [Security](security.md).
+- `auth` (table): client authentication (`mtls` or `scram`); see
+  [Security](security.md#the-auth-block).
 
 **Behaviour**
 
@@ -148,7 +153,7 @@ allow = ["viewer-01"]
 - With an `auth` block, one middleware gates **both** endpoints, with no body
   detail in a refusal. Under `mtls` a refused certificate gets `403`. Under
   `scram` a client logs in at `POST /auth`, which sits outside the gate (see
-  [`logwisp auth token`](cli.md#logwisp-auth)), and sends
+  [`lw auth token`](cli.md#lw-auth)), and sends
   `Authorization: Bearer <token>`; a missing, invalid or expired token gets
   `401` with `WWW-Authenticate`, a certificate that does not match the token's
   user `403`. A stream is checked when it connects and outlives its token; a
@@ -233,18 +238,20 @@ type  = "mtls"
 allow = ["viewer-01"]
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
-| `port` | int | **required** | Listen port |
-| `buffer_size` | int | `1000` | Sink input queue depth |
-| `client_buffer_size` | int | `256` | Per-client send queue depth |
-| `write_timeout_ms` | int | `5000` | Per-write deadline |
-| `keep_alive` | bool | `true` | Enable TCP keep-alive on accepted connections |
-| `keep_alive_period_ms` | int | `30000` | Keep-alive idle period |
-| `max_connections` | int | `0` | Concurrent connection cap; `0` = unlimited |
-| `tls` | table | — | Listener TLS |
-| `auth` | table | — | Client authentication (`mtls` or `scram`); see [Security](security.md#the-auth-block) |
+Options, each as type and default:
+
+- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the listener
+  keeps to its family ([Networking](networking.md#address-family)).
+- `port` (int, **required**): listen port.
+- `buffer_size` (int, `1000`): sink input queue depth.
+- `client_buffer_size` (int, `256`): per-client send queue depth.
+- `write_timeout_ms` (int, `5000`): per-write deadline.
+- `keep_alive` (bool, `true`): TCP keep-alive on accepted connections.
+- `keep_alive_period_ms` (int, `30000`): keep-alive idle period.
+- `max_connections` (int, `0`): concurrent connection cap; `0` = unlimited.
+- `tls` (table): listener TLS.
+- `auth` (table): client authentication (`mtls` or `scram`); see
+  [Security](security.md#the-auth-block).
 
 **Behaviour**
 
@@ -254,7 +261,7 @@ allow = ["viewer-01"]
   first: a hello carrying the login, then challenge, proof and final, all
   within 10 s, after which the stream follows on the same connection. `nc` and
   `openssl s_client` cannot do this; use
-  [`logwisp auth stream`](cli.md#logwisp-auth).
+  [`lw auth stream`](cli.md#lw-auth).
 - A write that misses its deadline means the kernel buffer stayed full for the
   whole timeout, so the client is disconnected immediately rather than retried.
 - A client whose send queue is full has that event dropped (`dropped_writes`)
@@ -300,20 +307,22 @@ cert_file = "/etc/logwisp/tls/client.crt"
 key_file  = "/etc/logwisp/tls/client.key"
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `host` | string | **required** | Downstream host |
-| `port` | int | **required** | Downstream port |
-| `node` | string | `os.Hostname()` | Origin label stamped on first-hop entries |
-| `buffer_size` | int | `1000` | Sink input queue depth |
-| `dial_timeout_ms` | int | `5000` | TCP connect timeout |
-| `write_timeout_ms` | int | `5000` | Per-write deadline |
-| `backoff_min_ms` | int | `500` | Reconnect backoff floor |
-| `backoff_max_ms` | int | `30000` | Reconnect backoff ceiling |
-| `keep_alive` | bool | `true` | Enable TCP keep-alive |
-| `keep_alive_period_ms` | int | `30000` | Keep-alive idle period |
-| `tls` | table | — | Dialer TLS; `cert_file`/`key_file` present a client identity |
-| `auth` | table | — | Server identity pinning (`mtls`) or a login (`scram`); see [Security](security.md#the-auth-block) |
+Options, each as type and default:
+
+- `host` (string, **required**): downstream host or address; an IPv6 one goes
+  bare (`::1`).
+- `port` (int, **required**): downstream port.
+- `node` (string, `os.Hostname()`): origin label stamped on first-hop entries.
+- `buffer_size` (int, `1000`): sink input queue depth.
+- `dial_timeout_ms` (int, `5000`): TCP connect timeout.
+- `write_timeout_ms` (int, `5000`): per-write deadline.
+- `backoff_min_ms` (int, `500`): reconnect backoff floor.
+- `backoff_max_ms` (int, `30000`): reconnect backoff ceiling.
+- `keep_alive` (bool, `true`): TCP keep-alive.
+- `keep_alive_period_ms` (int, `30000`): keep-alive idle period.
+- `tls` (table): dialer TLS; `cert_file`/`key_file` present a client identity.
+- `auth` (table): server identity pinning (`mtls`) or a login (`scram`); see
+  [Security](security.md#the-auth-block).
 
 **Behaviour**
 
@@ -380,21 +389,23 @@ cert_file = "/etc/logwisp/tls/client.crt"
 key_file  = "/etc/logwisp/tls/client.key"
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `host` | string | **required** | Downstream host |
-| `port` | int | **required** | Downstream port |
-| `ingest_path` | string | `/ingest` | Endpoint path; must start with `/` |
-| `node` | string | `os.Hostname()` | Origin label stamped on first-hop entries |
-| `buffer_size` | int | `1000` | Sink input queue depth |
-| `max_batch_count` | int | `100` | Flush after this many entries |
-| `max_batch_bytes` | int | `1048576` | Flush after this many bytes (1 MiB) |
-| `flush_interval_ms` | int | `1000` | Flush after this long |
-| `request_timeout_ms` | int | `10000` | Covers dial, write, and response |
-| `backoff_min_ms` | int | `500` | Retry backoff floor |
-| `backoff_max_ms` | int | `30000` | Retry backoff ceiling |
-| `tls` | table | — | Dialer TLS; `cert_file`/`key_file` present a client identity |
-| `auth` | table | — | Server identity pinning (`mtls`) or a login (`scram`); see [Security](security.md#the-auth-block) |
+Options, each as type and default:
+
+- `host` (string, **required**): downstream host or address; an IPv6 one goes
+  bare (`::1`).
+- `port` (int, **required**): downstream port.
+- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`.
+- `node` (string, `os.Hostname()`): origin label stamped on first-hop entries.
+- `buffer_size` (int, `1000`): sink input queue depth.
+- `max_batch_count` (int, `100`): flush after this many entries.
+- `max_batch_bytes` (int, `1048576`): flush after this many bytes (1 MiB).
+- `flush_interval_ms` (int, `1000`): flush after this long.
+- `request_timeout_ms` (int, `10000`): covers dial, write, and response.
+- `backoff_min_ms` (int, `500`): retry backoff floor.
+- `backoff_max_ms` (int, `30000`): retry backoff ceiling.
+- `tls` (table): dialer TLS; `cert_file`/`key_file` present a client identity.
+- `auth` (table): server identity pinning (`mtls`) or a login (`scram`); see
+  [Security](security.md#the-auth-block).
 
 **Behaviour**
 
@@ -407,10 +418,10 @@ key_file  = "/etc/logwisp/tls/client.key"
   sends `Authorization: Bearer <token>`. A failed login is retried like a
   transport error, holding the batch. The token is renewed ahead of its expiry;
   a `401` on ingest (the source reloaded) drops it and the retry logs in again.
-  A `403` is permanent. A
-  connection presenting a certificate other than the one the login was bound
-  to drops token and pin, and the retry logs in anew. A sink without `scram`
-  facing a `scram` source gets `401` and drops every batch.
+  A `403` is permanent. A connection presenting a certificate other than the
+  one the login was bound to drops token and pin, and the retry logs in anew.
+  A sink without `scram` facing a `scram` source gets `401` and drops every
+  batch.
 - Redirects are never followed; a `3xx` is permanent too. Following one would
   resend the batch wherever the response points, plaintext `http` included.
 - HTTP/2 is off by design; batched NDJSON POSTs gain nothing from it.

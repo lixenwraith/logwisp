@@ -39,9 +39,10 @@ const (
 
 // TCPChainSource accepts connections from upstream tcp_chain sinks and ingests NDJSON entries
 type TCPChainSource struct {
-	id     string
-	proxy  *session.Proxy
-	config *config.TCPChainSourceOptions
+	id      string
+	proxy   *session.Proxy
+	config  *config.TCPChainSourceOptions
+	network string
 
 	subscribers []chan core.LogEntry
 	listener    net.Listener
@@ -86,6 +87,10 @@ func NewTCPChainSourcePlugin(
 	if err := lconfig.Port(opts.Port); err != nil {
 		return nil, fmt.Errorf("port: %w", err)
 	}
+	network, err := core.Network(opts.Host)
+	if err != nil {
+		return nil, fmt.Errorf("host: %w", err)
+	}
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultChainSourceBufferSize
 	}
@@ -105,6 +110,7 @@ func NewTCPChainSourcePlugin(
 		id:          id,
 		proxy:       proxy,
 		config:      opts,
+		network:     network,
 		subscribers: make([]chan core.LogEntry, 0),
 		conns:       make(map[net.Conn]struct{}),
 		logger:      logger,
@@ -153,9 +159,9 @@ func (s *TCPChainSource) Start() error {
 		return err
 	}
 	addr := net.JoinHostPort(s.config.Host, strconv.FormatInt(s.config.Port, 10))
-	// IPv4-only. TLS-wrapped when configured; handshake runs explicitly in
-	// handleConn under tlsx.HandshakeTimeout, pre-hello.
-	ln, err := net.Listen("tcp4", addr)
+	// TLS-wrapped when configured; handshake runs explicitly in handleConn
+	// under tlsx.HandshakeTimeout, pre-hello.
+	ln, err := core.Listen(context.Background(), &net.ListenConfig{}, s.network, addr)
 	if err != nil {
 		s.auth.Close()
 		return fmt.Errorf("listen %s: %w", addr, err)

@@ -5,16 +5,18 @@ and its default ships as [`config/logwisp.toml`](../config/logwisp.toml).
 
 ## Configuration Precedence
 
-Sources are merged in this order, highest priority first:
-
-1. Command-line flags
-2. Environment variables
-3. Configuration file
-4. Built-in defaults
-
-The `pipelines` array is replaced wholesale, not merged: as soon as your file
-defines `[[pipelines]]`, the built-in default pipeline (and its default rate
-limit and formatter) disappears entirely.
+- Pipelines come from the first of these that defines any, replacing the rest
+  wholesale (the default pipeline's rate limit and formatter included):
+  1. pipeline flags: `--source`, `--sink`, ... ([CLI](cli.md#pipelines))
+  2. pipeline variables: `LOGWISP_SOURCE`, ...
+     ([CLI](cli.md#pipeline-variables))
+  3. the file's `[[pipelines]]`
+  4. the built-in default pipeline
+- Every other key merges, highest priority first:
+  1. command-line flags
+  2. environment variables
+  3. configuration file
+  4. built-in defaults
 
 ## File Location
 
@@ -36,11 +38,14 @@ runtime metadata and cannot be redirected by a `config_file` key inside the file
 
 ## Global Settings
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `quiet` | bool | `false` | Disable all application logging and console diagnostics |
-| `status_reporter` | bool | `true` | Emit a periodic status report every 30 s at DEBUG level |
-| `auto_reload` | bool | `false` | Watch the config file and reload pipelines on change |
+Top-level keys, each as type and default:
+
+- `quiet` (bool, `false`): disable all application logging and console
+  diagnostics.
+- `status_reporter` (bool, `true`): emit a status report every 30 s at DEBUG
+  level.
+- `auto_reload` (bool, `false`): watch the config file and reload pipelines on
+  change.
 
 `--version` prints version information and exits; it is not a persistent
 setting.
@@ -69,14 +74,12 @@ retention_hours   = 168.0
 
 ### Output modes
 
-| Mode | Behaviour |
-|------|-----------|
-| `file` | Files only |
-| `stdout` | Standard output only |
-| `stderr` | Standard error only |
-| `split` | DEBUG/INFO to stdout, WARN/ERROR to stderr |
-| `all` | Files plus split console |
-| `none` | No application logging |
+- `file`: files only.
+- `stdout`: standard output only.
+- `stderr`: standard error only.
+- `split`: DEBUG/INFO to stdout, WARN/ERROR to stderr.
+- `all`: files plus split console.
+- `none`: no application logging.
 
 `[logging.file]` applies only to the `file` and `all` modes.
 
@@ -131,32 +134,34 @@ port = 8080
 
 Every source and sink is a plugin instance with three keys:
 
-| Key | Meaning |
-|-----|---------|
-| `id` | Instance identifier, unique within the pipeline; appears in logs and stats |
-| `type` | Registered plugin type |
-| `config` | Plugin-specific table; see [Sources](sources.md) and [Sinks](sinks.md) |
+- `id`: instance identifier, unique within the pipeline; appears in logs and
+  stats.
+- `type`: registered plugin type.
+- `config`: plugin-specific table; see [Sources](sources.md) and
+  [Sinks](sinks.md).
 
 `config_file` is reserved on both structures for a future include mechanism and
 is not implemented.
 
 ### Flow stages
 
-| Block | Optional | Reference |
-|-------|----------|-----------|
-| `flow.rate_limit` | yes | below |
-| `flow.filters` | yes | [Filters](filters.md) |
-| `flow.format` | yes (defaults to `raw`) | [Formatters](formatters.md) |
-| `flow.heartbeat` | yes | below |
+Every stage is optional:
+
+- `flow.rate_limit`: see [Rate limiting](#rate-limiting).
+- `flow.filters`: see [Filters](filters.md).
+- `flow.format`: defaults to `raw`; see [Formatters](formatters.md).
+- `flow.heartbeat`: see [Heartbeat](#heartbeat).
 
 #### Rate limiting
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `rate` | float | `0` | Entries per second; `<= 0` disables the limiter entirely |
-| `burst` | float | `rate` | Token bucket capacity |
-| `policy` | string | `pass` | `pass` allows everything through, `drop` discards over-limit entries |
-| `max_entry_size_bytes` | int | `0` | Per-entry byte cap; `0` = unlimited |
+Options, each as type and default:
+
+- `rate` (float, `0`): entries per second; `<= 0` disables the limiter
+  entirely.
+- `burst` (float, `rate`): token bucket capacity.
+- `policy` (string, `pass`): `pass` allows everything through, `drop` discards
+  over-limit entries.
+- `max_entry_size_bytes` (int, `0`): per-entry byte cap; `0` = unlimited.
 
 Two behaviours are easy to trip over:
 
@@ -167,13 +172,16 @@ Two behaviours are easy to trip over:
 
 #### Heartbeat
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable heartbeat generation |
-| `interval_ms` | int | `1000` | Interval; minimum `100` |
-| `include_timestamp` | bool | `false` | `false` formats with level only, no timestamp |
-| `include_stats` | bool | `false` | Attach `beat_count` and measured `interval_ms` as fields |
-| `format` | string | `txt` | `txt`, `json`, or `raw` |
+Options, each as type and default:
+
+- `enabled` (bool, `false`): enable heartbeat generation.
+- `interval_ms` (int, `1000`): interval; minimum `100`.
+- `include_timestamp` (bool, `false`): `false` formats with level only, no
+  timestamp.
+- `include_stats` (bool, `false`): attach `beat_count` and measured
+  `interval_ms` as fields.
+- `format` (string, `txt`): `txt`, `json` or `raw` are accepted but have no
+  effect: heartbeats go through the flow's `format`, like every entry.
 
 Heartbeats are ordinary entries with source `heartbeat` and level `INFO`. They
 are generated after the flow's filter and rate-limit stages, so filters do not
@@ -186,14 +194,14 @@ suppress them, and they reach every sink in the pipeline.
 ## Environment Variables
 
 Environment overrides are derived from the TOML path: `.` becomes `_`, the
-result is uppercased, and `LOGWISP_` is prepended.
+result is uppercased, and `LOGWISP_` is prepended:
 
-| TOML path | Environment variable |
-|-----------|---------------------|
-| `quiet` | `LOGWISP_QUIET` |
-| `status_reporter` | `LOGWISP_STATUS_REPORTER` |
-| `logging.level` | `LOGWISP_LOGGING_LEVEL` |
-| `logging.file.directory` | `LOGWISP_LOGGING_FILE_DIRECTORY` |
+```
+quiet                   LOGWISP_QUIET
+status_reporter         LOGWISP_STATUS_REPORTER
+logging.level           LOGWISP_LOGGING_LEVEL
+logging.file.directory  LOGWISP_LOGGING_FILE_DIRECTORY
+```
 
 Migration: the old custom transform accidentally read bare names such as `QUIET`
 and `LOGGING_LEVEL`. Rename those variables to their prefixed forms; bare names
@@ -201,16 +209,17 @@ are now ignored. `LOGWISP_CONFIG_FILE` and `LOGWISP_CONFIG_DIR` still select the
 file directly.
 
 Only scalar paths that exist in the configuration schema can be set this way.
-Array elements cannot: `LOGWISP_PIPELINES_0_NAME` has no effect.
+Array elements cannot: `LOGWISP_PIPELINES_0_NAME` has no effect. A whole
+pipeline can: see [pipeline variables](cli.md#pipeline-variables).
 
 ## Command-Line Overrides
 
 Any scalar configuration path is settable as a flag using its TOML path:
 
 ```bash
-logwisp --logging.level=debug --status_reporter=false
-logwisp --logging.level debug          # space form also works
-logwisp --quiet                        # bare flag means true
+lw --logging.level=debug --status_reporter=false
+lw --logging.level debug          # space form also works
+lw --quiet                        # bare flag means true
 ```
 
 Unrecognized flags are reported on stderr before the logger exists and are then
@@ -220,11 +229,8 @@ ignored:
 Warning: unrecognized flags ignored: [pipelines.0.name]
 ```
 
-> Array-indexed paths are **not** settable from the command line.
-> `--pipelines.0.name=x`, `--pipelines.0.plugin_sinks.0.type=null`, and similar
-> flags are reported as unrecognized and ignored. Pipelines, sources, sinks, and
-> filters can only be defined in the configuration file. Older documentation
-> claimed otherwise.
+Array-indexed paths such as `--pipelines.0.name=x` are unrecognized; whole
+pipelines have [their own flags](cli.md#pipelines).
 
 ## Validation
 
@@ -236,6 +242,8 @@ Startup validation is intentionally split.
   `config` table: `config file "…": unknown key
   "pipelines[0].plugin_sinks[0].confg"`. A misspelled table path would otherwise
   drop the whole table it heads. A top-level `config_file` is ignored
+- pipeline [specs](cli.md#pipelines): syntax, and unknown flow-stage keys such
+  as `--rate-limit rate=1,polcy=drop`
 - at least one pipeline
 - unique, non-empty pipeline names
 - at least one source and one sink per pipeline
@@ -265,7 +273,11 @@ auto_reload = true
 or send `SIGHUP` / `SIGUSR1`. Signals reread the selected file even when watching
 is disabled and always rebuild, allowing certificate and credentials rotation
 without TOML edits; `auto_reload` watches only the configuration file.
-CLI and environment overrides are captured at startup and keep their precedence.
+CLI and environment overrides, pipelines included, are captured at startup and
+keep their precedence. As at startup, a discovered default file that does not
+exist is not an error, so an instance configured by flags or variables alone
+still rebuilds. Once read, though, its removal fails the reload and the running
+service stays as it is; restart to run without the file.
 
 Reload rebuilds the whole service: a new service is constructed from the new
 configuration first, and only if that succeeds is the old one shut down. Each
@@ -279,25 +291,30 @@ without rebuilding. Queued path changes are combined, and unchanged pipelines
 and status settings do not trigger another rebuild. Removed file keys fall back
 to the remaining sources on the next successful load.
 
-| Reloaded | Not reloaded |
-|----------|--------------|
-| Pipelines, sources, sinks | `logging.*` (applied once at startup) |
-| Filters, formatters, rate limits, heartbeats | `quiet` |
-| `status_reporter` | `auto_reload` (the watcher is not restarted) |
+What a reload applies:
+
+- Reloaded:
+  - pipelines, sources, sinks
+  - filters, formatters, rate limits, heartbeats
+  - `status_reporter`
+- Not reloaded:
+  - `logging.*`: applied once at startup
+  - `quiet`
+  - `auto_reload`: the watcher is not restarted
 
 Because the rebuild is total, listeners close and reopen and every connected
 client is disconnected. Chain sinks reconnect on their own backoff schedule.
 
 ## Type Reference
 
-| TOML type | Go type | Command-line / environment form |
-|-----------|---------|-------------------------------|
-| String | `string` | Plain text |
-| Integer | `int64` | Decimal string |
-| Float | `float64` | Decimal string |
-| Boolean | `bool` | `true` / `false`, or a bare flag for `true` |
-| Array | `[]T` | Not settable outside the file |
-| Table | struct | Nested path with `.` (flags) or `_` (environment) |
+Each TOML type, its Go type, and its command-line / environment form:
+
+- String (`string`): plain text.
+- Integer (`int64`): decimal string.
+- Float (`float64`): decimal string.
+- Boolean (`bool`): `true` / `false`, or a bare flag for `true`.
+- Array (`[]T`): only in [pipeline specs](cli.md#pipelines), as a repeated key.
+- Table (struct): nested path with `.` (flags) or `_` (environment).
 
 Integer fields reject fractions, overflow and negative unsigned values. Non-finite
 floats and integer-to-float precision loss are rejected too. This applies to plugin

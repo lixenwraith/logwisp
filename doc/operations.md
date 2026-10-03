@@ -6,10 +6,10 @@ Running, monitoring, and maintaining LogWisp.
 
 ```bash
 # foreground, explicit config
-logwisp -c /etc/logwisp/logwisp.toml
+lw -c /etc/logwisp/logwisp.toml
 
 # no config: built-in demo pipeline (random source -> stdout)
-logwisp
+lw
 ```
 
 There is no built-in daemon mode. Run LogWisp in the foreground under a
@@ -42,7 +42,7 @@ auto_reload = true
 or send a signal:
 
 ```bash
-kill -HUP $(pidof logwisp)
+kill -HUP $(pidof lw)
 ```
 
 Signals reread the selected TOML file even when `auto_reload` is disabled.
@@ -60,8 +60,9 @@ What reload does *not* do:
 - Preserve connections. Listeners close and reopen, and every SSE, TCP, and
   chain client is disconnected. Chain sinks reconnect on their own backoff;
   browsers reconnect SSE automatically; raw TCP consumers must retry themselves.
-- Reload certificates without a reload — certificate files are read at plugin
-  construction, so rotation requires `SIGHUP`.
+- Notice rotated certificates on its own: certificate files are read at plugin
+  construction and `auto_reload` watches only the configuration file, so
+  rotation requires `SIGHUP`.
 
 Plan reloads on a busy relay the way you would plan a restart.
 Listener bind/start failures happen after the old service stops; these can leave
@@ -70,16 +71,17 @@ File-watch errors do not restart services, and queued changes are combined.
 
 ### Checking a configuration
 
-There is no validate-only mode. To check a file, start it with debug logging and
-watch for pipeline startup:
+`lw --check` builds every pipeline and plugin as a start would, without binding
+a port or opening, reading or creating a log file, prints the startup warnings,
+and exits 0, 1 on an invalid configuration, or 2 when a named file is missing:
 
 ```bash
-logwisp -c candidate.toml --logging.level=debug --logging.output=stderr
+lw --check -c candidate.toml
 ```
 
-Success looks like `Created source instance`, `Created sink instance`, and
-`Starting pipeline` for each pipeline. Failures name the pipeline and the
-offending key:
+Before a reload, check the edited file this way: a failed reload keeps the
+running service, but `--check` says why without touching it. Failures name the
+pipeline and the offending key:
 
 ```
 ERROR msg="Failed to create pipeline" pipeline=app error="failed to create sink out: port: must be 1-65535, got 0"
@@ -145,22 +147,28 @@ curl -s http://127.0.0.1:8080/status | jq .
 
 This endpoint is scoped to one sink, not to the whole process, and without an
 `auth` block it is **unauthenticated**. Bind it to a trusted interface, or
-query it with a client certificate or a token from `logwisp auth token`.
+query it with a client certificate or a token from `lw auth token`.
 
 ### Metrics worth watching
 
-| Metric | Where | Meaning if rising |
-|--------|-------|-------------------|
-| `dropped_entries` | source | Downstream cannot keep up with the source |
-| `total_dropped` | flow | Rate limit or filters are discarding entries (often intended) |
-| `total_dropped_by_sink` | pipeline | A sink's input queue is full |
-| `dropped_writes` | tcp/http sink | A client's queue overflowed: either it is too slow, or one burst exceeded `client_buffer_size` |
-| `rejected_conns` / `rejected_clients` | tcp/http sink, tcp_chain source | `max_connections` is being hit |
-| `tls_handshake_errors` | tcp sink, tcp_chain source | Certificate or version mismatch, or scanning |
-| `parse_errors` | chain source | Protocol or version skew upstream |
-| `reconnects` | chain sink | Unstable link or a flapping downstream |
-| `dropped_batches` | http_chain sink | Downstream rejecting batches permanently |
-| `synthesized` | chain sink | Events reaching the sink without structure |
+Each counter, where it is reported, and what a rise means:
+
+- `dropped_entries` (source): downstream cannot keep up with the source
+- `total_dropped` (flow): the rate limit or filters are discarding entries,
+  often by intent
+- `total_dropped_by_sink` (pipeline): a sink's input queue is full
+- `dropped_writes` (`tcp` and `http` sinks): a client's queue overflowed,
+  because it is too slow or one burst exceeded `client_buffer_size`
+- `rejected_conns` (`tcp` sink, `tcp_chain` source), `rejected_clients`
+  (`http` sink): `max_connections` is being hit; `rejected_conns` also counts
+  auth refusals
+- `tls_handshake_errors` (`tcp` sink, `tcp_chain` source): a certificate or
+  version mismatch, or scanning
+- `parse_errors` (chain sources): protocol or version skew upstream
+- `reconnects` (`tcp_chain` sink): an unstable link or a flapping downstream
+- `dropped_batches` (`http_chain` sink): downstream is rejecting batches
+  permanently
+- `synthesized` (chain sinks): events reach the sink without structure
 
 ## Log Management
 
@@ -264,15 +272,18 @@ sink blocked on an unreachable downstream also holds its full input queue.
 
 **Chain link not delivering**
 
-Check `connected` and `reconnects` on the sink, `parse_errors` on the source,
-and remember `http_chain` waits up to `flush_interval_ms`. For TLS problems see
-[Networking](networking.md#troubleshooting).
+Check `connected` and `reconnects` on a `tcp_chain` sink, `parse_errors` on the
+source, and remember `http_chain` waits up to `flush_interval_ms`. For TLS
+problems see [Networking](networking.md#troubleshooting).
 
 **Environment variable override has no effect**
 
 LogWisp reads `LOGWISP_QUIET`, `LOGWISP_LOGGING_LEVEL`, and other prefixed
-names. Bare names used by older versions must be renamed. Array-indexed paths cannot be set from the
-environment or the command line at all.
+names. Bare names used by older versions must be renamed. Array-indexed paths,
+such as a key inside `[[pipelines]]`, cannot be set from the environment or the
+command line; define whole pipelines there with the
+[pipeline flags](cli.md#pipelines) or
+[pipeline variables](cli.md#pipeline-variables).
 
 ## Security Operations
 
