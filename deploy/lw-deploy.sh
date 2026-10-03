@@ -150,6 +150,8 @@ tlist() { # newline-separated list -> TOML array
 }
 
 urlhost() { case $1 in *:*) printf '[%s]' "$1" ;; *) printf '%s' "$1" ;; esac; }
+# in a URL a zone's % is escaped as %25 (RFC 6874)
+urihost() { case $1 in *%*) urlhost "${1%%\%*}%25${1#*%}" ;; *) urlhost "$1" ;; esac; }
 
 # --- commands: printed, and run unless --dry-run ---
 
@@ -1216,7 +1218,7 @@ next_steps() {
 		[ "$_h" = 0.0.0.0 ] && _h=127.0.0.1
 		[ "$_h" = :: ] && _h=::1
 		if [ "$TLS" = yes ]; then _u=https; else _u=http; fi
-		_u=$_u://$(urlhost "$_h"):$HTTP_PORT
+		_u=$_u://$(urihost "$_h"):$HTTP_PORT
 		case $SINK_AUTH in
 		none)
 			_c=''

@@ -224,6 +224,15 @@ said dry-manual "+ generate a password into $RUN/dry/secrets/edge-01.pass" || ok
 [[ -e $RUN/dry || $(snapshot) != "$before" ]] && ok=0
 check "manual: printed the configuration and the passwords it would generate, wrote nothing (exit $rc)" $ok
 
+deploy dry-zone --dry-run --runtime manual --role aggregator --config-dir "$RUN/dry/conf" --listen fe80::1%lo \
+	--http-port $PORT_DRY --file-dir "$RUN/dry/out" --tls --cert-file "$PKI/aggregator.crt" \
+	--key-file "$PKI/aggregator.key" --sink-auth scram --add-viewer viewer-01 --secrets-dir "$RUN/dry/secrets"
+rc=$?
+ok=$((rc == 0))
+said dry-zone "-url https://[fe80::1%25lo]:$PORT_DRY " || ok=0
+said dry-zone 'host = "fe80::1%lo"' || ok=0
+check "a link-local listener: its URLs escape the zone as %25, its host keeps it (exit $rc)" $ok
+
 deploy dry-native --dry-run --runtime native --role edge --log-dir "$APP" --aggregator 127.0.0.1 \
 	--chain-port $PORT_CHAIN --node deploy-native --bin "$BIN"
 rc=$?
