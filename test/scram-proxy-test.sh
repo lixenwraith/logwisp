@@ -2,7 +2,8 @@
 # logwisp browser login test: an http sink in proxy mode behind a TLS-terminating
 # reverse proxy that mounts it under /logs/; headless Chromium signs in through
 # the shipped pages, with cookies and without (token mode); the CLI unbound.
-# Requires: bash 5+, go, openssl, curl; node with playwright, or the browser checks skip.
+# Requires: bash 5+, go, openssl, curl; node with playwright and both builds
+# `playwright install chromium` fetches, or the browser checks skip.
 
 set -u
 . "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
@@ -21,8 +22,14 @@ e2e_init "$@"
 section "Setup"
 need go openssl curl
 ports_free $PORT_PROXY $PORT_SINK
-BROWSER=0
-command -v node >/dev/null && node -e 'require.resolve("playwright")' 2>/dev/null && BROWSER=1
+# The launch each scenario makes: the module resolves without its browsers, and
+# chromium.executablePath() names full Chromium, not the default headless shell
+launches() { timeout 60 node -e 'require("playwright").chromium.launch(JSON.parse(process.argv[1])).then((b) => b.close())' "$1" >/dev/null 2>&1; }
+BROWSER=0 FULL_CHROMIUM=0
+if command -v node >/dev/null; then
+	launches '{}' && BROWSER=1
+	launches '{"channel": "chromium"}' && FULL_CHROMIUM=1
+fi
 rm -rf "$RUN"
 mkdir -p "$CONF" "$LOG" "$PKI" "$AUTH" "$PROXY_SRC"
 
@@ -295,6 +302,8 @@ browser() { # mode: runs browser.cjs, whose key=value lines val reads
 	[[ -z $(val error) ]] || info "${C_RED}browser error ($1): $(val error)$C_OFF"
 }
 val() { sed -n "s/^$1=//p" <<<"$browser_out"; }
+# The count covers the whole scenario only when it ran to its end without error
+csp_clean() { echo $(($(is "$(val error)" "") && $(is "$(val csp_violations)" 0))); }
 
 section "Scenario 1: a person in a browser"
 if ((BROWSER)); then
@@ -311,7 +320,7 @@ if ((BROWSER)); then
 		$(is "$(val document_cookie)" '""')
 	check "browser: sign out cleared the cookie" $(is "$(val cookie_after_logout)" 0)
 	check "browser: status refused after sign out (HTTP $(val status_after_logout))" $(is "$(val status_after_logout)" 401)
-	check "browser: no CSP violations ($(val csp_violations))" $(is "$(val csp_violations)" 0)
+	check "browser: no CSP violations ($(val csp_violations))" $(csp_clean)
 	n=$(grep 'Login accepted' "$LOG/logwisp.out" | grep -c 'remote_addr 127.0.0.1')
 	check "logwisp logged the forwarded client, not the proxy ($n logins from 127.0.0.1)" $((n >= 1))
 	browser dropped
@@ -319,11 +328,11 @@ if ((BROWSER)); then
 		$(is "$(val inline_login)" 1)
 	check "browser: its token stays out of storage, the URL and cookies" $(is "$(val token_in_page_only)" 1)
 else
-	skip "browser checks: node with playwright not found"
+	skip "browser checks: node, playwright or its Chromium headless shell missing"
 fi
 
 section "Scenario 2: a browser that keeps no cookies"
-if ((BROWSER)); then
+if ((FULL_CHROMIUM)); then
 	mkdir -p "$RUN/profile/Default"
 	echo '{"profile": {"default_content_setting_values": {"cookies": 2}}}' >"$RUN/profile/Default/Preferences"
 	browser blocked
@@ -343,9 +352,9 @@ if ((BROWSER)); then
 		$(is "$(val token_status_after_logout)" 401)
 	check "no cookies: a reload ended the session and the viewer asked to sign in again" \
 		$(is "$(val expired_asks_again)" 1)
-	check "no cookies: no CSP violations ($(val csp_violations))" $(is "$(val csp_violations)" 0)
+	check "no cookies: no CSP violations ($(val csp_violations))" $(csp_clean)
 else
-	skip "browser checks: node with playwright not found"
+	skip "browser checks: node, playwright or its full Chromium missing"
 fi
 
 section "Scenario 3: the CLI through the proxy"

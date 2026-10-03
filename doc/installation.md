@@ -8,8 +8,9 @@
   or BSD make
 - For `make e2e`: bash 5+, coreutils, curl, openssl and go (the proxy test
   builds its reverse proxy). Optional, else those checks SKIP: node with
-  playwright (browser checks), an IPv6 loopback (`ipv6-test.sh`), docker as
-  root with the `logwisp:dev` image (`deploy-test.sh`'s container run)
+  playwright and the Chromium builds `playwright install chromium` fetches
+  (browser checks), an IPv6 loopback (`ipv6-test.sh`), docker as root with the
+  `logwisp:dev` image (`deploy-test.sh`'s container run)
 
 ## Building from Source
 
@@ -292,8 +293,9 @@ or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
 - `scram-chain-test.sh`: SCRAM chain edges and viewers with `lw auth`
   credentials; ports 15821-15825
 - `scram-proxy-test.sh`: browser and CLI logins to an `http` sink behind a
-  TLS-terminating proxy; ports 15831-15832; the browser checks need node with
-  playwright and are skipped without it
+  TLS-terminating proxy; ports 15831-15832; the browser checks skip without
+  node and playwright's Chromium: the headless shell for the scenarios with
+  cookies, full Chromium for the profile that blocks them
 - `ipv6-test.sh`: a relay on `::1` over both chain transports, IPv6 SANs,
   per-family listeners; ports 15851-15855; skips (exit 77) without an IPv6
   loopback
