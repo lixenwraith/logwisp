@@ -418,10 +418,10 @@ Options, each as type and default:
   sends `Authorization: Bearer <token>`. A failed login is retried like a
   transport error, holding the batch. The token is renewed ahead of its expiry;
   a `401` on ingest (the source reloaded) drops it and the retry logs in again.
-  A `403` is permanent. A
-  connection presenting a certificate other than the one the login was bound
-  to drops token and pin, and the retry logs in anew. A sink without `scram`
-  facing a `scram` source gets `401` and drops every batch.
+  A `403` is permanent. A connection presenting a certificate other than the
+  one the login was bound to drops token and pin, and the retry logs in anew.
+  A sink without `scram` facing a `scram` source gets `401` and drops every
+  batch.
 - Redirects are never followed; a `3xx` is permanent too. Following one would
   resend the batch wherever the response points, plaintext `http` included.
 - HTTP/2 is off by design; batched NDJSON POSTs gain nothing from it.
