@@ -52,6 +52,8 @@ certificates: see [Security](security.md#enabling-mtls).
   - installs `deploy/package/logwisp.service`, `logwisp.sysusers` and
     `logwisp.tmpfiles` under `/etc`, unless a package installed the unit
   - writes `/etc/logwisp/logwisp.toml`, `root:logwisp`, mode 0640
+  - refuses log and output directories under `/tmp` and `/var/tmp`: the unit's
+    `PrivateTmp=yes` gives the service its own, empty ones
   - adds `logwisp.service.d/deploy.conf` when the node needs it:
     `ReadWritePaths` for an output outside `/var/log/logwisp`,
     `ProtectHome=read-only` for logs or output under `/home`,

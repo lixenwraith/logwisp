@@ -239,6 +239,12 @@ rc=$?
 ok=$((rc != 0))
 said fail-check 'lw --check rejects' || ok=0
 check "a configuration lw --check rejects (a log file as the certificate) stops the run (exit $rc)" $ok
+deploy fail-tmp --dry-run --runtime native --role standalone --log-dir "$APP" --file-dir /tmp/lw-deploy-test \
+	--bin "$BIN"
+rc=$?
+ok=$((rc != 0))
+said fail-tmp 'PrivateTmp=yes' || ok=0
+check "native Linux: a --file-dir under /tmp, which the unit makes private, stops the run (exit $rc)" $ok
 # A failing install stands in for the real one: a regression must not install onto this host
 mkdir -p "$RUN/stub"
 printf '#!/bin/sh\nexit 1\n' >"$RUN/stub/install"

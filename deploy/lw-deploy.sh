@@ -348,8 +348,13 @@ v_file() {
 	[ "$DRY_RUN" = 1 ] && { warn "not a readable file here: $1"; return 0; }
 	bad "not a readable file: $1"
 }
-v_logdir() {
+v_dir() { # a directory the service reads or writes
 	v_abs "$1" || return 1
+	[ "$RUNTIME/$TARGET_OS" = native/linux ] || return 0
+	case $1/ in /tmp/* | /var/tmp/*) bad "the systemd unit gives lw its own /tmp and /var/tmp (PrivateTmp=yes): $1" ;; esac
+}
+v_logdir() {
+	v_dir "$1" || return 1
 	[ -d "$ROOT$1" ] && return 0
 	[ "$DRY_RUN" = 1 ] && { warn "no such directory here: $ROOT$1"; return 0; }
 	bad "no such directory: $ROOT$1"
@@ -567,7 +572,7 @@ resolve() {
 			[ "$RUNTIME" = docker ] && _dv=/var/log/$NAME
 			[ "$RUNTIME" = manual ] && _dv=$CONF_DIR/out
 			ask_yn _want "Write the entries to rotating files?" yes
-			[ "$_want" = no ] || ask FILE_DIR --file-dir "Output directory" "$_dv" v_abs
+			[ "$_want" = no ] || ask FILE_DIR --file-dir "Output directory" "$_dv" v_dir
 			_want=''
 			ask_yn _want "Serve a live HTTP stream (SSE) with a status endpoint?" no
 			[ "$_want" = no ] || ask HTTP_PORT --http-port "HTTP port" 8080 v_port
@@ -576,7 +581,7 @@ resolve() {
 			[ "$_want" = no ] || ask TCP_PORT --tcp-port "TCP port" 9090 v_port
 			[ -n "$FILE_DIR$HTTP_PORT$TCP_PORT" ] || die "no output chosen"
 		fi
-		[ -z "$FILE_DIR" ] || ask FILE_DIR --file-dir "Output directory" '' v_abs
+		[ -z "$FILE_DIR" ] || ask FILE_DIR --file-dir "Output directory" '' v_dir
 		[ -z "$FILE_DIR" ] || ask FILE_NAME --file-name "Output file name stem" logwisp v_ident
 		[ -z "$HTTP_PORT" ] || ask HTTP_PORT --http-port "HTTP port" '' v_port
 		[ -z "$TCP_PORT" ] || ask TCP_PORT --tcp-port "TCP port" '' v_port
