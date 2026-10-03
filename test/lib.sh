@@ -18,6 +18,9 @@ if [[ ${FORCE_COLOR:-0} != 0 ]] || [[ -t 1 && -z ${NO_COLOR:-} ]]; then
 else
 	C_BOLD='' C_DIM='' C_RED='' C_GREEN='' C_YELLOW='' C_CYAN='' C_OFF=''
 fi
+# Rules fit a narrower terminal; wider ones keep 64 columns
+COLS=${COLUMNS:-$(stty size <&2 2>/dev/null | cut -d' ' -f2)}
+[[ $COLS =~ ^[0-9]+$ ]] && ((COLS >= 20 && COLS < 64)) || COLS=64
 
 usage() {
 	sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0"
@@ -55,9 +58,9 @@ e2e_init() { # "$@" of the script
 
 # --- output ---
 
-rule() { local s='' n=$1; while ((n-- > 0)); do s+='─'; done; printf '%s' "$s"; }
+rule() { local s='' n=$1; while ((n-- > 0)); do s+=${2:-─}; done; printf '%s' "$s"; } # N [CHAR]
 short() { if [[ $1 == "$PWD"/* ]]; then printf '%s' "${1#"$PWD"/}"; else printf '%s' "$1"; fi; }
-section() { printf '\n%s── %s %s%s\n' "$C_BOLD$C_CYAN" "$1" "$(rule $((60 - ${#1})))" "$C_OFF"; }
+section() { printf '\n%s── %s %s%s\n' "$C_BOLD$C_CYAN" "$1" "$(rule $((COLS - 4 - ${#1})))" "$C_OFF"; }
 info() { printf '  %s·%s %s\n' "$C_DIM" "$C_OFF" "$*"; }
 
 pass() { E2E_PASSED=$((E2E_PASSED + 1)); printf '  %sPASS%s  %s\n' "$C_BOLD$C_GREEN" "$C_OFF" "$1"; }
@@ -67,20 +70,21 @@ check() { if (($2)); then pass "$1"; else fail "$1"; fi; } # LABEL 1|0
 is() { [[ $1 == "$2" ]] && echo 1 || echo 0; }           # ACTUAL EXPECTED
 is_set() { [[ -n $1 ]] && echo 1 || echo 0; }
 
-# guide TITLE, the body on stdin: "> " lines are commands, "  NNNNN " lines
-# ports, lines ending in ":" headings.
+# guide TITLE, the body on stdin, between two rules and without a side border,
+# so lines wrapped by a narrow terminal stay readable: "> " lines are commands,
+# "  NNNNN " lines ports, lines ending in ":" headings.
 guide() {
 	local line
-	printf '\n%s┌── %s %s%s\n' "$C_BOLD" "$1" "$(rule $((59 - ${#1})))" "$C_OFF"
+	printf '\n%s══ %s %s%s\n' "$C_BOLD" "$1" "$(rule $((COLS - 4 - ${#1})) ═)" "$C_OFF"
 	while IFS= read -r line; do
 		case $line in
 		'> '*) line="  $C_CYAN${line#> }$C_OFF" ;;
 		'  '[0-9][0-9][0-9][0-9][0-9]' '*) line="  $C_YELLOW${line:2:5}$C_OFF${line:7}" ;;
 		*:) line="$C_BOLD$line$C_OFF" ;;
 		esac
-		printf '%s│%s %s\n' "$C_BOLD" "$C_OFF" "$line"
+		printf '%s\n' "$line"
 	done
-	printf '%s└%s%s\n' "$C_BOLD" "$(rule 63)" "$C_OFF"
+	printf '%s%s%s\n' "$C_BOLD" "$(rule "$COLS" ═)" "$C_OFF"
 }
 
 # write_env NAME=VALUE...: $RUN/env, which the guide's commands source
@@ -119,7 +123,7 @@ summary() {
 			[[ $name == "${ABORTED:-}" ]] || excerpt "$name" '^([^ ]+ ERROR |Error: )'
 		done
 	fi
-	printf '%s%s%s\n' "$C_DIM" "$(rule 64)" "$C_OFF"
+	printf '%s%s%s\n' "$C_DIM" "$(rule "$COLS")" "$C_OFF"
 	if ((E2E_FAILED)); then
 		printf '%sRESULT: FAILURES%s (%s); logs in %s/\n' "$C_BOLD$C_RED" "$C_OFF" "$counts" "$(short "$LOG")"
 		exit 1
@@ -134,7 +138,7 @@ summary() {
 
 skip_all() { # REASON: nothing in the script applies to this host
 	skip "$1"
-	printf '%s%s%s\n%sRESULT: SKIPPED%s\n' "$C_DIM" "$(rule 64)" "$C_OFF" "$C_BOLD$C_YELLOW" "$C_OFF"
+	printf '%s%s%s\n%sRESULT: SKIPPED%s\n' "$C_DIM" "$(rule "$COLS")" "$C_OFF" "$C_BOLD$C_YELLOW" "$C_OFF"
 	exit 77
 }
 
