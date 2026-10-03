@@ -225,7 +225,7 @@ func (h *HTTPSink) Input() chan<- core.TransportEvent {
 func (h *HTTPSink) Start(ctx context.Context) error {
 	// TLS is applied via server.TLSConfig + ServeTLS below, not by wrapping
 	// ln; net/http then owns handshake, ALPN (h2), and per-conn errors.
-	ln, err := net.Listen(h.network, h.addr)
+	ln, err := core.Listen(ctx, &net.ListenConfig{}, h.network, h.addr)
 	if err != nil {
 		return fmt.Errorf("http sink bind %s: %w", h.addr, err)
 	}

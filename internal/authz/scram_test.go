@@ -417,6 +417,15 @@ func TestDialerRefusesACheapChallenge(t *testing.T) {
 	}
 }
 
+// Link-local peers share one budget per link, not one across every link: the
+// zone names the link and stays in the key.
+func TestLinkLocalBudgetIsPerLink(t *testing.T) {
+	a, b, other := throttleKey("fe80::1%eth0"), throttleKey("fe80::2%eth0"), throttleKey("fe80::1%eth1")
+	if a != b || a == other {
+		t.Fatalf("keys %q, %q on one link, %q on another", a, b, other)
+	}
+}
+
 // Only failed attempts drain an address's budget; beyond it the listener
 // answers "too many attempts" without running the exchange.
 func TestOnlyFailedAttemptsAreThrottled(t *testing.T) {

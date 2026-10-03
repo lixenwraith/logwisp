@@ -175,7 +175,7 @@ func (s *HTTPChainSource) Start() error {
 		return err
 	}
 	addr := net.JoinHostPort(s.config.Host, strconv.FormatInt(s.config.Port, 10))
-	ln, err := net.Listen(s.network, addr)
+	ln, err := core.Listen(context.Background(), &net.ListenConfig{}, s.network, addr)
 	if err != nil {
 		s.auth.Close()
 		return fmt.Errorf("listen %s: %w", addr, err)

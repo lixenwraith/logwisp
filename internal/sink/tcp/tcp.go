@@ -198,7 +198,7 @@ func (t *TCPSink) listen() (net.Listener, error) {
 			Idle:   time.Duration(t.config.KeepAlivePeriodMS) * time.Millisecond,
 		}
 	}
-	ln, err := lc.Listen(context.Background(), t.network, t.addr)
+	ln, err := core.Listen(context.Background(), &lc, t.network, t.addr)
 	if err != nil {
 		return nil, err
 	}

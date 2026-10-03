@@ -15,8 +15,9 @@ Every listener and dialer keeps strictly to the family of its `host`:
     system's `bindv6only` default.
   - To serve both families, run two listeners on the same port, one on
     `0.0.0.0` and one on `::`: neither holds the other's port.
-- Hostname: resolved. A listener binds one address (IPv4 when there is one),
-  so name the address to be sure; a dialer tries each address in turn.
+- Hostname: resolved. A listener binds one address (IPv4 when there is one)
+  in that address's family alone, a name for `0.0.0.0` or `::` too, so name
+  the address to be sure; a dialer tries each address in turn.
 
 ### IPv6
 
@@ -24,8 +25,8 @@ Every listener and dialer keeps strictly to the family of its `host`:
   - `host` takes the bare address: `host = "::1"`. A bracketed host, one
     with a port, or an IPv4-mapped one (`::ffff:10.0.0.1`) fails at load.
   - Addresses and URLs bracket it: logs print `[::1]:8443`, and `lw auth`
-    takes `-addr [::1]:8443` and `-url https://[::1]:8443`. Give `curl` `-g`,
-    or it reads the brackets as a glob.
+    takes `-addr [::1]:8443` and `-url https://[::1]:8443`. Older `curl`
+    releases read the brackets as a glob; `-g` stops that and is harmless.
   - A link-local address carries its zone, `fe80::1%eth0`, escaped in URLs as
     `https://[fe80::1%25eth0]:8443`.
 - TLS: a dialer verifies an IPv6 target against the certificate's IP SANs
@@ -35,7 +36,8 @@ Every listener and dialer keeps strictly to the family of its `host`:
   - Logs and sessions name an IPv6 peer by its address, a link-local one with
     its zone.
   - SCRAM throttling counts an IPv6 client by its /64, so the hosts on a link
-    share one link-local budget: each can pick any `fe80::/64` address.
+    share one link-local budget per interface (zone): each can pick any
+    `fe80::/64` address.
   - A peer with a zone never matches `auth.trusted_proxies`: put the proxy on
     loopback or a routed address.
 

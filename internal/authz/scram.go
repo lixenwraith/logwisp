@@ -904,14 +904,18 @@ func remoteIP(addr string) string {
 // --- Throttling ---
 
 // throttleKey is what the limiter counts: an address, or for IPv6 its /64,
-// which one host usually holds whole. Link-local too: a peer picks any
-// fe80::/64 address, so per address it would escape its budget.
+// which one host usually holds whole. Link-local too, per zone: a peer picks
+// any fe80::/64 address, so per address it would escape its budget.
 func throttleKey(ip string) string {
 	addr, err := netip.ParseAddr(ip)
 	if err != nil || addr.Is4() {
 		return ip
 	}
-	return netip.PrefixFrom(addr, 64).Masked().String()
+	key := netip.PrefixFrom(addr, 64).Masked().String()
+	if zone := addr.Zone(); zone != "" {
+		key += "%" + zone
+	}
+	return key
 }
 
 // limiter bounds SCRAM attempts per remote address: failed or abandoned
