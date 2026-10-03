@@ -179,16 +179,18 @@ What remains:
     package list for `lw` and `logwisp`.
   - Already checked: Ubuntu 26.04 and 24.04 contents and the FreeBSD 15.1
     ports tree ship no `bin/lw`.
-- Arch (AUR):
-  - Finalize the PKGBUILD (source URL and checksum of a tagged tarball, the
-    Arch Go flags `-trimpath -buildmode=pie -mod=readonly -modcacherw`).
-  - Run namcap, generate `.SRCINFO`, and publish `logwisp` (and optionally
-    `logwisp-git`).
-- FreeBSD:
-  - Turn the skeleton into a port (`sysutils/logwisp`): `GH_TUPLE` or
-    `go:modules` distinfo, `USE_RC_SUBR=logwisp`, `USERS`/`GROUPS`, a
-    pkg-plist with the `.sample` config.
-  - Test with poudriere on 14.x and 15.x, then submit through Bugzilla.
+- Arch (AUR): `deploy/package/arch/PKGBUILD` already has the source URL, the
+  Arch Go flags (`-trimpath -buildmode=pie -mod=readonly -modcacherw`),
+  `backup` for the config and `check()`. Remaining:
+  - the checksum of a tagged tarball in place of `SKIP`, and a maintainer;
+  - namcap, `.SRCINFO`, and publishing `logwisp` (optionally `logwisp-git`).
+- FreeBSD: `deploy/package/freebsd/` already has `USES=go:1.27,modules`,
+  `USE_RC_SUBR=logwisp`, `USERS`/`GROUPS`, and a pkg-plist with the `.sample`
+  config and the manual. Remaining:
+  - `distinfo` (or `GH_TUPLE`), which needs the module rename and a tag;
+  - a real `MAINTAINER` and a `UIDs`/`GIDs` entry for `logwisp`;
+  - poudriere on 14.x and 15.x, then submission through Bugzilla
+    (`sysutils/logwisp`).
 - Debian:
   - Debian policy wants every Go dependency packaged; the four `lixenwraith`
     libraries are not.
