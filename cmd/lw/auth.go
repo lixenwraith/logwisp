@@ -18,10 +18,10 @@ import (
 	"strings"
 	"syscall"
 
-	"logwisp/internal/authz"
-	"logwisp/internal/config"
-	"logwisp/internal/core"
-	"logwisp/internal/tlsx"
+	"github.com/lixenwraith/logwisp/internal/authz"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/tlsx"
 
 	"github.com/lixenwraith/auth"
 )

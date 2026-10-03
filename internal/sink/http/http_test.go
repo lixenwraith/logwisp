@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/core"
-	"logwisp/internal/sink"
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/sink"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 
 	"github.com/lixenwraith/auth"
 	"github.com/lixenwraith/log"

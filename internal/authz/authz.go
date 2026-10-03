@@ -19,9 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"logwisp/internal/chain"
-	"logwisp/internal/config"
-	"logwisp/internal/tlsx"
+	"github.com/lixenwraith/logwisp/internal/chain"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/tlsx"
 
 	"github.com/lixenwraith/log"
 )

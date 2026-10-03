@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"logwisp/internal/core"
-	"logwisp/internal/source"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/source"
 
 	"github.com/lixenwraith/log"
 )

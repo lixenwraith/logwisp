@@ -7,12 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
-	"logwisp/internal/flow"
-	"logwisp/internal/session"
-	"logwisp/internal/sink"
-	"logwisp/internal/source"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/flow"
+	"github.com/lixenwraith/logwisp/internal/session"
+	"github.com/lixenwraith/logwisp/internal/sink"
+	"github.com/lixenwraith/logwisp/internal/source"
 
 	"github.com/lixenwraith/log"
 )

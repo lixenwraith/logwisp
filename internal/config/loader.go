@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/core"
 
 	lconfig "github.com/lixenwraith/config"
 )

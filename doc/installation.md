@@ -52,9 +52,11 @@ Variables:
 - `SOURCE_DATE_EPOCH`: when set, the embedded build time comes from it, so
   package builds are reproducible.
 
-A plain `go build -o bin/lw ./cmd/lw` works too, and reports `dev` for the
-version metadata. `go install github.com/lixenwraith/logwisp/cmd/lw@latest`
-does not work until the module is renamed to its canonical path.
+A plain `go build -o bin/lw ./cmd/lw` works too, as does
+`go install github.com/lixenwraith/logwisp/cmd/lw@latest` (or `@vX.Y.Z`).
+Without the Makefile's `-ldflags`, `lw --version` reports what Go stamps into
+the binary: the module version, or a pseudo-version with the commit in a
+checkout.
 
 ## Installing
 
@@ -237,10 +239,9 @@ The foundation for distribution packages is in place:
 - skeletons: `deploy/package/arch/PKGBUILD` and a `sysutils/logwisp` port in
   `deploy/package/freebsd/`
 
-Still missing: tagged, signed release tarballs; the module rename to
-`github.com/lixenwraith/logwisp`, which `go install` and FreeBSD's
-`go:modules` need; finishing and submitting the AUR package and the port;
-Debian packaging. [To Do](todo.md) has the steps.
+Still missing: release tags, which both skeletons download; finishing and
+submitting the AUR package and the port; Debian packaging.
+[To Do](todo.md) has the steps.
 
 ## Verification
 

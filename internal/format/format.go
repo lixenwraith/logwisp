@@ -1,8 +1,8 @@
 package format
 
 import (
-	"logwisp/internal/config"
-	"logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
 )
 
 // Formatter defines the interface for transforming a LogEntry into a byte slice

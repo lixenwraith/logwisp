@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
 func TestResolveConfigArguments(t *testing.T) {

@@ -2,8 +2,9 @@ package main
 
 import (
 	"fmt"
-	"logwisp/internal/version"
 	"os"
+
+	"github.com/lixenwraith/logwisp/internal/version"
 )
 
 // helpText is the CLI usage reference. Scalar flags map 1:1 to TOML config paths.

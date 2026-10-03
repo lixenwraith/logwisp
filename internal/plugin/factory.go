@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	"logwisp/internal/core"
-	"logwisp/internal/session"
-	"logwisp/internal/sink"
-	"logwisp/internal/source"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/session"
+	"github.com/lixenwraith/logwisp/internal/sink"
+	"github.com/lixenwraith/logwisp/internal/source"
 
 	"github.com/lixenwraith/log"
 )

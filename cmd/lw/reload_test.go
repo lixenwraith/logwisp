@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/plugin"
-	"logwisp/internal/session"
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/plugin"
+	"github.com/lixenwraith/logwisp/internal/session"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 
 	lconfig "github.com/lixenwraith/config"
 )

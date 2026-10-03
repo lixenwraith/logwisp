@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"logwisp/internal/authz"
+	"github.com/lixenwraith/logwisp/internal/authz"
 
 	"github.com/lixenwraith/auth"
 )

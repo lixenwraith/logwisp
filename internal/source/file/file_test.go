@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/core"
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
 func TestStoppedWatcherReturnsNormally(t *testing.T) {

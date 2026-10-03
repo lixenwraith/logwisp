@@ -1,4 +1,4 @@
-module logwisp
+module github.com/lixenwraith/logwisp
 
 go 1.27.1
 

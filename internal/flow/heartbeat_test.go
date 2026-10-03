@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/config"
-	"logwisp/internal/format"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/format"
 )
 
 // include_timestamp = false drops the timestamp the formatter shows by default

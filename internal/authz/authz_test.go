@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"logwisp/internal/config"
-	"logwisp/internal/tlsx"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/tlsx"
 )
 
 // peerState fakes a completed handshake. Only the leaf's identity fields are

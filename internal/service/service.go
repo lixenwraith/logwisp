@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"logwisp/internal/config"
-	"logwisp/internal/pipeline"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/pipeline"
 
 	"github.com/lixenwraith/log"
 )

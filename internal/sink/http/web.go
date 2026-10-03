@@ -9,9 +9,9 @@ import (
 	"path"
 	"strings"
 
-	"logwisp/internal/authz"
-	"logwisp/internal/chain"
-	"logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/authz"
+	"github.com/lixenwraith/logwisp/internal/chain"
+	"github.com/lixenwraith/logwisp/internal/config"
 )
 
 //go:embed web/*.js web/*.html web/*.css

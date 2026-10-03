@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
 func isolateConfig(t *testing.T) {

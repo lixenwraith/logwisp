@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
 func loadPipelines(t *testing.T, args ...string) []PipelineConfig {
