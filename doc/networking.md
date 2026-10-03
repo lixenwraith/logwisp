@@ -290,16 +290,17 @@ headers, and entry encoding.
 - Every connection through the proxy fails: it sends a PROXY header (nginx
   `stream` with `proxy_protocol on`, HAProxy `send-proxy`) to a LogWisp TLS
   listener, which cannot read one yet. The header lands in front of the TLS
-  handshake, which fails with `first record does not look like a TLS
-  handshake`, logged with the proxy's address (at DEBUG on the `tcp` sink).
+  handshake, which fails; the listener logs the proxy's address and
+  `first record does not look like a TLS handshake` (the `tcp` sink at DEBUG).
   Route LogWisp without it: see
   [Behind nginx or another proxy](security.md#behind-nginx-or-another-proxy).
 - All peers share one throttling budget behind a passthrough proxy: without
-  PROXY every peer arrives from the proxy's address, so one client failing
-  logins makes every other login answer `too many attempts` until it stops
-  ([Throttling](security.md#throttling)). Expose the chain ports directly, or
-  keep the proxy hop on a trusted network so only trusted clients share the
-  budget.
+  PROXY every `scram` peer arrives from the proxy's address. One client failing
+  logins exhausts everyone's, and a fifth login while 4 are unfinished (edges
+  reconnecting together after a restart) is refused; both answer
+  `too many attempts` ([Throttling](security.md#throttling)).
+  Expose the LogWisp ports directly, or keep the proxy hop on a trusted
+  network so only trusted clients share the budget.
 
 **Entries not arriving over a chain link**
 - Check the sink's `connected` statistic and its `reconnects` count.
