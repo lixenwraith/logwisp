@@ -104,6 +104,11 @@ needs `--force`.
     `viewers.toml`); viewers log in with `lw auth token` and `lw auth stream`
   - without it the outputs admit anyone who reaches them: bind `--listen` to a
     trusted address
+- without `--auth` or `--sink-auth`, the auth flags imply their mode:
+  `--allow` and `--sink-allow` mtls; `--add-user`, `--username`,
+  `--password-file` and `--add-viewer` scram. Under `--yes` one that does not
+  apply, such as `--add-user` with `--auth none` or without `--tls`, stops the
+  run rather than deploy the node open
 
 ## FreeBSD host, jails and one aggregator
 

@@ -33,6 +33,7 @@ deploy() { # NAME ARGS...: lw-deploy.sh --yes, its output in $LOG/deploy-NAME.ou
 	shift
 	"$DEPLOY" --yes "$@" >"$LOG/deploy-$name.out" 2>&1
 }
+said() { grep -qF -- "$2" "$LOG/deploy-$1.out"; } # NAME TEXT: lw-deploy.sh printed TEXT
 declare -A GEN # NAME -> lw-deploy.sh's exit status
 generate() { deploy "$1" --runtime manual --config-dir "$RUN/$1" --bin "$BIN" "${@:2}"; GEN[$1]=$?; }
 
@@ -201,6 +202,22 @@ ok=$((rc != 0))
 grep -q 'no output: give --file-dir, --http-port or --tcp-port' "$LOG/deploy-fail-aggregator.out" || ok=0
 [[ -e $RUN/fail-aggregator ]] && ok=0
 check "an aggregator without an output stops before writing anything (exit $rc)" $ok
+deploy implied-auth --dry-run --runtime manual --role aggregator --config-dir "$RUN/dry/conf" --listen 127.0.0.1 \
+	--http-port $PORT_DRY --tls --cert-file "$PKI/aggregator.crt" --key-file "$PKI/aggregator.key" \
+	--ca-file "$PKI/ca.crt" --add-user edge-01 --sink-allow viewer-01 --secrets-dir "$RUN/dry/secrets"
+rc=$?
+ok=$((rc == 0))
+said implied-auth "over tcp_chain (TLS, auth scram)" || ok=0
+said implied-auth "/stream /status (txt, TLS, auth mtls)" || ok=0
+check "without --auth and --sink-auth, --add-user implies scram and --sink-allow mtls (exit $rc)" $ok
+deploy fail-auth --runtime manual --role aggregator --config-dir "$RUN/fail-auth" --bin "$BIN" \
+	--file-dir "$RUN/fail-auth/out" --tls --cert-file "$PKI/aggregator.crt" --key-file "$PKI/aggregator.key" \
+	--auth none --add-user edge-01 --secrets-dir "$RUN/fail-auth/secrets"
+rc=$?
+ok=$((rc != 0))
+said fail-auth '--add-user needs --auth scram' || ok=0
+[[ -e $RUN/fail-auth ]] && ok=0
+check "an --add-user that --auth none contradicts stops before writing anything (exit $rc)" $ok
 
 section "--dry-run changes nothing"
 # What a dry run could touch: the run directory (minus what the daemons write)
@@ -210,7 +227,6 @@ snapshot() {
 	stat -c '%n %s %Y' /usr/local/bin/lw /etc/logwisp /etc/systemd/system/logwisp.service \
 		/etc/systemd/system/logwisp.service.d /etc/sysusers.d/logwisp.conf /etc/tmpfiles.d/logwisp.conf 2>&1
 }
-said() { grep -qF -- "$2" "$LOG/deploy-$1.out"; } # NAME TEXT: lw-deploy.sh printed TEXT
 before="$(snapshot)"
 
 deploy dry-manual --dry-run --runtime manual --role aggregator --config-dir "$RUN/dry/conf" --bin "$BIN" \

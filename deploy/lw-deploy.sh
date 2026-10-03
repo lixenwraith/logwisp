@@ -77,7 +77,8 @@ TLS (this script creates no certificates: doc/security.md#enabling-mtls)
                           listener the client certificates
   --server-name NAME      edge: name the aggregator's certificate must carry
 
-Authentication (needs TLS)
+Authentication (needs TLS; without --auth or --sink-auth the flags below imply
+their mode, and under --yes one that does not apply stops the run)
   --auth none|mtls|scram  the chain link
   --allow ID              mtls certificate CN; an edge pins the aggregator, an
                           aggregator admits edges; repeatable (none: any the CA issued)
@@ -317,8 +318,10 @@ ask_yn() { # VAR PROMPT DEFAULT(yes|no)
 	eval "$_var=\${_val:-\$_def}"
 }
 
-drop() { # VAR FLAG
+# With NEEDS, an auth flag: --yes stops, as dropping it would leave the node open.
+drop() { # VAR FLAG [NEEDS]
 	eval "_val=\$$1"
+	[ -z "$_val" ] || [ -z "${3:-}" ] || [ "$INTERACTIVE" = 1 ] || die "$2 needs $3"
 	[ -z "$_val" ] || warn "$2 does not apply to these choices; ignored"
 	eval "$1=''"
 }
@@ -590,6 +593,12 @@ resolve() {
 	_dv=no
 	[ -z "$CERT_FILE$CA_FILE" ] || _dv=yes
 	ask_yn TLS "Use TLS on this node's network links?" "$_dv"
+	# Auth-only flags imply their mode, the default --yes takes.
+	_ia=none _isa=none
+	[ -z "$ALLOW" ] || _ia=mtls
+	[ -z "$ADD_USERS$USERNAME$PASSWORD_FILE" ] || _ia=scram
+	[ -z "$SINK_ALLOW" ] || _isa=mtls
+	[ -z "$ADD_VIEWERS" ] || _isa=scram
 	if [ "$TLS" = yes ]; then
 		[ "$INTERACTIVE" = 0 ] || note "Certificates come from openssl or your PKI: doc/security.md#enabling-mtls" >&2
 		if [ "$ROLE" = edge ]; then
@@ -598,7 +607,7 @@ resolve() {
 			ask CERT_FILE --cert-file "This node's certificate (PEM)" '' v_file
 			ask KEY_FILE --key-file "Its private key (PEM)" '' v_file
 		fi
-		[ "$ROLE" = standalone ] || choose AUTH --auth "Authenticate the chain link:" none \
+		[ "$ROLE" = standalone ] || choose AUTH --auth "Authenticate the chain link:" "$_ia" \
 			none "TLS only" \
 			mtls "client certificates, admitted by CN" \
 			scram "username and password"
@@ -640,7 +649,7 @@ resolve() {
 	_viewers=no
 	[ "$ROLE" != edge ] && [ -n "$HTTP_PORT$TCP_PORT" ] && [ "$TLS" = yes ] && _viewers=yes
 	if [ "$_viewers" = yes ]; then
-		choose SINK_AUTH --sink-auth "Authenticate the stream viewers (http/tcp outputs):" none \
+		choose SINK_AUTH --sink-auth "Authenticate the stream viewers (http/tcp outputs):" "$_isa" \
 			none "TLS only" \
 			mtls "client certificates, admitted by CN" \
 			scram "username and password (lw auth token / stream)"
@@ -660,11 +669,13 @@ resolve() {
 	fi
 
 	# Values the choices made moot are dropped, so the plan shows what applies.
-	[ "$ROLE/$AUTH" = edge/mtls ] || [ "$ROLE/$AUTH" = aggregator/mtls ] || drop ALLOW --allow
-	[ "$ROLE/$AUTH" = edge/scram ] || { drop USERNAME --username; drop PASSWORD_FILE --password-file; }
-	[ "$ROLE/$AUTH" = aggregator/scram ] || drop ADD_USERS --add-user
-	[ "$SINK_AUTH" = mtls ] || drop SINK_ALLOW --sink-allow
-	[ "$SINK_AUTH" = scram ] || drop ADD_VIEWERS --add-viewer
+	_n='--auth scram (TLS, on an edge)'
+	[ "$ROLE/$AUTH" = edge/mtls ] || [ "$ROLE/$AUTH" = aggregator/mtls ] ||
+		drop ALLOW --allow '--auth mtls (TLS, on an edge or aggregator)'
+	[ "$ROLE/$AUTH" = edge/scram ] || { drop USERNAME --username "$_n"; drop PASSWORD_FILE --password-file "$_n"; }
+	[ "$ROLE/$AUTH" = aggregator/scram ] || drop ADD_USERS --add-user '--auth scram (TLS, on an aggregator)'
+	[ "$SINK_AUTH" = mtls ] || drop SINK_ALLOW --sink-allow '--sink-auth mtls (TLS, an http or tcp output)'
+	[ "$SINK_AUTH" = scram ] || drop ADD_VIEWERS --add-viewer '--sink-auth scram (TLS, an http or tcp output)'
 	[ "$ROLE" = edge ] || { drop SERVER_NAME --server-name; drop AGGREGATOR --aggregator; drop NODE --node; }
 	[ "$ROLE" != edge ] || { drop FILE_DIR --file-dir; drop HTTP_PORT --http-port; drop TCP_PORT --tcp-port; }
 	[ "$ROLE" != aggregator ] || drop LOG_DIRS --log-dir
