@@ -734,3 +734,35 @@ func TestTokenIsRenewedBeforeExpiry(t *testing.T) {
 		t.Fatalf("logins after the renewal point = %d, want 2", n)
 	}
 }
+
+// A refused renewal (throttled, or the server busy) keeps the link sending on
+// the token it still holds, and retries soon; past its expiry it fails.
+func TestRefusedRenewalKeepsTheValidToken(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: MinTokenLifetime.Milliseconds()}, f.serverTLS, RoleListener, HTTP)
+	srv, _ := f.httpListener(t, l, f.serverTLS)
+	d := f.dialer(t, "edge-01", "edge-01-secret")
+	client := f.httpClient(d)
+	prepare := func() (string, error) {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/protected", nil)
+		err := d.Prepare(t.Context(), client, srv.URL, req)
+		return req.Header.Get("Authorization"), err
+	}
+	first, err := prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Close() // every further login answers busy
+	d.dialer.renewAt.Store(time.Now().UnixNano())
+	if got, err := prepare(); err != nil || got != first {
+		t.Fatalf("refused renewal: header %q, %v; want the held token", got, err)
+	}
+	if ahead := time.Until(time.Unix(0, d.dialer.renewAt.Load())); ahead <= 0 || ahead > 5*time.Second {
+		t.Fatalf("next renewal %v ahead, want within 5 s", ahead)
+	}
+	d.dialer.renewAt.Store(time.Now().UnixNano())
+	d.dialer.expires.Store(time.Now().UnixNano())
+	if _, err := prepare(); err == nil {
+		t.Fatal("an expired token was kept after a refused renewal")
+	}
+}

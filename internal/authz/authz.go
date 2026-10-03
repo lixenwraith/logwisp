@@ -414,13 +414,22 @@ func (p *Policy) Prepare(ctx context.Context, client *http.Client, baseURL strin
 	if p == nil || p.dialer == nil {
 		return nil
 	}
-	token := p.dialer.token.Load()
-	if token == nil || time.Now().UnixNano() >= p.dialer.renewAt.Load() {
+	d := p.dialer
+	token := d.token.Load()
+	if token == nil || time.Now().UnixNano() >= d.renewAt.Load() {
+		pin, expires := d.pin.Load(), d.expires.Load()
 		t, err := p.Token(ctx, client, baseURL)
-		if err != nil {
+		// A renewal refused while the old token holds (a throttled login behind
+		// a shared address) keeps sending on it and retries in a few seconds
+		if left := time.Duration(expires - time.Now().UnixNano()); err != nil && token != nil && left > 0 {
+			d.pin.Store(pin)
+			d.token.Store(token)
+			d.renewAt.Store(time.Now().Add(min(5*time.Second, left/2)).UnixNano())
+		} else if err != nil {
 			return err
+		} else {
+			token = &t
 		}
-		token = &t
 	}
 	req.Header.Set("Authorization", "Bearer "+*token)
 	return nil
@@ -561,7 +570,11 @@ func (p *Policy) LogStartup(l *log.Logger, component, id string, trustNode bool)
 			"hint", "set auth.allow or auth.allow_patterns to authorize named peers")
 	}
 	if p.BindsNode() {
-		l.Info("msg", "Node labels bound to peer identity; trust_node is ignored",
+		msg := "Connection node label bound to peer identity; trust_node still governs per-entry labels"
+		if p.binding == BindingForce {
+			msg = "Node labels bound to peer identity; trust_node is ignored"
+		}
+		l.Info("msg", msg,
 			"component", component,
 			"instance_id", id,
 			"node_binding", p.binding,

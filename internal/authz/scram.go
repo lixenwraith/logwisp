@@ -566,6 +566,7 @@ type scramDialer struct {
 	unbound  bool // HTTP logins to a listener behind a TLS-terminating proxy
 	token    atomic.Pointer[string]
 	renewAt  atomic.Int64           // unix nanoseconds; Prepare logs in again from then
+	expires  atomic.Int64           // unix nanoseconds; 0 = lifetime unknown
 	pin      atomic.Pointer[[]byte] // HTTP: certificate the token's login was bound to
 	failures atomic.Uint64
 	lastErr  atomic.Pointer[string]
@@ -722,7 +723,12 @@ func (p *Policy) Token(ctx context.Context, client *http.Client, baseURL string)
 	if step.Token == "" {
 		return "", errors.New("auth: server issued no token")
 	}
-	d.renewAt.Store(renewAt(time.Now(), time.Duration(step.ExpiresIn)*time.Second).UnixNano())
+	now, lifetime := time.Now(), time.Duration(step.ExpiresIn)*time.Second
+	d.renewAt.Store(renewAt(now, lifetime).UnixNano())
+	d.expires.Store(0)
+	if lifetime > 0 {
+		d.expires.Store(now.Add(lifetime).UnixNano())
+	}
 	d.token.Store(&step.Token)
 	return step.Token, nil
 }
