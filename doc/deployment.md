@@ -2,9 +2,10 @@
 
 `deploy/lw-deploy.sh` configures and deploys one LogWisp node per run. It asks
 for what its flags leave open, prints a plan with the equivalent non-interactive
-command, then writes the files and starts the node. `--dry-run` stops at
-printing; `--yes` never asks and fails on a missing required value. It creates
-no certificates: see [Security](security.md#enabling-mtls).
+command, then writes the files, runs `lw --check` on them (the node's binary or
+image, with its mounts) and starts the node. `--dry-run` stops at printing;
+`--yes` never asks and fails on a missing required value. It creates no
+certificates: see [Security](security.md#enabling-mtls).
 
 ## Roles
 

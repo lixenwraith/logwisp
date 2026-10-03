@@ -233,6 +233,12 @@ ok=$((rc != 0))
 said fail-secrets 'not an absolute path: ~/secrets' || ok=0
 [[ -e $RUN/fail-secrets || -e "$RUN/~" ]] && ok=0
 check "a --secrets-dir of ~/secrets stops before writing anything (exit $rc)" $ok
+deploy fail-check --runtime manual --role aggregator --config-dir "$RUN/fail-check" --bin "$BIN" \
+	--file-dir "$RUN/fail-check/out" --tls --cert-file "$APP/app.log" --key-file "$APP/app.log"
+rc=$?
+ok=$((rc != 0))
+said fail-check 'lw --check rejects' || ok=0
+check "a configuration lw --check rejects (a log file as the certificate) stops the run (exit $rc)" $ok
 # A failing install stands in for the real one: a regression must not install onto this host
 mkdir -p "$RUN/stub"
 printf '#!/bin/sh\nexit 1\n' >"$RUN/stub/install"

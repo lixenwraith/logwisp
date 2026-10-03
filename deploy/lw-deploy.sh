@@ -1145,7 +1145,22 @@ build_image() {
 		die "the image build failed (behind a proxy: --build-ca FILE, --build-flags \"--network host\")"
 }
 
+# --check builds every plugin as a start would, reading its TLS and credentials files.
+conf_check() { # COMMAND...: lw, or the container that runs it
+	run "$@" --check -c "$CONF_LW/logwisp.toml" ||
+		die "lw --check rejects $CONF_HOST/logwisp.toml${OLD_CONF:+ (the previous one is logwisp.toml.bak)}"
+}
+
 docker_start() {
+	set -- --read-only --cap-drop ALL --security-opt no-new-privileges -u "$IMAGE_USER"
+	[ -z "$USERNS" ] || set -- "$@" --userns "$USERNS"
+	[ -z "$LOG_GID" ] || set -- "$@" --group-add "$LOG_GID"
+	set -- "$@" -v "$CONF_HOST:/etc/logwisp:ro"
+	IFS=$NL
+	for _d in $LOG_DIRS; do set -- "$@" -v "$_d:$_d:ro"; done
+	IFS=$OIFS
+	[ -z "$FILE_DIR" ] || set -- "$@" -v "$FILE_DIR:$FILE_DIR"
+	conf_check "$ENGINE" run --rm --network none "$@" "$IMAGE"
 	_net=''
 	case $NETWORK in
 	'' | host | bridge | none) ;;
@@ -1155,22 +1170,13 @@ docker_start() {
 		[ -z "$_net" ] || run "$ENGINE" network create "$_net" || die "cannot create network $_net"
 		[ -z "$OLD_CTR" ] || run "$ENGINE" rm -f "$NAME" || die "cannot remove container $NAME"
 	fi
-	set -- "$ENGINE" run -d --name "$NAME" --restart unless-stopped \
-		--read-only --cap-drop ALL --security-opt no-new-privileges -u "$IMAGE_USER"
-	[ -z "$USERNS" ] || set -- "$@" --userns "$USERNS"
-	[ -z "$LOG_GID" ] || set -- "$@" --group-add "$LOG_GID"
 	[ -z "$NETWORK" ] || set -- "$@" --network "$NETWORK"
-	set -- "$@" -v "$CONF_HOST:/etc/logwisp:ro"
-	IFS=$NL
-	for _d in $LOG_DIRS; do set -- "$@" -v "$_d:$_d:ro"; done
-	IFS=$OIFS
-	[ -z "$FILE_DIR" ] || set -- "$@" -v "$FILE_DIR:$FILE_DIR"
 	if [ "$NETWORK" != host ] && [ "$ROLE" != edge ]; then
 		for _p in $CHAIN_PORT $HTTP_PORT $TCP_PORT; do
 			set -- "$@" -p "$(urlhost "$LISTEN"):$_p:$_p"
 		done
 	fi
-	set -- "$@" "$IMAGE" -c /etc/logwisp/logwisp.toml
+	set -- "$ENGINE" run -d --name "$NAME" --restart unless-stopped "$@" "$IMAGE" -c /etc/logwisp/logwisp.toml
 	if [ "$START" = no ]; then
 		note "Start it with:"
 		[ -z "$_net" ] || note "+ $ENGINE network create $_net"
@@ -1301,7 +1307,11 @@ main() {
 
 	case $RUNTIME in
 	docker) docker_start ;;
-	native) native_start ;;
+	native)
+		if [ -n "$JAIL" ]; then conf_check jexec "$JAIL" "$BINDIR/lw"; else conf_check "$BINDIR/lw"; fi
+		native_start
+		;;
+	manual) [ ! -x "$LW" ] || conf_check "$LW" ;;
 	esac
 	next_steps
 }

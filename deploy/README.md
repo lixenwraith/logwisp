@@ -22,7 +22,7 @@ deploy/lw-deploy.sh --yes ...        # no questions: defaults, or fail on a miss
   - `manual`: the configuration only, for `lw -c`
 - Every question has a flag. Before changing anything the script prints its
   plan and the command line that repeats it without questions, ready for the
-  next node.
+  next node. It starts nothing that `lw --check` rejects.
 - The native runtimes install the service files of `deploy/package/`.
 - Not covered, and printed by the script: filters, rate limits, heartbeat,
   several pipelines, proxy mode, ACLs, certificate creation. Edit the generated
