@@ -133,8 +133,9 @@ The split between `assert` and `force` is what makes both worth having:
   it forwards keep the origin labels stamped at the first hop, so multi-hop
   attribution survives.
 
-`node_binding` overrides `trust_node`; when binding is active the constructor
-logs that `trust_node` is being ignored.
+`node_binding` overrides `trust_node` for the connection label. Under `force`
+the constructor logs that `trust_node` is ignored; under `assert`, that it still
+governs the per-entry labels.
 
 Dialer-side plugins (`tcp_chain` and `http_chain` sinks) accept the same block
 to pin the *server's* identity beyond hostname verification. There
