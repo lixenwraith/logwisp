@@ -232,10 +232,10 @@ wait_until() { # SECONDS COMMAND...
 		sleep 0.2
 	done
 }
-ports_free() { # HOST PORT...
+ports_free() { # PORT...: in either family, as a dual-stack [::] listener holds IPv4 too
 	local p
-	for p in "${@:2}"; do
-		listening "$p" "$1" && abort "port $p is already in use ($1)"
+	for p; do
+		listening "$p" || listening "$p" :: && abort "port $p is already in use"
 	done
 	return 0
 }

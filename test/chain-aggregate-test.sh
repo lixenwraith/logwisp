@@ -16,7 +16,7 @@ e2e_init "$@"
 
 section "Setup"
 need curl
-ports_free 127.0.0.1 $PORTS
+ports_free $PORTS
 mkdir -p "$CONF" "$LOG"
 
 edge_conf() { # name sink_type port [sink options]

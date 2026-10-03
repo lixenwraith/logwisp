@@ -24,8 +24,7 @@ section "Setup"
 # /proc/net/if_inet6 lists ::1 as 31 zeros and a 1; it is absent without IPv6
 grep -qs '^0\{31\}1 ' /proc/net/if_inet6 || skip_all "this host has no IPv6 loopback (::1)"
 need openssl curl
-ports_free 127.0.0.1 $PORTS
-ports_free ::1 $PORTS
+ports_free $PORTS
 rm -rf "$RUN"
 mkdir -p "$CONF" "$LOG" "$PKI" "$AUTH" "$OUT"
 

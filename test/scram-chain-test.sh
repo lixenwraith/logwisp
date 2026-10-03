@@ -22,7 +22,7 @@ e2e_init "$@"
 
 section "Setup"
 need openssl curl
-ports_free 127.0.0.1 $PORTS
+ports_free $PORTS
 rm -rf "$RUN"
 mkdir -p "$CONF" "$LOG" "$PKI" "$AUTH" "$OUT"
 

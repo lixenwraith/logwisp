@@ -20,7 +20,7 @@ e2e_init "$@"
 
 section "Setup"
 need go openssl curl
-ports_free 127.0.0.1 $PORT_PROXY $PORT_SINK
+ports_free $PORT_PROXY $PORT_SINK
 BROWSER=0
 command -v node >/dev/null && node -e 'require.resolve("playwright")' 2>/dev/null && BROWSER=1
 rm -rf "$RUN"

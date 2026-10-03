@@ -39,7 +39,7 @@ generate() { deploy "$1" --runtime manual --config-dir "$RUN/$1" --bin "$BIN" "$
 section "Setup"
 need curl openssl
 [[ -x $DEPLOY ]] || abort "no $(short "$DEPLOY")"
-ports_free 127.0.0.1 $PORTS
+ports_free $PORTS
 if [[ -d $RUN/docker ]] && command -v docker >/dev/null; then docker rm -f "$CONTAINER" >/dev/null 2>&1; fi
 rm -rf "$RUN"
 mkdir -p "$LOG" "$APP" "$OUT"
