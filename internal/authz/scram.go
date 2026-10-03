@@ -776,6 +776,12 @@ func (d *scramDialer) stats(m map[string]any) {
 	}
 }
 
+// putOff marks a login the server deferred (throttled, busy) rather than
+// refused: a token still held stays usable meanwhile.
+type putOff struct{ error }
+
+func (e putOff) Unwrap() error { return e.error }
+
 // postStep sends one /auth request; any answer but 200 is a refusal
 func postStep(ctx context.Context, client *http.Client, url string, body []byte) (authStep, *http.Response, error) {
 	var step authStep
@@ -802,7 +808,11 @@ func postStep(ctx context.Context, client *http.Client, url string, body []byte)
 		if msg == "" {
 			msg = resp.Status
 		}
-		return step, resp, fmt.Errorf("%w: server: %s", ErrRefused, msg)
+		err := fmt.Errorf("%w: server: %s", ErrRefused, msg)
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			err = putOff{err}
+		}
+		return step, resp, err
 	case decodeErr != nil:
 		return step, resp, fmt.Errorf("auth: malformed answer: %w", decodeErr)
 	}

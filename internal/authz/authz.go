@@ -419,9 +419,13 @@ func (p *Policy) Prepare(ctx context.Context, client *http.Client, baseURL strin
 	if token == nil || time.Now().UnixNano() >= d.renewAt.Load() {
 		pin, expires := d.pin.Load(), d.expires.Load()
 		t, err := p.Token(ctx, client, baseURL)
-		// A renewal refused while the old token holds (a throttled login behind
-		// a shared address) keeps sending on it and retries in a few seconds
-		if left := time.Duration(expires - time.Now().UnixNano()); err != nil && token != nil && left > 0 {
+		// A renewal put off while the old token holds (a throttled login behind
+		// a shared address) keeps sending on it and retries in a few seconds.
+		// Idle connections close first: Token dialed them with no pin, and the
+		// token may ride only connections the old pin verifies
+		var later putOff
+		if left := time.Duration(expires - time.Now().UnixNano()); errors.As(err, &later) && token != nil && left > 0 {
+			client.CloseIdleConnections()
 			d.pin.Store(pin)
 			d.token.Store(token)
 			d.renewAt.Store(time.Now().Add(min(5*time.Second, left/2)).UnixNano())

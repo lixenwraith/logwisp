@@ -738,9 +738,10 @@ stream {
   that keeps failing logins makes every other client's logins answer
   `too many attempts` until it stops.
 - Established `tcp_chain` links and open streams keep flowing; a reconnect
-  waits for the budget. An `http_chain` sink whose early renewal is refused
-  keeps sending on its token, retrying every few seconds, and holds its
-  batches only once that token has expired.
+  waits for the budget. An `http_chain` sink whose early renewal is put off
+  (`too many attempts` or `busy`) keeps sending on its token to the server it
+  pinned, retrying every few seconds, and holds its batches only once that
+  token has expired; any other refusal ends the token at once.
 - Logs and sessions name the proxy, not the peer.
 - Proxy mode is unaffected: it throttles on the forwarded client.
 - Until LogWisp reads PROXY, mitigate:
