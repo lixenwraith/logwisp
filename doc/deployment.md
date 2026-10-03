@@ -48,9 +48,12 @@ certificates: see [Security](security.md#enabling-mtls).
     `/var/log` would relabel it for every other service too
 - `native`, Linux
   - needs systemd; installs `lw` to `/usr/local/bin` unless one is installed
-    (`--bin FILE`, or `--build` for `make build`)
-  - installs `deploy/package/logwisp.service`, `logwisp.sysusers` and
-    `logwisp.tmpfiles` under `/etc`, unless a package installed the unit
+    (`--bin FILE`, or `--build` for `make build`), and
+    `deploy/package/logwisp.service`, `logwisp.sysusers` and
+    `logwisp.tmpfiles` under `/etc`
+  - a package's unit (`/usr/lib/systemd/system/logwisp.service`) is used as it
+    is, with the `lw` its `ExecStart` runs; `--bin` and `--build` then stop the
+    run, since the service would never run that binary
   - writes `/etc/logwisp/logwisp.toml`, `root:logwisp`, mode 0640
   - refuses log and output directories under `/tmp` and `/var/tmp`: the unit's
     `PrivateTmp=yes` gives the service its own, empty ones

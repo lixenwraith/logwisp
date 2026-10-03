@@ -17,6 +17,7 @@ NL='
 '
 OIFS=$IFS
 IMAGE_USER=65532:65532
+PKG_UNIT=/usr/lib/systemd/system/logwisp.service # a package's, used as it is
 HOME_DIR=${HOME:-$PWD} # keeps keys and passwords out of a checkout run from its root
 
 ROLE='' RUNTIME='' ENGINE='' TARGET_OS='' NAME='' CONF_DIR='' JAIL=''
@@ -491,6 +492,9 @@ resolve() {
 	fi
 	if [ "$RUNTIME" = native ] && [ "$TARGET_OS" != "$HOST_OS" ] && [ "$DRY_RUN" = 0 ]; then
 		die "--os $TARGET_OS with --runtime native needs a $TARGET_OS host (or --dry-run, or --runtime manual)"
+	fi
+	if [ "$RUNTIME/$TARGET_OS" = native/linux ] && [ -f "$PKG_UNIT" ] && { [ -n "$BIN" ] || [ "$BUILD" = yes ]; }; then
+		die "a package provides lw ($PKG_UNIT); drop --bin/--build"
 	fi
 	[ -n "$ENGINE" ] || ENGINE=docker
 	case $ENGINE in docker | podman) ;; *) die "invalid --engine: $ENGINE (docker|podman)" ;; esac
@@ -1074,11 +1078,14 @@ pick_bin() { # CANDIDATE-DIRS: sets BINDIR, and BIN_SRC when lw must be installe
 
 linux_prepare() {
 	command -v systemctl >/dev/null 2>&1 || [ "$DRY_RUN" = 1 ] || die "a native Linux install needs systemd; use --runtime docker or manual"
-	pick_bin '/usr/local/bin /usr/bin'
-	[ -z "$BIN_SRC" ] || run install -m 0755 "$BIN_SRC" "$BINDIR/lw" || die "cannot install lw"
-	if [ -f /usr/lib/systemd/system/logwisp.service ]; then
-		note "using the packaged logwisp.service"
+	if [ -f "$PKG_UNIT" ]; then
+		# lw auth and lw --check run the binary the packaged unit starts.
+		BINDIR=$(sed -n 's|^ExecStart=\(/[^ ]*\)/lw\( .*\)\{0,1\}$|\1|p' "$PKG_UNIT")
+		[ -n "$BINDIR" ] || die "no lw in the ExecStart of $PKG_UNIT"
+		note "using the packaged logwisp.service and $BINDIR/lw"
 	else
+		pick_bin '/usr/local/bin /usr/bin'
+		[ -z "$BIN_SRC" ] || run install -m 0755 "$BIN_SRC" "$BINDIR/lw" || die "cannot install lw"
 		_unit=$(pkg_text logwisp.service "s|@BINDIR@|$BINDIR|g; s|@SYSCONFDIR@|/etc|g") || exit 1
 		put_file /etc/systemd/system/logwisp.service 0644 <<EOF
 $_unit
