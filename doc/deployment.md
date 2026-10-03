@@ -134,7 +134,8 @@ already, and the `logs` jail has an address the others reach (`AGG_ADDR`).
 
 4. Check: `jexec logs service logwisp status`, the files in the `logs` jail's
    `/var/log/logwisp`, and `https://AGG_ADDR:8080/status` with a token from
-   `lw auth token -user ops -ca-file ca.crt` ([CLI](cli.md#lw-auth)).
+   `lw auth token -url https://AGG_ADDR:8080 -user ops -password-file
+   ~/logwisp-secrets/ops.pass -ca-file ca.crt` ([CLI](cli.md#lw-auth)).
 
 Variants:
 

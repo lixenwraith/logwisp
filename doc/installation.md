@@ -212,12 +212,15 @@ docker run -d --name logwisp \
 - Writable data: a `file` sink or `logging.file` needs a volume writable by
   65532; nothing else is written.
 - Reload: `docker kill -s HUP logwisp`.
-- `lw auth` runs from the image too, with a directory writable by 65532:
+- `lw auth` runs from the image too, with directories writable by 65532.
+  Keep the generated passwords out of the directory the server mounts: it
+  needs only `users.toml` (verifiers) and the TLS files, while a `.pass` file
+  is the client's plaintext password.
 
   ```bash
   docker run --rm --read-only --cap-drop ALL --network none \
-    -v /srv/logwisp/secrets:/work logwisp:<tag> \
-    auth add-user -credentials /work/users.toml -user <name> -password-file /work/<name>.pass
+    -v /srv/logwisp/secrets:/work -v /srv/logwisp/passwords:/pw logwisp:<tag> \
+    auth add-user -credentials /work/users.toml -user <name> -password-file /pw/<name>.pass
   ```
 
 ## Packaging Status
