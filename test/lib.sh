@@ -101,7 +101,8 @@ write_env() {
 # daemon's last warnings and errors
 abort() {
 	fail "$1"
-	[[ -z ${2:-} ]] || excerpt "$2" '^[^ ]+ (WARN|ERROR) ' 5
+	ABORTED=${2:-}
+	[[ -z $ABORTED ]] || excerpt "$ABORTED" '^([^ ]+ (WARN|ERROR) |Error: )' 5
 	summary
 }
 
@@ -114,7 +115,9 @@ summary() {
 	fi
 	stop_all
 	if ((E2E_FAILED)); then
-		for name in "${DAEMONS[@]}"; do excerpt "$name" '^[^ ]+ ERROR '; done
+		for name in "${DAEMONS[@]}"; do
+			[[ $name == "${ABORTED:-}" ]] || excerpt "$name" '^([^ ]+ ERROR |Error: )'
+		done
 	fi
 	printf '%s%s%s\n' "$C_DIM" "$(rule 64)" "$C_OFF"
 	if ((E2E_FAILED)); then
@@ -187,6 +190,8 @@ follow_filter() { # tail -v output -> "NAME HH:MM:SS LEVEL message"; read, not a
 			continue ;;
 		esac
 		read -r ts lvl rest <<<"$line"
+		# lw's own startup failure, before its logger runs: "Error: ..."
+		[[ $ts == Error: ]] && rest="$lvl $rest" lvl=ERROR ts=''
 		case $lvl in
 		ERROR) c=$C_RED ;;
 		WARN) c=$C_YELLOW ;;

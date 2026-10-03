@@ -77,8 +77,10 @@ func main() {
 	log.Fatal(http.ListenAndServeTLS(listen, cert, key, mux))
 }
 EOF
-(cd "$PROXY_SRC" && go build -o proxy main.go) >"$LOG/proxy-build.out" 2>&1 ||
-	abort "the reverse proxy did not build" proxy-build
+if ! (cd "$PROXY_SRC" && go build -o proxy main.go) >"$LOG/proxy-build.out" 2>&1; then
+	tail -n 5 "$LOG/proxy-build.out" | sed 's/^/        /'
+	abort "the reverse proxy did not build"
+fi
 info "reverse proxy built in $(short "$PROXY_SRC")/"
 
 cat >"$CONF/logwisp.toml" <<EOF
