@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -125,12 +128,14 @@ func TestMisspelledSpecKeyFailsPluginConstruction(t *testing.T) {
 }
 
 // lw --check builds every plugin, so a bad option fails it, but starts none:
-// the port a valid sink names stays free.
+// the port a valid sink names stays free and its log directory uncreated.
 func TestCheckBuildsWithoutStarting(t *testing.T) {
 	testLogger(t)
-	path := filepath.Join(t.TempDir(), "empty.toml")
+	dir := t.TempDir()
+	path, out := filepath.Join(dir, "empty.toml"), filepath.Join(dir, "out")
 	testutil.WriteFile(t, path, "")
-	if code := checkConfig(loadTestConfig(t, path, "--source", "null", "--sink", "http,host=127.0.0.1,port=15862")); code != 0 {
+	if code := checkConfig(loadTestConfig(t, path, "--source", "null", "--sink", "http,host=127.0.0.1,port=15862",
+		"--sink", "file,name=check,directory="+out)); code != 0 {
 		t.Fatalf("valid configuration: exit %d", code)
 	}
 	ln, err := net.Listen("tcp4", "127.0.0.1:15862")
@@ -138,6 +143,9 @@ func TestCheckBuildsWithoutStarting(t *testing.T) {
 		t.Fatalf("check bound the sink's port: %v", err)
 	}
 	ln.Close()
+	if _, err := os.Stat(out); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("check created the file sink's directory: %v", err)
+	}
 	if code := checkConfig(loadTestConfig(t, path, "--source", "null", "--sink", "http,port=15862,tls.enabled=true")); code != 1 {
 		t.Fatalf("listener TLS without a certificate: exit %d, want 1", code)
 	}
