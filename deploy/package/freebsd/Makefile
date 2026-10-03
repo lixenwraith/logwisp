@@ -17,6 +17,7 @@ LICENSE_FILE=	${WRKSRC}/LICENSE
 
 USES=		go:1.27,modules
 USE_RC_SUBR=	logwisp
+SUB_LIST=	BINDIR=${PREFIX}/bin
 
 GO_MODULE=	github.com/lixenwraith/logwisp
 GO_TARGET=	./cmd/lw

@@ -183,7 +183,7 @@ install:
 	[ -x $(BIN_DIR)/$(BINARY) ] || { echo "no $(BIN_DIR)/$(BINARY): run make build or make release first" >&2; exit 1; }; \
 	put() { install -d -m 0755 "$${3%/*}"; install -m "$$1" "$$2" "$$3"; echo "install $$3"; }; \
 	sub() { install -d -m 0755 "$${3%/*}"; \
-		sed -e 's|@BINDIR@|$(BINDIR)|g' -e 's|@SYSCONFDIR@|$(SYSCONFDIR)|g' \
+		sed -e 's|@BINDIR@|$(BINDIR)|g' -e 's|@SYSCONFDIR@|$(SYSCONFDIR)|g' -e 's|%%BINDIR%%|$(BINDIR)|g' \
 			-e 's|%%PREFIX%%/etc|$(SYSCONFDIR)|g' -e 's|%%PREFIX%%|$(PREFIX)|g' "$$2" > "$$3"; \
 		chmod "$$1" "$$3"; echo "install $$3"; }; \
 	root='$(DESTDIR)'; etc="$$root$(SYSCONFDIR)/logwisp"; \

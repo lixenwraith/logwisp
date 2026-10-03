@@ -59,7 +59,8 @@ does not work until the module is renamed to its canonical path.
 ## Installing
 
 `make install` copies what a package ships and compiles nothing, so build
-first. It honours `DESTDIR`, `PREFIX` and `SYSCONFDIR`:
+first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `BINDIR` (default
+`$PREFIX/bin`, the path the systemd unit and the rc.d script run `lw` from):
 
 - Linux defaults: `PREFIX=/usr`, `SYSCONFDIR=/etc`. Outside a package
   manager, prefer `PREFIX=/usr/local`; systemd reads units, sysusers and
@@ -75,7 +76,7 @@ sudo make install PREFIX=/usr/local
 
 Every system gets:
 
-- `$PREFIX/bin/lw` and the manual `$PREFIX/share/man/man1/lw.1`
+- `$BINDIR/lw` and the manual `$PREFIX/share/man/man1/lw.1`
 - `$PREFIX/share/doc/logwisp/` (this documentation) and
   `$PREFIX/share/licenses/logwisp/LICENSE`
 

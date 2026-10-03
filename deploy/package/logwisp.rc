@@ -29,7 +29,7 @@ load_rc_config $name
 # daemon(8) records the child's pid, so stop and reload (SIGHUP) signal lw
 # itself, and sends its output to syslog under the tag logwisp.
 pidfile="/var/run/${name}/${name}.pid"
-procname="%%PREFIX%%/bin/lw"
+procname="%%BINDIR%%/lw"
 command="/usr/sbin/daemon"
 command_args="-f -S -T ${name} -p ${pidfile} ${procname} -c ${logwisp_config} ${logwisp_args}"
 required_files="${logwisp_config}"

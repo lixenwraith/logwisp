@@ -1113,14 +1113,14 @@ EOF
 
 freebsd_prepare() {
 	pick_bin /usr/local/bin
-	trun install -d -m 0755 /usr/local/bin /usr/local/etc/rc.d || exit 1
-	[ -z "$BIN_SRC" ] || put_file /usr/local/bin/lw 0755 "$BIN_SRC"
+	trun install -d -m 0755 "$BINDIR" /usr/local/etc/rc.d || exit 1
+	[ -z "$BIN_SRC" ] || put_file "$BINDIR/lw" 0755 "$BIN_SRC"
 	if [ "$DRY_RUN" = 1 ] || ! tprobe pw usershow logwisp >/dev/null 2>&1; then
 		trun pw useradd logwisp -d /nonexistent -s /usr/sbin/nologin -c "LogWisp log transport" ||
 			die "cannot create the logwisp user"
 	fi
 	[ -z "$LOG_GROUP" ] || trun pw groupmod "$LOG_GROUP" -m logwisp || die "cannot add logwisp to $LOG_GROUP"
-	_rc=$(pkg_text logwisp.rc 's|%%PREFIX%%|/usr/local|g') || exit 1
+	_rc=$(pkg_text logwisp.rc "s|%%BINDIR%%|$BINDIR|g; s|%%PREFIX%%|/usr/local|g") || exit 1
 	put_file /usr/local/etc/rc.d/logwisp 0555 <<EOF
 $_rc
 EOF
