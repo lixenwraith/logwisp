@@ -95,7 +95,8 @@ Each stage drops and counts instead of waiting:
 
 - Source → subscriber: a full channel drops the entry; source
   `dropped_entries`.
-- Flow: a rate limit, filter or format error drops it; `flow.total_dropped`.
+- Flow: the rate limiter, a filter rejection or a format error drops it;
+  `flow.total_dropped`.
 - Pipeline → sink: a full sink input drops it for that sink only; pipeline
   `total_dropped_by_sink`.
 - TCP/HTTP sink → client queue: a full queue drops it for that client only;
