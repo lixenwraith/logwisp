@@ -94,15 +94,17 @@ func validateLogConfig(cfg *LogConfig) error {
 // not declare: a misspelled tls or auth key must fail, not silently disable
 // the protection it was meant to configure.
 func Scan(configMap map[string]any, target any) error {
-	if err := unknownKeys(configMap, reflect.TypeOf(target), ""); err != nil {
+	if err := checkKeys(configMap, reflect.TypeOf(target), ""); err != nil {
 		return err
 	}
 	return lconfig.ScanMap(configMap, target)
 }
 
-// unknownKeys walks nested tables against the toml tags of t. Map-typed fields
-// hold free-form keys and are not descended into.
-func unknownKeys(m map[string]any, t reflect.Type, prefix string) error {
+// checkKeys walks nested tables against the toml tags of t, refusing unknown
+// keys and making a lone string for a list field a one-entry list: the weakly
+// typed decoder would split it at commas, which a pattern or a DN may hold.
+// Map-typed fields hold free-form keys and are not descended into.
+func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
 		t = t.Elem()
 	}
@@ -122,8 +124,12 @@ func unknownKeys(m map[string]any, t reflect.Type, prefix string) error {
 		}
 		var tables []map[string]any
 		switch v := m[key].(type) {
+		case string:
+			if ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.String {
+				m[key] = []string{v}
+			}
 		case map[string]any:
-			if err := unknownKeys(v, ft, prefix+key+"."); err != nil {
+			if err := checkKeys(v, ft, prefix+key+"."); err != nil {
 				return err
 			}
 		case []map[string]any:
@@ -136,7 +142,7 @@ func unknownKeys(m map[string]any, t reflect.Type, prefix string) error {
 			}
 		}
 		for i, table := range tables {
-			if err := unknownKeys(table, ft, fmt.Sprintf("%s%s[%d].", prefix, key, i)); err != nil {
+			if err := checkKeys(table, ft, fmt.Sprintf("%s%s[%d].", prefix, key, i)); err != nil {
 				return err
 			}
 		}
@@ -160,5 +166,5 @@ func checkFileKeys(path string) error {
 		return err
 	}
 	delete(root, "config_file") // runtime metadata, documented as ignored in the file
-	return unknownKeys(root, reflect.TypeOf(Config{}), "")
+	return checkKeys(root, reflect.TypeOf(Config{}), "")
 }

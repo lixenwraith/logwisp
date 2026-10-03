@@ -75,8 +75,8 @@ A SPEC is a comma-separated list:
   table or of the [flow stage](configuration.md#flow-stages)
   - a dotted key reaches a nested table: `tls.cert_file=...`, `auth.type=scram`
   - a repeated key makes a list: `patterns=ERROR,patterns=WARN`
-  - a plugin's list option given once splits at commas: `auth.allow=a\,b` is
-    two entries; a filter's `patterns` value is always one regex
+  - each value is one list entry, commas included: `auth.allow_patterns=^a{1\,3}$`
+    is one regex, `auth.allow=a,auth.allow=b` two entries
   - values convert to the option's type: `port=8080`, `raw=true`
 - `\` escapes `,`, `=` and `\` in a value; any other backslash stays, so regex
   escapes such as `\d` pass unchanged

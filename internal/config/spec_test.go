@@ -79,6 +79,22 @@ func TestPipelineSpecGrammar(t *testing.T) {
 	}
 }
 
+// A spec value is one list entry, commas included: a regex quantifier or a DN
+// must not split into several, wider entries.
+func TestSpecValueIsOneListEntry(t *testing.T) {
+	isolateConfig(t)
+	sink := loadPipelines(t, "--source", "null", "--sink",
+		`tcp,auth.type=mtls,auth.allow_patterns=^edge-\d{1\,3}$,auth.allow=CN=a\,O=b,auth.allow=CN=c`)[0].PluginSinks[0]
+	var opts TCPSinkOptions
+	if err := Scan(sink.Config, &opts); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(opts.Auth.AllowPatterns, []string{`^edge-\d{1,3}$`}) ||
+		!reflect.DeepEqual(opts.Auth.Allow, []string{"CN=a,O=b", "CN=c"}) {
+		t.Fatalf("allow_patterns %q, allow %q", opts.Auth.AllowPatterns, opts.Auth.Allow)
+	}
+}
+
 // One pipeline from LOGWISP_*: numbered variables follow the bare one in
 // numeric order, only repeatable kinds are numbered, and empty means unset.
 func TestEnvironmentPipeline(t *testing.T) {

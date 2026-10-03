@@ -39,9 +39,6 @@ var specKinds = []specKind{
 		return err
 	}},
 	{"filter", true, true, func(p *PipelineConfig, typ string, opts map[string]any) error {
-		if s, ok := opts["patterns"].(string); ok {
-			opts["patterns"] = []any{s} // one regex: the decoder must not split it at commas
-		}
 		opts["type"] = typ
 		f := FilterConfig{}
 		err := Scan(opts, &f)
