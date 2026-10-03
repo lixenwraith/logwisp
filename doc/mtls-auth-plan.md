@@ -111,7 +111,7 @@ default rather than a silent deny-all, and the plugin logs a WARN at startup
 saying so.
 
 `node_binding` applies only to the chain sources, where a `node` label is
-declared. Setting it to `assert` or `force` on any other plugin is a
+declared. Setting it to anything but `none` on any other plugin is a
 configuration error. Its values:
 
 - `none`: `trust_node` governs the connection label, as before, and the
