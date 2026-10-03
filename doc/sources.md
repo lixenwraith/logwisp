@@ -193,8 +193,9 @@ Options, each as type and default:
 - `read_timeout_ms` (int, `0`): per-connection idle read deadline; `0` = none.
 - `hello_timeout_ms` (int, `10000`): deadline for the hello preamble.
 - `trust_node` (bool, `true`): `false` overrides the sender's node label with
-  its remote address. `auth.node_binding` takes over the connection label;
-  only `force` also overrides the per-entry labels.
+  its remote address. `auth.node_binding` `assert` or `force` takes over the
+  connection label; only `force` also overrides the per-entry labels; `none`
+  leaves both to `trust_node`.
 - `tls` (table): listener TLS; see [Security](security.md).
 - `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
   see [Security](security.md#the-auth-block).
@@ -276,8 +277,9 @@ Options, each as type and default:
 - `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB).
 - `read_timeout_ms` (int, `30000`): full request read deadline.
 - `trust_node` (bool, `true`): `false` overrides the sender's node label with
-  its remote address. `auth.node_binding` takes over the connection label;
-  only `force` also overrides the per-entry labels.
+  its remote address. `auth.node_binding` `assert` or `force` takes over the
+  connection label; only `force` also overrides the per-entry labels; `none`
+  leaves both to `trust_node`.
 - `tls` (table): listener TLS; see [Security](security.md).
 - `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
   see [Security](security.md#the-auth-block).

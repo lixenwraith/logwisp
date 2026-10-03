@@ -224,7 +224,8 @@ lw
 `lw --check` validates without running: it builds every pipeline and plugin as
 a start would (options, TLS files, credentials files, startup warnings), but
 binds no port and opens, reads or creates no log file; it prints
-`configuration ok` and exits 0, or the error and exits 1:
+`configuration ok` and exits 0, or the error and exits 1 (2 when a named file
+is missing, see [Exit Codes](#exit-codes)):
 
 ```bash
 lw --check -c /etc/logwisp/logwisp.toml

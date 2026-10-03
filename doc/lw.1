@@ -81,7 +81,9 @@ Build every pipeline and plugin as a start would, loading options, TLS files
 and credentials files and printing startup warnings, without binding a port
 or opening, reading or creating a log file; print
 .Dq configuration ok
-and exit 0, or the error and exit 1.
+and exit 0, or the error and exit 1, or 2 when a named configuration file is
+missing
+.Pq see Sx EXIT STATUS .
 .It Fl \-version
 Print the version, commit and build time, and exit.
 .It Fl h , Fl \-help , Cm help

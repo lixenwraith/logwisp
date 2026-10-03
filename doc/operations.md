@@ -73,7 +73,7 @@ File-watch errors do not restart services, and queued changes are combined.
 
 `lw --check` builds every pipeline and plugin as a start would, without binding
 a port or opening, reading or creating a log file, prints the startup warnings,
-and exits 0 or 1:
+and exits 0, 1 on an invalid configuration, or 2 when a named file is missing:
 
 ```bash
 lw --check -c candidate.toml

@@ -200,8 +200,9 @@ reported at startup.
 
 ### Node binding
 
-`node_binding` applies only to the chain sources. It takes the connection label
-over from `trust_node`; only `force` also overrides the per-entry labels.
+`node_binding` applies only to the chain sources. `assert` and `force` take the
+connection label over from `trust_node`; only `force` also overrides the
+per-entry labels.
 
 - `none`: `trust_node` governs both the connection label and the per-entry
   `node` field.
