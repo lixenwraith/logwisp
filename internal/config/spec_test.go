@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"os"
 	"reflect"
 	"testing"
 
@@ -159,7 +161,8 @@ func TestSpecPipelinesReplaceFilePipelines(t *testing.T) {
 }
 
 // Without a file a reload still rebuilds; once the discovered default
-// appears it is read, and its pipelines still yield to the specs.
+// appears it is read, and its pipelines still yield to the specs. Its later
+// removal fails the reload instead of keeping the removed file's values.
 func TestReloadKeepsSpecPipelines(t *testing.T) {
 	isolateConfig(t)
 	m, err := Load([]string{"--source", "random,special=true", "--sink", "null"})
@@ -177,5 +180,11 @@ func TestReloadKeepsSpecPipelines(t *testing.T) {
 	if err != nil || next.StatusReporter || len(next.Pipelines) != 1 || next.Pipelines[0].Name != "cli" ||
 		next.Pipelines[0].PluginSources[0].Config["special"] != "true" {
 		t.Fatalf("reload: %+v %v", next, err)
+	}
+	if err := os.Remove("logwisp.toml"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reload(); !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("reload after the file was removed: %v", err)
 	}
 }

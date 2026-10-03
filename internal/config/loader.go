@@ -21,6 +21,7 @@ type Manager struct {
 	config   *lconfig.Config
 	path     string
 	explicit bool
+	read     bool           // the file was loaded once
 	specs    []pipelineSpec // command-line or environment pipelines, kept across reloads
 }
 
@@ -69,6 +70,7 @@ func Load(args []string) (*Manager, error) {
 		}
 		// A missing discovered default still permits valid CLI/env/default values.
 	}
+	m.read = err == nil
 	if unknown := cfg.UnknownCLIKeys(); len(unknown) > 0 && !initial.Quiet {
 		fmt.Fprintf(os.Stderr, "Warning: unrecognized flags ignored: %v\n", unknown)
 	}
@@ -110,12 +112,14 @@ func (m *Manager) usePipelines(cfg *Config) error {
 // Reload rereads the selected file, retaining the startup CLI/environment sources.
 // Signals must call this even when automatic watching is disabled.
 func (m *Manager) Reload() (*Config, error) {
-	// As at startup, a missing discovered default keeps the other sources, so a
-	// file-less instance still rebuilds and rotates its certificates.
+	// As at startup, a discovered default that does not exist is no error, so a
+	// file-less instance still rebuilds and rotates its certificates. Once read,
+	// its removal is one: the loader would keep the removed file's values.
 	err := m.config.LoadFile(m.path)
-	if err != nil && (m.explicit || !errors.Is(err, ErrConfigNotFound)) {
+	if err != nil && (m.explicit || m.read || !errors.Is(err, ErrConfigNotFound)) {
 		return nil, fmt.Errorf("reload %q: %w", m.path, err)
 	}
+	m.read = m.read || err == nil
 	return m.Snapshot()
 }
 
