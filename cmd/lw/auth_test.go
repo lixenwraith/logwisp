@@ -190,7 +190,23 @@ func TestRemoveUserRefusesTheLastUser(t *testing.T) {
 
 func TestAuthCommandHelpPrintsAuthUsage(t *testing.T) {
 	code, _, stderr := runAuthTest(t, "add-user", "-h")
-	if code != 0 || !strings.Contains(stderr, "Usage: logwisp auth add-user -credentials FILE") {
+	if code != 0 || !strings.Contains(stderr, "Usage: lw auth add-user -credentials FILE") {
 		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+}
+
+// The login is posted to the -url given plus /auth: a link-local URL keeps
+// its zone escaped, not turned into one that no longer parses
+func TestTokenLogsInAtTheURLGiven(t *testing.T) {
+	pass := filepath.Join(t.TempDir(), "edge-01.pass")
+	if err := os.WriteFile(pass, []byte("correct horse battery\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// No such interface or listener: the dial fails at once, after the URL is formed
+	for _, rawURL := range []string{"https://[fe80::1%25nosuchif0]:1", "https://127.0.0.1:1?"} {
+		code, _, stderr := runAuthTest(t, "token", "-url", rawURL, "-user", "edge-01", "-password-file", pass)
+		if want := `"` + strings.TrimSuffix(rawURL, "?") + `/auth"`; code != 1 || !strings.Contains(stderr, want) {
+			t.Errorf("%s: exit %d, stderr: %s", rawURL, code, stderr)
+		}
 	}
 }

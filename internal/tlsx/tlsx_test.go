@@ -6,7 +6,23 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"logwisp/internal/config"
 )
+
+// A dialer verifies an IPv6 target by its address: the zone names a local
+// interface, which no certificate carries.
+func TestClientServerNameDropsTheZone(t *testing.T) {
+	for host, want := range map[string]string{"fe80::1%eth0": "fe80::1", "::1": "::1", "relay.example": "relay.example"} {
+		cfg, err := Client(&config.TLSOptions{Enabled: true}, host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ServerName != want {
+			t.Errorf("Client(%q).ServerName = %q, want %q", host, cfg.ServerName, want)
+		}
+	}
+}
 
 // Startup names a certificate outside its validity window or within 30 days
 // of leaving it; a healthy one stays silent.

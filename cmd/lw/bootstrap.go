@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	_ "logwisp/internal/source/console"
 	_ "logwisp/internal/source/file"
@@ -106,6 +107,22 @@ func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service
 	)
 
 	return svc, nil
+}
+
+// checkConfig builds every pipeline and plugin as a start would, so TLS files,
+// credentials and options are loaded and their warnings print, then exits
+// before anything binds or reads: plugins start goroutines only in Start.
+func checkConfig(cfg *config.Config) int {
+	cfg.Logging.Output, cfg.Logging.Level = "stderr", "warn"
+	if err := initializeLogger(cfg); err == nil && logger.Start() == nil {
+		defer shutdownLogger()
+	}
+	if _, err := service.NewService(context.Background(), cfg, logger); err != nil {
+		fmt.Fprintf(os.Stderr, "configuration invalid: %v\n", err)
+		return 1
+	}
+	fmt.Printf("configuration ok: %d pipeline(s)\n", len(cfg.Pipelines))
+	return 0
 }
 
 // initializeLogger sets up the global logger based on the application's configuration

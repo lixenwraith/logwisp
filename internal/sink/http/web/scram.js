@@ -16,11 +16,14 @@ const encoder = new TextEncoder();
 
 /**
  * Logs in to the logwisp http sink mounted at base (a URL ending in "/"), per
- * the wire protocol in logwisp's doc/scram-auth-plan.md. The session arrives as
- * an HttpOnly cookie; the promise resolves only once the server has proved it
- * holds this user's verifier. onProgress(fraction) follows the Argon2 pass.
+ * logwisp's doc/scram-auth-plan.md; it resolves only once the server has proved
+ * it holds this user's verifier. The session is an HttpOnly cookie, or with
+ * session "token" the returned token. onProgress(fraction) follows Argon2.
  */
-export async function login(base, username, password, { onProgress } = {}) {
+export async function login(base, username, password, { onProgress, session = "cookie" } = {}) {
+  if (session !== "cookie" && session !== "token") {
+    throw new Error('session must be "cookie" or "token"');
+  }
   const pw = checkCredentials(username, password);
   subtle(); // an insecure page fails before anything is sent
   const url = new URL("auth", base);
@@ -29,7 +32,8 @@ export async function login(base, username, password, { onProgress } = {}) {
   const first = await post(url, { logwisp: 1, scram: { username, client_nonce: clientNonce } });
   const { proof, serverSignature } = await prove(username, pw, clientNonce, first.challenge,
     MIN_TIME, MIN_MEMORY, onProgress);
-  const step = await post(url, { proof, session: "cookie" });
+  // Without "session" the server answers with the token in the body
+  const step = await post(url, session === "cookie" ? { proof, session } : { proof });
   const final = step.final;
   if (!final || typeof final !== "object") {
     throw new Error("server sent no final message");
@@ -40,20 +44,119 @@ export async function login(base, username, password, { onProgress } = {}) {
     throw new Error("server could not prove it holds this user's verifier");
   }
   const expiresIn = Number.isSafeInteger(step.expires_in) && step.expires_in > 0 ? step.expires_in : 0;
-  return { username, expiresIn };
+  if (session === "cookie") return { username, expiresIn };
+  if (typeof step.token !== "string" || step.token === "") {
+    throw new Error("server issued no token");
+  }
+  return { username, expiresIn, token: step.token };
 }
 
 // Logout posts to auth itself: a clearing cookie from any other path would
-// get another default path and miss the session cookie
-export async function logout(base) {
+// get another default path and miss the session cookie. A token is revoked.
+export async function logout(base, { token } = {}) {
   const res = await send(new URL("auth", base), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...bearer(token) },
     body: JSON.stringify({ logout: true }),
   });
   if (res.status !== 200 && res.status !== 204) {
     throw new Error(`logout failed: ${res.status}`);
   }
+}
+
+// Why no login can run on this page, or "": an insecure page refuses the probe's
+// Secure cookie too, so a page asks this before cookiesUsable().
+export function loginUnavailable() {
+  return globalThis.crypto?.subtle ? "" : "WebCrypto unavailable: the page must be served over HTTPS";
+}
+
+// Whether the session cookie would stick. Chromium blocking every cookie still
+// reports navigator.cookieEnabled, so a cookie with the session's attributes
+// must also come back.
+export function cookiesUsable() {
+  if (!globalThis.navigator?.cookieEnabled) return false;
+  document.cookie = "logwisp_probe=1; Secure; SameSite=Strict";
+  const usable = document.cookie.split("; ").includes("logwisp_probe=1");
+  document.cookie = "logwisp_probe=; Max-Age=0; Secure; SameSite=Strict";
+  return usable;
+}
+
+/**
+ * Reads an event stream through fetch, which can send the bearer EventSource
+ * cannot. onEvent({type, data, lastEventId}) gets each event EventSource would
+ * dispatch. Resolves to {lastEventId, retry} when the server ends the stream;
+ * rejects with err.status on an answer other than 200, or on signal's abort.
+ */
+export async function stream(url, { token, signal, onEvent } = {}) {
+  const res = await send(new URL(url, globalThis.location?.href), {
+    headers: { Accept: "text/event-stream", ...bearer(token) },
+    signal,
+  });
+  const type = res.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
+  if (res.status !== 200 || type !== "text/event-stream") {
+    res.body?.cancel().catch(() => {});
+    const err = new Error(res.status !== 200 ? `stream refused: ${res.status}` : "not an event stream");
+    err.status = res.status;
+    throw err;
+  }
+  const parser = eventParser(onEvent);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder(); // UTF-8, dropping a leading BOM as the spec asks
+  try {
+    for (let r = await reader.read(); !r.done; r = await reader.read()) {
+      parser.feed(decoder.decode(r.value, { stream: true }));
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return parser.result();
+}
+
+// The event stream interpretation of the HTML standard; a CR that ends one
+// chunk may be the first half of a CRLF the next chunk completes.
+function eventParser(onEvent) {
+  let line = "", afterCR = false, data = "", type = "", idBuffer = "", lastEventId = "", retry = null;
+  const field = (name, value) => {
+    switch (name) {
+      case "event": type = value; break;
+      case "data": data += value + "\n"; break;
+      case "id": if (!value.includes("\0")) idBuffer = value; break;
+      case "retry": if (/^[0-9]+$/.test(value)) retry = Number(value); break;
+    }
+  };
+  const dispatch = () => {
+    lastEventId = idBuffer;
+    if (data !== "") onEvent?.({ type: type || "message", data: data.slice(0, -1), lastEventId });
+    data = type = "";
+  };
+  const interpret = (l) => {
+    if (l === "") return dispatch();
+    if (l.startsWith(":")) return;
+    const colon = l.indexOf(":");
+    if (colon < 0) return field(l, "");
+    const value = l.slice(colon + 1);
+    field(l.slice(0, colon), value.startsWith(" ") ? value.slice(1) : value);
+  };
+  const breaks = /[\r\n]/g;
+  return {
+    feed(text) {
+      let i = 0;
+      if (afterCR && text.startsWith("\n")) i = 1;
+      if (text !== "") afterCR = false;
+      for (breaks.lastIndex = i; breaks.exec(text); i = breaks.lastIndex) {
+        const end = breaks.lastIndex - 1;
+        interpret(line + text.slice(i, end));
+        line = "";
+        if (text[end] === "\r") {
+          if (end + 1 === text.length) afterCR = true;
+          else if (text[end + 1] === "\n") breaks.lastIndex++;
+        }
+      }
+      line += text.slice(i);
+    },
+    // An event the stream ended before its blank line is discarded
+    result: () => ({ lastEventId, retry }),
+  };
 }
 
 // Test hook: the proof for a fixed client nonce, under an explicit Argon2 floor
@@ -135,19 +238,24 @@ async function post(url, body) {
   return step;
 }
 
-// A redirect would replay the proof to wherever it points
+// A redirect would replay the proof or the token to wherever it points
 async function send(url, init) {
   try {
     return await fetch(url, { ...init, credentials: "same-origin", cache: "no-store", redirect: "error" });
-  } catch {
+  } catch (err) {
+    if (err?.name === "AbortError") throw err;
     throw new Error(`cannot reach ${url.pathname}`);
   }
 }
 
+function bearer(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 function subtle() {
-  const s = globalThis.crypto?.subtle;
-  if (!s) throw new Error("WebCrypto unavailable: the page must be served over HTTPS");
-  return s;
+  const reason = loginUnavailable();
+  if (reason) throw new Error(reason);
+  return crypto.subtle;
 }
 
 async function hmac(key, message) {

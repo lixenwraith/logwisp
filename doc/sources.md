@@ -36,13 +36,14 @@ raw               = false
 from              = "end"
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `directory` | string | **required** | Directory to scan; not recursive |
-| `pattern` | string | `*` | Glob over filenames; `*` and `?` only |
-| `check_interval_ms` | int | `100` | Directory rescan interval; minimum `10` |
-| `raw` | bool | `false` | Never parse a line: the whole line is the message |
-| `from` | string | `end` | Where a new watcher starts: `end` or `start` of the file |
+Options, each as type and default:
+
+- `directory` (string, required): directory to scan; not recursive.
+- `pattern` (string, `*`): glob over filenames; `*` and `?` only.
+- `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
+- `raw` (bool, `false`): never parse a line: the whole line is the message.
+- `from` (string, `end`): where a new watcher starts, `end` or `start` of the
+  file.
 
 **Behaviour**
 
@@ -93,9 +94,9 @@ type = "console"
 buffer_size = 1000
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `buffer_size` | int | `1000` | Subscriber channel depth |
+Option, as type and default:
+
+- `buffer_size` (int, `1000`): subscriber channel depth.
 
 At most **one** instance per pipeline: the type is registered with
 `MaxInstances: 1`, and a second instance is rejected at pipeline construction.
@@ -119,13 +120,15 @@ length      = 20
 special     = false
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `interval_ms` | int | `500` | Emission period |
-| `jitter_ms` | int | `0` | Symmetric jitter; clamped to `interval_ms`, must be non-negative |
-| `format` | string | `txt` | `raw` (message only), `txt` (bracketed line), `json` (JSON object as the message) |
-| `length` | int | `20` | Message length in characters |
-| `special` | bool | `false` | Inject control and non-ASCII characters |
+Options, each as type and default:
+
+- `interval_ms` (int, `500`): emission period.
+- `jitter_ms` (int, `0`): symmetric jitter; must be non-negative, clamped to
+  `interval_ms`.
+- `format` (string, `txt`): `raw` (message only), `txt` (bracketed line) or
+  `json` (JSON object as the message).
+- `length` (int, `20`): message length in characters.
+- `special` (bool, `false`): inject control and non-ASCII characters.
 
 `special = true` is the intended way to exercise sanitizer policies: it inserts
 control bytes and multi-byte Unicode into otherwise ordinary messages. Levels
@@ -180,17 +183,22 @@ allow        = ["edge-01", "edge-02"]
 node_binding = "force"
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
-| `port` | int | **required** | Listen port, 1–65535 |
-| `buffer_size` | int | `1000` | Subscriber channel depth |
-| `max_connections` | int | `0` | Concurrent connection cap; `0` = unlimited |
-| `read_timeout_ms` | int | `0` | Per-connection idle read deadline; `0` = none |
-| `hello_timeout_ms` | int | `10000` | Deadline for the hello preamble |
-| `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address. Ignored when `auth.node_binding` is active |
-| `tls` | table | — | Listener TLS; see [Security](security.md) |
-| `auth` | table | — | Peer authentication (`mtls` or `scram`) and node binding; see [Security](security.md#the-auth-block) |
+Options, each as type and default:
+
+- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the
+  listener keeps to its family ([Networking](networking.md#address-family)).
+- `port` (int, required): listen port, 1–65535.
+- `buffer_size` (int, `1000`): subscriber channel depth.
+- `max_connections` (int, `0`): concurrent connection cap; `0` = unlimited.
+- `read_timeout_ms` (int, `0`): per-connection idle read deadline; `0` = none.
+- `hello_timeout_ms` (int, `10000`): deadline for the hello preamble.
+- `trust_node` (bool, `true`): `false` overrides the sender's node label with
+  its remote address. `auth.node_binding` `assert` or `force` takes over the
+  connection label; only `force` also overrides the per-entry labels; `none`
+  leaves both to `trust_node`.
+- `tls` (table): listener TLS; see [Security](security.md).
+- `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
+  see [Security](security.md#the-auth-block).
 
 For passwords instead of certificates, the `auth` block takes `type = "scram"`
 and a `credentials_file`, and `client_auth` becomes optional; see
@@ -258,17 +266,23 @@ allow        = ["edge-01", "edge-02"]
 node_binding = "force"
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `host` | string | `0.0.0.0` | Bind address; IPv4 only |
-| `port` | int | **required** | Listen port |
-| `ingest_path` | string | `/ingest` | Endpoint path; must start with `/` |
-| `buffer_size` | int | `1000` | Subscriber channel depth |
-| `max_body_bytes` | int | `8388608` | Per-request body cap (8 MiB) |
-| `read_timeout_ms` | int | `30000` | Full request read deadline |
-| `trust_node` | bool | `true` | `false` overrides the sender's node label with its remote address. Ignored when `auth.node_binding` is active |
-| `tls` | table | — | Listener TLS |
-| `auth` | table | — | Peer authentication (`mtls` or `scram`) and node binding; see [Security](security.md#the-auth-block) |
+Options, each as type and default:
+
+- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the
+  listener keeps to its family ([Networking](networking.md#address-family)).
+- `port` (int, required): listen port, 1–65535.
+- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
+  `/auth` is reserved for the login.
+- `buffer_size` (int, `1000`): subscriber channel depth.
+- `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB).
+- `read_timeout_ms` (int, `30000`): full request read deadline.
+- `trust_node` (bool, `true`): `false` overrides the sender's node label with
+  its remote address. `auth.node_binding` `assert` or `force` takes over the
+  connection label; only `force` also overrides the per-entry labels; `none`
+  leaves both to `trust_node`.
+- `tls` (table): listener TLS; see [Security](security.md).
+- `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
+  see [Security](security.md#the-auth-block).
 
 **Behaviour**
 

@@ -19,12 +19,14 @@ Omitting `[pipelines.flow.format]` entirely selects `raw`.
 
 ## Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `type` | string | `raw` | `raw`, `txt` (alias `text`), or `json` |
-| `sanitizer_policy` | string | derived from `type` | `raw`, `txt`, `json`, or `shell` |
-| `flags` | int64 | `0` | Bitmask override; `0` selects a per-type default |
-| `timestamp_format` | string | formatter default | Go reference layout, e.g. `"2006-01-02T15:04:05Z07:00"` |
+Each as type and default:
+
+- `type` (string, `raw`): `raw`, `txt` (alias `text`), or `json`.
+- `sanitizer_policy` (string, derived from `type`): `raw`, `txt`, `json`, or
+  `shell`.
+- `flags` (int64, `0`): bitmask override; `0` selects a per-type default.
+- `timestamp_format` (string, `time.RFC3339Nano`): Go reference layout, e.g.
+  `"2006-01-02T15:04:05Z07:00"`.
 
 ## Types
 
@@ -86,33 +88,37 @@ LogWisp's own configuration surface.
 `flags` is a bitmask passed to the underlying formatter. Leave it at `0` unless
 you need to override the defaults.
 
-| Value | Name | Effect |
-|-------|------|--------|
-| `1` | Raw | Bypass formatting and sanitization entirely |
-| `2` | ShowTimestamp | Emit the timestamp |
-| `4` | ShowLevel | Emit the level |
-| `8` | StructuredJSON | Render attached fields as a JSON object |
-| `16` | NoTimestamp | Suppress the timestamp |
-| `32` | NoLevel | Suppress the level |
+- `1` Raw: bypass formatting and sanitization entirely.
+- `2` ShowTimestamp: emit the timestamp.
+- `4` ShowLevel: emit the level.
+- `8` StructuredJSON: render attached fields as a JSON object.
+- `16` NoTimestamp: suppress the timestamp.
+- `32` NoLevel: suppress the level.
 
 With `flags = 0` the formatter selects `1` for `type = "raw"` and `6`
 (timestamp + level) for every other type. `8` is added automatically whenever an
 entry carries parseable `fields` and `1` is not set; `1` always wins.
 
-Examples: `flags = 4` for level only, no timestamp; `flags = 2` for timestamp
-only, no level.
+`txt` and `json` show timestamp and level unless a suppress bit says otherwise
+(suppress wins over show), so `2` and `4` alone change nothing. Examples:
+`flags = 16` for level only, no timestamp; `flags = 32` for timestamp only, no
+level.
 
 ## Sanitizer Policies
 
 The sanitizer runs before serialization and neutralizes control characters that
 would otherwise break framing or reach a terminal.
 
-| Policy | Behaviour | Use with |
-|--------|-----------|----------|
-| `raw` | No-op passthrough | `type = "raw"` where you control the data |
-| `txt` | Escapes non-printable characters | File and console sinks |
-| `json` | Escapes control characters for safe JSON embedding | `type = "json"`, chain links |
-| `shell` | Strips shell metacharacters, whitespace, and control characters | Data that will be passed to a command |
+Each policy, then what to use it with:
+
+- `raw`: no-op passthrough.
+  - `type = "raw"` where you control the data.
+- `txt`: escapes non-printable characters.
+  - File and console sinks.
+- `json`: escapes control characters for safe JSON embedding.
+  - `type = "json"`.
+- `shell`: strips shell metacharacters, whitespace, and control characters.
+  - Data that will be passed to a command.
 
 When `sanitizer_policy` is omitted, the policy is derived from `type`: `json`
 for `json`, `txt` for `txt`/`text`, and `raw` for anything else — so the safe
@@ -129,7 +135,8 @@ message.
 ## Node Identity in Output
 
 Entries that arrived over a chain link carry a `Node` label. The formatter
-renders it as a syslog-style prefix on the source field:
+renders it as a syslog-style prefix on the source field (`trace` in `json`
+output):
 
 ```
 edge-01/app.log
@@ -149,13 +156,16 @@ from the heartbeat generator when `include_stats = true`.
 
 ## Choosing a Configuration
 
-| Goal | Configuration |
-|------|---------------|
-| Maximum throughput, data already formatted | `type = "raw"` |
-| Human reading in a terminal or file | `type = "txt"`, `sanitizer_policy = "txt"` |
-| Downstream ingestion (Loki, Elasticsearch, jq) | `type = "json"`, `sanitizer_policy = "json"` |
-| Compact console output | `type = "txt"`, `flags = 4` |
-| Untrusted log content | never `raw`; pick `txt` or `json` and set the matching policy |
+By goal:
+
+- Maximum throughput, data already formatted: `type = "raw"`.
+- Human reading in a terminal or file: `type = "txt"`,
+  `sanitizer_policy = "txt"`.
+- Downstream ingestion (Loki, Elasticsearch, jq): `type = "json"`,
+  `sanitizer_policy = "json"`.
+- Compact console output: `type = "txt"`, `flags = 16`.
+- Untrusted log content: never `raw`; pick `txt` or `json` and set the
+  matching policy.
 
 ## Formatting and Chain Links
 

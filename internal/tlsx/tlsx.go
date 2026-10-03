@@ -63,7 +63,8 @@ func Server(o *config.TLSOptions) (*tls.Config, error) {
 
 // Client builds the *tls.Config for dialer plugins (tcp_chain/http_chain
 // sinks). host seeds ServerName when no override is set; Go verifies IP SANs
-// when host is an address. Returns (nil, nil) when disabled.
+// when host is an address, without its zone, which names a local interface
+// and no certificate carries. Returns (nil, nil) when disabled.
 func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 	if o == nil || !o.Enabled {
 		return nil, nil
@@ -78,7 +79,7 @@ func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 		InsecureSkipVerify: o.InsecureSkipVerify,
 	}
 	if cfg.ServerName == "" {
-		cfg.ServerName = host
+		cfg.ServerName, _, _ = strings.Cut(host, "%")
 	}
 	if o.CAFile != "" {
 		pool, err := loadPool(o.CAFile)

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { argon2id, _proofForTest } from "./scram.js";
+import { argon2id, _proofForTest, login, logout, stream } from "./scram.js";
 
 const hex = (b) => Buffer.from(b).toString("hex");
 const unhex = (s) => new Uint8Array(Buffer.from(s, "hex"));
@@ -41,4 +41,102 @@ test("proof and server signature match lixenwraith/auth", async () => {
     client_proof: "JCVOdKAYwVu3YZx+6nfRfBUcnsTCgydOchnQq1G7Ry0=",
     server_signature: "0HKxosIZvdoAzstS4dEkNgoYvcDpFnOgwBjyhiSsK00=",
   });
+});
+
+const STREAM = "https://site.test/logs/stream";
+
+// A fetch answering with an event stream sent in the given chunks
+function sseFetch(t, chunks, { status = 200, type = "text/event-stream" } = {}) {
+  return t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+    start(c) {
+      for (const chunk of chunks) c.enqueue(new TextEncoder().encode(chunk));
+      c.close();
+    },
+  }), { status, headers: { "Content-Type": type } }));
+}
+
+async function events(t, chunks) {
+  sseFetch(t, chunks);
+  const got = [];
+  const end = await stream(STREAM, { onEvent: (e) => got.push(e) });
+  return { got, end };
+}
+
+// A split CRLF is one break, so "d" and "e" stay one event; a kept BOM would
+// rename the first field and drop "a".
+test("stream splits lines at CRLF, LF and a lone CR, across chunks", async (t) => {
+  const { got } = await events(t, ["\uFEFFdata: a\r\ndata: b\rdata: c\n\r", "\n", "data: d\r", "\ndata: e\r", "\r\n"]);
+  assert.deepEqual(got, [
+    { type: "message", data: "a\nb\nc", lastEventId: "" },
+    { type: "message", data: "d\ne", lastEventId: "" },
+  ]);
+});
+
+test("stream interprets fields as the HTML standard does", async (t) => {
+  const { got, end } = await events(t, [
+    ": comment\nevent: connected\ndata:{\"a\":1}\nid: 7\n\n",
+    "data\n\n",
+    "data:  one space kept\nunknown: x\nid: 8\0\nretry: 3000\nretry: 15x\n\n",
+    "id: 8\nevent: no-data\n\n",
+    "id\ndata: never ended\n",
+  ]);
+  assert.deepEqual(got, [
+    { type: "connected", data: "{\"a\":1}", lastEventId: "7" },
+    { type: "message", data: "", lastEventId: "7" },
+    { type: "message", data: " one space kept", lastEventId: "7" },
+  ]);
+  assert.deepEqual(end, { lastEventId: "8", retry: 3000 });
+});
+
+test("stream presents the bearer and refuses anything but a 200 event stream", async (t) => {
+  const fetch = sseFetch(t, []);
+  await stream(STREAM, { token: "tok" });
+  const init = fetch.mock.calls[0].arguments[1];
+  assert.equal(init.headers.Authorization, "Bearer tok");
+  assert.equal(init.redirect, "error");
+  fetch.mock.restore();
+  sseFetch(t, [], { status: 401 });
+  await assert.rejects(stream(STREAM, { token: "tok" }), { status: 401 });
+  sseFetch(t, [], { type: "text/html" });
+  await assert.rejects(stream(STREAM), { message: "not an event stream" });
+});
+
+test("stream rejects with the AbortError once its signal aborts", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url, { signal }) => signal.throwIfAborted() ?? new Response(new ReadableStream({
+    start(c) {
+      c.enqueue(new TextEncoder().encode("data: first\n\n"));
+      signal.addEventListener("abort", () => c.error(signal.reason));
+    },
+  }), { headers: { "Content-Type": "text/event-stream" } }));
+  const ac = new AbortController();
+  await assert.rejects(stream(STREAM, { signal: ac.signal, onEvent: () => ac.abort() }), { name: "AbortError" });
+  await assert.rejects(stream(STREAM, { signal: AbortSignal.abort() }), { name: "AbortError" });
+});
+
+// The mock server signs with the client's own derivation at the Argon2 floor
+test("token mode returns the token, and logout presents it", async (t) => {
+  const challenge = { salt: Buffer.alloc(16, 9).toString("base64"), argon_time: 3, argon_memory: 65536, argon_threads: 1 };
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    const body = JSON.parse(init.body);
+    sent.push({ body, headers: init.headers });
+    if (body.scram) {
+      challenge.client_nonce = body.scram.client_nonce;
+      challenge.full_nonce = body.scram.client_nonce + "server-nonce";
+      return Response.json({ challenge });
+    }
+    if (body.proof) {
+      const want = await _proofForTest("alice", "password123", challenge.client_nonce, challenge, 3, 65536);
+      challenge.proof_ok = body.proof.client_proof === want.client_proof;
+      return Response.json({ final: { username: "alice", server_signature: want.server_signature }, token: "tok", expires_in: 900 });
+    }
+    return new Response(null, { status: 204 });
+  });
+  const base = "https://site.test/logs/";
+  assert.deepEqual(await login(base, "alice", "password123", { session: "token" }),
+    { username: "alice", expiresIn: 900, token: "tok" });
+  assert.ok(challenge.proof_ok);
+  assert.equal("session" in sent[1].body, false);
+  await logout(base, { token: "tok" });
+  assert.equal(sent[2].headers.Authorization, "Bearer tok");
 });

@@ -34,9 +34,10 @@ type FileSink struct {
 	config *config.FileSinkOptions
 
 	// Application
-	input  chan core.TransportEvent
-	writer *log.Logger // internal logger for file writing
-	logger *log.Logger // application logger
+	input        chan core.TransportEvent
+	writer       *log.Logger // internal logger for file writing
+	writerConfig *log.Config
+	logger       *log.Logger // application logger
 
 	// Runtime
 	done      chan struct{}
@@ -117,20 +118,21 @@ func NewFileSinkPlugin(
 	writerConfig.ShowLevel = false
 	writerConfig.Format = "raw"
 
-	// Create internal logger for file writing
-	writer := log.NewLogger()
-	if err := writer.ApplyConfig(writerConfig); err != nil {
+	// Validated here, applied in Start: applying creates the directory and
+	// file, which lw --check and a rejected reload must not do
+	if err := writerConfig.Validate(); err != nil {
 		return nil, fmt.Errorf("failed to initialize file writer: %w", err)
 	}
 
 	fs := &FileSink{
-		id:     id,
-		proxy:  proxy,
-		config: opts,
-		input:  make(chan core.TransportEvent, opts.BufferSize),
-		writer: writer,
-		done:   make(chan struct{}),
-		logger: logger,
+		id:           id,
+		proxy:        proxy,
+		config:       opts,
+		input:        make(chan core.TransportEvent, opts.BufferSize),
+		writer:       log.NewLogger(),
+		writerConfig: writerConfig,
+		done:         make(chan struct{}),
+		logger:       logger,
 	}
 	fs.lastProcessed.Store(time.Time{})
 
@@ -168,7 +170,9 @@ func (fs *FileSink) Input() chan<- core.TransportEvent {
 
 // Start begins the processing loop for the sink
 func (fs *FileSink) Start(ctx context.Context) error {
-	// Start the internal file writer
+	if err := fs.writer.ApplyConfig(fs.writerConfig); err != nil {
+		return fmt.Errorf("failed to initialize file writer: %w", err)
+	}
 	if err := fs.writer.Start(); err != nil {
 		return fmt.Errorf("failed to start file writer: %w", err)
 	}

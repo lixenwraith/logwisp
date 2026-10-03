@@ -6,7 +6,7 @@ channel binding and the mTLS layer was hardened (see
 on the `auth` release that carries channel binding; then browser logins behind
 a TLS-terminating proxy. Operator documentation lives in
 [Security](security.md#password-authentication-scram) and
-[`logwisp auth`](cli.md#logwisp-auth).
+[`lw auth`](cli.md#lw-auth).
 
 **Scope:** optional username/password authentication on every network plugin,
 next to the existing certificate method, without weakening what mTLS gives.
@@ -18,7 +18,7 @@ next to the existing certificate method, without weakening what mTLS gives.
 - No password or password-equivalent on the wire, no KDF work on listeners, and
   no credential relay through a TLS-terminating MITM.
 - Default stays `auth.type = "none"`; existing configurations are unaffected.
-- Config in TOML, credential management and viewer clients in a `logwisp auth`
+- Config in TOML, credential management and viewer clients in a `lw auth`
   CLI.
 
 ## Non-Goals
@@ -94,8 +94,9 @@ Validation at construction:
   CA-issued certificate plus any valid password (`clientcert=verify-ca`).
 - `token_lifetime_ms` only on HTTP listeners; default 15 minutes.
 - `/auth` and every path under it are reserved.
-- `mtls` rejects the four SCRAM keys. A block that names peers or credentials
-  with `type = "none"` is refused: the type was forgotten, not the block.
+- `mtls` rejects every SCRAM key, `trusted_proxies` included. A block that
+  names peers or credentials with `type = "none"` is refused: the type was
+  forgotten, not the block.
 
 **Credentials file** (TOML, written by the CLI, mode 0600):
 
@@ -113,12 +114,12 @@ username = "edge-01"
 
 `decoy_key` keeps unknown-user challenges stable across restarts and edits, so
 a single probe cannot tell a real user from an unknown one (a real user's salt
-changes when it is added, rotated or removed). It is created by the first `add-user` and
-preserved by every rewrite. An empty user set, a duplicate user, a missing or
-short `decoy_key`, an unknown key, or users differing in KDF profile or salt
-length are configuration errors. The file is read at construction; the SCRAM
-server starts in the plugin's `Start` and stops in `Stop`, so a rejected reload
-leaks nothing.
+changes when it is added, rotated or removed). It is created by the first
+`add-user` and preserved by every rewrite. An empty user set, a duplicate
+user, a missing or short `decoy_key`, an unknown key, or users differing in KDF
+profile or salt length are configuration errors. The file is read at
+construction; the SCRAM server starts in the plugin's `Start` and stops in
+`Stop`, so a rejected reload leaks nothing.
 
 ## Wire Protocol
 
@@ -140,12 +141,15 @@ silent, and the dialer gives up after its deadline with "no challenge within
 
 **HTTP** (`http_chain` source, `http` sink): `POST /auth`, outside the auth
 middleware, with its own 10 s read/write deadline. It answers `404` unless the
-policy is `scram`.
+policy is `scram`. Each step, by its request body:
 
-| Step | Request body | Success | Failure |
-|------|--------------|---------|---------|
-| 1 | hello | `200` challenge | `429` throttled, `503` busy, `400` malformed, `413` oversized |
-| 2 | proof | `200` final, token, expires_in | `401 {"error":"authentication failed"}`, `503` if the server stopped |
+- Step 1, the hello
+  - Success: `200` with the challenge.
+  - Failure: `429` throttled, `503` busy, `400` malformed, `413` oversized.
+- Step 2, the proof
+  - Success: `200` with the final, `token` and `expires_in`.
+  - Failure: `401 {"error":"authentication failed"}`, or `503` if the server
+    stopped.
 
 Protected endpoints take `Authorization: Bearer <token>`: missing or invalid is
 `401` with `WWW-Authenticate: Bearer realm="logwisp"`, a certificate-binding miss
@@ -157,23 +161,22 @@ checked at connect and outlives its token; a reload ends it.
 batch is held under backoff); `404`/`405` from `/auth` reads "no auth endpoint
 at <url> (older logwisp, or not a scram listener)"; an ingest `401` clears the
 token and is retried (tokens are renewed ahead of expiry, so this follows a
-listener reload); `403` drops
-the batch; a pin mismatch clears token and pin. Refusals are logged at WARN on
-every attempt, paced by the backoff (`Chain connect refused` on `tcp_chain`,
-`Chain batch delivery failed` on `http_chain`), and failed logins are counted
-in `auth_failures` / `last_auth_error`.
+listener reload); `403` drops the batch; a pin mismatch clears token and pin.
+Refusals are logged at WARN on every attempt, paced by the backoff (`Chain
+connect refused` on `tcp_chain`, `Chain batch delivery failed` on
+`http_chain`), and failed logins are counted in `auth_failures` /
+`last_auth_error`.
 
 ## Throttling
 
 Per remote IP (the socket address; in proxy mode the forwarded client, an IPv6
-one per /64), on handshake
-starts: a token bucket (burst 10, 1/s) refunded on success, and at most 4
-unfinished exchanges. An unanswered HTTP challenge holds its slot for the
-`auth` handshake timeout (30 s); abandoned TCP exchanges release their slot,
-and their entry in the `auth` handshake table, immediately. The address table
-holds 65,536 entries, drops one idle for a minute once its challenges have
-expired, and fails closed when full; the SCRAM server itself caps in-flight
-handshakes at 4,096 (`busy`).
+one per /64), on handshake starts: a token bucket (burst 10, 1/s) refunded on
+success, and at most 4 unfinished exchanges. An unanswered HTTP challenge holds
+its slot for the `auth` handshake timeout (30 s); abandoned TCP exchanges
+release their slot, and their entry in the `auth` handshake table,
+immediately. The address table holds 65,536 entries, drops one idle for a
+minute once its challenges have expired, and fails closed when full; the SCRAM
+server itself caps in-flight handshakes at 4,096 (`busy`).
 
 Counters: `auth_allowed` counts logins; `auth_rejected` every refusal — failed
 proofs, malformed requests, missing credentials and, on HTTP, refused tokens;
@@ -201,10 +204,10 @@ closed.
 ## CLI
 
 ```
-logwisp auth add-user    -credentials F -user U [-password-file P] [-generate]
-logwisp auth remove-user -credentials F -user U
-logwisp auth token  -url https://host:port[/path] -user U -password-file P [-unbound] [TLS flags]
-logwisp auth stream -addr host:port        -user U -password-file P [TLS flags]
+lw auth add-user    -credentials F -user U [-password-file P] [-generate]
+lw auth remove-user -credentials F -user U
+lw auth token  -url https://host:port[/path] -user U -password-file P [-unbound] [TLS flags]
+lw auth stream -addr host:port        -user U -password-file P [TLS flags]
 ```
 
 - `add-user` takes the password from `-password-file` when it exists (at least
@@ -266,44 +269,54 @@ SameSite=Strict; Max-Age=<lifetime>`) and carries no token in the body. It has
 no `Path`: RFC 6265 defaults it to the directory of `POST <mount>/auth`, which
 is the mount behind any proxy prefix. Stream and status accept the cookie or
 `Authorization: Bearer`; another `Authorization` scheme, such as the site's own
-Basic auth, leaves the cookie in charge. Logout is `{"logout": true}` on `POST /auth` itself,
-because a clearing cookie set from `/auth/logout` would default to another path
-and miss the login cookie. It clears the cookie and revokes a valid token until
-it expires (a set of at most 65,536 hashes, gone on reload like every token). An
-open stream outlives its token; a reconnect after expiry gets `401`. `/auth`
-takes only `application/json`, which a cross-origin page cannot send without a
-preflight nobody answers.
+Basic auth, leaves the cookie in charge. Logout is `{"logout": true}` on
+`POST /auth` itself, because a clearing cookie set from `/auth/logout` would
+default to another path and miss the login cookie. It clears the cookie and
+revokes a valid token until it expires (a set of at most 65,536 hashes, gone on
+reload like every token). An open stream outlives its token; a reconnect after
+expiry gets `401`. `/auth` takes only `application/json`, which a cross-origin
+page cannot send without a preflight nobody answers.
+
+**Token mode.** A proof step without `"session"` gets the token in the answer
+body, in proxy mode as everywhere else, so a browser that keeps no cookies needs
+no server change. `scram.js` asks for it with `{session: "token"}`, reads the
+stream through `fetch` with the bearer (`EventSource` cannot send one), and
+revokes it with `logout(base, {token})`. The viewer falls back to it when a
+cookie would not stick or a fresh cookie login still gets `401`, and keeps the
+token in a page variable only: it lasts no longer than the page or its lifetime.
 
 **Endpoints.** `/auth` and every path under it are reserved; every URL in the
 pages is relative, so a proxy prefix works unchanged.
 
-| Path | Purpose |
-|------|---------|
-| `POST /auth` | SCRAM hello, proof, or logout; unbound in proxy mode |
-| `GET /auth/scram.js` | the client library, always in proxy mode |
-| `GET /auth/login`, `login.js`, `style.css` | login page (`login_page`) |
-| `GET /auth/view`, `view.js` | minimal live viewer (`viewer_page`, needs `login_page`) |
+- `POST /auth`: SCRAM hello, proof or logout; unbound in proxy mode.
+- `GET /auth/scram.js`: the client library, always served in proxy mode.
+- `GET /auth/login`, `login.js`, `style.css`: the login page (`login_page`).
+- `GET /auth/view`, `view.js`: a minimal live viewer (`viewer_page`, needs
+  `login_page`).
 
 Files carry `default-src 'none'; script-src 'self'; connect-src 'self';
 style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`,
 `nosniff` and `no-referrer`; nothing is inline. The viewer learns a custom
 `status_path` from a meta tag the sink fills in, renders entries as text, and
-sends a signed-out visitor to `login?next=view`; the login page follows `next`
-only within its origin. The `proxy_tls` capability satisfies the pipeline's
-"auth needs TLS" check.
+sends a signed-out visitor to `login?next=view%23signed-in` (the fragment marks
+a fresh cookie login; without cookies it shows its own sign-in form); the login
+page follows `next` only within its origin. The `proxy_tls` capability
+satisfies the pipeline's "auth needs TLS" check.
 
 **Client library.** `internal/sink/http/web/scram.js`, embedded with `go:embed`,
 is one dependency-free ES module, so a site with its own CSP can copy it into
-its bundle. It exports `login(base, username, password, {onProgress})` and
-`logout(base)`. BLAKE2b and Argon2id are plain JS (no WebAssembly, which would
-need `'wasm-unsafe-eval'`), yielding to the page every 50 ms; SHA-256 and HMAC
-come from WebCrypto, so it needs a secure context. It checks the challenge as
-the Go client does (nonce, salt, cost limits and the dialer's Argon2 floor),
+its bundle. It exports `login(base, username, password, {onProgress, session})`,
+`logout(base, {token})`, `stream(url, {token, signal, onEvent})` (an event
+stream parsed as the HTML standard does), `cookiesUsable()` and
+`loginUnavailable()`. BLAKE2b and Argon2id are plain JS (no WebAssembly, which
+would need `'wasm-unsafe-eval'`), yielding to the page every 50 ms; SHA-256 and
+HMAC come from WebCrypto, so it needs a secure context. It checks the challenge
+as the Go client does (nonce, salt, cost limits and the dialer's Argon2 floor),
 refuses redirects, and reports success only after verifying the server's
 signature. A 64 MiB login takes about 2 s on a desktop. The wire protocol above
 is the contract: a site may implement its own client.
 
-**CLI.** `logwisp auth token -unbound` logs in through the proxy, still pinning
+**CLI.** `lw auth token -unbound` logs in through the proxy, still pinning
 its certificate across the two requests; only then may `-url` carry the mount
 path.
 
@@ -336,29 +349,31 @@ their types and CSP, direct peers refused, pages only in proxy mode, and the
 CLI: private files with a matching verifier, no password replaced without a
 source, mode, decoy key and symlink kept across rewrites, an empty file filled,
 last-user refusal. Under node, `scram.js` against the RFC 9106 vector, Go's
-`argon2.IDKey`, and `auth`'s known-answer proof.
+`argon2.IDKey`, and `auth`'s known-answer proof; the event-stream line breaks
+and fields, the bearer, refusals and abort; a token-mode login and logout.
 
 `test/scram-chain-test.sh --auto` (ports 15821-15825): a relay with SCRAM on all
 four listener types plus one `client_auth` + SCRAM port; authorized edges over
 both chain transports; node labels forced to usernames; wrong password, unknown
-user and no-auth edges deliver nothing; a `tcp` sink viewer through `logwisp auth
+user and no-auth edges deliver nothing; a `tcp` sink viewer through `lw auth
 stream` held past the exchange deadline; a raw TLS client without a hello gets
-nothing; the `http` sink through `logwisp auth token` and curl; missing and bad
+nothing; the `http` sink through `lw auth token` and curl; missing and bad
 tokens get `401`; `remove-user` + `SIGHUP` revokes token and login; throttling
 last. `test/scram-proxy-test.sh --auto` (ports 15831-15832): a Go reverse proxy
 ending TLS in front of a plaintext `http` sink mounted at `/logs/`; headless
 Chromium sent to the login page, refused a wrong password, streaming events
 after login, with the cookie scoped to `/logs` and hidden from scripts, cleared
-by sign-out, and no CSP violations; `token -unbound` and curl through the
-proxy; direct peers and plaintext-forwarded requests `403`. The existing
-scripts keep passing.
+by sign-out, and no CSP violations; a cookie the browser drops leading to the
+viewer's own form, not a loop, its token kept out of storage and the URL; a
+profile blocking every cookie signing in on the viewer, its proofs asking for
+no cookie, streaming with a bearer, sign-out revoking the token, and a reload's
+`401` asking again; `token -unbound` and curl through the proxy; direct peers
+and plaintext-forwarded requests `403`. The existing scripts keep passing.
 
 ## Not Implemented
 
-1. **PROXY protocol behind TLS passthrough.** Every client then shares the
-   proxy's address, and so one throttling budget that a single client can
-   exhaust. Accepting PROXY v2 from listed proxies would restore per-client
-   throttling on the TCP listeners and on HTTP listeners outside proxy mode.
+1. **PROXY protocol behind TLS passthrough**: planned in
+   [To Do, 1.2](todo.md#12-proxy-protocol-deferred-gap-of-scram-see-scram-auth-planmd).
 
 ## mTLS Hardening
 

@@ -51,6 +51,7 @@ type TCPChainSink struct {
 
 	node      string
 	addr      string
+	network   string
 	tlsConfig *tls.Config
 
 	// Authorization: pins the downstream server's identity
@@ -99,6 +100,10 @@ func NewTCPChainSinkPlugin(
 	}
 	if err := lconfig.Port(opts.Port); err != nil {
 		return nil, fmt.Errorf("port: %w", err)
+	}
+	network, err := core.Network(opts.Host)
+	if err != nil {
+		return nil, fmt.Errorf("host: %w", err)
 	}
 
 	if opts.BufferSize <= 0 {
@@ -149,6 +154,7 @@ func NewTCPChainSinkPlugin(
 		config:       opts,
 		node:         node,
 		addr:         net.JoinHostPort(opts.Host, strconv.FormatInt(opts.Port, 10)),
+		network:      network,
 		tlsConfig:    tlsCfg,
 		auth:         authPolicy,
 		input:        make(chan core.TransportEvent, opts.BufferSize),
@@ -377,10 +383,10 @@ func (t *TCPChainSink) connect(ctx context.Context) error {
 		// handshake under ctx, so bound dial + handshake together here
 		dctx, cancel := context.WithTimeout(ctx, t.dialTimeout+tlsx.HandshakeTimeout)
 		td := tls.Dialer{NetDialer: &nd, Config: t.tlsConfig}
-		conn, err = td.DialContext(dctx, "tcp4", t.addr) // IPv4-only
+		conn, err = td.DialContext(dctx, t.network, t.addr)
 		cancel()
 	} else {
-		conn, err = nd.DialContext(ctx, "tcp4", t.addr) // IPv4-only
+		conn, err = nd.DialContext(ctx, t.network, t.addr)
 	}
 	if err != nil {
 		return err

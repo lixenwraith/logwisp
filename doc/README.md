@@ -7,22 +7,32 @@ streams, or downstream LogWisp nodes.
 
 ## Documentation Map
 
-| Document | Contents |
-|----------|----------|
-| [Installation](installation.md) | Building, installing, and running as a service |
-| [Architecture](architecture.md) | Component model, data flow, concurrency, back-pressure |
-| [Configuration](configuration.md) | TOML structure, precedence, environment and CLI overrides |
-| [Sources](sources.md) | Every input plugin and its options |
-| [Sinks](sinks.md) | Every output plugin and its options |
-| [Filters](filters.md) | Pattern-based inclusion and exclusion |
-| [Formatters](formatters.md) | Output shaping and sanitization |
-| [Chaining](chaining.md) | Multi-node topologies and the chain wire protocol |
-| [Networking](networking.md) | Listeners, dialers, timeouts, connection limits |
-| [Security](security.md) | TLS, mTLS, and peer authorization; threat model and current limits |
-| [mTLS Authentication](mtls-auth-plan.md) | Design and rationale for certificate-based authorization |
-| [Password Authentication](scram-auth-plan.md) | Design and rationale for Argon2id-SCRAM authentication; mTLS hardening |
-| [CLI](cli.md) | Flags, signals, exit codes, `logwisp auth` |
-| [Operations](operations.md) | Running, monitoring, tuning, troubleshooting |
+- [Installation](installation.md): building, installing, and running as a
+  service
+- [Deployment](deployment.md): `deploy/lw-deploy.sh` for edges, aggregators,
+  containers, services, jails
+- [Architecture](architecture.md): component model, data flow, concurrency,
+  back-pressure
+- [Configuration](configuration.md): TOML structure, precedence, environment
+  and CLI overrides
+- [Sources](sources.md): every input plugin and its options
+- [Sinks](sinks.md): every output plugin and its options
+- [Filters](filters.md): pattern-based inclusion and exclusion
+- [Formatters](formatters.md): output shaping and sanitization
+- [Chaining](chaining.md): multi-node topologies and the chain wire protocol
+- [Networking](networking.md): listeners, dialers, timeouts, connection limits
+- [Security](security.md): TLS, mTLS, and peer authorization; threat model and
+  current limits
+- [mTLS Authentication](mtls-auth-plan.md): design and rationale for
+  certificate-based authorization
+- [Password Authentication](scram-auth-plan.md): design and rationale for
+  Argon2id-SCRAM authentication; mTLS hardening
+- [CLI](cli.md): flags, signals, exit codes, `lw auth`; also the `lw(1)`
+  manual, [`lw.1`](lw.1)
+- [Operations](operations.md): running, monitoring, tuning, troubleshooting
+- [To Do](todo.md): planned work in priority order: network access control
+  and the PROXY protocol, a hardening review of the config libraries,
+  packaging
 
 A fully annotated configuration covering every option lives at
 [`config/logwisp.toml`](../config/logwisp.toml).
@@ -64,7 +74,7 @@ endpoint), `tcp` (broadcast server), `null`, and the chain forwarders
 - Authorization by certificate identity, per listener: named peers rather than
   everything the CA issued, with the `http` sink's endpoints gated too
 - Password authentication (Argon2id-SCRAM) bound to the listener's certificate,
-  with bearer tokens on HTTP listeners and a `logwisp auth` CLI, and browser
+  with bearer tokens on HTTP listeners and a `lw auth` CLI, and browser
   logins behind a TLS-terminating proxy
 - Node binding, so a chain source labels entries from the sender's certificate
   identity or username rather than from what the sender claims
@@ -96,16 +106,17 @@ target = "stdout"
 ```
 
 ```bash
-logwisp -c config.toml
+lw -c config.toml
 ```
 
 ## System Requirements
 
 - **Operating systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
 - **Architecture**: amd64
-- **Go**: 1.26+ to build from source
+- **Go**: 1.27.1+ to build from source
 
-Network sources and sinks bind and dial over IPv4 only.
+Network sources and sinks bind and dial IPv4 or IPv6, each keeping strictly to
+the family of its host ([Networking](networking.md#address-family)).
 
 ## License
 

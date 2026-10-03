@@ -1,0 +1,5 @@
+LogWisp collects log entries from files, standard input or other LogWisp
+nodes; rate-limits, filters and formats them; and distributes them to files,
+the console, live HTTP (Server-Sent Events) and TCP streams, or downstream
+nodes. Every network source and sink supports TLS, mutual TLS and
+Argon2id-SCRAM password authentication, and reloads on SIGHUP.

@@ -1,0 +1,2 @@
+# Type Name    ID Description             Home             Shell
+u      logwisp -  "LogWisp log transport" /var/lib/logwisp -

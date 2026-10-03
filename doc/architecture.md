@@ -25,29 +25,33 @@ main
 
 Package map:
 
-| Package | Responsibility |
-|---------|----------------|
-| `cmd/logwisp` | Entry point, help, logger bootstrap, signal loop, status reporter |
-| `internal/config` | Typed config schema, loading, top-level validation |
-| `internal/service` | Owns the pipeline set; start, stop, shutdown, global stats |
-| `internal/pipeline` | Pipeline runtime and per-pipeline plugin registry |
-| `internal/flow` | Rate limiter, filter chain invocation, formatting, heartbeat |
-| `internal/filter` | Regex filter and filter chain |
-| `internal/format` | Adapter over `lixenwraith/log` formatter + sanitizer |
-| `internal/source/*` | Source plugins |
-| `internal/sink/*` | Sink plugins |
-| `internal/plugin` | Global factory registry populated by plugin `init()` |
-| `internal/chain` | Chain wire protocol: hello preamble, entry codec, backoff |
-| `internal/tlsx` | The single seam between `TLSOptions` and `crypto/tls` |
-| `internal/session` | Session manager and per-instance proxy |
-| `internal/core` | Shared types (`LogEntry`, `TransportEvent`), capabilities, constants |
-| `internal/tokenbucket` | Rate limiter primitive |
-| `internal/sanitize` | Standalone hex-escaping helpers |
+- `cmd/lw`: entry point, help, logger bootstrap, signal loop, status
+  reporter.
+- `internal/config`: typed config schema, loading, top-level validation.
+- `internal/service`: owns the pipeline set; start, stop, shutdown, global
+  stats.
+- `internal/pipeline`: pipeline runtime and per-pipeline plugin registry.
+- `internal/flow`: rate limiter, filter chain invocation, formatting,
+  heartbeat.
+- `internal/filter`: regex filter and filter chain.
+- `internal/format`: adapter over the `lixenwraith/log` formatter and
+  sanitizer.
+- `internal/source/*`, `internal/sink/*`: the source and sink plugins.
+- `internal/plugin`: global factory registry populated by plugin `init()`.
+- `internal/chain`: chain wire protocol: hello preamble, entry codec, backoff.
+- `internal/tlsx`: the single seam between `TLSOptions` and `crypto/tls`.
+- `internal/authz`: the single seam between `AuthOptions` and the network
+  plugins: `Admit`, `AuthorizeRequest`, `Greet`, `Prepare`.
+- `internal/session`: session manager and per-instance proxy.
+- `internal/core`: shared types (`LogEntry`, `TransportEvent`), capabilities,
+  constants.
+- `internal/tokenbucket`: rate limiter primitive.
+- `internal/sanitize`: standalone hex-escaping helpers.
 
 ## Plugin Registration
 
 Every plugin registers itself in an `init()` function, and
-`cmd/logwisp/bootstrap.go` blank-imports each package to trigger those
+`cmd/lw/bootstrap.go` blank-imports each package to trigger those
 `init()`s. Adding a plugin therefore means writing the package, calling
 `plugin.RegisterSource` / `plugin.RegisterSink`, and adding one blank import.
 
@@ -71,15 +75,14 @@ registry rejects a second instance of any such type.
 
 `LogEntry` fields:
 
-| Field | Purpose |
-|-------|---------|
-| `Time` | Entry timestamp |
-| `Node` | Origin node label for chained topologies; stamped at the first hop, preserved by relays |
-| `Source` | Origin identifier within the node (filename, plugin id, …) |
-| `Level` | `DEBUG`/`INFO`/`WARN`/`ERROR`/`TRACE`, when detected |
-| `Message` | Log content |
-| `Fields` | Optional structured metadata as raw JSON |
-| `RawSize` | Original byte size, used by the entry-size cap |
+- `Time`: entry timestamp.
+- `Node`: origin node label for chained topologies; stamped at the first hop,
+  preserved by relays.
+- `Source`: origin identifier within the node (filename, plugin id, …).
+- `Level`: `DEBUG`, `INFO`, `WARN`, `ERROR` or `TRACE`, when detected.
+- `Message`: log content.
+- `Fields`: optional structured metadata as raw JSON.
+- `RawSize`: original byte size, used by the entry-size cap.
 
 Carrying `Entry` alongside `Payload` is what makes chain sinks
 format-independent: a `tcp_chain` or `http_chain` sink re-serializes the
@@ -88,13 +91,16 @@ structured entry rather than shipping whatever text the local formatter chose.
 ### Back-pressure and drops
 
 There is exactly one drop policy and it is not configurable: **never block**.
+Each stage drops and counts instead of waiting:
 
-| Stage | Full-buffer behaviour | Counter |
-|-------|----------------------|---------|
-| Source → subscriber | Drop the entry | source `dropped_entries` |
-| Flow | Drop on rate limit, filter, or format error | `flow.total_dropped` |
-| Pipeline → sink | Drop for that sink only | pipeline `total_dropped_by_sink` |
-| TCP/HTTP sink → client queue | Drop for that client only | sink `dropped_writes` |
+- Source → subscriber: a full channel drops the entry; source
+  `dropped_entries`.
+- Flow: the rate limiter, a filter rejection or a format error drops it;
+  `flow.total_dropped`.
+- Pipeline → sink: a full sink input drops it for that sink only; pipeline
+  `total_dropped_by_sink`.
+- TCP/HTTP sink → client queue: a full queue drops it for that client only;
+  sink `dropped_writes`.
 
 The `tcp_chain` sink is the one deliberate exception. It holds a line across
 reconnects until it is written or the process shuts down, so a downstream
@@ -126,17 +132,20 @@ on a non-retryable response or on shutdown (`dropped_batches`).
 
 ## Network Architecture
 
-All listeners bind `tcp4` and all dialers dial `tcp4`. IPv6 clients cannot
-connect; this is deliberate, not an oversight.
+Each listener and dialer keeps strictly to the family of its host literal:
+`tcp4` for IPv4, IPv6-only `tcp6` for IPv6 (`::` too); a hostname resolves.
+See [Networking](networking.md#address-family).
 
-| Plugin | Role | Protocol |
-|--------|------|----------|
-| `tcp` sink | Listener | Raw broadcast of formatted payloads |
-| `http` sink | Listener | HTTP/1.1 SSE; HTTP/2 negotiated via ALPN when TLS is on |
-| `tcp_chain` source | Listener | Chain protocol, persistent NDJSON stream |
-| `http_chain` source | Listener | Chain protocol, NDJSON batches over POST |
-| `tcp_chain` sink | Dialer | Chain protocol, persistent stream, auto-reconnect |
-| `http_chain` sink | Dialer | Chain protocol, batched POST with retry |
+The network plugins, by role:
+
+- Listeners
+  - `tcp` sink: raw broadcast of formatted payloads.
+  - `http` sink: HTTP/1.1 SSE; HTTP/2 negotiated via ALPN when TLS is on.
+  - `tcp_chain` source: chain protocol, persistent NDJSON stream.
+  - `http_chain` source: chain protocol, NDJSON batches over POST.
+- Dialers
+  - `tcp_chain` sink: chain protocol, persistent stream, auto-reconnect.
+  - `http_chain` sink: chain protocol, batched POST with retry.
 
 TLS is built in exactly one place, `internal/tlsx`, which exposes
 `Server(opts)` for listeners and `Client(opts, host)` for dialers. See
@@ -176,17 +185,20 @@ Reload (signal or file watch) rebuilds the entire service:
 Because this is a full rebuild, listening sockets close and reopen and all
 clients are disconnected. Application logging is configured once at startup and
 is **not** re-applied on reload.
-Watch errors do not rebuild services. Queued changes are combined, and an unchanged
-pipeline/status snapshot is skipped. Signals always rebuild for certificate rotation.
-Failed candidates release their session workers. Once the old service has stopped,
-a bind/start failure requires another corrected reload or process restart.
+
+Watch errors do not rebuild services. Queued changes are combined, and an
+unchanged pipeline/status snapshot is skipped. Signals always rebuild for
+certificate rotation. Failed candidates release their session workers. Once the
+old service has stopped, a bind/start failure requires another corrected reload
+or process restart.
 
 ## Resource Management
 
 - Every buffer is bounded; the drop-not-block policy keeps memory flat under
   load.
-- Network sinks and chain sources accept a `max_connections` cap. Admission is
-  a load-then-check, so a burst can over-admit by roughly one connection.
+- The `tcp` and `http` sinks and the `tcp_chain` source accept a
+  `max_connections` cap. Admission is a load-then-check, so a burst can
+  over-admit by roughly one connection.
 - Chain listeners bound a single line at `core.MaxLogEntryBytes` (1 MiB); an
   oversized line is a protocol violation and terminates the connection.
 - The `http_chain` source caps each request body at `max_body_bytes`.

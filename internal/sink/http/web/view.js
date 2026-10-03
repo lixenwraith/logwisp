@@ -1,4 +1,4 @@
-import { logout } from "./scram.js";
+import { cookiesUsable, login, loginUnavailable, logout, stream } from "./scram.js";
 
 const base = new URL("..", location.href);
 // The server writes its status path here, relative to the mount
@@ -6,7 +6,22 @@ const statusPath = document.querySelector('meta[name="logwisp-status"]').content
 const MAX_LINES = 5000;
 const log = document.getElementById("log");
 const state = document.getElementById("state");
-let source = null;
+const signOut = document.getElementById("logout");
+const form = document.getElementById("login");
+const progress = document.getElementById("progress");
+const status = document.getElementById("status");
+
+const unavailable = loginUnavailable();
+// Without cookies the session is a token in this variable only: never stored,
+// so it ends with the page, or earlier with its lifetime or sign-out
+let tokenMode = !unavailable && !cookiesUsable();
+let token = null;
+// The login page comes back with this fragment: a 401 now means the browser
+// dropped the session cookie
+let fresh = location.hash === "#signed-in";
+if (fresh) history.replaceState(null, "", location.pathname + location.search);
+let stopStream = null;
+let timer = null;
 
 function append(line) {
   const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
@@ -18,50 +33,140 @@ function append(line) {
 }
 
 // The status answer names the stream path; its 401 is the only way to tell an
-// expired session apart, since EventSource hides the status of a failure.
+// ended session apart, since EventSource hides the status of a failure.
 async function connect() {
+  if (tokenMode && !token) return showLogin("");
   let res;
   try {
-    res = await fetch(new URL("./" + statusPath, base), { credentials: "same-origin", cache: "no-store", redirect: "error" });
+    res = await fetch(new URL("./" + statusPath, base), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: "same-origin", cache: "no-store", redirect: "error",
+    });
   } catch {
     return retry("server unreachable");
   }
-  if (res.status === 401) {
-    location.replace(new URL("login?next=view", location.href).href);
-    return;
-  }
+  if (res.status === 401) return sessionEnded();
+  fresh = false;
   const path = res.ok ? (await res.json().catch(() => ({})))?.endpoints?.stream : null;
   if (typeof path !== "string" || !path.startsWith("/")) {
     return retry(`status unavailable (${res.status})`);
   }
   // Stream paths are absolute in logwisp; the proxy may mount it under a prefix
-  source = new EventSource(new URL("./" + path.replace(/^\/+/, ""), base));
-  source.addEventListener("connected", () => { state.textContent = "live"; });
-  source.addEventListener("disconnect", () => {
-    source.close();
+  const url = new URL("./" + path.replace(/^\/+/, ""), base);
+  if (tokenMode) streamWithToken(url);
+  else streamWithCookie(url);
+}
+
+function onEvent(type, data) {
+  if (type === "connected") state.textContent = "live";
+  if (type === "disconnect") {
+    stopStream();
     retry("server shut down");
-  });
-  source.onmessage = (event) => event.data.split("\n").forEach(append);
+  }
+  if (type === "message") data.split("\n").forEach(append);
+}
+
+function streamWithCookie(url) {
+  const source = new EventSource(url);
+  stopStream = () => source.close();
+  for (const type of ["connected", "disconnect", "message"]) {
+    source.addEventListener(type, (event) => onEvent(type, event.data));
+  }
   source.onerror = () => {
     if (source.readyState === EventSource.CLOSED) retry("disconnected");
     else state.textContent = "reconnecting…";
   };
 }
 
-function retry(reason) {
-  state.textContent = `${reason}, retrying…`;
-  setTimeout(connect, 5000);
+async function streamWithToken(url) {
+  const abort = new AbortController();
+  stopStream = () => abort.abort();
+  let refused = 0;
+  try {
+    await stream(url, { token, signal: abort.signal, onEvent: (event) => onEvent(event.type, event.data) });
+  } catch (err) {
+    refused = err.status ?? 0;
+  }
+  if (abort.signal.aborted) return;
+  if (refused === 401) sessionEnded();
+  else retry(refused ? `stream refused (${refused})` : "disconnected");
 }
 
-document.getElementById("logout").addEventListener("click", async () => {
-  source?.close();
+function sessionEnded() {
+  if (!tokenMode && !fresh) {
+    location.replace(new URL("login?next=" + encodeURIComponent("view#signed-in"), location.href).href);
+    return;
+  }
+  const expired = token !== null;
+  tokenMode = true;
+  token = null;
+  showLogin(expired ? "The session ended; sign in again." : "");
+}
+
+function showLogin(message) {
+  stopStream?.();
+  clearTimeout(timer);
+  state.textContent = "signed out";
+  signOut.hidden = true;
+  status.textContent = message;
+  form.hidden = false;
+  form.elements.username.focus();
+}
+
+function retry(reason) {
+  state.textContent = `${reason}, retrying…`;
+  clearTimeout(timer);
+  timer = setTimeout(connect, 5000);
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const fields = new FormData(form);
+  const button = form.querySelector("button");
+  button.disabled = true;
+  progress.removeAttribute("value");
+  progress.hidden = false;
+  status.textContent = "Deriving the key, this takes a few seconds…";
   try {
-    await logout(base);
+    ({ token } = await login(base, fields.get("username"), fields.get("password"), {
+      session: "token",
+      onProgress: (fraction) => { progress.value = fraction; },
+    }));
+  } catch (err) {
+    status.textContent = err.message;
+    return;
+  } finally {
+    progress.hidden = true;
+    button.disabled = false;
+  }
+  form.elements.password.value = "";
+  form.hidden = true;
+  signOut.hidden = false;
+  state.textContent = "connecting…";
+  connect();
+});
+
+signOut.addEventListener("click", async () => {
+  stopStream?.();
+  clearTimeout(timer);
+  try {
+    await logout(base, { token });
   } catch (err) {
     state.textContent = err.message;
     return;
   }
-  location.replace(new URL("login", location.href).href);
+  if (!tokenMode) {
+    location.replace(new URL("login", location.href).href);
+    return;
+  }
+  token = null;
+  showLogin("Signed out.");
 });
 
-connect();
+// No session of either kind can start on this page, so it offers no form
+if (unavailable) {
+  state.textContent = unavailable;
+  signOut.hidden = true;
+} else {
+  connect();
+}

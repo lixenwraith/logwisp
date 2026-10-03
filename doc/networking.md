@@ -6,23 +6,54 @@ see [Chaining](chaining.md).
 
 ## Address Family
 
-**All listeners bind `tcp4` and all dialers dial `tcp4`.** IPv6 is not
-supported, deliberately. An IPv6 client cannot connect and will simply see a
-connection failure.
+Every listener and dialer keeps strictly to the family of its `host`:
 
-When testing locally use `127.0.0.1`, not `localhost` — the latter may resolve
-to `::1` and appear as an unexplained connection refusal.
+- IPv4 literal (`127.0.0.1`, the default `0.0.0.0`): IPv4 only (`tcp4`). An
+  empty `host` is the IPv4 wildcard, as `0.0.0.0`.
+- IPv6 literal (`::1`, `::`, `fe80::1%eth0`): IPv6 only (`tcp6`).
+  - `::` takes no IPv4 connections, on Linux and FreeBSD alike, whatever the
+    system's `bindv6only` default.
+  - To serve both families, run two listeners on the same port, one on
+    `0.0.0.0` and one on `::`: neither holds the other's port.
+- Hostname: resolved. A listener binds one address (IPv4 when there is one)
+  in that address's family alone, a name for `0.0.0.0` or `::` too, so name
+  the address to be sure; a dialer tries each address in turn.
+
+### IPv6
+
+- Notation
+  - `host` takes the bare address: `host = "::1"`. A bracketed host, one
+    with a port, or an IPv4-mapped one (`::ffff:10.0.0.1`) fails at load.
+  - Addresses and URLs bracket it: logs print `[::1]:8443`, and `lw auth`
+    takes `-addr [::1]:8443` and `-url https://[::1]:8443`. Older `curl`
+    releases read the brackets as a glob; `-g` stops that and is harmless.
+  - A link-local address carries its zone, `fe80::1%eth0`, escaped in URLs as
+    `https://[fe80::1%25eth0]:8443`.
+- TLS: a dialer verifies an IPv6 target against the certificate's IP SANs
+  (`subjectAltName = IP:::1`), as it does an IPv4 one. The zone is not part of
+  the name; `server_name` overrides as usual.
+- Peers
+  - Logs and sessions name an IPv6 peer by its address, a link-local one with
+    its zone.
+  - SCRAM throttling counts an IPv6 client by its /64, so the hosts on a link
+    share one link-local budget per interface (zone): each can pick any
+    `fe80::/64` address.
+  - A peer with a zone never matches `auth.trusted_proxies`: put the proxy on
+    loopback or a routed address.
 
 ## Network Plugins
 
-| Plugin | Role | Protocol | Purpose |
-|--------|------|----------|---------|
-| `tcp` sink | Listener | Raw stream | Broadcast formatted payloads to clients |
-| `http` sink | Listener | HTTP SSE | Browser-friendly live stream plus status JSON |
-| `tcp_chain` source | Listener | Chain v1 | Ingest a persistent NDJSON stream |
-| `http_chain` source | Listener | Chain v1 | Ingest NDJSON batches over POST |
-| `tcp_chain` sink | Dialer | Chain v1 | Forward entries over a persistent connection |
-| `http_chain` sink | Dialer | Chain v1 | Forward entries as batched POSTs |
+Listeners:
+
+- `tcp` sink: raw stream; broadcasts formatted payloads to clients.
+- `http` sink: HTTP SSE; a browser-friendly live stream plus status JSON.
+- `tcp_chain` source: chain v1; ingests a persistent NDJSON stream.
+- `http_chain` source: chain v1; ingests NDJSON batches over POST.
+
+Dialers:
+
+- `tcp_chain` sink: chain v1; forwards entries over a persistent connection.
+- `http_chain` sink: chain v1; forwards entries as batched POSTs.
 
 There is no port registry and no default port: `port` is required on every
 network plugin. There is also no cross-pipeline conflict detection — two sinks
@@ -34,30 +65,36 @@ ERROR msg="Failed to start sink" error="tcp sink bind 0.0.0.0:9090: listen tcp4 
 
 ## Timeouts
 
-Every network plugin exposes the deadlines relevant to its role. Zero means "no
-deadline" wherever the table says so.
+Every network plugin exposes the deadlines relevant to its role. `0` means no
+deadline where the default is `0` (none); elsewhere it selects the default.
 
-| Plugin | Option | Default | Bounds |
-|--------|--------|---------|--------|
-| `tcp` sink | `write_timeout_ms` | `5000` | One write to one client; a miss disconnects that client |
-| `http` sink | `write_timeout_ms` | `0` (none) | One SSE event write |
-| `tcp_chain` source | `hello_timeout_ms` | `10000` | Reading the protocol preamble, and under `scram` the whole login |
-| `tcp_chain` source | `read_timeout_ms` | `0` (none) | Idle time between entries |
-| `http_chain` source | `read_timeout_ms` | `30000` | Reading a whole request body |
-| `tcp_chain` sink | `dial_timeout_ms` | `5000` | TCP connect |
-| `tcp_chain` sink | `write_timeout_ms` | `5000` | One line write |
-| `http_chain` sink | `request_timeout_ms` | `10000` | Dial plus write plus response, and a SCRAM login when one is due |
+- `tcp` sink
+  - `write_timeout_ms`, default `5000`: one write to one client; a miss
+    disconnects that client.
+- `http` sink
+  - `write_timeout_ms`, default `0` (none): one SSE event write.
+- `tcp_chain` source
+  - `hello_timeout_ms`, default `10000`: reading the protocol preamble, and
+    under `scram` the whole login.
+  - `read_timeout_ms`, default `0` (none): idle time between entries.
+- `http_chain` source
+  - `read_timeout_ms`, default `30000`: reading a whole request body.
+- `tcp_chain` sink
+  - `dial_timeout_ms`, default `5000`: TCP connect.
+  - `write_timeout_ms`, default `5000`: one line write.
+- `http_chain` sink
+  - `request_timeout_ms`, default `10000`: dial plus write plus response, and
+    a SCRAM login when one is due.
 
 Fixed, non-configurable bounds:
 
-| Bound | Value | Applies to |
-|-------|-------|------------|
-| TLS handshake | 10 s | All TLS listeners and dialers |
-| HTTP read-header timeout | 10 s | `http` sink, `http_chain` source |
-| HTTP server shutdown grace | 2 s | `http` sink, `http_chain` source |
-| Max single entry line | 1 MiB | Chain listeners |
-| SCRAM login | 10 s | `tcp` sink, chain sinks, `logwisp auth`, each `/auth` request |
-| SCRAM line or `/auth` body | 4 KiB | `scram` listeners and dialers |
+- TLS handshake: 10 s, on all TLS listeners and dialers.
+- HTTP read-header timeout: 10 s, on the `http` sink and `http_chain` source.
+- HTTP server shutdown grace: 2 s, on the `http` sink and `http_chain` source.
+- Single entry line: at most 1 MiB, on chain listeners.
+- SCRAM login: 10 s, on the `tcp` sink, chain sinks, `lw auth`, and each
+  `/auth` request.
+- SCRAM line or `/auth` body: at most 4 KiB, on `scram` listeners and dialers.
 
 The `http` sink deliberately leaves the server's `WriteTimeout` unset, since it
 would terminate long-lived SSE streams; per-event deadlines come from
@@ -163,7 +200,9 @@ headers, and entry encoding.
 
 **Connection refused**
 - Confirm the pipeline started; a bind failure is logged at ERROR.
-- Confirm you are dialing IPv4. `localhost` may resolve to `::1`.
+- Confirm the dialer uses the listener's family: `[::1]` does not reach a
+  `127.0.0.1` or `0.0.0.0` listener, nor `127.0.0.1` a `::` one. `localhost`
+  may resolve to either.
 - Check the port is not already bound by another pipeline in the same process.
 
 **TLS handshake failure**
@@ -176,7 +215,8 @@ headers, and entry encoding.
   is not covered by the server certificate's SANs; set `server_name`.
 - `protocol version not supported` — one side is pinned to `min_version = "1.3"`
   and the other cannot negotiate it.
-- Handshake failures appear as WARN with the remote address, and increment
+- Listeners log handshake failures at WARN with the remote address (the `tcp`
+  sink at DEBUG); the `tcp` sink and `tcp_chain` source count them in
   `tls_handshake_errors`.
 
 **Rejected after a successful handshake**
@@ -206,7 +246,7 @@ headers, and entry encoding.
   between the peers terminates TLS. Pass TLS through to LogWisp; the login
   cannot work otherwise, except on an `http` sink in proxy mode
   (`auth.trusted_proxies`), where `the client bound its proof to the proxy's
-  certificate` means a client that needs `logwisp auth token -unbound`, and
+  certificate` means a client that needs `lw auth token -unbound`, and
   `the client sent an unbound proof` the reverse. On an `http_chain` sink,
   `server certificate differs from the one the SCRAM login was bound to` means
   the certificate changed after the login: a rotation (the retry binds anew),
@@ -217,15 +257,16 @@ headers, and entry encoding.
   `X-Forwarded-For`.
 - `too many attempts` — the address failed or abandoned logins faster than one
   per second beyond a burst of 10, or has 4 unfinished; it clears within seconds
-  once the failing peer stops. Peers behind one NAT share the budget. `busy` —
-  4,096 logins in flight, or the listener is stopping.
+  once the failing peer stops. Peers behind one NAT or one passthrough proxy
+  share the budget. `busy` — 4,096 logins in flight, or the listener is
+  stopping.
 - `authentication not enabled` — the dialer has `scram`; the listener's
   `auth.type` is `none` or `mtls`.
 - `no challenge within 10s (older logwisp, or not a scram listener)` — the
   server read the hello and said nothing. Over HTTP the same case reads
   `no auth endpoint at …/auth`.
 - `Argon2 parameters below client minimum` — the credentials file holds a
-  cheaper Argon2 profile than the defaults; recreate it with `logwisp auth`.
+  cheaper Argon2 profile than the defaults; recreate it with `lw auth`.
 - `peer offered no credentials` (`authentication required` on the wire) in the
   listener's log — a peer without `scram` reached a `scram` listener; a client
   that sends nothing logs `read hello: … i/o timeout` after 10 s instead. A
@@ -244,6 +285,22 @@ headers, and entry encoding.
   dies with every listener reload.
 - `403` is not the token: it is the `identity` binding, node binding or, in
   proxy mode, the proxy gate.
+
+**Behind an L4 proxy**
+- Every connection through the proxy fails: it sends a PROXY header (nginx
+  `stream` with `proxy_protocol on`, HAProxy `send-proxy`) to a LogWisp TLS
+  listener, which cannot read one yet. The header lands in front of the TLS
+  handshake, which fails; the listener logs the proxy's address and
+  `first record does not look like a TLS handshake` (the `tcp` sink at DEBUG).
+  Route LogWisp without it: see
+  [Behind nginx or another proxy](security.md#behind-nginx-or-another-proxy).
+- All peers share one throttling budget behind a passthrough proxy: without
+  PROXY every `scram` peer arrives from the proxy's address. One client failing
+  logins exhausts everyone's, and a fifth login while 4 are unfinished (edges
+  reconnecting together after a restart) is refused; both answer
+  `too many attempts` ([Throttling](security.md#throttling)).
+  Expose the LogWisp ports directly, or keep the proxy hop on a trusted
+  network so only trusted clients share the budget.
 
 **Entries not arriving over a chain link**
 - Check the sink's `connected` statistic and its `reconnects` count.

@@ -49,6 +49,9 @@ It is the contract, not a suggestion.
 
 - `doc/` is already long. Condense when you touch it; append only for a new concept
   or scope.
+- No tables in docs, never a large one: docs are read in terminals and in editors
+  that do not render Markdown. Use hierarchical bullet lists (item, then its
+  details indented beneath); fenced blocks for config, commands and port maps.
 - A gap you are deferring goes in the "Not Implemented" list of the design doc it
   belongs to: extend the item, or add a concise one in the list's pattern.
 - The repository describes the architecture, never a machine: docs and commands
@@ -64,7 +67,7 @@ It is the contract, not a suggestion.
 `go build ./...`, `gofmt -l` on changed files, and `go test` on the packages the
 change touches.
 - A change to platform-sensitive code also cross-builds the production target:
-  `GOOS=freebsd GOARCH=amd64 go build ./cmd/logwisp`.
+  `GOOS=freebsd GOARCH=amd64 go build ./cmd/lw`.
 - Do not run `-race` tests unless investigating a known/suspected race issue; CI
   runs them.
 
@@ -91,8 +94,12 @@ change touches.
   dependency-free ES module (sites copy it into their bundles) and the pages
   stay free of inline script and style (their CSP); `node --test` there checks
   it against Go's Argon2 and `auth`'s known answer.
-- Listeners and dialers are IPv4-only (`tcp4`). E2E scripts in `test/` need
-  `bin/logwisp` and `--auto`, and each owns a port range and a gitignored run
-  directory.
+- Listeners and dialers take their network from `core.Network`, strictly per
+  family: an IPv4 literal `tcp4`, an IPv6 literal (`::` too) IPv6-only `tcp6`,
+  a hostname `tcp`. Join addresses with `net.JoinHostPort`, build URLs with
+  `net/url`. E2E scripts in `test/` need `bin/lw` and `--auto`, and each owns
+  a port range and a gitignored run directory. They source `test/lib.sh`
+  (checks, skips, summary; daemons log only to files) and exit 77 when the host
+  lacks what they test.
 - Many older files lack a trailing newline and fail `gofmt -l`; format the files
   you change, not the tree.
