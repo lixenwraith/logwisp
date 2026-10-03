@@ -29,10 +29,11 @@ mkdir -p "$CONF" "$LOG" "$PKI" "$OUT"
 pki_ca
 pki_leaf relay relay.internal serverAuth "IP:127.0.0.1,DNS:relay.internal"
 pki_leaf edge-01 edge-01 clientAuth
+pki_leaf edge-02 edge-02 clientAuth
 pki_leaf edge-99 edge-99 clientAuth
 pki_leaf viewer-01 viewer-01 clientAuth
 pki_leaf rogue rogue-viewer clientAuth
-info "test PKI in $(short "$PKI")/: ca, relay, edge-01, edge-99, viewer-01, rogue"
+info "test PKI in $(short "$PKI")/: ca, relay, edge-01, edge-02, edge-99, viewer-01, rogue"
 
 # Relay: both ingest ports authorize edge-01 only and bind the node label to
 # the certificate identity; both streaming sinks authorize viewer-01 only.
@@ -63,7 +64,7 @@ client_ca_file = "$PKI/ca.crt"
 [pipelines.plugin_sources.config.auth]
 type = "mtls"
 identity = "cn"
-allow = ["edge-01"]
+allow = ["edge-01", "edge-02"]
 node_binding = "force"
 
 [[pipelines.plugin_sinks]]
@@ -182,7 +183,8 @@ pin edge_http relay.internal
 edge_conf edge_rogue tcp_chain $PORT_TCP_CHAIN edge-01 edge-99 info
 # edge_pinfail pins a server identity the relay does not have: the dialer must
 # refuse the handshake even though the certificate chains to the trusted CA.
-edge_conf edge_pinfail tcp_chain $PORT_TCP_CHAIN edge-pinfail edge-01 debug "backoff_max_ms = 1000"
+# The relay admits its edge-02, so only the pin can keep its entries out.
+edge_conf edge_pinfail tcp_chain $PORT_TCP_CHAIN edge-pinfail edge-02 debug "backoff_max_ms = 1000"
 pin edge_pinfail some-other-relay.internal
 info "configurations in $(short "$CONF")/"
 
@@ -200,12 +202,13 @@ write_env LW="$BIN" PKI="$PKI" CA="$PKI/ca.crt" CERT="$PKI/viewer-01.crt" KEY="$
 
 guide "logwisp mTLS test" <<EOF
 Ports:
-  $PORT_TCP_CHAIN  relay tcp_chain ingest, mTLS, allow edge-01
+  $PORT_TCP_CHAIN  relay tcp_chain ingest, mTLS, allow edge-01, edge-02
   $PORT_HTTP_CHAIN  relay http_chain ingest, mTLS, allow edge-01
   $PORT_TCP_SINK  tcp sink, mTLS, allow viewer-01
   $PORT_HTTP_SINK  http sink, mTLS, allow viewer-01
 Edges: edge_tcp, edge_http (edge-01) deliver; edge_rogue (edge-99) is
-refused; edge_pinfail pins a server name the relay does not have.
+refused; edge_pinfail (edge-02, admitted) pins a server name the relay does
+not have.
 Shell setup (CA, and viewer-01's CERT and KEY):
 > . $(short "$RUN")/env
 Read the tcp sink, then the http sink, as viewer-01:
@@ -271,8 +274,8 @@ check "client_auth: a peer with no certificate was refused ($n handshake errors)
 # 5. Dialer-side pinning: the relay's identity is not the one edge_pinfail pins
 n=$(grep -c 'is not allowed' "$LOG/edge_pinfail.out")
 check "server pinning: dialer refused a CA-valid server it does not pin ($n refusals)" $((n >= 1))
-n=$(grep -c 'edge-pinfail' <<<"$tcp_file")
-check "server pinning: pin-failing edge delivered nothing" $((n == 0))
+n=$(grep -c 'edge-02/' <<<"$tcp_file")
+check "server pinning: pin-failing edge-02 delivered nothing ($n lines)" $((n == 0))
 
 section "Scenario 2: viewer clients on mTLS-gated sinks"
 
@@ -282,8 +285,8 @@ n=$(grep -c 'edge-01/' <<<"$out")
 check "tcp sink: viewer-01 streamed entries ($n lines)" $((n >= 1))
 
 out="$(tcp_view rogue 4)"
-n=$(grep -c '"message"' <<<"$out")
-check "tcp sink: rogue viewer received no entries" $((n == 0))
+n=$(grep -c 'edge-01/' <<<"$out")
+check "tcp sink: rogue viewer received no entries ($n lines)" $((n == 0))
 
 # 7. HTTP sink: stream and status both gated
 code="$(http_get /status viewer-01)"
