@@ -14,6 +14,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/version"
 
 	"github.com/lixenwraith/log"
+	"golang.org/x/term"
 )
 
 var logger *log.Logger
@@ -88,6 +89,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if !cfg.Quiet && readsStdin(cfg) && term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintln(os.Stderr, "lw: reading standard input; Ctrl-D ends it (lw --help for usage)")
+	}
+
 	// --- 3. Setup signals and shutdown ---
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
@@ -158,6 +163,10 @@ func main() {
 				reload(false)
 			}
 
+		case <-svc.Done():
+			logger.Info("msg", "Every pipeline finished: its input ended")
+			return
+
 		case <-ctx.Done():
 			return // Exit the loop and trigger deferred shutdown
 		}
@@ -171,4 +180,16 @@ func shutdownLogger() {
 			Error("Logger shutdown error: %v\n", err)
 		}
 	}
+}
+
+// readsStdin reports a console source: typed into, it waits for the keyboard
+func readsStdin(cfg *config.Config) bool {
+	for _, p := range cfg.Pipelines {
+		for _, src := range p.PluginSources {
+			if src.Type == "console" {
+				return true
+			}
+		}
+	}
+	return false
 }

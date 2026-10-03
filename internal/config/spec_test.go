@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/lixenwraith/logwisp/internal/testutil"
@@ -160,6 +161,21 @@ func TestSpecPipelinesReplaceFilePipelines(t *testing.T) {
 	}
 }
 
+// A spec pipeline without a source reads stdin and one without a sink writes
+// stdout, as a filter does; two pipelines cannot both read stdin.
+func TestSpecPipelinesDefaultToStdio(t *testing.T) {
+	isolateConfig(t)
+	got := loadPipelines(t, "--filter", "include,patterns=ERROR")
+	if p := got[0]; len(p.PluginSources) != 1 || p.PluginSources[0].Type != "console" || p.PluginSources[0].ID != "stdin" ||
+		len(p.PluginSinks) != 1 || p.PluginSinks[0].Type != "console" || p.PluginSinks[0].ID != "stdout" {
+		t.Fatalf("pipeline: %+v", p)
+	}
+	_, err := Load([]string{"--pipeline", "a", "--sink", "null", "--pipeline", "b", "--sink", "null"})
+	if err == nil || !strings.Contains(err.Error(), `console source already reads stdin in pipeline "a"`) {
+		t.Fatalf("second stdin reader: %v", err)
+	}
+}
+
 // Without a file a reload still rebuilds; once the discovered default
 // appears it is read, and its pipelines still yield to the specs. Its later
 // removal fails the reload instead of keeping the removed file's values.
@@ -171,13 +187,13 @@ func TestReloadKeepsSpecPipelines(t *testing.T) {
 	}
 	defer m.Close()
 	first, err := m.Reload()
-	if err != nil || !first.StatusReporter {
+	if err != nil || first.StatusReporter {
 		t.Fatalf("reload without a file: %+v %v", first, err)
 	}
 	first.Pipelines[0].PluginSources[0].Config["special"] = "mutated"
-	testutil.WriteFile(t, "logwisp.toml", "status_reporter = false\n[[pipelines]]\nname = \"file\"\n")
+	testutil.WriteFile(t, "logwisp.toml", "status_reporter = true\n[[pipelines]]\nname = \"file\"\n")
 	next, err := m.Reload()
-	if err != nil || next.StatusReporter || len(next.Pipelines) != 1 || next.Pipelines[0].Name != "cli" ||
+	if err != nil || !next.StatusReporter || len(next.Pipelines) != 1 || next.Pipelines[0].Name != "cli" ||
 		next.Pipelines[0].PluginSources[0].Config["special"] != "true" {
 		t.Fatalf("reload: %+v %v", next, err)
 	}
