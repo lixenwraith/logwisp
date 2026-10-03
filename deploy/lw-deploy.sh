@@ -89,7 +89,7 @@ their mode, and under --yes one that does not apply stops the run)
   --sink-auth none|mtls|scram  the http and tcp outputs
   --sink-allow ID         mtls viewer CN; repeatable
   --add-viewer NAME       scram viewer; repeatable
-  --secrets-dir DIR       generated passwords (default ~/logwisp-secrets)
+  --secrets-dir DIR       generated passwords, absolute (default ~/logwisp-secrets)
 
 Containers (Linux)
   --name NAME             container name (default logwisp-ROLE)
@@ -684,8 +684,7 @@ resolve() {
 	[ "$ROLE" != aggregator ] || drop LOG_DIRS --log-dir
 	[ -z "$SERVER_NAME" ] || v_host "$SERVER_NAME" || exit 1
 	if [ -n "$ADD_USERS$ADD_VIEWERS" ]; then
-		ask SECRETS_DIR --secrets-dir "Directory for the generated passwords" "$HOME_DIR/logwisp-secrets"
-		case $SECRETS_DIR in /*) ;; *) SECRETS_DIR=$PWD/$SECRETS_DIR ;; esac
+		ask SECRETS_DIR --secrets-dir "Directory for the generated passwords" "$HOME_DIR/logwisp-secrets" v_abs
 	else
 		drop SECRETS_DIR --secrets-dir
 	fi

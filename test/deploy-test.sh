@@ -225,6 +225,14 @@ ok=$((rc != 0))
 said fail-pattern 'invalid --log-pattern' || ok=0
 [[ -e $RUN/fail-pattern ]] && ok=0
 check "a --log-pattern with a newline stops before writing anything (exit $rc)" $ok
+(cd "$RUN" && deploy fail-secrets --runtime manual --role aggregator --config-dir "$RUN/fail-secrets" \
+	--bin "$BIN" --file-dir "$RUN/fail-secrets/out" --tls --cert-file "$PKI/aggregator.crt" \
+	--key-file "$PKI/aggregator.key" --auth scram --add-user edge-01 --secrets-dir '~/secrets')
+rc=$?
+ok=$((rc != 0))
+said fail-secrets 'not an absolute path: ~/secrets' || ok=0
+[[ -e $RUN/fail-secrets || -e "$RUN/~" ]] && ok=0
+check "a --secrets-dir of ~/secrets stops before writing anything (exit $rc)" $ok
 # A failing install stands in for the real one: a regression must not install onto this host
 mkdir -p "$RUN/stub"
 printf '#!/bin/sh\nexit 1\n' >"$RUN/stub/install"

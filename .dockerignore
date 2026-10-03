@@ -16,5 +16,6 @@ script
 test/run*
 **/node_modules
 *.log
+*.pass
 *.toml
 !config/*.toml

@@ -8,6 +8,7 @@ bin/
 script/
 build/
 *.log
+*.pass
 *.toml
 !config/*.toml
 build.sh

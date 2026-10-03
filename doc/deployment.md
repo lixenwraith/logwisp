@@ -96,10 +96,10 @@ needs `--force`.
     CNs (none: any certificate the CA issued); an edge's `--allow` pins the
     aggregator's CN
   - `scram`: the aggregator creates each `--add-user`, its password generated
-    into `--secrets-dir` (default `~/logwisp-secrets`) and handed to
-    `lw auth add-user`, natively or through the image; copy each password file
-    to its edge as `--password-file`, whose name without `.pass` is the
-    default `--username`
+    into `--secrets-dir`, an absolute path (default `~/logwisp-secrets`), and
+    handed to `lw auth add-user`, natively or through the image; copy each
+    password file to its edge as `--password-file`, whose name without
+    `.pass` is the default `--username`
   - either binds the node label to the authenticated identity
 - `--sink-auth` on the `http` and `tcp` outputs
   - `mtls` with `--sink-allow`, or `scram` with `--add-viewer` (a separate
