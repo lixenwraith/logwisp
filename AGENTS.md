@@ -98,6 +98,8 @@ change touches.
   family: an IPv4 literal `tcp4`, an IPv6 literal (`::` too) IPv6-only `tcp6`,
   a hostname `tcp`. Join addresses with `net.JoinHostPort`, build URLs with
   `net/url`. E2E scripts in `test/` need `bin/lw` and `--auto`, and each owns
-  a port range and a gitignored run directory.
+  a port range and a gitignored run directory. They source `test/lib.sh`
+  (checks, skips, summary; daemons log only to files) and exit 77 when the host
+  lacks what they test.
 - Many older files lack a trailing newline and fail `gofmt -l`; format the files
   you change, not the tree.

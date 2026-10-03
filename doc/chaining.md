@@ -45,7 +45,8 @@ the original producer rather than the last relay.
 
 With an `auth` block the source can instead bind the label to the sender's
 authenticated identity — its certificate identity under `mtls`, its username
-under `scram` — which overrides `trust_node` entirely. `auth.node_binding`:
+under `scram`. The binding takes over the connection label from `trust_node`;
+only `force` also overrides the per-entry labels. `auth.node_binding`:
 
 - `none`: `trust_node` governs the connection label and the per-entry `node`
   field.

@@ -180,7 +180,8 @@ Options, each as type and default:
   timestamp.
 - `include_stats` (bool, `false`): attach `beat_count` and measured
   `interval_ms` as fields.
-- `format` (string, `txt`): `txt`, `json`, or `raw`.
+- `format` (string, `txt`): `txt`, `json` or `raw` are accepted but have no
+  effect: heartbeats go through the flow's `format`, like every entry.
 
 Heartbeats are ordinary entries with source `heartbeat` and level `INFO`. They
 are generated after the flow's filter and rate-limit stages, so filters do not

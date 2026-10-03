@@ -87,7 +87,7 @@ name = "default"
 # interval_ms = 1000                    # Minimum 100
 # include_timestamp = false
 # include_stats = false
-# format = "txt"                        # txt|json|raw ("comment" is rejected)
+# format = "txt"                        # accepted, no effect: heartbeats use flow.format
 
 ###============================================================================
 ### TLS (shared shape; applies to every network source and sink)

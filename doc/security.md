@@ -200,7 +200,8 @@ reported at startup.
 
 ### Node binding
 
-`node_binding` applies only to the chain sources, and it overrides `trust_node`.
+`node_binding` applies only to the chain sources. It takes the connection label
+over from `trust_node`; only `force` also overrides the per-entry labels.
 
 - `none`: `trust_node` governs both the connection label and the per-entry
   `node` field.
@@ -737,8 +738,9 @@ stream {
   that keeps failing logins makes every other client's logins answer
   `too many attempts` until it stops.
 - Established `tcp_chain` links and open streams keep flowing; a reconnect
-  waits for the budget. An `http_chain` sink logs in again ahead of token
-  expiry and holds its batches under backoff until that login passes.
+  waits for the budget. An `http_chain` sink whose early renewal is refused
+  keeps sending on its token, retrying every few seconds, and holds its
+  batches only once that token has expired.
 - Logs and sessions name the proxy, not the peer.
 - Proxy mode is unaffected: it throttles on the forwarded client.
 - Until LogWisp reads PROXY, mitigate:

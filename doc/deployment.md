@@ -175,3 +175,10 @@ every key.
   `force`
 - creating certificates
 - several native instances on one host: use one per host or jail
+
+## Testing the script
+
+`test/deploy-test.sh --auto` drives the script with `--yes` and `--dry-run` for
+the manual, native and docker runtimes, runs the generated edge, aggregator and
+standalone nodes end to end, and checks that `--yes` fails closed and that
+`--dry-run` changes nothing.

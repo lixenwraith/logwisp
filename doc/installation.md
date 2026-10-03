@@ -6,7 +6,10 @@
 - Architecture: amd64; arm64 builds but is untested
 - To build: Go 1.27.1 or newer (FreeBSD: the `go127` package), and GNU make
   or BSD make
-- For `make e2e`: bash 5+, coreutils, curl and openssl
+- For `make e2e`: bash 5+, coreutils, curl, openssl and go (the proxy test
+  builds its reverse proxy). Optional, else those checks SKIP: node with
+  playwright (browser checks), an IPv6 loopback (`ipv6-test.sh`), docker as
+  root with the `logwisp:dev` image (`deploy-test.sh`'s container run)
 
 ## Building from Source
 
@@ -250,12 +253,31 @@ starting it, run `lw --check -c FILE`; see
 
 ## Test Scripts
 
-The end-to-end scripts in `test/` run against `bin/lw`; `make e2e` runs them
-all with `--auto` and reports skips separately from passes and failures.
-Without `--auto`, every script but `passthrough-test.sh` keeps its daemons up
-for inspection (the chain scripts run the relay in the foreground), and
-`--keep` skips the teardown after a pass. The scripts work in gitignored
-run directories under `test/`.
+The end-to-end scripts in `test/` run against `bin/lw` and share
+`test/lib.sh`. `make e2e` runs each with `--auto` and reports it as PASS, FAIL
+or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
+
+- Modes:
+  - without flags: start the daemons, print a guide of the ports and one-line
+    commands (run `. test/run-X/env` first for `$LW`, `$CA` and the token
+    helper), and wait for Ctrl-C
+  - `--auto`: run the checks and tear down; `--keep` leaves the daemons up
+    after a pass
+  - `--follow`: show only WARN, ERROR and key events from the daemons
+- Daemons log only to `test/run*/log/NAME.out`, never to the terminal.
+- Colour only on a terminal; `NO_COLOR` turns it off, `FORCE_COLOR=1` on.
+- Exit status: 0 all passed, 1 a failure, 77 skipped.
+- Each script owns a port range and a gitignored run directory:
+
+```
+15801-15804  chain-test.sh, chain-aggregate-test.sh  test/run/
+(no ports)   passthrough-test.sh                     test/run/passthrough/
+15811-15814  mtls-chain-test.sh                      test/run-mtls/
+15821-15825  scram-chain-test.sh                     test/run-scram/
+15831-15832  scram-proxy-test.sh                     test/run-proxy/
+15851-15855  ipv6-test.sh                            test/run-ipv6/
+15871-15879  deploy-test.sh                          test/run-deploy/
+```
 
 - `chain-test.sh`: two edges into a relay, one pipeline per chain transport;
   ports 15801-15804
