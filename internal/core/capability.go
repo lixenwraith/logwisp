@@ -15,6 +15,9 @@ const (
 	CapMultiSession   Capability = "multi_session"
 	CapSingleInstance Capability = "single_instance"
 
+	// Flow capabilities
+	CapBackpressure Capability = "backpressure" // a full input stalls the pipeline instead of dropping
+
 	// Stream capabilities
 	CapBidirectional Capability = "bidirectional"
 	CapCompression   Capability = "compression"

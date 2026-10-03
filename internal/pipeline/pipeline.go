@@ -32,11 +32,17 @@ type Pipeline struct {
 	Stats  *PipelineStats
 	logger *log.Logger
 
+	// Sinks that stall dispatch rather than drop (core.CapBackpressure)
+	backpressure map[string]bool
+
 	// Runtime
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	running atomic.Bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	running      atomic.Bool
+	halt         chan struct{} // closed by Stop: backpressure sinks drop again
+	finished     chan struct{} // closed when every source has ended
+	finishedOnce sync.Once
 }
 
 // PipelineStats contains runtime statistics for a pipeline
@@ -70,6 +76,9 @@ func NewPipeline(
 		logger:   logger,
 		ctx:      pipelineCtx,
 		cancel:   pipelineCancel,
+
+		backpressure: make(map[string]bool),
+		finished:     make(chan struct{}),
 	}
 
 	// Create flow processor
@@ -199,6 +208,9 @@ func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig
 	var hasTLS, hasAuth bool
 	for _, c := range s.Capabilities() {
 		switch c {
+		case core.CapBackpressure:
+			p.backpressure[cfg.ID] = true
+
 		// Network capabilities
 		case core.CapNetLimit:
 			continue // No-op for now, placeholder
@@ -224,31 +236,31 @@ func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig
 	return nil
 }
 
-// run is the central processing loop that connects sources, flow, and sinks
-func (p *Pipeline) run() {
+// run connects the subscribed sources through the flow to the sinks. It
+// returns once every source channel has closed, at Stop or at end of input.
+func (p *Pipeline) run(subscriptions []<-chan core.LogEntry) {
 	defer p.wg.Done()
+	defer p.finish()
 	defer p.logger.Info("msg", "Pipeline processing loop stopped", "pipeline", p.Config.Name)
 
 	var componentWg sync.WaitGroup
-	// Start a goroutine for each source to fan-in data
-	for _, src := range p.Sources {
+	for _, ch := range subscriptions {
 		componentWg.Add(1)
-		go func(s source.Source) {
+		go func() {
 			defer componentWg.Done()
-			ch := s.Subscribe()
-			// Range allows in-flight data to drain cleanly once Source.Stop() closes the channel
+			// Range drains in-flight entries once the source closes the channel
 			for entry := range ch {
 				if event, passed := p.Flow.Process(entry); passed {
-					// Use non-blocking dispatcher
 					p.dispatch(event)
 				}
 			}
-		}(src)
+		}()
 	}
 
+	// Sinks keep p.ctx until Stop, so the heartbeat ends on its own context
+	hbCtx, hbCancel := context.WithCancel(p.ctx)
 	var hbWg sync.WaitGroup
-	// Start heartbeat generator if enabled
-	if heartbeatCh := p.Flow.StartHeartbeat(p.ctx); heartbeatCh != nil {
+	if heartbeatCh := p.Flow.StartHeartbeat(hbCtx); heartbeatCh != nil {
 		hbWg.Add(1)
 		go func() {
 			defer hbWg.Done()
@@ -258,9 +270,8 @@ func (p *Pipeline) run() {
 					if !ok {
 						return
 					}
-					// Use non-blocking dispatcher
 					p.dispatch(event)
-				case <-p.ctx.Done():
+				case <-hbCtx.Done():
 					return
 				}
 			}
@@ -268,24 +279,35 @@ func (p *Pipeline) run() {
 	}
 
 	componentWg.Wait()
-
-	// Terminate internal contexts (heartbeat) once flow is complete
-	p.cancel()
+	hbCancel()
 	hbWg.Wait()
 }
 
-// dispatch performs a non-blocking send to all sinks.
-// A full/stalled sink must never block the run loop or starve sibling sinks.
+// dispatch sends to every sink. A full sink drops the event so it cannot
+// stall its siblings, except a backpressure sink, which waits until Stop.
 func (p *Pipeline) dispatch(event core.TransportEvent) {
-	for _, snk := range p.Sinks {
+	for id, snk := range p.Sinks {
+		if p.backpressure[id] {
+			select {
+			case snk.Input() <- event:
+			case <-p.halt:
+				p.Stats.TotalEntriesDroppedBySink.Add(1)
+			}
+			continue
+		}
 		select {
 		case snk.Input() <- event:
 		default:
-			// Buffer full - drop to avoid deadlocking the pipeline
 			p.Stats.TotalEntriesDroppedBySink.Add(1)
 		}
 	}
 }
+
+func (p *Pipeline) finish() { p.finishedOnce.Do(func() { close(p.finished) }) }
+
+// Finished is closed when every source has ended, or the pipeline shut down.
+// Only a finite source (console at end of input) ends without Stop.
+func (p *Pipeline) Finished() <-chan struct{} { return p.finished }
 
 // Start starts the pipeline operation and all its components including flow, sources, and sinks
 func (p *Pipeline) Start() error {
@@ -295,6 +317,7 @@ func (p *Pipeline) Start() error {
 
 	p.logger.Info("msg", "Starting pipeline", "pipeline", p.Config.Name)
 	p.ctx, p.cancel = context.WithCancel(context.Background())
+	p.halt = make(chan struct{})
 
 	// Start all sinks
 	for id, s := range p.Sinks {
@@ -303,7 +326,11 @@ func (p *Pipeline) Start() error {
 		}
 	}
 
-	// Start all sources
+	// Subscribed before Start: a source publishes from its first entry on
+	subscriptions := make([]<-chan core.LogEntry, 0, len(p.Sources))
+	for _, src := range p.Sources {
+		subscriptions = append(subscriptions, src.Subscribe())
+	}
 	for id, src := range p.Sources {
 		if err := src.Start(); err != nil {
 			return fmt.Errorf("failed to start source %s: %w", id, err)
@@ -313,7 +340,7 @@ func (p *Pipeline) Start() error {
 	// Start the central processing loop
 	p.Stats.StartTime = time.Now()
 	p.wg.Add(1)
-	go p.run()
+	go p.run(subscriptions)
 
 	return nil
 }
@@ -325,6 +352,7 @@ func (p *Pipeline) Stop() error {
 	}
 
 	p.logger.Info("msg", "Stopping pipeline", "pipeline", p.Config.Name)
+	close(p.halt)
 
 	// 1. Stop all sources concurrently to halt new data ingress and close their channels
 	var sourceWg sync.WaitGroup
@@ -338,7 +366,6 @@ func (p *Pipeline) Stop() error {
 	sourceWg.Wait()
 
 	// 2. Wait for the run loop to finish processing and sending all in-flight data
-	// run() inherently calls p.cancel() when the source channels are empty
 	p.wg.Wait()
 
 	// 3. Stop all sinks concurrently now that no new data will be sent
@@ -351,6 +378,7 @@ func (p *Pipeline) Stop() error {
 		}(s)
 	}
 	sinkWg.Wait()
+	p.cancel()
 
 	p.logger.Info("msg", "Pipeline stopped", "pipeline", p.Config.Name)
 	return nil
@@ -373,6 +401,7 @@ func (p *Pipeline) Shutdown() {
 	if p.Sessions != nil {
 		p.Sessions.Stop()
 	}
+	p.finish() // a pipeline that never started has no run loop to close it
 
 	p.logger.Info("msg", "Pipeline shutdown complete",
 		"component", "pipeline",
