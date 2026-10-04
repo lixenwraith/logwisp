@@ -109,7 +109,7 @@ authentication designs for the rationale and what is deliberately left out.
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
 - [To Do](doc/todo.md): planned work in priority order: network access
-  control and the PROXY protocol, a hardening review of the config libraries,
+  control and the PROXY protocol, flushing network sinks at shutdown,
   packaging
 
 A fully annotated configuration covering every option ships as
