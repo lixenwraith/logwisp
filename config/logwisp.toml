@@ -293,14 +293,15 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # [pipelines.plugin_sinks.config]
 # host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
 # port = 8081                           # Required
-# stream_path = "/stream"               # Must start with "/"
-# status_path = "/status"               # Must differ from stream_path
+# stream_path = "/stream"               # Exact; starts with "/", clean, none of { } % ? #
+# status_path = "/status"               # Same rules; differs from stream_path
 # buffer_size = 1000                    # Sink input queue
 # client_buffer_size = 256              # Per-client send queue
 # write_timeout_ms = 0                  # Per-event deadline, 0 = none
 # max_connections = 0                   # 0 = unlimited
-# login_page = false                    # GET /auth/login; needs auth.trusted_proxies
-# viewer_page = false                   # GET /auth/view; needs login_page
+# login_page = false                    # GET /auth/login; scram behind auth.trusted_proxies
+# viewer_page = false                   # GET /auth/view, needs login_page; scram + trusted_proxies only
+                                        # (without auth or under mtls the viewer is always on)
 # [pipelines.plugin_sinks.config.tls]
 # enabled = true                        # example
 # cert_file = "/etc/logwisp/tls/server.crt"

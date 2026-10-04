@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,7 +78,7 @@ type HTTPSink struct {
 
 	// Authorization
 	auth *authz.Policy
-	web  map[string]http.Handler // proxy mode: GET /auth/... browser files
+	web  map[string]http.Handler // GET paths of the browser files and the root
 
 	// Runtime. Stop closes flush; the broker then moves what remains of its
 	// input to tail and closes flushed; each stream writes its queue, tail
@@ -128,21 +129,20 @@ func NewHTTPSinkPlugin(
 	}
 	if opts.StreamPath == "" {
 		opts.StreamPath = DefaultHTTPStreamPath
-	} else if !strings.HasPrefix(opts.StreamPath, "/") {
-		return nil, fmt.Errorf("stream_path: must start with '/'")
 	}
 	if opts.StatusPath == "" {
 		opts.StatusPath = DefaultHTTPStatusPath
-	} else if !strings.HasPrefix(opts.StatusPath, "/") {
-		return nil, fmt.Errorf("status_path: must start with '/'")
+	}
+	for _, o := range []struct{ name, p string }{{"stream_path", opts.StreamPath}, {"status_path", opts.StatusPath}} {
+		if !routable(o.p) {
+			return nil, fmt.Errorf("%s %q: must start with '/', hold no '//', '.' or '..' segment, and none of '{', '}', '%%', '?', '#'", o.name, o.p)
+		}
+		if p := o.p; p == chain.AuthPath || strings.HasPrefix(p, chain.AuthPath+"/") {
+			return nil, fmt.Errorf("%s and the paths under it are reserved for authentication", chain.AuthPath)
+		}
 	}
 	if opts.StreamPath == opts.StatusPath {
 		return nil, fmt.Errorf("stream_path and status_path must differ")
-	}
-	for _, p := range []string{opts.StreamPath, opts.StatusPath} {
-		if p == chain.AuthPath || strings.HasPrefix(p, chain.AuthPath+"/") {
-			return nil, fmt.Errorf("%s and the paths under it are reserved for authentication", chain.AuthPath)
-		}
 	}
 	if opts.BufferSize <= 0 {
 		opts.BufferSize = DefaultHTTPBufferSize
@@ -160,15 +160,13 @@ func NewHTTPSinkPlugin(
 	}
 	switch {
 	case (opts.LoginPage || opts.ViewerPage) && !authPolicy.BehindProxy():
-		return nil, errors.New("login_page and viewer_page need auth.trusted_proxies: browsers log in only behind a TLS-terminating proxy")
+		return nil, errors.New("login_page and viewer_page apply to scram behind auth.trusted_proxies, where browsers log in; without auth or under mtls the viewer is always served")
 	case opts.ViewerPage && !opts.LoginPage:
 		return nil, errors.New("viewer_page needs login_page, where it sends a signed-out viewer")
 	}
-	var web map[string]http.Handler
-	if authPolicy.BehindProxy() {
-		if web, err = webHandlers(opts); err != nil {
-			return nil, err
-		}
+	web, err := webHandlers(opts, authPolicy)
+	if err != nil {
+		return nil, err
 	}
 
 	h := &HTTPSink{
@@ -202,7 +200,7 @@ func NewHTTPSinkPlugin(
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
 		"auth", authPolicy.Describe(),
 		"login_page", opts.LoginPage,
-		"viewer_page", opts.ViewerPage)
+		"viewer_page", web[chain.AuthPath+"/view"] != nil)
 	tlsx.LogWarnings(logger, "http_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_sink", id, false)
 	return h, nil
@@ -248,28 +246,26 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	}
 	mux := http.NewServeMux()
 	// Method-scoped patterns: mux answers 405 with Allow header on non-GET
-	mux.HandleFunc(http.MethodGet+" "+h.config.StreamPath, h.handleStream)
-	mux.HandleFunc(http.MethodGet+" "+h.config.StatusPath, h.handleStatus)
+	mux.HandleFunc(http.MethodGet+" "+exact(h.config.StreamPath), h.handleStream)
+	mux.HandleFunc(http.MethodGet+" "+exact(h.config.StatusPath), h.handleStatus)
 	// A GET pattern also serves HEAD, and a HEAD stream is a registered client
 	// whose body writes are discarded: it never reads, so nothing but the peer
 	// closing the connection ends it. The status path answers one either way.
-	mux.HandleFunc(http.MethodHead+" "+h.config.StreamPath, streamHeadNotAllowed)
+	mux.HandleFunc(http.MethodHead+" "+exact(h.config.StreamPath), streamHeadNotAllowed)
 
 	// One wrapper covers stream and status, and keeps the handlers themselves
-	// unaware of authorization. Login and its browser files sit outside it;
-	// in proxy mode everything sits behind the proxy gate.
-	var handler http.Handler = mux
-	if h.auth.Enabled() {
-		outer := http.NewServeMux()
-		outer.HandleFunc(http.MethodPost+" "+chain.AuthPath, h.handleAuth)
-		for p, file := range h.web {
-			outer.Handle(http.MethodGet+" "+p, file)
-		}
-		outer.Handle("/", h.authMiddleware(mux))
-		handler = outer
-		if h.auth.BehindProxy() {
-			handler = h.proxyGate(outer)
-		}
+	// unaware of authorization; a nil policy admits every request. Login, the
+	// browser files and the root sit outside it; in proxy mode everything sits
+	// behind the proxy gate.
+	outer := http.NewServeMux()
+	outer.HandleFunc(http.MethodPost+" "+chain.AuthPath, h.handleAuth)
+	for p, file := range h.web {
+		outer.Handle(http.MethodGet+" "+p, file)
+	}
+	outer.Handle("/", h.authMiddleware(mux))
+	var handler http.Handler = outer
+	if h.auth.BehindProxy() {
+		handler = h.proxyGate(outer)
 	}
 
 	h.server = &http.Server{
@@ -669,6 +665,21 @@ func (h *HTTPSink) handleAuth(w http.ResponseWriter, r *http.Request) {
 			"remote_addr", clientAddr(r),
 			"auth_identity", ident.Name)
 	}
+}
+
+// routable reports a path ServeMux and a URL take literally: clean, a trailing
+// '/' aside, without the braces of wildcards, an escape, a query or a fragment
+func routable(p string) bool {
+	c := path.Clean(p)
+	return strings.HasPrefix(p, "/") && !strings.ContainsAny(p, "{}%?#") && (c == p || c != "/" && c+"/" == p)
+}
+
+// exact keeps a path ending in '/' from matching every path beneath it
+func exact(p string) string {
+	if strings.HasSuffix(p, "/") {
+		return p + "{$}"
+	}
+	return p
 }
 
 // streamHeadNotAllowed refuses a body-less read of a stream that is only a body

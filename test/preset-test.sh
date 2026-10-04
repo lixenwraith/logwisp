@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # logwisp preset test: colors, presets, --dump, lw tls, listeners that make
-# their certificate (self-signed and pinned, or issued), and the http and tcp
-# sinks writing a finite input whole. One-shot: both modes run the checks.
+# their certificate (self-signed and pinned, or issued), the serve preset's
+# browser viewer, and the http and tcp sinks writing a finite input whole.
+# One-shot: both modes run the checks.
 # Ports: 15890-15896 on 127.0.0.1.
 # Requires: bash 5+, coreutils, curl, openssl. Linux dev host only.
 
@@ -85,6 +86,15 @@ check "curl --pinnedpubkey reads a self-signed stream's status" \
 	"$(curl -sk --pinnedpubkey "$SERVE_PIN" https://127.0.0.1:15895/status | grep -q '"tls":true' && echo 1 || echo 0)"
 curl -sk --pinnedpubkey "$PIN" -o /dev/null https://127.0.0.1:15895/status
 check "curl with another listener's pin is refused" "$(( $? != 0 ))"
+check "a browser at the self-signed root lands on the viewer" \
+	"$(curl -sLk --pinnedpubkey "$SERVE_PIN" https://127.0.0.1:15895/ | grep -q 'name="logwisp-login" content="none"' && echo 1 || echo 0)"
+
+section "Viewer"
+spawn serve-plain "$BIN" --preset "serve,path=$RUN/edge.log,listen=127.0.0.1:15896"
+wait_port 15896 || abort "the plain serve preset did not listen" serve-plain
+root=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://127.0.0.1:15896/)
+check "GET / sends a browser to the viewer, which needs no login over plain http ($root)" \
+	"$( [[ $root == '303 http://127.0.0.1:15896/auth/view' ]] && curl -sL http://127.0.0.1:15896/ | grep -q 'name="logwisp-login" content="none"' && echo 1 || echo 0)"
 
 section "Flush at exit"
 # feed SECONDS PORT: the lines, once a client had time to connect

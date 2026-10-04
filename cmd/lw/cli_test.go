@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -13,9 +15,10 @@ import (
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 )
 
-// lw's own flags: the last -c wins, a pipeline flag or --color takes the next
-// argument unless it starts with '-', -- ends lw's flags, and a command is
-// only the first argument. Everything else is a setting for config.
+// lw's own flags: a short is its long flag, an unknown single-dash one fails,
+// the last -c wins, a pipeline flag or --color takes the next argument unless
+// it starts with '-', -- ends lw's flags, and a command is only the first
+// argument. Everything else is a setting for config.
 func TestCommandLineGrammar(t *testing.T) {
 	for _, c := range []struct {
 		argv []string
@@ -33,15 +36,47 @@ func TestCommandLineGrammar(t *testing.T) {
 		{[]string{"help"}, invocation{help: true, load: config.Args{Overrides: []string{"help"}}}},
 		{[]string{"tls", "ca", "-h"}, invocation{command: &commands[1], args: []string{"ca", "-h"}}},
 		{[]string{"--quiet", "tls"}, invocation{load: config.Args{Overrides: []string{"--quiet", "tls"}}}},
+		{[]string{"-q", "-t", "-V", "-p", "tail,path=x", "-c=a.toml", "--logging.file.retention_hours", "-1"},
+			invocation{load: config.Args{File: "a.toml", Specs: []config.Spec{{Flag: "preset", Value: "tail,path=x"}},
+				Overrides: []string{"--quiet", "--check", "--version", "--logging.file.retention_hours", "-1"}}}},
 	} {
 		got, err := parseCommandLine(c.argv)
 		if err != nil || !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%q:\n got %+v %v\nwant %+v", c.argv, got, err, c.want)
 		}
 	}
-	for _, argv := range [][]string{{"-c"}, {"--config"}, {"--config="}, {"-c="}, {"-c", "--quiet"}} {
+	for _, argv := range [][]string{{"-c"}, {"--config"}, {"--config="}, {"-c="}, {"-c", "--quiet"},
+		{"-v"}, {"-qt"}, {"-u", "x"}, {"-config", "x"}} {
 		if _, err := parseCommandLine(argv); err == nil {
-			t.Errorf("%q: missing path accepted", argv)
+			t.Errorf("%q accepted", argv)
+		}
+	}
+}
+
+// Every subcommand's -h lists each flag once, GNU style, with its short form
+// beside it: "  -u, --user NAME" or "      --credentials FILE"
+func TestUsageListsEachFlagOnce(t *testing.T) {
+	for _, c := range commands {
+		for _, s := range c.subcommands {
+			code, _, stderr := runCommand(t, c.name, s.name, "-h")
+			fs := flag.NewFlagSet("", flag.ContinueOnError)
+			s.define(fs)
+			want := 0
+			fs.VisitAll(func(f *flag.Flag) {
+				want++
+				head := "      --" + f.Name
+				for letter, short := range shorts {
+					if short.long == f.Name {
+						head = "  -" + letter + ", --" + f.Name
+					}
+				}
+				if n := len(regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(head)+`( |$)`).FindAllString(stderr, -1)); n != 1 {
+					t.Errorf("lw %s %s -h lists %q %d times:\n%s", c.name, s.name, head, n, stderr)
+				}
+			})
+			if heads := regexp.MustCompile(`(?m)^  (-., |    )--`).FindAllString(stderr, -1); code != 0 || len(heads) != want {
+				t.Errorf("lw %s %s -h: exit %d, %d flags listed, want %d", c.name, s.name, code, len(heads), want)
+			}
 		}
 	}
 }

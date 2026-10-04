@@ -128,7 +128,7 @@ No options. The input queue is fixed at 1000.
 
 ## http
 
-Server-Sent Events stream plus a JSON status endpoint.
+Server-Sent Events stream, a JSON status endpoint, and a browser viewer.
 
 ```toml
 [[pipelines.plugin_sinks]]
@@ -161,17 +161,20 @@ Options, each as type and default:
 - `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the listener
   keeps to its family ([Networking](networking.md#address-family)).
 - `port` (int, **required**): listen port.
-- `stream_path` (string, `/stream`): SSE endpoint; must start with `/`.
-- `status_path` (string, `/status`): status endpoint; must start with `/` and
-  differ from `stream_path`.
+- `stream_path` (string, `/stream`): SSE endpoint, matched exactly (`/logs/`
+  does not answer `/logs/x`); it starts with `/`, is clean (no `//`, `.` or
+  `..` segment) and holds none of `{`, `}`, `%`, `?`, `#`.
+- `status_path` (string, `/status`): status endpoint, under the same rules;
+  differs from `stream_path`.
 - `buffer_size` (int, `1000`): sink input queue depth.
 - `client_buffer_size` (int, `256`): per-client send queue depth.
 - `write_timeout_ms` (int, `0`): per-event write deadline; `0` = none.
 - `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited.
-- `login_page` (bool, `false`): serve the browser login page at `/auth/login`;
-  needs `auth.trusted_proxies`.
-- `viewer_page` (bool, `false`): serve a minimal live viewer at `/auth/view`;
-  needs `login_page`.
+- `login_page` (bool, `false`): `scram` in proxy mode only (an error
+  elsewhere): the browser login page at `/auth/login`.
+- `viewer_page` (bool, `false`): `scram` in proxy mode only (an error
+  elsewhere): the live viewer at `/auth/view`; needs `login_page`. Without
+  auth, or under `mtls`, the viewer is always served.
 - `tls` (table): listener TLS; see [Security](security.md).
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
@@ -194,6 +197,19 @@ Options, each as type and default:
   through `/auth/login` or the site's own copy of `/auth/scram.js`, and stream
   and status also accept the `logwisp_session` cookie. See
   [Browsers behind a TLS-terminating proxy](security.md#browsers-behind-a-tls-terminating-proxy).
+- `GET /` answers `303` to `auth/view`, a relative `Location` that a proxy
+  prefix keeps, wherever a browser can read the stream:
+  - without auth, over plain http too: the viewer needs no secure context, so
+    `http://ADDRESS:PORT/` works;
+  - under `mtls`, with the browser's client certificate (`openssl pkcs12
+    -export -in NAME.crt -inkey NAME.key -out NAME.p12` imports it);
+  - in proxy mode with `viewer_page`, or to `auth/login` with `login_page`
+    alone;
+  - never under `scram` on the sink's own TLS, which a browser cannot log in
+    to: `/` is refused like any other path;
+  - an endpoint at `/` keeps the root, and the viewer stays at `/auth/view`.
+  The viewer shows entries from when it connects (the sink keeps no backlog)
+  and holds one stream against `max_connections`.
 - Refusals are logged at WARN and counted in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
   `auth_identity`.

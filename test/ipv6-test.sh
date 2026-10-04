@@ -168,9 +168,9 @@ Ports (relay on ::1, TLS with SAN IP ::1, scram):
 Shell setup (LW, CA, PW: viewer-01's password file):
 > . $(short "$RUN")/env
 Read the tcp sink as viewer-01:
-> \$LW auth stream -addr [::1]:$PORT_TCP_SINK -user viewer-01 -password-file \$PW -ca-file \$CA
+> \$LW auth stream --addr [::1]:$PORT_TCP_SINK --user viewer-01 --password-file \$PW --ca-file \$CA
 Read the http sink (bearer keeps the token off argv; -g leaves the brackets to the URL):
-> token=\$(\$LW auth token -url https://[::1]:$PORT_HTTP_SINK -user viewer-01 -password-file \$PW -ca-file \$CA)
+> token=\$(\$LW auth token --url https://[::1]:$PORT_HTTP_SINK --user viewer-01 --password-file \$PW --ca-file \$CA)
 > curl -gN --cacert \$CA -H @<(bearer) https://[::1]:$PORT_HTTP_SINK/stream
 Which listener answers on $PORT_FAMILY:
 > curl -s http://127.0.0.1:$PORT_FAMILY/status; curl -gs http://[::1]:$PORT_FAMILY/status
@@ -203,7 +203,7 @@ check "relay logged its listener as [::1]:$PORT_TCP_CHAIN ($n)" $((n >= 1))
 # 2. HTTP sink: lw auth token at an IPv6 URL, the token carried by curl -g
 token="$("$BIN" auth token -url "https://[::1]:$PORT_HTTP_SINK" -user viewer-01 \
 	-password-file "$AUTH/viewer-01.pass" -ca-file "$PKI/ca.crt" 2>>"$LOG/auth-cli.out")"
-check "http sink: lw auth token -url https://[::1]:$PORT_HTTP_SINK issued a token" $(is_set "$token")
+check "http sink: lw auth token --url https://[::1]:$PORT_HTTP_SINK issued a token" $(is_set "$token")
 
 code="$(curl "${curl_args[@]}" -o /dev/null -w '%{http_code}' --cacert "$PKI/ca.crt" \
 	-H @<(printf 'Authorization: Bearer %s\n' "$token") "https://[::1]:$PORT_HTTP_SINK/status" 2>/dev/null || true)"
@@ -220,7 +220,7 @@ timeout 4 "$BIN" auth stream -addr "[::1]:$PORT_TCP_SINK" -user viewer-01 \
 	-password-file "$AUTH/viewer-01.pass" -ca-file "$PKI/ca.crt" \
 	>"$RUN/stream.out" 2>"$LOG/stream.err"
 n=$(grep -c 'edge-01/' "$RUN/stream.out")
-check "tcp sink: lw auth stream -addr [::1]:$PORT_TCP_SINK streamed entries ($n lines)" $((n >= 1))
+check "tcp sink: lw auth stream --addr [::1]:$PORT_TCP_SINK streamed entries ($n lines)" $((n >= 1))
 
 section "Scenario 2: each listener keeps to its address family"
 

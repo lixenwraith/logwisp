@@ -116,8 +116,8 @@ both:
 
 ```bash
 sudo install -m 0600 -o logwisp -g logwisp /dev/null /etc/logwisp/users.toml
-sudo lw auth add-user -credentials /etc/logwisp/users.toml -user <name> \
-  -password-file <file>
+sudo lw auth add-user --credentials /etc/logwisp/users.toml --user <name> \
+  --password-file <file>
 sudo systemctl reload logwisp
 ```
 
@@ -230,7 +230,7 @@ docker run -d --name logwisp \
   ```bash
   docker run --rm --read-only --cap-drop ALL --network none \
     -v /srv/logwisp/secrets:/work -v /srv/logwisp/passwords:/pw logwisp:<tag> \
-    auth add-user -credentials /work/users.toml -user <name> -password-file /pw/<name>.pass
+    auth add-user --credentials /work/users.toml --user <name> --password-file /pw/<name>.pass
   ```
 
 ## Packaging Status

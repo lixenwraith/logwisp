@@ -44,8 +44,8 @@ streams, or downstream LogWisp nodes.
 
 `console` (level names in color and control characters escaped on a
 terminal), `file` (rotating with
-retention), `http` (Server-Sent Events plus a
-JSON status endpoint), `tcp` (broadcast server), `null`, and the chain
+retention), `http` (Server-Sent Events, a JSON status endpoint and a browser
+viewer), `tcp` (broadcast server), `null`, and the chain
 forwarders `tcp_chain` and `http_chain`.
 
 ### Processing
@@ -116,7 +116,7 @@ authentication designs for the rationale and what is deliberately left out.
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
 - [To Do](doc/todo.md): planned work in priority order: network access
-  control and the PROXY protocol, packaging
+  control and the PROXY protocol, packaging, smaller follow-ups
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](config/logwisp.toml).
@@ -135,7 +135,8 @@ one without `--sink` writes stdout:
 ./bin/lw < app.log > copy.log
 tail -F app.log | ./bin/lw --filter include,patterns=ERROR,patterns=WARN
 
-# stdin as a live SSE stream; the http sink binds 0.0.0.0 unless told
+# stdin as a live SSE stream, with a browser viewer at http://127.0.0.1:8080/;
+# the http sink binds 0.0.0.0 unless told
 journalctl -f | ./bin/lw --sink http,host=127.0.0.1,port=8080
 
 # tail a directory instead of stdin

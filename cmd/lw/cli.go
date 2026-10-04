@@ -8,6 +8,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/lixenwraith/logwisp/internal/config"
 
@@ -37,6 +38,17 @@ var commands = []command{
 		"lw --preset NAME,key=value runs one; flags here are its keys.", presetCommands()},
 }
 
+// shorts are lw's one-letter flags, each its long flag in every command that
+// defines that flag; lw's own command line takes the top ones
+var shorts = map[string]struct {
+	long string
+	top  bool
+}{
+	"c": {"config", true}, "h": {"help", true}, "p": {"preset", true},
+	"q": {"quiet", true}, "t": {"check", true}, "V": {"version", true},
+	"u": {"user", false},
+}
+
 // usageError is a command-line mistake: exit status 2 rather than 1
 type usageError string
 
@@ -63,9 +75,14 @@ func (c *command) run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: %s %s\n\n%s.\n\n", fs.Name(), s.synopsis, s.summary)
-		fs.PrintDefaults()
+		printFlags(stderr, fs)
 	}
 	work := s.define(fs)
+	for letter, short := range shorts {
+		if f := fs.Lookup(short.long); f != nil {
+			fs.Var(f.Value, letter, "") // no usage: printFlags shows it with its long flag
+		}
+	}
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -88,12 +105,39 @@ func (c *command) run(args []string, stdout, stderr io.Writer) int {
 }
 
 func (c *command) usage(w io.Writer) {
-	fmt.Fprintf(w, "Usage: lw %s <command> [flags]\n\n", c.name)
+	fmt.Fprintf(w, "Usage: lw %s COMMAND [flags]\n\n", c.name)
 	for _, s := range c.subcommands {
 		fmt.Fprintf(w, "  %-12s %s\n", s.name, s.summary)
 	}
-	fmt.Fprintf(w, "\nRun lw %s <command> -h for its flags. %s\n"+
+	fmt.Fprintf(w, "\nRun lw %s COMMAND -h for its flags. %s\n"+
 		"Exit status: 0 success, 1 failure, 2 usage error.\n", c.name, c.footer)
+}
+
+// printFlags lists fs's flags as "  -u, --user NAME" or "      --credentials FILE"
+func printFlags(w io.Writer, fs *flag.FlagSet) {
+	fs.VisitAll(func(f *flag.Flag) {
+		if f.Usage == "" {
+			return
+		}
+		head := "    "
+		for letter, short := range shorts {
+			if short.long == f.Name {
+				head = "-" + letter + ", "
+			}
+		}
+		arg, usage := flag.UnquoteUsage(f)
+		// Only a bool flag has no argument; its "false" default goes unsaid
+		if f.DefValue != "" && (arg != "" || f.DefValue != "false") {
+			usage += " (default: " + f.DefValue + ")"
+		}
+		if arg == "string" {
+			arg = "value"
+		}
+		if arg != "" {
+			arg = " " + strings.ToUpper(arg)
+		}
+		fmt.Fprintf(w, "  %s--%s%s\n        %s\n", head, f.Name, arg, usage)
+	})
 }
 
 func checkArgs(fs *flag.FlagSet, required []string) error {
@@ -102,7 +146,7 @@ func checkArgs(fs *flag.FlagSet, required []string) error {
 	}
 	for _, name := range required {
 		if fs.Lookup(name).Value.String() == "" {
-			return usageError("-" + name + " is required")
+			return usageError("--" + name + " is required")
 		}
 	}
 	return nil
@@ -117,10 +161,10 @@ type invocation struct {
 	load    config.Args
 }
 
-// parseCommandLine reads lw's own flags; anything else is a --path=value
-// setting for lixenwraith/config, which reports what it does not know. A
-// pipeline flag takes the next argument unless it starts with '-'. A help
-// request wins over a malformed flag.
+// parseCommandLine reads lw's own flags, a short one as its long one; any
+// other --flag is a --path=value setting for lixenwraith/config, which reports
+// what it does not know. A pipeline flag takes the next argument unless it
+// starts with '-'. A help request wins over a malformed flag.
 func parseCommandLine(argv []string) (inv invocation, err error) {
 	defer func() {
 		if inv.help {
@@ -144,18 +188,22 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
 		name, value, inline := strings.Cut(arg, "=")
+		typed := name
+		if short, ok := shorts[strings.TrimPrefix(name, "-")]; ok && short.top && len(name) == 2 {
+			arg, name = "--"+short.long+arg[len(name):], "--"+short.long
+		}
 		switch {
 		case arg == "--":
 			inv.load.Overrides = append(inv.load.Overrides, argv[i:]...)
 			return inv, err
-		case arg == "-h" || arg == "--help":
+		case arg == "--help":
 			inv.help = true
-		case name == "-c" || name == "--config":
+		case name == "--config":
 			if !inline {
 				value = next(&i)
 			}
 			if value == "" {
-				err = cmp.Or(err, fmt.Errorf("%s requires a configuration file path", name))
+				err = cmp.Or(err, fmt.Errorf("%s requires a configuration file path", typed))
 			}
 			inv.load.File = value
 		case arg == "--color":
@@ -166,6 +214,9 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 				value = next(&i)
 			}
 			inv.load.Specs = append(inv.load.Specs, config.Spec{Flag: name[2:], Value: value})
+		case len(name) > 1 && name[0] == '-' && unicode.IsLetter(rune(name[1])):
+			// config reads only --flags; a negative number stays a value
+			err = cmp.Or(err, fmt.Errorf("unknown option %s: long options take two dashes, and a value that starts with '-' follows '=' (lw --help lists them)", typed))
 		default:
 			inv.load.Overrides = append(inv.load.Overrides, arg)
 		}
@@ -182,10 +233,10 @@ func presetCommands() []subcommand {
 		for _, k := range p.Params {
 			if k.Required {
 				s.required = append(s.required, k.Name)
-				synopsis = append(synopsis, "-"+k.Name+" VALUE")
+				synopsis = append(synopsis, "--"+k.Name+" VALUE")
 			}
 		}
-		s.synopsis = strings.Join(append(synopsis, "[-KEY VALUE...]"), " ")
+		s.synopsis = strings.Join(append(synopsis, "[--KEY VALUE...]"), " ")
 		s.define = func(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			values := map[string]*string{}
 			for _, k := range p.Params {

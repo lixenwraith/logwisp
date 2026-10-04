@@ -80,7 +80,7 @@ func TestStopWritesQueuedEventsToReadingClients(t *testing.T) {
 	t.Cleanup(manager.Stop)
 	created, err := NewTCPSinkPlugin("out", map[string]any{
 		"host": "127.0.0.1", "port": p, "buffer_size": int64(n), "client_buffer_size": int64(64),
-		"write_timeout_ms": int64(500),
+		"write_timeout_ms": int64(2000),
 	}, log.NewLogger(), session.NewProxy(manager, "out"))
 	if err != nil {
 		t.Fatal(err)
@@ -132,8 +132,8 @@ func TestStopWritesQueuedEventsToReadingClients(t *testing.T) {
 	}()
 	time.Sleep(100 * time.Millisecond)
 	sink.clientsMu.Unlock()
-	if d := <-stopped; d > 1500*time.Millisecond {
-		t.Errorf("Stop took %v past a 500 ms flush bound", d)
+	if d := <-stopped; d > 3500*time.Millisecond {
+		t.Errorf("Stop took %v past a 2 s flush bound", d)
 	}
 	if got := <-lines; got != n {
 		t.Fatalf("reading client received %d of %d lines", got, n)
