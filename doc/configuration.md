@@ -231,12 +231,17 @@ lw --logging.level debug          # space form also works
 lw --quiet                        # bare flag means true
 ```
 
-Unrecognized flags are reported on stderr before the logger exists and are then
-ignored:
+A bare flag is accepted only for a boolean key: `--logging.file.directory
+--quiet` fails with `--logging.file.directory needs a value`. Unrecognized flags,
+positional words and single-dash arguments are reported on stderr before the
+logger exists and are then ignored:
 
 ```
-Warning: unrecognized flags ignored: [pipelines.0.name]
+Warning: unrecognized flags ignored: [pipelines.0.name -q]
 ```
+
+An empty `LOGWISP_<PATH>` variable counts as unset, as the pipeline variables
+do.
 
 Array-indexed paths such as `--pipelines.0.name=x` are unrecognized; whole
 pipelines have [their own flags](cli.md#pipelines).

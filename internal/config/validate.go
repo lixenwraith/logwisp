@@ -111,9 +111,7 @@ func Scan(configMap map[string]any, target any) error {
 }
 
 // checkKeys walks nested tables against the toml tags of t, refusing unknown
-// keys and making a lone string for a list field a one-entry list: the weakly
-// typed decoder would split it at commas, which a pattern or a DN may hold.
-// Map-typed fields hold free-form keys and are not descended into.
+// keys. Map-typed fields hold free-form keys and are not descended into.
 func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
 		t = t.Elem()
@@ -134,10 +132,6 @@ func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 		}
 		var tables []map[string]any
 		switch v := m[key].(type) {
-		case string:
-			if ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.String {
-				m[key] = []string{v}
-			}
 		case map[string]any:
 			if err := checkKeys(v, ft, prefix+key+"."); err != nil {
 				return err

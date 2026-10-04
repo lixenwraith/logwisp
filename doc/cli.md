@@ -26,7 +26,7 @@ pipelines have [their own flags](#pipelines):
 ```
 --<path>=<value>        e.g. --logging.level=debug
 --<path> <value>        e.g. --logging.level debug
---<path>                bare flag, means true
+--<path>                bare flag: true, for a boolean path only
 ```
 
 ### Common
