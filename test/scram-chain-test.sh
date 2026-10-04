@@ -235,12 +235,12 @@ edge_unknown and edge_noauth are refused on $PORT_TCP_CHAIN. On $PORT_BOUND edge
 Shell setup (LW, CA, PW: viewer-01's password file, USERS, RELAY: its pid):
 > . $(short "$RUN")/env
 Read the tcp sink as viewer-01:
-> \$LW auth stream -addr 127.0.0.1:$PORT_TCP_SINK -user viewer-01 -password-file \$PW -ca-file \$CA
+> \$LW auth stream --addr 127.0.0.1:$PORT_TCP_SINK --user viewer-01 --password-file \$PW --ca-file \$CA
 Read the http sink (bearer keeps the token off argv):
-> token=\$(\$LW auth token -url https://127.0.0.1:$PORT_HTTP_SINK -user viewer-01 -password-file \$PW -ca-file \$CA)
+> token=\$(\$LW auth token --url https://127.0.0.1:$PORT_HTTP_SINK --user viewer-01 --password-file \$PW --ca-file \$CA)
 > curl -N --cacert \$CA -H @<(bearer) https://127.0.0.1:$PORT_HTTP_SINK/stream
 Revoke viewer-01:
-> \$LW auth remove-user -credentials \$USERS -user viewer-01 && kill -HUP \$RELAY
+> \$LW auth remove-user --credentials \$USERS --user viewer-01 && kill -HUP \$RELAY
 Ingested entries (node label forced to the username): $(short "$OUT")/
 Passwords: $(short "$AUTH")/   Logs: $(short "$LOG")/
 EOF

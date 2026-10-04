@@ -235,19 +235,22 @@ lw --quiet                        # bare flag means true
 ```
 
 A bare flag is accepted only for a boolean key: `--logging.file.directory
---quiet` fails with `--logging.file.directory needs a value`. Unrecognized flags,
-positional words and single-dash arguments are reported on stderr before the
-logger exists and are then ignored:
+--quiet` fails with `--logging.file.directory needs a value`. Unrecognized `--`
+flags and positional words are reported on stderr before the logger exists and
+are then ignored:
 
 ```
-Warning: unrecognized flags ignored: [pipelines.0.name -q]
+Warning: unrecognized flags ignored: [nosuch.key]
 ```
+
+Single-dash options are lw's own ([CLI](cli.md#options)); an unknown one is
+an error.
 
 An empty `LOGWISP_<PATH>` variable counts as unset, as the pipeline variables
 do.
 
-Array-indexed paths such as `--pipelines.0.name=x` are unrecognized; whole
-pipelines have [their own flags](cli.md#pipelines).
+An array-indexed path such as `--pipelines.0.name=x` is an error (exit 1);
+whole pipelines have [their own flags](cli.md#pipelines).
 
 ## Validation
 

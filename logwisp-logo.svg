@@ -1,33 +1,24 @@
 <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-    <!--
-      LogWisp Logo - Vibrant Tech Stream
-      - Shape: 5 swirling streams emanating from a center point.
-      - Style: Wiry, energetic, and modern, suggesting data flow or a galaxy.
-      - Color: Radiant gradient from a bright core to a vibrant teal.
-    -->
-    <defs>
-        <radialGradient id="vibrant-glow" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
-            <stop offset="0%" stop-color="#E0FFFF" /> <!-- Bright, almost white cyan at the core -->
-            <stop offset="100%" stop-color="#00B0B0" /> <!-- Deeper teal/cyan at the tips -->
-        </radialGradient>
-    </defs>
+  <!-- LogWisp: five colored wisps interlock directly at the center.
+       No central core; each wing meets the others at (50,50). -->
 
-    <style>
-        .wisp-path {
-        fill: none;
-        stroke: url(#vibrant-glow);
-        stroke-width: 1.5;
-        stroke-linecap: round;
-        }
-    </style>
+  <defs>
+    <path id="wisp" d="
+      M 50,50
+      C 50,38.5 59.2,28.8 70.8,27.8
+      C 82.9,26.7 91.2,35.4 96.7,49.3
+      A 1.8,1.8 0 0 1 93.3,50.7
+      C 89.1,42.8 82.0,38.2 74.1,38.4
+      C 64.8,38.7 56.5,43.7 50,50
+      Z
+    "/>
+  </defs>
 
-    <g id="wisps">
-        <!-- A single path shape is defined, then rotated 5 times around the center (50, 50) -->
-        <!-- The path is a cubic Bezier curve: M(start) C(control1, control2, end) -->
-        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(0, 50, 50)" />
-        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(72, 50, 50)" />
-        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(144, 50, 50)" />
-        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(216, 50, 50)" />
-        <path class="wisp-path" d="M50,50 C58,30 85,25 95,50" transform="rotate(288, 50, 50)" />
-    </g>
+  <g id="wisps">
+    <use href="#wisp" fill="#E0409A"/>
+    <use href="#wisp" fill="#D4640A" transform="rotate(72 50 50)"/>
+    <use href="#wisp" fill="#169B58" transform="rotate(144 50 50)"/>
+    <use href="#wisp" fill="#0891B2" transform="rotate(216 50 50)"/>
+    <use href="#wisp" fill="#8E5CF0" transform="rotate(288 50 50)"/>
+  </g>
 </svg>

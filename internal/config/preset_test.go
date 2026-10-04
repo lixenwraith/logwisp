@@ -49,6 +49,7 @@ func TestPresetKeysAreChecked(t *testing.T) {
 		"serve,tls=files,cert=c":       "tls=files needs key",
 		"serve,viewer=yes":             `viewer "yes"`,
 		"serve,proxy=127.0.0.1":        "proxy needs users",
+		"serve,viewer=true":            "viewer=true needs proxy",
 		"edge,to=agg:9000":             "it never sends unauthenticated",
 		"edge,to=agg:9000,user=u":      "user and password_file go together",
 		"edge,to=agg:9000,user=u,password_file=p,transport=udp": `transport "udp"`,

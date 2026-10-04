@@ -97,7 +97,7 @@ Append a line and watch it arrive:
 > curl -N http://127.0.0.1:$PORT_HTTP/stream
 > echo hello >>\$APP/app.log
 The secured sink (bearer keeps the token off argv):
-> token=\$(\$LW auth token -url https://127.0.0.1:$PORT_S_HTTP -user viewer-01 -password-file \$PW -ca-file \$CA)
+> token=\$(\$LW auth token --url https://127.0.0.1:$PORT_S_HTTP --user viewer-01 --password-file \$PW --ca-file \$CA)
 > curl -N --cacert \$CA -H @<(bearer) https://127.0.0.1:$PORT_S_HTTP/stream
 Logs: $(short "$LOG")/
 EOF

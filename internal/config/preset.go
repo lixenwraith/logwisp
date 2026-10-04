@@ -59,13 +59,13 @@ var presets = []Preset{
 			p.Flow.Format = &FormatConfig{Type: v["format"]}
 			return nil
 		}},
-	{"serve", "Serve files or standard input as a live HTTP stream (SSE)",
+	{"serve", "Serve files or standard input live: a browser viewer at /, SSE at /stream",
 		append([]PresetParam{pathParam, fromParam, formatParam("json"),
 			{Name: "listen", Default: "127.0.0.1:8080", Help: "HOST:PORT; [IPV6]:PORT"},
 			{Name: "tls", Default: "off", Help: "off|self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files"},
 			{Name: "users", Help: "credentials file (lw auth add-user): readers log in with SCRAM"},
 			{Name: "proxy", List: true, Help: "addresses or CIDRs of the TLS-terminating proxies browsers come through; ',' between them"},
-			{Name: "viewer", Default: "false", Help: "true: the built-in login and viewer pages, behind proxy"},
+			{Name: "viewer", Default: "false", Help: "true: the login page and viewer for users, behind proxy; without users the viewer is always on"},
 		}, tlsParams...),
 		func(p *PipelineConfig, v map[string]string) error {
 			p.PluginSources = pathOrStdin(v)
@@ -85,6 +85,9 @@ var presets = []Preset{
 			}
 			switch v["viewer"] {
 			case "true":
+				if v["proxy"] == "" {
+					return fmt.Errorf("viewer=true needs proxy, behind which browsers log in; without users the viewer is always on")
+				}
 				sink["login_page"], sink["viewer_page"] = true, true
 			case "false":
 			default:

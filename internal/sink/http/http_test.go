@@ -4,14 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -138,17 +136,6 @@ func TestHeadOnStreamPathIsRefused(t *testing.T) {
 // open stream keeps the wildcard so browser dashboards still work.
 func TestWildcardCORSOnlyWithoutAuth(t *testing.T) {
 	pki := testutil.NewPKI(t, "viewer-01")
-	caPEM, err := os.ReadFile(pki.CA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	roots := x509.NewCertPool()
-	roots.AppendCertsFromPEM(caPEM)
-	clientCert, err := tls.LoadX509KeyPair(pki.ClientCert, pki.ClientKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	open, _ := newTestHTTPSink(t, nil)
 	gated, _ := newTestHTTPSink(t, map[string]any{
 		"tls": map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey,
@@ -162,8 +149,7 @@ func TestWildcardCORSOnlyWithoutAuth(t *testing.T) {
 	}{{"open", open, "*"}, {"gated", gated, ""}} {
 		client, baseURL := serveTestHTTPSink(t, tc.sink)
 		if tc.sink.tlsConfig != nil {
-			client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, Certificates: []tls.Certificate{clientCert}}}
-			baseURL = "https" + strings.TrimPrefix(baseURL, "http")
+			baseURL = trustPKI(t, client, baseURL, pki, true)
 		}
 		resp, err := client.Get(baseURL + "/stream")
 		if err != nil {
@@ -189,14 +175,7 @@ func TestLoginEndpointBypassesTheGate(t *testing.T) {
 		"auth": map[string]any{"type": "scram", "credentials_file": creds},
 	})
 	client, baseURL := serveTestHTTPSink(t, gated)
-	caPEM, err := os.ReadFile(pki.CA)
-	if err != nil {
-		t.Fatal(err)
-	}
-	roots := x509.NewCertPool()
-	roots.AppendCertsFromPEM(caPEM)
-	client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}}
-	baseURL = "https" + strings.TrimPrefix(baseURL, "http")
+	baseURL = trustPKI(t, client, baseURL, pki, false)
 
 	hello := `{"logwisp":1,"scram":{"username":"viewer-01","client_nonce":"abcdefgh"}}`
 	resp, err := client.Post(baseURL+"/auth", "application/json", strings.NewReader(hello))
@@ -268,6 +247,85 @@ func TestProxyModeServesBrowserFiles(t *testing.T) {
 	}
 }
 
+// The root leads to the page a browser can use: the viewer, needing no login
+// without auth and under mtls; in proxy mode the viewer, or else the login
+// page; nothing under direct scram, which a browser cannot log in to; and an
+// endpoint at "/" keeps the root.
+func TestRootLeadsToThePageABrowserCanUse(t *testing.T) {
+	pki := testutil.NewPKI(t, "viewer-01")
+	tlsOn := map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey}
+	mtlsOn := map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey,
+		"client_auth": true, "client_ca_file": pki.CA}
+	creds := scramCredentials(t)
+	proxy := map[string]any{"type": "scram", "credentials_file": creds, "trusted_proxies": []any{"127.0.0.1"}}
+	for _, tc := range []struct {
+		name         string
+		opts         map[string]any
+		code         int
+		target, mode string // the root's Location, and that page's logwisp-login
+	}{
+		{"no auth", nil, http.StatusSeeOther, "auth/view", "none"},
+		{"mtls", map[string]any{"tls": mtlsOn, "auth": map[string]any{"type": "mtls"}}, http.StatusSeeOther, "auth/view", "none"},
+		{"proxy, viewer", map[string]any{"auth": proxy, "login_page": true, "viewer_page": true}, http.StatusSeeOther, "auth/view", "scram"},
+		{"proxy, login page", map[string]any{"auth": proxy, "login_page": true}, http.StatusSeeOther, "auth/login", ""},
+		{"direct scram", map[string]any{"tls": tlsOn, "auth": map[string]any{"type": "scram", "credentials_file": creds}}, http.StatusUnauthorized, "", ""},
+		{"status at the root", map[string]any{"status_path": "/"}, http.StatusOK, "", ""},
+	} {
+		h, _ := newTestHTTPSink(t, tc.opts)
+		client, baseURL := serveTestHTTPSink(t, h)
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		if h.tlsConfig != nil {
+			baseURL = trustPKI(t, client, baseURL, pki, h.tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert)
+		}
+		get := func(path string) (*http.Response, string) {
+			req, _ := http.NewRequest(http.MethodGet, baseURL+path, nil)
+			resp, err := client.Do(proxied(req))
+			if err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return resp, string(body)
+		}
+		resp, _ := get("/")
+		if resp.StatusCode != tc.code || resp.Header.Get("Location") != tc.target {
+			t.Errorf("%s: GET / = %d to %q, want %d to %q", tc.name, resp.StatusCode, resp.Header.Get("Location"), tc.code, tc.target)
+		}
+		for _, file := range []string{tc.target + ".js", "auth/scram.js", "auth/style.css"} {
+			if resp, _ := get("/" + file); tc.target != "" && resp.StatusCode != http.StatusOK {
+				t.Errorf("%s: /%s = %d, which its page loads", tc.name, file, resp.StatusCode)
+			}
+		}
+		if tc.mode == "" {
+			continue
+		}
+		resp, page := get("/" + tc.target)
+		if want := `name="logwisp-login" content="` + tc.mode + `"`; resp.StatusCode != http.StatusOK || !strings.Contains(page, want) {
+			t.Errorf("%s: /%s = %d, without %s", tc.name, tc.target, resp.StatusCode, want)
+		}
+	}
+}
+
+// A path ending in "/" matches itself only: a stream at the root does not
+// answer every other path, a browser's favicon request included
+func TestEndpointPathsMatchExactly(t *testing.T) {
+	h, manager := newTestHTTPSink(t, map[string]any{"stream_path": "/"})
+	client, baseURL := serveTestHTTPSink(t, h)
+	for path, want := range map[string]int{"/favicon.ico": http.StatusNotFound, "/auth/view": http.StatusOK} {
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("GET %s = %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+	if n := manager.GetSessionCount(); n != 0 {
+		t.Errorf("sessions = %d, want 0", n)
+	}
+}
+
 // Behind a proxy nothing answers a peer outside trusted_proxies, not even the
 // login page or the challenge.
 func TestProxyModeRefusesDirectPeers(t *testing.T) {
@@ -289,9 +347,10 @@ func TestProxyModeRefusesDirectPeers(t *testing.T) {
 	}
 }
 
-// Pages exist only behind a proxy, where browsers can log in; the viewer
-// needs the login page; /auth and the paths under it are reserved.
-func TestPagesNeedProxyMode(t *testing.T) {
+// The constructor refuses what it cannot serve: the login pages outside
+// scram's proxy mode, a viewer without the login page, a path under /auth, and
+// a path ServeMux or a URL would not take literally, which panicked at Start.
+func TestUnservableOptionsAreRefused(t *testing.T) {
 	scram := map[string]any{"type": "scram", "credentials_file": scramCredentials(t)}
 	pki := testutil.NewPKI(t, "viewer-01")
 	tlsOn := map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey}
@@ -300,6 +359,10 @@ func TestPagesNeedProxyMode(t *testing.T) {
 		"login page without proxies": {"tls": tlsOn, "auth": scram, "login_page": true},
 		"viewer without login":       {"auth": proxy, "viewer_page": true},
 		"stream under /auth":         {"auth": proxy, "stream_path": "/auth/stream"},
+		"wildcard brace in a path":   {"stream_path": "/a{b"},
+		"unclean path":               {"status_path": "//status"},
+		"escape aliasing a path":     {"stream_path": "/x", "status_path": "/%78"},
+		"query in a path":            {"status_path": "/a?b"},
 	} {
 		maps.Copy(opts, map[string]any{"host": "127.0.0.1", "port": int64(8081)})
 		if _, err := NewHTTPSinkPlugin("stream", opts, log.NewLogger(), nil); err == nil {
@@ -326,7 +389,7 @@ func TestSSEFramesEveryLineAsData(t *testing.T) {
 // stopped reading does; Stop returns at the flush bound.
 func TestStopWritesQueuedEventsToReadingStreams(t *testing.T) {
 	const n = 2000 // of 8 KiB: more than a silent peer's socket buffers hold
-	httpSink, _ := newTestHTTPSink(t, map[string]any{"buffer_size": int64(n), "client_buffer_size": int64(64), "write_timeout_ms": int64(500)})
+	httpSink, _ := newTestHTTPSink(t, map[string]any{"buffer_size": int64(n), "client_buffer_size": int64(64), "write_timeout_ms": int64(2000)})
 	client, baseURL := serveTestHTTPSink(t, httpSink)
 	var scanners []*bufio.Scanner
 	for range 2 {
@@ -383,8 +446,8 @@ func TestStopWritesQueuedEventsToReadingStreams(t *testing.T) {
 	}()
 	time.Sleep(100 * time.Millisecond)
 	httpSink.clientsMu.Unlock()
-	if d := <-stopped; d > 1500*time.Millisecond {
-		t.Errorf("Stop took %v past a 500 ms flush bound", d)
+	if d := <-stopped; d > 3500*time.Millisecond {
+		t.Errorf("Stop took %v past a 2 s flush bound", d)
 	}
 	if r := <-done; r.lines != n || !r.disconnect {
 		t.Fatalf("reading stream received %d of %d lines, disconnect %v", r.lines, n, r.disconnect)

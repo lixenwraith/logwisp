@@ -29,16 +29,16 @@ import (
 const reloadHint = "send SIGHUP to logwisp to apply (auto_reload does not watch the credentials file)"
 
 var authCommands = []subcommand{
-	{"add-user", "-credentials FILE -user NAME [-password-file FILE] [-generate]",
+	{"add-user", "--credentials FILE -u NAME [--password-file FILE] [--generate]",
 		"Add a user to a credentials file, or replace its password",
 		[]string{"credentials", "user"}, defineAddUser},
-	{"remove-user", "-credentials FILE -user NAME",
+	{"remove-user", "--credentials FILE -u NAME",
 		"Remove a user from a credentials file",
 		[]string{"credentials", "user"}, defineRemoveUser},
-	{"token", "-url https://HOST:PORT -user NAME -password-file FILE [TLS flags]",
+	{"token", "--url https://HOST:PORT -u NAME --password-file FILE [--unbound] [TLS flags]",
 		"Log in to an http sink or http_chain source and print a bearer token",
 		[]string{"url", "user", "password-file"}, defineToken},
-	{"stream", "-addr HOST:PORT -user NAME -password-file FILE [TLS flags]",
+	{"stream", "--addr HOST:PORT -u NAME --password-file FILE [TLS flags]",
 		"Log in to a tcp sink and copy its stream to stdout until interrupted",
 		[]string{"addr", "user", "password-file"}, defineStream},
 }
@@ -47,7 +47,7 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	path := fs.String("credentials", "", "credentials `file`, created when missing")
 	user := fs.String("user", "", "user `name`")
 	passwordFile := fs.String("password-file", "", "read the password from `file` when it exists, else write a generated one there")
-	generate := fs.Bool("generate", false, "generate a new password, replacing any -password-file; needed to rotate without one")
+	generate := fs.Bool("generate", false, "generate a new password, replacing any --password-file; needed to rotate without one")
 	return func(stdout, stderr io.Writer) error {
 		creds, err := authz.LoadCredentials(*path)
 		// An empty file is one created beforehand to choose its owner
@@ -72,8 +72,8 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 		}
 		generated := password == ""
 		if generated && i >= 0 && !*generate {
-			// A mistyped -password-file must not replace a working password
-			return fmt.Errorf("user %q exists: replacing its password needs an existing -password-file or -generate", *user)
+			// A mistyped --password-file must not replace a working password
+			return fmt.Errorf("user %q exists: replacing its password needs an existing --password-file or --generate", *user)
 		}
 		if generated {
 			password = rand.Text()
@@ -105,7 +105,7 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 		}
 		if generated && *passwordFile != "" {
 			// First, so a failure leaves the verifiers untouched and a rerun
-			// without -generate completes the change
+			// without --generate completes the change
 			if err := writeAtomic(*passwordFile, []byte(password+"\n")); err != nil {
 				return err
 			}
@@ -153,7 +153,7 @@ func defineRemoveUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 }
 
 func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
-	rawURL := fs.String("url", "", "listener `URL`, https://HOST:PORT or https://[IPV6]:PORT (with -unbound, a proxy's mount URL may carry a path)")
+	rawURL := fs.String("url", "", "listener `URL`, https://HOST:PORT or https://[IPV6]:PORT (with --unbound, a proxy's mount URL may carry a path)")
 	user := fs.String("user", "", "user `name`")
 	passwordFile := fs.String("password-file", "", "`file` holding the password")
 	unbound := fs.Bool("unbound", false, "log in without channel binding, to an http sink behind a TLS-terminating proxy (auth.trusted_proxies)")
@@ -161,15 +161,15 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	return func(stdout, _ io.Writer) error {
 		u, err := url.Parse(*rawURL)
 		if err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-			return usageError("-url must be https://HOST:PORT")
+			return usageError("--url must be https://HOST:PORT")
 		}
 		if u.Path = strings.TrimSuffix(u.Path, "/"); u.Path != "" && !*unbound {
 			// TLS passthrough cannot route by path: only a terminating proxy can
-			return usageError("-url takes a path only with -unbound")
+			return usageError("--url takes a path only with --unbound")
 		}
 		network, err := core.Network(u.Hostname())
 		if err != nil {
-			return usageError("-url: " + err.Error())
+			return usageError("--url: " + err.Error())
 		}
 		tlsCfg, policy, err := dialPolicy(tlsOpts, u.Hostname(), *user, *passwordFile, authz.HTTP)
 		if err != nil {
@@ -203,7 +203,7 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 }
 
 func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
-	addr := fs.String("addr", "", "tcp sink `address`, HOST:PORT or [IPV6]:PORT")
+	addr := fs.String("addr", "", "tcp sink address, `HOST:PORT` or [IPV6]:PORT")
 	user := fs.String("user", "", "user `name`")
 	passwordFile := fs.String("password-file", "", "`file` holding the password")
 	tlsOpts := tlsFlags(fs)
@@ -211,7 +211,7 @@ func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 		host, _, err := net.SplitHostPort(*addr)
 		network, nerr := core.Network(host)
 		if err != nil || nerr != nil || host == "" {
-			return usageError("-addr must be HOST:PORT, with an IPv6 address in brackets")
+			return usageError("--addr must be HOST:PORT, with an IPv6 address in brackets")
 		}
 		tlsCfg, policy, err := dialPolicy(tlsOpts, host, *user, *passwordFile, authz.TCP)
 		if err != nil {
@@ -244,7 +244,7 @@ func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 func tlsFlags(fs *flag.FlagSet) *config.TLSOptions {
 	o := &config.TLSOptions{Enabled: true}
 	fs.StringVar(&o.CAFile, "ca-file", "", "CA `file` that verifies the server (default: system roots)")
-	fs.StringVar(&o.PinSHA256, "pin-sha256", "", "sha256//BASE64 `pin` of the server key, in place of -ca-file (a self_signed listener logs it)")
+	fs.StringVar(&o.PinSHA256, "pin-sha256", "", "sha256//BASE64 `pin` of the server key, in place of --ca-file (a self_signed listener logs it)")
 	fs.StringVar(&o.ServerName, "server-name", "", "`name` the server certificate must carry (default: the host)")
 	fs.StringVar(&o.CertFile, "cert-file", "", "client certificate `file`, for listeners with tls.client_auth")
 	fs.StringVar(&o.KeyFile, "key-file", "", "client key `file`")

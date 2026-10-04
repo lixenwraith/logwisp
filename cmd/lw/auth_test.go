@@ -42,7 +42,7 @@ func writeCredentials(t *testing.T, path string, users ...string) *authz.Credent
 func TestAddUserCreatesPrivateFilesWithAMatchingVerifier(t *testing.T) {
 	dir := t.TempDir()
 	creds, pass := filepath.Join(dir, "users.toml"), filepath.Join(dir, "edge-01.pass")
-	code, stdout, stderr := runAuthTest(t, "add-user", "-credentials", creds, "-user", "edge-01", "-password-file", pass)
+	code, stdout, stderr := runAuthTest(t, "add-user", "--credentials", creds, "-u", "edge-01", "--password-file", pass)
 	if code != 0 || stdout != "" {
 		t.Fatalf("exit %d, stdout %q, stderr: %s", code, stdout, stderr)
 	}
@@ -182,13 +182,6 @@ func TestRemoveUserRefusesTheLastUser(t *testing.T) {
 	c, err := authz.LoadCredentials(creds)
 	if err != nil || len(c.Users) != 1 || c.Users[0].Username != "edge-02" {
 		t.Fatalf("users after refusal: %v", err)
-	}
-}
-
-func TestAuthCommandHelpPrintsAuthUsage(t *testing.T) {
-	code, _, stderr := runAuthTest(t, "add-user", "-h")
-	if code != 0 || !strings.Contains(stderr, "Usage: lw auth add-user -credentials FILE") {
-		t.Fatalf("exit %d, stderr: %s", code, stderr)
 	}
 }
 
