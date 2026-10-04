@@ -1,12 +1,18 @@
 # Command Line Interface
 
 ```
-lw [options]
+lw [options] [< input]
+lw -c <file> [options]
 lw --check [options]
 lw auth <command> [flags]
 lw help | -h | --help
 lw --version
 ```
+
+Without a configuration file or pipeline options, lw is a filter: stdin to
+stdout, line for line, until the end of input ([Built-in
+Defaults](#built-in-defaults)). With a file it runs the file's pipelines as a
+service.
 
 `lw auth` manages SCRAM credentials and logs in to `scram` listeners; see
 [below](#lw-auth). There is no certificate-generation command: use
@@ -25,12 +31,15 @@ pipelines have [their own flags](#pipelines):
 
 ### Common
 
-- `-c <path>`, `--config <path>`, `--config=<path>`: the configuration file,
-  default `./logwisp.toml`
+- `-c <path>`, `--config <path>`, `--config=<path>`: the configuration file;
+  unnamed, `~/.config/logwisp/logwisp.toml` if it exists, else
+  `./logwisp.toml` ([Configuration](configuration.md#file-location))
 - `--check`: build every pipeline and plugin, bind nothing, report and exit;
   see [Usage Patterns](#usage-patterns)
-- `--quiet`: suppress all application output, default `false`
-- `--status_reporter=<bool>`: periodic status logging, default `true`
+- `--quiet`: silence lw's own log and notices, default `false`; pipeline
+  output still flows
+- `--status_reporter=<bool>`: periodic status logging, default `true` with a
+  configuration file, `false` without
 - `--auto_reload=<bool>`: reload when the configuration file changes, default
   `false`
 - `--version`: print the version and exit
@@ -41,8 +50,10 @@ path returns an error, and `--` ends option parsing.
 
 ### Logging
 
-- `--logging.output`: `file`, `stdout`, `stderr`, `split`, `all` or `none`
-- `--logging.level`: `debug`, `info`, `warn` or `error`
+- `--logging.output`: `file`, `stdout`, `stderr`, `split`, `all` or `none`,
+  default `stderr`, so stdout carries only data
+- `--logging.level`: `debug`, `info`, `warn` or `error`, default `info` with a
+  configuration file, `warn` without
 - `--logging.format`: `raw`, `txt` or `json`
 - `--logging.sanitization`: `raw`, `json`, `txt` or `shell`
 - `--logging.file.directory`: a path
@@ -63,6 +74,10 @@ pipelines and the built-in default; every other key keeps its precedence.
 - `--source SPEC`, `--sink SPEC` and `--filter SPEC` add a stage, repeatable
 - `--format SPEC`, `--rate-limit SPEC` and `--heartbeat SPEC`, once per pipeline
 - both `--flag SPEC` and `--flag=SPEC` work; `--` ends options
+- a pipeline without `--source` reads stdin (console source `stdin`), one
+  without `--sink` writes stdout (console sink `stdout`)
+- stdin has one reader, so the whole configuration holds at most one console
+  source: `pipeline "b": a console source already reads stdin in pipeline "a"`
 
 A SPEC is a comma-separated list:
 
@@ -96,7 +111,7 @@ A misspelled plugin key fails when the plugin is built, before any listener
 opens: `failed to create sink http: ... unknown key "tls.enabeld"`.
 
 ```bash
-# tail a directory, serve it over SSE
+# tail a directory, serve it over SSE on every interface
 lw --source 'file,directory=/var/log/app,pattern=*.log' \
    --sink http,host=0.0.0.0,port=8080
 
@@ -106,11 +121,13 @@ lw --source file,directory=/var/log/app \
    --sink "http,port=8443,auth.type=scram,auth.credentials_file=/etc/logwisp/users.toml,\
 tls.enabled=true,tls.cert_file=/etc/logwisp/server.crt,tls.key_file=/etc/logwisp/server.key"
 
-# two pipelines
-lw --pipeline app --source file,directory=/var/log/app --sink console \
+# two pipelines: app writes stdout, relay a file
+lw --pipeline app --source file,directory=/var/log/app \
    --pipeline relay --source tcp_chain,port=9000 \
    --sink file,directory=/var/log/relay,name=relay
 ```
+
+Pipelines over stdin and stdout are under [Usage Patterns](#usage-patterns).
 
 ## Environment Variables
 
@@ -154,8 +171,14 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
   -e LOGWISP_FILTER='exclude,patterns=DEBUG' \
   -e LOGWISP_SINK='http,host=0.0.0.0,port=8080' \
   -e LOGWISP_SINK_1=console \
+  -e LOGWISP_LOGGING_LEVEL=info \
   logwisp
 ```
+
+Without a file, lw logs at `warn` with no status reporter, so a container
+configured through the environment passes `LOGWISP_LOGGING_LEVEL=info` (and
+`LOGWISP_STATUS_REPORTER=true`) to keep the service defaults. The image does
+not set them: environment variables would override a mounted file's values.
 
 ## Precedence
 
@@ -163,12 +186,13 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
   - pipeline flags, if any are given
   - else pipeline variables, if any are set
   - else the configuration file's `[[pipelines]]`
-  - else the built-in default
+  - else the built-in `pipe` ([Built-in Defaults](#built-in-defaults))
 - Every other key
   1. command-line flags
   2. environment variables
   3. configuration file
-  4. built-in defaults
+  4. built-in defaults; `logging.level` and `status_reporter` depend on
+     whether a file was found
 
 A reload rereads the file and keeps the command-line or environment pipelines.
 
@@ -186,10 +210,13 @@ service untouched; see [Configuration](configuration.md#hot-reload).
 
 ## Exit Codes
 
-- `0`: clean shutdown, `--version` / `--help`, or a valid `--check`
+- `0`: the end of input, a clean shutdown (`SIGINT`, `SIGTERM`), `--version` /
+  `--help`, or a valid `--check`
 - `1`: general error: a configuration load or validation failure (`--check`
   included), a logger init failure, a service bootstrap failure
 - `2`: an explicitly requested configuration file is not found
+- killed by `SIGPIPE` (shell status `141`): the reader of stdout went away, as
+  in `lw | head`; `cat` ends the same way
 
 Exit code 2 applies only when the file was named explicitly (`-c`,
 `--config=`, or the `LOGWISP_CONFIG_*` variables). A missing discovered default
@@ -197,35 +224,77 @@ is not an error, and LogWisp starts on built-in defaults.
 
 ## Built-in Defaults
 
-With no configuration file present, LogWisp runs one pipeline named
-`default_pipeline`: a `random` source with `special = true`, JSON formatting,
-a rate limit of 5 entries/second with a burst of 10 and `policy = "drop"`, and a
-`console` sink on stdout. It is a self-demonstrating idle mode, not a useful
-production configuration.
+Without a configuration file and without pipeline flags or variables, lw runs
+one built-in pipeline, `pipe`: console source `stdin`, `raw` format, console
+sink `stdout`, no filter, no rate limit. lw is then a Unix filter, like `cat`:
 
-As soon as the file defines `[[pipelines]]`, or pipeline flags or variables are
-given, that entire default pipeline — rate limit included — is replaced rather
-than merged.
+```bash
+lw < app.log > copy.log
+```
+
+- Each line of stdin is one entry and one line of stdout.
+  - The terminator (`\n` or `\r\n`) is written back as `\n`; an unterminated
+    last line is kept and terminated.
+  - Blank lines are skipped.
+  - A line over 1 MiB continues in the next entry; no byte is lost.
+- Nothing is dropped: a slow reader slows the reading of stdin.
+- On a terminal, control characters are written as `<hex>` (`ESC` becomes
+  `<1b>`); pipes and files get the bytes unchanged
+  ([console sink](sinks.md#console)).
+- When a console source reads a terminal, lw says so once on stderr, unless
+  `--quiet`: `lw: reading standard input; Ctrl-D ends it (lw --help for usage)`.
+
+A file that defines no `[[pipelines]]` still runs `pipe`. The file's
+`[[pipelines]]`, or pipeline flags or variables, replace it whole.
+
+Without a file lw also logs less: `logging.level` defaults to `warn` and
+`status_reporter` to `false`, against `info` and `true` with one. Explicit
+values from the file, the environment or flags win.
+
+**End of input.** When stdin ends, the console source ends. A pipeline
+finishes when all its sources have ended, and once every pipeline has
+finished lw shuts down gracefully and exits 0. Only a console source ends on
+its own: file and network sources run until a signal, and so does a pipeline
+holding one. Console and file sinks write what is queued before the
+exit. The `http` and `tcp` sinks do not yet flush their clients' queues, so a
+connected client can miss the last entries of a finite input
+([To Do](todo.md)).
 
 ## Usage Patterns
+
+**Filter**
+
+```bash
+# copy, line for line; exits 0 at the end of input
+lw < app.log > copy.log
+
+# errors and warnings only
+tail -F app.log | lw --filter include,patterns=ERROR,patterns=WARN
+
+# stdin as a live SSE stream; the http and tcp sinks bind 0.0.0.0 by default
+journalctl -f | lw --sink http,host=127.0.0.1,port=8080
+
+# a directory's files to one file, through stdout
+lw --source file,directory=/var/log/app,pattern='*.log' > all.log
+```
+
+A console sink never drops: when its reader is slow, the pipeline waits, and
+so does the reading of stdin.
 
 **Development**
 
 ```bash
-# verbose, everything to stderr
-lw -c dev.toml --logging.output=stderr --logging.level=debug
-
-# no config at all: synthetic generator to stdout
-lw
+# a file's pipelines, verbose
+lw -c dev.toml --logging.level=debug
 ```
 
 **Configuration check**
 
 `lw --check` validates without running: it builds every pipeline and plugin as
 a start would (options, TLS files, credentials files, startup warnings), but
-binds no port and opens, reads or creates no log file; it prints
-`configuration ok` and exits 0, or the error and exits 1 (2 when a named file
-is missing, see [Exit Codes](#exit-codes)):
+binds no port, reads no stdin, and opens, reads or creates no log file; it
+prints `configuration ok: N pipeline(s)` and exits 0, or the error and exits 1
+(2 when a named file is missing, see [Exit Codes](#exit-codes)):
 
 ```bash
 lw --check -c /etc/logwisp/logwisp.toml
@@ -238,8 +307,10 @@ lw --check --source file,directory=/var/log/app --sink http,port=8080
 lw -c /etc/logwisp/logwisp.toml --logging.output=file
 ```
 
-Run under a supervisor (systemd, rc.d) rather than backgrounding it — there is
-no `--background` flag; earlier releases had one and it was removed. See
+Run it in the foreground under a supervisor (systemd, rc.d, a container
+runtime); there is no `--background` flag. A supervisor's stdin is usually
+`/dev/null`, where a console source ends at once, so a service's file defines
+its pipelines. See [Operations](operations.md#starting) and
 [Installation](installation.md).
 
 **Reload**

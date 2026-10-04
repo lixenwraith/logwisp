@@ -84,7 +84,8 @@ last read time, plus `active_watchers`.
 
 ## console
 
-Reads newline-delimited entries from standard input.
+Reads newline-delimited entries from standard input. It is the source of the
+built-in `pipe` pipeline, and of every spec pipeline given no `--source`.
 
 ```toml
 [[pipelines.plugin_sources]]
@@ -98,9 +99,23 @@ Option, as type and default:
 
 - `buffer_size` (int, `1000`): subscriber channel depth.
 
-At most **one** instance per pipeline: the type is registered with
-`MaxInstances: 1`, and a second instance is rejected at pipeline construction.
-The level is inferred from the line text, and `Source` is set to `console`.
+Lines:
+- Each line is one entry, its terminator (`\n` or `\r\n`) removed; the
+  formatter writes one back. An unterminated last line is kept.
+- Blank lines are skipped.
+- A line over 1 MiB continues in the next entry; no byte is lost.
+- The level is inferred from the line text, and `Source` is set to `console`.
+
+Delivery and lifetime:
+- Nothing is dropped: the source waits for its pipeline, so a slow pipeline
+  slows the reading of stdin.
+- One reader serves the process. A reload's new source continues where the old
+  one stopped; no line is read twice. Hence at most **one** console source in
+  the whole configuration, checked at validation.
+- At the end of input the source ends, and with it a pipeline whose sources
+  have all ended; lw exits once every pipeline has
+  ([CLI](cli.md#built-in-defaults)). Under a supervisor whose stdin is
+  `/dev/null` that is at once.
 
 ---
 

@@ -19,23 +19,28 @@ streams, or downstream LogWisp nodes.
 
 ### Pipeline
 
+- **A Unix filter out of the box**: with no configuration, `lw` copies stdin
+  to stdout line for line and exits at the end of input; flags add filters,
+  formats, sources and sinks
 - **Independent pipelines**, each `sources → flow → sinks`, running concurrently
   in one process
 - **Fan-in and fan-out**: many sources and many sinks per pipeline
-- **Never blocks**: a stalled sink drops its own events and is counted, rather
-  than stalling the pipeline or its sibling sinks
+- **Isolated sinks**: a stalled sink drops and counts its own events rather
+  than stalling the pipeline or its sibling sinks; only the console sink
+  waits, so a filter loses no line to a slow reader
 - **Hot reload** via `SIGHUP`/`SIGUSR1` or a config file watch, with the new
   configuration validated before the old service is torn down
 
 ### Inputs
 
 `file` (directory tail with rotation detection and JSON line parsing),
-`console` (stdin), `random` (synthetic generator), `null`, and the chain ingest
-listeners `tcp_chain` and `http_chain`.
+`console` (stdin, one reader per process), `random` (synthetic generator),
+`null`, and the chain ingest listeners `tcp_chain` and `http_chain`.
 
 ### Outputs
 
-`console`, `file` (rotating with retention), `http` (Server-Sent Events plus a
+`console` (control characters escaped on a terminal), `file` (rotating with
+retention), `http` (Server-Sent Events plus a
 JSON status endpoint), `tcp` (broadcast server), `null`, and the chain
 forwarders `tcp_chain` and `http_chain`.
 
@@ -99,8 +104,8 @@ authentication designs for the rationale and what is deliberately left out.
 - [Security](doc/security.md): TLS, mTLS, peer authorization, threat model
 - Design notes: [mTLS](doc/mtls-auth-plan.md) and
   [password](doc/scram-auth-plan.md) authentication
-- [CLI](doc/cli.md): flags, pipeline specifications, signals, exit codes,
-  `lw auth`; also the `lw(1)` manual, [`doc/lw.1`](doc/lw.1)
+- [CLI](doc/cli.md): filter use, flags, pipeline specifications, signals,
+  exit codes, `lw auth`; also the `lw(1)` manual, [`doc/lw.1`](doc/lw.1)
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
 - [To Do](doc/todo.md): planned work in priority order: network access
@@ -114,16 +119,30 @@ A fully annotated configuration covering every option ships as
 
 ```bash
 make build                      # plain `make` lists the targets
-./bin/lw --source 'file,directory=/var/log/myapp,pattern=*.log' \
-    --format json,sanitizer_policy=json --sink console
 ```
 
-Or as a configuration file:
+Without a configuration file, `lw` is a filter: stdin to stdout, line for
+line, exiting 0 at the end of input. A pipeline without `--source` reads stdin,
+one without `--sink` writes stdout:
+
+```bash
+./bin/lw < app.log > copy.log
+tail -F app.log | ./bin/lw --filter include,patterns=ERROR,patterns=WARN
+
+# stdin as a live SSE stream; the http sink binds 0.0.0.0 unless told
+journalctl -f | ./bin/lw --sink http,host=127.0.0.1,port=8080
+
+# tail a directory instead of stdin
+./bin/lw --source 'file,directory=/var/log/myapp,pattern=*.log' \
+    --format json,sanitizer_policy=json > all.json
+```
+
+As a service, a configuration file holds the pipelines:
 
 ```toml
 # logwisp.toml
 [[pipelines]]
-name = "default"
+name = "app"
 
 [pipelines.flow.format]
 type = "json"
@@ -137,18 +156,17 @@ directory = "/var/log/myapp"
 pattern = "*.log"
 
 [[pipelines.plugin_sinks]]
-id = "stdout"
-type = "console"
+id = "sse"
+type = "http"
 [pipelines.plugin_sinks.config]
-target = "stdout"
+host = "127.0.0.1"
+port = 8080
 ```
 
 ```bash
-./bin/lw -c logwisp.toml
+./bin/lw -c logwisp.toml                # until SIGINT or SIGTERM; logs to stderr
+curl -N http://127.0.0.1:8080/stream    # from another shell
 ```
-
-Running with neither starts a self-demonstrating pipeline: a synthetic
-generator writing JSON to stdout.
 
 In a container, read-only and without capabilities:
 

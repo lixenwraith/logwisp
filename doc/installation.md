@@ -203,6 +203,12 @@ docker run -d --name logwisp \
   -e LOGWISP_SINK=console
   ```
 
+  Without a file lw logs warnings only and runs no status reporter; add
+  `-e LOGWISP_LOGGING_LEVEL=info` (and `-e LOGWISP_STATUS_REPORTER=true`) for
+  the service defaults. The image cannot set them: a variable would override
+  a mounted file's value. Without `-i`, stdin is `/dev/null`, so a container
+  needs a source other than `console`.
+
 - Secrets: only as mounted files, at `/run/secrets` (Docker or Compose
   secrets, a Kubernetes secret volume), named by `tls.key_file`,
   `auth.credentials_file` and `auth.password_file`. Never put a password in

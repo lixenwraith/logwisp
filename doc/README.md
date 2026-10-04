@@ -41,21 +41,24 @@ A fully annotated configuration covering every option lives at
 
 ### Pipeline
 
+- A Unix filter without configuration: stdin to stdout, line for line
 - Independent named pipelines, each `sources → flow → sinks`
 - Fan-in (many sources per pipeline) and fan-out (many sinks per pipeline)
-- Non-blocking sink dispatch: a stalled sink drops its own events and never
-  stalls the pipeline or its sibling sinks
+- Isolated sinks: a stalled sink drops its own events rather than stall the
+  pipeline; only the console sink waits, so a filter loses no line
 - Hot reload of pipeline configuration via `SIGHUP`/`SIGUSR1` or a file watch
 
 ### Inputs
 
-`file` (directory tail with rotation detection), `console` (stdin),
+`file` (directory tail with rotation detection), `console` (stdin, one
+reader per process),
 `random` (synthetic generator), `null`, and the chain ingest listeners
 `tcp_chain` and `http_chain`.
 
 ### Outputs
 
-`console`, `file` (rotating), `http` (Server-Sent Events plus a JSON status
+`console` (control characters escaped on a terminal), `file` (rotating),
+`http` (Server-Sent Events plus a JSON status
 endpoint), `tcp` (broadcast server), `null`, and the chain forwarders
 `tcp_chain` and `http_chain`.
 
@@ -83,9 +86,20 @@ See [Security](security.md) for what each layer does and does not give you.
 
 ## Quick Start
 
+Without a configuration file `lw` is a filter, exiting 0 at the end of input;
+a pipeline without `--source` reads stdin and one without `--sink` writes
+stdout:
+
+```bash
+lw < app.log > copy.log
+tail -F app.log | lw --filter include,patterns=ERROR,patterns=WARN
+```
+
+As a service, a file holds the pipelines:
+
 ```toml
 [[pipelines]]
-name = "default"
+name = "app"
 
 [pipelines.flow.format]
 type = "json"

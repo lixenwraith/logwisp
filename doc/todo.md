@@ -122,7 +122,16 @@ connection level, below TLS, so a refused peer costs no handshake.
   - Denied and allowed clients; per-client SCRAM budgets behind one proxy
     address.
 
-## 2. Hardening review of `lixenwraith/config` and `lixenwraith/toml`
+## 2. Flush network sinks at shutdown
+
+At the end of a finite input lw shuts down, and the `http` and `tcp` sinks
+disconnect their clients without writing the entries still queued for them, so
+a client can miss the last ones. On `Stop`, each sink's broker should first move
+its input queue into the client queues, then let every client writer drain its
+queue within a bound (`write_timeout_ms`) before the disconnect frame. Verify
+with a finite stdin into each sink and a connected client counting lines.
+
+## 3. Hardening review of `lixenwraith/config` and `lixenwraith/toml`
 
 Both parse untrusted-shaped input (config files, environment, command line)
 and were not reviewed with the auth work. Review them as `auth` was reviewed:
@@ -151,7 +160,7 @@ the library repository, then a dependency bump here.
   - Fuzz targets committed in the library repositories.
   - A note in this repository's security.md once done.
 
-## 3. Packaging: AUR, FreeBSD ports, Debian
+## 4. Packaging: AUR, FreeBSD ports, Debian
 
 The foundation exists:
 - The `lw` binary name, free in Arch (official repositories and AUR), Ubuntu
