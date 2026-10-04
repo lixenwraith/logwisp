@@ -9,11 +9,12 @@ import (
 	"reflect"
 	"syscall"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
-	"logwisp/internal/version"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/version"
 
 	"github.com/lixenwraith/log"
+	"golang.org/x/term"
 )
 
 var logger *log.Logger
@@ -88,6 +89,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if !cfg.Quiet && readsStdin(cfg) && term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintln(os.Stderr, "lw: reading standard input; Ctrl-D ends it (lw --help for usage)")
+	}
+
 	// --- 3. Setup signals and shutdown ---
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
@@ -112,6 +117,9 @@ func main() {
 		logger.Info("msg", "Shutdown complete")
 	}()
 
+	// Closed when every pipeline's input ended (stdin); nil while none runs
+	done := svc.Done()
+
 	reload := func(fromDisk bool) {
 		var next *config.Config
 		var err error
@@ -130,8 +138,12 @@ func main() {
 			return
 		}
 		newSvc, newCfg, newStatusCancel, err := handleReload(ctx, next, svc, statusReporterCancel)
-		if err == nil {
+		switch {
+		case err == nil:
 			svc, cfg, statusReporterCancel = newSvc, newCfg, newStatusCancel
+			done = svc.Done()
+		case errors.Is(err, errServiceStopped):
+			done = nil // the stopped service's pipelines did not reach the end of input
 		}
 	}
 
@@ -158,6 +170,10 @@ func main() {
 				reload(false)
 			}
 
+		case <-done:
+			logger.Info("msg", "Every pipeline finished: its input ended")
+			return
+
 		case <-ctx.Done():
 			return // Exit the loop and trigger deferred shutdown
 		}
@@ -171,4 +187,16 @@ func shutdownLogger() {
 			Error("Logger shutdown error: %v\n", err)
 		}
 	}
+}
+
+// readsStdin reports a console source: typed into, it waits for the keyboard
+func readsStdin(cfg *config.Config) bool {
+	for _, p := range cfg.Pipelines {
+		for _, src := range p.PluginSources {
+			if src.Type == "console" {
+				return true
+			}
+		}
+	}
+	return false
 }

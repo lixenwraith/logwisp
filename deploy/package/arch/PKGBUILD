@@ -1,6 +1,6 @@
 # Maintainer: <name> <email>
-# Skeleton: source and checksum wait for a tagged release; run namcap and
-# makepkg --printsrcinfo > .SRCINFO before publishing to the AUR.
+# Skeleton: pkgver, sha256sums and the maintainer wait for a tagged release;
+# doc/todo.md lists the steps to publish it to the AUR.
 
 pkgname=logwisp
 pkgver=0.21.0

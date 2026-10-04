@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"logwisp/internal/service"
+	"github.com/lixenwraith/logwisp/internal/service"
 )
 
 // startStatusReporter starts a new status reporter for a service and returns its cancel function.

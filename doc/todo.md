@@ -122,7 +122,16 @@ connection level, below TLS, so a refused peer costs no handshake.
   - Denied and allowed clients; per-client SCRAM budgets behind one proxy
     address.
 
-## 2. Hardening review of `lixenwraith/config` and `lixenwraith/toml`
+## 2. Flush network sinks at shutdown
+
+At the end of a finite input lw shuts down, and the `http` and `tcp` sinks
+disconnect their clients without writing the entries still queued for them, so
+a client can miss the last ones. On `Stop`, each sink's broker should first move
+its input queue into the client queues, then let every client writer drain its
+queue within a bound (`write_timeout_ms`) before the disconnect frame. Verify
+with a finite stdin into each sink and a connected client counting lines.
+
+## 3. Hardening review of `lixenwraith/config` and `lixenwraith/toml`
 
 Both parse untrusted-shaped input (config files, environment, command line)
 and were not reviewed with the auth work. Review them as `auth` was reviewed:
@@ -151,52 +160,59 @@ the library repository, then a dependency bump here.
   - Fuzz targets committed in the library repositories.
   - A note in this repository's security.md once done.
 
-## 3. Packaging: AUR, FreeBSD ports, Debian
+## 4. Packaging: AUR, FreeBSD ports, Debian
 
 The foundation exists:
-- The `lw` binary name.
+- The `lw` binary name, free in Arch (official repositories and AUR), Ubuntu
+  24.04 and 26.04, and the FreeBSD 15.1 ports tree.
+- The canonical module path `github.com/lixenwraith/logwisp`, which
+  `go install`, FreeBSD's `USES=go:modules` and Debian's dh-golang expect.
 - `make install` with `DESTDIR`, `PREFIX` and `SYSCONFDIR`.
 - The `doc/lw.1` manual.
 - Service files in `deploy/package/`: systemd unit, sysusers, tmpfiles and the
   FreeBSD rc.d script.
 - Skeletons in `deploy/package/arch/` and `deploy/package/freebsd/`.
 
-What remains:
+What remains. Steps 1 to 3 are the maintainer's: they need push rights and an
+identity, and both skeletons download the tagged source.
 
-- Releases:
-  - The repository has no tags, so versions come from `git describe` and fall
-    back to a commit hash. Tag releases `vX.Y.Z`.
-  - Publish source tarballs with checksums, and sign them.
-- Module path:
-  - The module is `logwisp`, so `go install github.com/lixenwraith/logwisp/cmd/lw@latest`
-    does not work.
-  - FreeBSD's `USES=go:modules` and Debian's dh-golang expect the canonical
-    path.
-  - Rename the module to `github.com/lixenwraith/logwisp`: a mechanical
-    import rewrite in one commit.
-- Name check before submission:
-  - Arch: `pkgfile -s lw` against the official repositories, and the AUR
-    package list for `lw` and `logwisp`.
-  - Already checked: Ubuntu 26.04 and 24.04 contents and the FreeBSD 15.1
-    ports tree ship no `bin/lw`.
-- Arch (AUR): `deploy/package/arch/PKGBUILD` already has the source URL, the
-  Arch Go flags (`-trimpath -buildmode=pie -mod=readonly -modcacherw`),
-  `backup` for the config and `check()`. Remaining:
-  - the checksum of a tagged tarball in place of `SKIP`, and a maintainer;
-  - namcap, `.SRCINFO`, and publishing `logwisp` (optionally `logwisp-git`).
-- FreeBSD: `deploy/package/freebsd/` already has `USES=go:1.27,modules`,
-  `USE_RC_SUBR=logwisp`, `USERS`/`GROUPS`, and a pkg-plist with the `.sample`
-  config and the manual. Remaining:
-  - `distinfo` (or `GH_TUPLE`), which needs the module rename and a tag;
-  - a real `MAINTAINER` and a `UIDs`/`GIDs` entry for `logwisp`;
-  - poudriere on 14.x and 15.x, then submission through Bugzilla
-    (`sysutils/logwisp`).
-- Debian:
-  - Debian policy wants every Go dependency packaged; the four `lixenwraith`
-    libraries are not.
-  - Either package them too (dh-golang), or start with an `.deb` built by the
-    Makefile `install` target (nfpm or `dpkg-deb`) and a PPA, and move to the
-    archive later.
-- Shell completion for bash, zsh and fish, installed by `make install`.
-- A packaging CI job: build the AUR package in an Arch container and the port
-  in a FreeBSD VM, run `lw --version` and `make image-check`.
+1. Tag the release on the merged main commit, `vX.Y.Z`:
+   ```
+   git tag -a vX.Y.Z -m vX.Y.Z      # git tag -s signs it with your key
+   git push origin vX.Y.Z
+   ```
+   - `make` then stamps `vX.Y.Z` (from `git describe`), and
+     `go install github.com/lixenwraith/logwisp/cmd/lw@vX.Y.Z` works.
+   - A GitHub release for the tag is optional; the tag alone serves
+     `archive/vX.Y.Z.tar.gz`, which the PKGBUILD downloads.
+2. Arch (AUR), `deploy/package/arch/PKGBUILD`:
+   - `pkgver=X.Y.Z` and the `# Maintainer: Name <email>` line.
+   - `updpkgsums` (pacman-contrib) replaces `sha256sums=('SKIP')` with the
+     tarball's checksum.
+   - `namcap PKGBUILD`, then `makepkg -si` (builds, runs `check()`,
+     installs), then `makepkg --printsrcinfo > .SRCINFO`.
+   - Push `PKGBUILD` and `.SRCINFO` to
+     `ssh://aur@aur.archlinux.org/logwisp.git`; optionally a `logwisp-git`
+     package built from the main branch.
+3. FreeBSD, `deploy/package/freebsd/` (`sysutils/logwisp`):
+   - `DISTVERSION=X.Y.Z` and `MAINTAINER=` your address.
+   - `make makesum` writes `distinfo`: the module zip that the Go proxy
+     serves for `GO_MODULE` at the tag.
+   - The `logwisp` user needs an ID registered in the ports tree. Take a
+     number below 1000 that is free in both `/usr/ports/UIDs` and
+     `/usr/ports/GIDs`, and add to the same patch:
+     ```
+     UIDs: logwisp:*:NNN:NNN::0:0:LogWisp daemon:/nonexistent:/usr/sbin/nologin
+     GIDs: logwisp:*:NNN:
+     ```
+   - `portlint -AC`, `poudriere testport` on 14.x and 15.x jails, then a
+     Bugzilla report with the port directory and the UIDs/GIDs diff.
+4. Debian:
+   - Debian policy wants every Go dependency packaged; the four `lixenwraith`
+     libraries are not.
+   - Either package them too (dh-golang), or start with an `.deb` built by the
+     Makefile `install` target (nfpm or `dpkg-deb`) and a PPA, and move to the
+     archive later.
+5. Shell completion for bash, zsh and fish, installed by `make install`.
+6. A packaging CI job: build the AUR package in an Arch container and the port
+   in a FreeBSD VM, run `lw --version` and `make image-check`.

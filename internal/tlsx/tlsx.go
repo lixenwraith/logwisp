@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/config"
 
 	"github.com/lixenwraith/log"
 )

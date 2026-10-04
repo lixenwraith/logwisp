@@ -18,9 +18,9 @@ BUILD_TIME ?= $(BUILD_TIME_DEFAULT)
 # The image stamps the commit time, so a rebuild of one commit stays cached
 IMAGE_BUILD_TIME_DEFAULT != TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%d_%H:%M:%S 2>/dev/null || echo unknown
 IMAGE_BUILD_TIME ?= $(IMAGE_BUILD_TIME_DEFAULT)
-VERSION_LDFLAGS = -X 'logwisp/internal/version.Version=$(VERSION)' \
-	-X 'logwisp/internal/version.GitCommit=$(GIT_COMMIT)' \
-	-X 'logwisp/internal/version.BuildTime=$(BUILD_TIME)'
+VERSION_LDFLAGS = -X 'github.com/lixenwraith/logwisp/internal/version.Version=$(VERSION)' \
+	-X 'github.com/lixenwraith/logwisp/internal/version.GitCommit=$(GIT_COMMIT)' \
+	-X 'github.com/lixenwraith/logwisp/internal/version.BuildTime=$(BUILD_TIME)'
 # Not LDFLAGS/GOFLAGS: packagers export those for the C linker and go itself.
 GO_BUILDFLAGS ?=
 GO_LDFLAGS ?=

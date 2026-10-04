@@ -2,27 +2,28 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
-	_ "logwisp/internal/source/console"
-	_ "logwisp/internal/source/file"
-	_ "logwisp/internal/source/httpchain"
-	_ "logwisp/internal/source/null"
-	_ "logwisp/internal/source/random"
-	_ "logwisp/internal/source/tcpchain"
+	_ "github.com/lixenwraith/logwisp/internal/source/console"
+	_ "github.com/lixenwraith/logwisp/internal/source/file"
+	_ "github.com/lixenwraith/logwisp/internal/source/httpchain"
+	_ "github.com/lixenwraith/logwisp/internal/source/null"
+	_ "github.com/lixenwraith/logwisp/internal/source/random"
+	_ "github.com/lixenwraith/logwisp/internal/source/tcpchain"
 
-	_ "logwisp/internal/sink/console"
-	_ "logwisp/internal/sink/file"
-	_ "logwisp/internal/sink/http"
-	_ "logwisp/internal/sink/httpchain"
-	_ "logwisp/internal/sink/null"
-	_ "logwisp/internal/sink/tcp"
-	_ "logwisp/internal/sink/tcpchain"
+	_ "github.com/lixenwraith/logwisp/internal/sink/console"
+	_ "github.com/lixenwraith/logwisp/internal/sink/file"
+	_ "github.com/lixenwraith/logwisp/internal/sink/http"
+	_ "github.com/lixenwraith/logwisp/internal/sink/httpchain"
+	_ "github.com/lixenwraith/logwisp/internal/sink/null"
+	_ "github.com/lixenwraith/logwisp/internal/sink/tcp"
+	_ "github.com/lixenwraith/logwisp/internal/sink/tcpchain"
 
-	"logwisp/internal/config"
-	"logwisp/internal/service"
-	"logwisp/internal/version"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/service"
+	"github.com/lixenwraith/logwisp/internal/version"
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/sanitizer"
@@ -47,6 +48,10 @@ func bootstrapInitial(ctx context.Context, cfg *config.Config) (*service.Service
 
 	return svc, statusCancel, nil
 }
+
+// errServiceStopped is a reload that failed after the old service stopped:
+// no pipeline runs until a later reload succeeds.
+var errServiceStopped = errors.New("old service stopped, new one failed to start")
 
 // handleReload orchestrates the entire hot-reload process including status reporter lifecycle
 func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Service, statusCancel context.CancelFunc) (*service.Service, *config.Config, context.CancelFunc, error) {
@@ -78,7 +83,7 @@ func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Se
 	if err := newService.Start(); err != nil {
 		newService.Shutdown()
 		logger.Error("msg", "Failed to start new service pipelines after reload. The application may be in a non-functional state.", "error", err)
-		return nil, nil, nil, fmt.Errorf("failed to start new service: %w", err)
+		return nil, nil, nil, fmt.Errorf("%w: %w", errServiceStopped, err)
 	}
 
 	// Manage status reporter lifecycle

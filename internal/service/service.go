@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"logwisp/internal/config"
-	"logwisp/internal/pipeline"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/pipeline"
 
 	"github.com/lixenwraith/log"
 )
@@ -21,6 +21,8 @@ type Service struct {
 	wg           sync.WaitGroup
 	logger       *log.Logger
 	shutdownOnce sync.Once
+	watchOnce    sync.Once
+	done         chan struct{} // closed when every pipeline has finished
 }
 
 // NewService creates a new, empty service
@@ -31,6 +33,7 @@ func NewService(ctx context.Context, cfg *config.Config, logger *log.Logger) (*S
 		ctx:       serviceCtx,
 		cancel:    cancel,
 		logger:    logger,
+		done:      make(chan struct{}),
 	}
 
 	var errs error
@@ -89,9 +92,25 @@ func (svc *Service) Start(names ...string) error {
 	}
 
 	svc.logger.Debug("msg", "Finished starting pipeline(s)", "pipelines", names)
+	svc.watchOnce.Do(func() {
+		pipelines := make([]*pipeline.Pipeline, 0, len(svc.pipelines))
+		for _, p := range svc.pipelines {
+			pipelines = append(pipelines, p)
+		}
+		go func() {
+			for _, p := range pipelines {
+				<-p.Finished()
+			}
+			close(svc.done)
+		}()
+	})
 
 	return errs
 }
+
+// Done is closed once every pipeline has finished: all their sources reached
+// the end of their input (stdin), or the service shut down.
+func (svc *Service) Done() <-chan struct{} { return svc.done }
 
 // Stop stops all or specific pipeline
 func (svc *Service) Stop(names ...string) error {

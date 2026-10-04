@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/chain"
-	"logwisp/internal/config"
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/chain"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 
 	"github.com/lixenwraith/auth"
 )

@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"logwisp/internal/core"
-	"logwisp/internal/source"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/source"
 
 	"github.com/lixenwraith/log"
 )
@@ -379,12 +379,11 @@ func (w *fileWatcher) isStopped() bool {
 // parseLine converts a line into an entry, as JSON when nothing would be lost
 func (w *fileWatcher) parseLine(line string) core.LogEntry {
 	if w.raw {
-		// Newline restored: sinks write the payload as it stands
 		return core.LogEntry{
 			Time:    time.Now(),
 			Source:  filepath.Base(w.directory),
 			Level:   source.ExtractLogLevel(line),
-			Message: line + "\n",
+			Message: line,
 		}
 	}
 

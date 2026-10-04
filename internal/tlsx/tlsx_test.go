@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/config"
 )
 
 // A dialer verifies an IPv6 target by its address: the zone names a local

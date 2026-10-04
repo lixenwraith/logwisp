@@ -131,7 +131,8 @@ func envPipelineSpecs() []pipelineSpec {
 }
 
 // buildPipelines turns specs, in order, into pipelines; specs before the first
-// --pipeline go to one named "cli". Every call returns fresh maps.
+// --pipeline go to one named "cli". A pipeline without a source reads stdin,
+// one without a sink writes stdout. Every call returns fresh maps.
 func buildPipelines(specs []pipelineSpec) ([]PipelineConfig, error) {
 	var pipelines []PipelineConfig
 	var seen map[*specKind]bool
@@ -158,6 +159,15 @@ func buildPipelines(specs []pipelineSpec) ([]PipelineConfig, error) {
 		}
 		if err := s.kind.apply(p, typ, opts); err != nil {
 			return nil, fmt.Errorf("%s %s: %w", s.name, s.value, err)
+		}
+	}
+	for i := range pipelines {
+		pipe := pipeDefault(pipelines[i].Name)
+		if len(pipelines[i].PluginSources) == 0 {
+			pipelines[i].PluginSources = pipe.PluginSources
+		}
+		if len(pipelines[i].PluginSinks) == 0 {
+			pipelines[i].PluginSinks = pipe.PluginSinks
 		}
 	}
 	return pipelines, nil

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
 
 	"github.com/lixenwraith/log"
 )

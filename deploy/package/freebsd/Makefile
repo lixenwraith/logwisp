@@ -1,7 +1,7 @@
-# Skeleton for sysutils/logwisp. GO_MODULE fetches the module by its canonical
-# path, so it waits for the module rename to github.com/lixenwraith/logwisp
-# (the -X paths below follow it), a tagged release, a maintainer, and a
-# UIDs/GIDs entry for logwisp. files/logwisp.in links to ../logwisp.rc: cp -L.
+# Skeleton for sysutils/logwisp: GO_MODULE fetches the tagged module from the
+# Go proxy, so it waits for a release tag, a maintainer and a UIDs/GIDs entry
+# for logwisp (doc/todo.md). files/logwisp.in is a symlink to
+# deploy/package/logwisp.rc: copy the port with cp -RL.
 
 PORTNAME=	logwisp
 DISTVERSIONPREFIX=	v
@@ -22,8 +22,8 @@ SUB_LIST=	BINDIR=${PREFIX}/bin
 GO_MODULE=	github.com/lixenwraith/logwisp
 GO_TARGET=	./cmd/lw
 GO_BUILDFLAGS=	-ldflags="-s -w \
-		-X logwisp/internal/version.Version=${DISTVERSION} \
-		-X logwisp/internal/version.GitCommit=${DISTVERSIONFULL}"
+		-X github.com/lixenwraith/logwisp/internal/version.Version=${DISTVERSION} \
+		-X github.com/lixenwraith/logwisp/internal/version.GitCommit=${DISTVERSIONFULL}"
 
 USERS=		logwisp
 GROUPS=		logwisp

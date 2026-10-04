@@ -64,14 +64,16 @@ registry rejects a second instance of any such type.
 ### Entry lifecycle
 
 1. **Source** produces a `core.LogEntry` and publishes it to every subscriber
-   channel it has handed out. Publication is non-blocking: a full subscriber
-   channel increments the source's `dropped_entries` counter.
+   channel it has handed out; the pipeline subscribes before the source
+   starts. Publication is non-blocking: a full subscriber channel increments
+   the source's `dropped_entries` counter. The console source alone waits,
+   since stdin can simply be read later.
 2. **Flow** applies, in order: rate limit → filter chain → formatter. A drop at
    any stage ends the entry's life and increments `flow.total_dropped`.
 3. The formatter output becomes a `core.TransportEvent`, which carries both the
    formatted `Payload` and the original structured `Entry`.
 4. **Dispatch** sends the event to every sink's input channel with a
-   non-blocking send.
+   non-blocking send, except to a sink declaring `CapBackpressure`.
 
 `LogEntry` fields:
 
@@ -90,15 +92,17 @@ structured entry rather than shipping whatever text the local formatter chose.
 
 ### Back-pressure and drops
 
-There is exactly one drop policy and it is not configurable: **never block**.
-Each stage drops and counts instead of waiting:
+The drop policy is not configurable: **never block**, except where waiting
+loses nothing. Each stage drops and counts instead of waiting:
 
 - Source → subscriber: a full channel drops the entry; source
-  `dropped_entries`.
+  `dropped_entries`. The console source waits instead and reads stdin later.
 - Flow: the rate limiter, a filter rejection or a format error drops it;
   `flow.total_dropped`.
 - Pipeline → sink: a full sink input drops it for that sink only; pipeline
-  `total_dropped_by_sink`.
+  `total_dropped_by_sink`. A sink declaring `core.CapBackpressure`, the console
+  sink, makes dispatch wait instead, so a filter loses no line to a slow
+  reader and its pipeline runs at the reader's pace; `Stop` ends the wait.
 - TCP/HTTP sink → client queue: a full queue drops it for that client only;
   sink `dropped_writes`.
 
@@ -126,9 +130,16 @@ on a non-retryable response or on shutdown (`dropped_batches`).
 
 `Pipeline.Stop` is deliberately ordered so in-flight data drains:
 
-1. Stop all sources concurrently; each closes its subscriber channels.
+1. Release dispatch waits on backpressure sinks; stop all sources
+   concurrently, each closing its subscriber channels.
 2. Wait for the run loop, which ends when every subscription channel closes.
-3. Stop all sinks concurrently.
+3. Stop all sinks concurrently; console and file sinks write their queue
+   first. Then cancel the pipeline context.
+
+A finite source ends on its own: the console source at the end of stdin. The
+run loop then returns and the pipeline's `Finished` channel closes; once every
+pipeline has finished, the service's `Done` closes and `main` shuts down as on
+`SIGTERM`, exiting 0.
 
 ## Network Architecture
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/session"
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/session"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 
 	"github.com/lixenwraith/log"
 )

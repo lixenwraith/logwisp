@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/core"
 )
 
 // Source represents an input data stream for log entries

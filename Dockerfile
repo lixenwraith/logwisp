@@ -24,7 +24,7 @@ ARG BUILD_TIME=unknown
 # REVISION identifies the commit: the context has no .git, so no VCS stamping.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -buildvcs=false \
-      -ldflags="-s -w -X logwisp/internal/version.Version=${VERSION} -X logwisp/internal/version.GitCommit=${REVISION} -X logwisp/internal/version.BuildTime=${BUILD_TIME}" \
+      -ldflags="-s -w -X github.com/lixenwraith/logwisp/internal/version.Version=${VERSION} -X github.com/lixenwraith/logwisp/internal/version.GitCommit=${REVISION} -X github.com/lixenwraith/logwisp/internal/version.BuildTime=${BUILD_TIME}" \
       -o /out/lw ./cmd/lw
 
 FROM scratch

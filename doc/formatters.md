@@ -11,8 +11,8 @@ flags            = 0
 timestamp_format = ""
 ```
 
-One formatter serves the whole pipeline. Sinks receive an identical payload;
-there is no per-sink formatting. When you need two shapes of the same data, run
+One formatter serves the whole pipeline. Sinks receive an identical payload,
+one record ending in exactly one newline; there is no per-sink formatting. When you need two shapes of the same data, run
 two pipelines, or chain to a node that formats differently.
 
 Omitting `[pipelines.flow.format]` entirely selects `raw`.
@@ -33,9 +33,10 @@ Each as type and default:
 ### raw
 
 Passthrough. `FlagRaw` bypasses formatting and sanitization: the message reaches
-the sink exactly as the source produced it, with no timestamp, level or source
-prefix added. An entry that also carries `fields` gets the fields JSON appended
-verbatim after a single space — `raw` never drops data and never re-encodes it.
+the sink as the source produced it, with no timestamp, level or source prefix
+added, and a newline appended unless the message ends in one. An entry that also
+carries `fields` gets the fields JSON appended verbatim after a single space —
+`raw` never drops data and never re-encodes it.
 
 ```toml
 [pipelines.flow.format]
@@ -47,8 +48,9 @@ its final form. Note that it also bypasses sanitization, so control characters
 in the source data reach your sinks intact.
 
 Byte-exact transport needs a source that does not split the line: the `console`
-source, or the `file` source with `raw = true`. Both put the whole line —
-newline included — in the message and leave `fields` empty. The `file` source's
+source, or the `file` source with `raw = true`. Both put the whole line, its
+terminator removed, in the message and leave `fields` empty; `raw` writes it
+back as one `\n`. The `file` source's
 JSON branch splits a line into message and fields, so `raw` reassembles it as
 `<msg> <fields>` rather than reproducing the original object.
 

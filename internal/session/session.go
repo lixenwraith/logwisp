@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/core"
 )
 
 // Session represents a connection session
