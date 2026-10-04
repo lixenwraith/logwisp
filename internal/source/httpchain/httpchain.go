@@ -112,7 +112,7 @@ func NewHTTPChainSourcePlugin(
 	if opts.ReadTimeoutMS <= 0 {
 		opts.ReadTimeoutMS = DefaultHTTPChainSourceReadTimeoutMS
 	}
-	tlsCfg, err := tlsx.Server(opts.TLS)
+	tlsCfg, err := tlsx.Server(opts.TLS, opts.Host)
 	if err != nil {
 		return nil, err
 	}

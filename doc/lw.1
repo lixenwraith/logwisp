@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 4, 2026
 .Dt LW 1
 .Os
 .Sh NAME
@@ -6,10 +6,12 @@
 .Nd LogWisp log transport
 .Sh SYNOPSIS
 .Nm
-.Op Fl \-check
+.Op Fl \-check | Fl \-dump
 .Op Fl c Ar file
 .Op Fl \-quiet
+.Op Fl \-color Op Ar when
 .Op Fl \- Ns Ar key Ns = Ns Ar value ...
+.Op Fl \-preset Ar spec
 .Op Fl \-pipeline Ar name
 .Op Fl \-source Ar spec ...
 .Op Fl \-sink Ar spec ...
@@ -18,7 +20,7 @@
 .Op Fl \-rate\-limit Ar spec
 .Op Fl \-heartbeat Ar spec
 .Nm
-.Cm auth
+.Cm auth | tls | preset
 .Ar command
 .Op Ar flags
 .Nm
@@ -63,11 +65,13 @@ source runs until shutdown.
 When every pipeline has finished,
 .Nm
 shuts down gracefully and exits 0.
-Console and file sinks first write what they hold; the
+Every sink first writes what it holds; the
 .Cm http
 and
 .Cm tcp
-sinks do not yet, so a client can miss the last lines of a finite input.
+sinks give each client
+.Cm write_timeout_ms ,
+at most 2 seconds, to take it.
 Under a supervisor, standard input is usually
 .Pa /dev/null :
 a console source there ends at once.
@@ -88,6 +92,13 @@ option sets this:
 .Cm always
 or
 .Cm never .
+Its
+.Cm color
+option, by default the top-level
+.Cm color ,
+paints the level name in each line: debug cyan, info green, warn yellow,
+error bold red, trace grey, in the 16 colors every terminal and text console
+renders, with the terminal theme choosing the shades.
 .Pp
 .Nm
 stays in the foreground and logs to standard error; run a configuration as a
@@ -109,6 +120,22 @@ Set any scalar configuration key by its TOML path, such as
 A bare
 .Fl \- Ns Ar key
 sets a boolean to true.
+.It Fl \-color Op Ar when
+Color the level names console sinks write:
+.Cm auto
+.Pq the default: on a terminal, with Ev NO_COLOR unset and Ev TERM not Cm dumb ,
+.Cm always
+.Pq what a bare Fl \-color No means
+or
+.Cm never .
+A console sink's own
+.Cm color
+option takes precedence.
+The codes go into whatever the format makes, JSON included, so output another
+program parses keeps
+.Cm auto
+or
+.Cm never .
 .It Fl \-quiet
 Turn off the log of
 .Nm
@@ -151,6 +178,11 @@ or opening, reading or creating a log file; print
 and exit 0, or the error and exit 1, or 2 when a named configuration file is
 missing
 .Pq see Sx EXIT STATUS .
+.It Fl \-dump
+Print the effective configuration, with the options, environment and
+presets resolved into it, as a file
+.Fl c
+reads back, and exit.
 .It Fl \-version
 Print the version, commit and build time, and exit.
 .It Fl h , Fl \-help , Cm help
@@ -176,7 +208,12 @@ Start a new pipeline.
 Specifications before the first
 .Fl \-pipeline
 belong to a pipeline named
-.Dq cli .
+.Dq cli ,
+or after the preset that starts them.
+.It Fl \-preset Ar spec
+Start the pipeline with a preset, described in
+.Sx Presets ;
+later options add sources, sinks and filters to it, or replace its format.
 .It Fl \-source Ar spec , Fl \-sink Ar spec , Fl \-filter Ar spec
 Add a source, sink or filter; each is repeatable.
 .It Fl \-format Ar spec , Fl \-rate\-limit Ar spec , Fl \-heartbeat Ar spec
@@ -218,6 +255,125 @@ Any pipeline flag on the command line makes
 .Nm
 ignore the pipeline variables in
 .Sx ENVIRONMENT .
+.Ss Presets
+A preset builds a common pipeline from a few keys:
+.Fl \-preset Ar name Ns Op , Ns Ar key Ns = Ns Ar value ... ,
+in the syntax of the other specifications;
+.Nm
+.Cm preset Ar name Op Fl Ns Ar key Ar value ...
+prints the pipeline it expands to, and
+.Fl h
+there lists its keys and defaults.
+A
+.Ar path
+is a file, a directory, whose files are followed, or a glob; without one, a
+preset that takes it reads standard input.
+.Bl -tag -width Ds
+.It Cm pipe Op Cm format
+Standard input to standard output, the pipeline
+.Nm
+runs without a configuration.
+.It Cm tail path Op Cm from , format
+Follow files to standard output, like
+.Ql tail \-F .
+.It Cm serve Oo Cm path , listen , format , tls , users , proxy , viewer Oc
+Serve a live HTTP stream on
+.Cm listen
+.Pq default Li 127.0.0.1:8080 .
+.Cm tls
+is
+.Cm off ,
+.Cm self
+.Pq a self-signed certificate made at startup ,
+.Cm issuer
+.Pq one signed by Cm issuer_cert No and Cm issuer_key
+or
+.Cm files
+.Pq Cm cert No and Cm key ;
+.Cm users
+names a credentials file, so readers log in with SCRAM.
+The built-in login and viewer pages,
+.Cm viewer=true ,
+work only behind a TLS-terminating proxy named by
+.Cm proxy ,
+since a browser cannot bind its login to the TLS channel.
+.It Cm edge to Oo Cm path , transport , ca | pin , user , password_file , cert , key , node Oc
+Forward to an aggregator at
+.Cm to
+over TLS, by
+.Cm tcp_chain
+or, with
+.Cm transport=http ,
+.Cm http_chain .
+It refuses to run without credentials:
+.Cm user
+and
+.Cm password_file ,
+or a client
+.Cm cert
+and
+.Cm key .
+.It Cm aggregator Oo Cm listen , transport , tls , users , client_ca , out , format Oc
+Receive from edges on
+.Cm listen
+.Pq default Li 0.0.0.0:9000
+over TLS, never off
+.Pq default Cm tls=self ,
+authenticated by the
+.Cm users
+credentials file or the client certificates
+.Cm client_ca
+vouches for, and write to standard output or to files in
+.Cm out .
+.El
+.Ss Certificate commands
+.Nm
+.Cm tls
+makes ECDSA P-256 certificates; it never replaces a file, and writes keys
+with mode 0600.
+.Bl -tag -width Ds
+.It Cm ca Fl dir Ar dir Oo Fl name Ar name Oc Op Fl days Ar n
+Create a certificate authority,
+.Pa dir/ca.crt
+and
+.Pa dir/ca.key ,
+valid 3650 days.
+.It Cm cert Fl ca-dir Ar dir Fl name Ar name Oo Fl host Ar names Oc Oo Fl server Oc Oo Fl client Oc Oo Fl days Ar n Oc Op Fl out Ar dir
+Issue
+.Pa name.crt
+and
+.Pa name.key
+from that authority, valid 397 days and never past it.
+.Fl host
+lists the DNS names and addresses a server certificate carries
+.Pq default: Ar name ;
+.Ar name
+is also the subject, the identity
+.Cm auth.type=mtls
+checks.
+.El
+.Pp
+A listener needs no files:
+.Cm tls.self_signed=true ,
+or
+.Cm tls.issuer_cert_file
+with
+.Cm tls.issuer_key_file ,
+make its certificate at startup, for
+.Cm tls.hosts ,
+its
+.Cm host ,
+this machine's name, localhost and the loopback addresses.
+Its key lasts until
+.Nm
+exits, across reloads.
+A self-signed listener logs the
+.Cm tls.pin_sha256
+that dialers set in place of
+.Cm tls.ca_file ;
+it changes when
+.Nm
+restarts, so a fleet uses an issuer instead.
 .Ss Authentication commands
 .Nm
 .Cm auth
@@ -258,7 +414,9 @@ The
 .Ar tls-flags
 are
 .Fl ca-file Ar file
-.Pq default: the system roots ,
+.Pq default: the system roots
+or
+.Fl pin-sha256 Ar pin ,
 .Fl server-name Ar name ,
 and
 .Fl cert-file Ar file
@@ -290,6 +448,8 @@ The directory holding
 .Pa logwisp.toml .
 .It Ev LOGWISP_PIPELINE
 The name of the one pipeline the variables below define.
+.It Ev LOGWISP_PRESET
+The preset that starts it.
 All of these are ignored when a pipeline option is on the command line.
 .It Ev LOGWISP_SOURCE , LOGWISP_SINK , LOGWISP_FILTER
 Source, sink and filter specifications, in the syntax of the matching
@@ -299,6 +459,13 @@ counting from 1, adds more, as in
 .Ev LOGWISP_SINK_1 .
 .It Ev LOGWISP_FORMAT , LOGWISP_RATE_LIMIT , LOGWISP_HEARTBEAT
 The pipeline's format, rate limit and heartbeat specifications.
+.It Ev NO_COLOR , TERM
+Set to anything,
+.Ev NO_COLOR
+turns
+.Cm auto
+color off, as does
+.Ev TERM=dumb .
 .El
 .Pp
 Secrets never go in the environment: TLS keys, credentials files and
@@ -357,8 +524,11 @@ as it ends
 the shell reports status 141.
 .Pp
 .Nm
-.Cm auth
-exits 0 on success or help, 1 on failure, and 2 on a usage error.
+.Cm auth ,
+.Cm tls
+and
+.Cm preset
+exit 0 on success or help, 1 on failure, and 2 on a usage error.
 .Sh SIGNALS
 .Bl -tag -width "SIGINT, SIGTERM"
 .It Dv SIGINT , SIGTERM
@@ -403,6 +573,33 @@ does, and write the new lines unparsed to one file:
 .Bd -literal -offset indent
 $ lw \-\-source 'file,directory=/var/log/app,pattern=*.log,raw=true' \e
     > all.log
+.Ed
+.Pp
+Follow every file in a directory, with the level names in color on a
+terminal:
+.Bd -literal -offset indent
+$ lw \-\-preset tail,path=/var/log/app
+.Ed
+.Pp
+Print the configuration a set of options makes, to keep as a file:
+.Bd -literal -offset indent
+$ lw \-\-preset serve,path=/var/log/app,tls=self \-\-dump > serve.toml
+.Ed
+.Pp
+Ship a directory from an edge to an aggregator: on the aggregator, create
+the authority, its certificate and a user for the edge; copy
+.Pa ca.crt
+and the password file to the edge; then run both:
+.Bd -literal -offset indent
+# lw tls ca \-dir /etc/logwisp/pki
+# lw tls cert \-ca-dir /etc/logwisp/pki \-name agg.example.org \-server
+# lw auth add-user \-credentials /etc/logwisp/users.toml \e
+    \-user edge-01 \-password-file /root/edge-01.pass
+agg# lw \-\-preset aggregator,tls=files,users=/etc/logwisp/users.toml,\e
+cert=/etc/logwisp/pki/agg.example.org.crt,\e
+key=/etc/logwisp/pki/agg.example.org.key,out=/var/log/edges
+edge# lw \-\-preset edge,path=/var/log/app,to=agg.example.org:9000,\e
+ca=/etc/logwisp/pki/ca.crt,user=edge-01,password_file=/root/edge-01.pass
 .Ed
 .Pp
 Check a configuration without binding a port or touching a log file:

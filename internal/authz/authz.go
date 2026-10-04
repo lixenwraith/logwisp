@@ -129,8 +129,9 @@ func New(o *config.AuthOptions, tlsCfg *tls.Config, role Role, transport Transpo
 	if tlsCfg == nil && (o.Type != MethodSCRAM || len(o.TrustedProxies) == 0) {
 		return nil, fmt.Errorf("auth: type %q requires tls.enabled", o.Type)
 	}
-	if role == RoleDialer && tlsCfg != nil && tlsCfg.InsecureSkipVerify {
-		// An unverified server makes identities claims and exposes credentials
+	if role == RoleDialer && tlsCfg != nil && tlsCfg.InsecureSkipVerify && tlsCfg.VerifyPeerCertificate == nil {
+		// An unverified server makes identities claims and exposes credentials;
+		// tls.pin_sha256 verifies it in VerifyPeerCertificate instead
 		return nil, fmt.Errorf("auth: type %q cannot be used with tls.insecure_skip_verify", o.Type)
 	}
 

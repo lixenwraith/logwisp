@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"strings"
 
 	"github.com/lixenwraith/logwisp/internal/version"
 )
@@ -15,19 +15,21 @@ Usage:
                                 line for line, like cat; exits at end of input
   lw -c <file> [options]        Run the file's pipelines
   lw --check [options]          Build every pipeline and plugin, report, exit
+  lw --dump [options]           Print the effective configuration as TOML, exit
   lw help | -h | --help
   lw --version
 
-Subcommands:
-  lw auth <command>             SCRAM credentials files, bearer tokens and tcp
-                                sink viewing; lw auth -h lists commands
-
+Commands (lw <command> -h lists its subcommands):
+%s
 Scalar configuration keys are settable as flags using their TOML paths:
   --<path>=<value>              e.g. --logging.level=debug
 
 Common options:
   -c, --config <path>           Configuration file (default: ./logwisp.toml)
       --quiet                   Suppress console output
+      --color [<when>]          Level names in color on console sinks:
+                                auto (a terminal, NO_COLOR unset; default),
+                                always (bare --color) or never
       --status_reporter=<bool>  Periodic status logging (default: true with
                                 a configuration file)
       --auto_reload=<bool>      Config hot reload on file change (default: false)
@@ -39,6 +41,9 @@ at warn without one):
       --logging.file.directory=<path>
 
 Pipelines (replace the file's pipelines; see doc/cli.md):
+      --preset <name>[,k=v...]  Start a pipeline with a preset: pipe, tail,
+                                serve, edge, aggregator; lw preset <name> -h
+                                lists its keys, lw preset <name> prints it
       --pipeline <name>         Start a pipeline; earlier specs go to "cli"
       --source <spec>           TYPE[,key=value...], repeatable
       --sink <spec>             e.g. http,host=0.0.0.0,port=8080, repeatable
@@ -56,14 +61,19 @@ Examples:
   journalctl -f | lw --sink http,host=127.0.0.1,port=8080
                                                   Serve stdin as a live stream
   lw --source file,directory=/var/log/app,pattern='*.log' --format txt
+  lw --preset tail,path=/var/log/app              Follow a directory's files
+  lw --preset serve,path=/var/log/app,tls=self,users=users.toml
+                                                  HTTPS stream, SCRAM logins
+  lw --preset edge,path=/var/log/app,to=agg:9000,ca=ca.crt,user=edge-01,\
+password_file=edge-01.pass                        Forward to an aggregator
 
 Environment:
   LOGWISP_<PATH>                Config path, '.' -> '_', uppercase
                                 e.g. LOGWISP_LOGGING_LEVEL=debug
   LOGWISP_CONFIG_FILE           Configuration file path
   LOGWISP_CONFIG_DIR            Configuration directory
-  LOGWISP_PIPELINE, LOGWISP_SOURCE[_N], LOGWISP_SINK[_N], LOGWISP_FILTER[_N],
-  LOGWISP_FORMAT, LOGWISP_RATE_LIMIT, LOGWISP_HEARTBEAT
+  LOGWISP_PIPELINE, LOGWISP_PRESET, LOGWISP_SOURCE[_N], LOGWISP_SINK[_N],
+  LOGWISP_FILTER[_N], LOGWISP_FORMAT, LOGWISP_RATE_LIMIT, LOGWISP_HEARTBEAT
                                 One pipeline, specs as the flags (_N adds
                                 more); ignored when a pipeline flag is given
 
@@ -77,22 +87,10 @@ Exit codes:
   2  configuration file not found
 `
 
-// handleHelp prints usage and exits if a help request is present in args
-func handleHelp(args []string) {
-	if len(args) > 0 && args[0] == "help" {
-		printHelp()
-	}
-	for _, arg := range args {
-		if arg == "--" {
-			break // end of flags
-		}
-		if arg == "-h" || arg == "--help" {
-			printHelp()
-		}
-	}
-}
-
 func printHelp() {
-	fmt.Printf(helpText, version.Short())
-	os.Exit(0)
+	var list strings.Builder
+	for _, c := range commands {
+		fmt.Fprintf(&list, "  lw %-26s %s\n", c.name+" <command>", c.summary)
+	}
+	fmt.Printf(helpText, version.Short(), list.String())
 }

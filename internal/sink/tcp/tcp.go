@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -74,8 +75,15 @@ type TCPSink struct {
 	// Authorization
 	auth *authz.Policy
 
-	// Runtime
+	// Runtime. Stop closes flush; the broadcast loop then moves what remains
+	// of its input to tail and closes flushed; each writer writes its queue
+	// and tail on its own, until flushBy. done tears down what is left.
 	done      chan struct{}
+	flush     chan struct{}
+	flushed   chan struct{}
+	flushBy   time.Time
+	tail      [][]byte // read only once flushed is closed
+	flushing  bool     // under clientsMu: no client registers once set
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
 	startTime time.Time
@@ -91,11 +99,13 @@ type TCPSink struct {
 
 // tcpClient is a registered connection's bounded send queue.
 // send is written by the broadcast loop (non-blocking) and drained by the
-// writer goroutine; closed signals reader-detected disconnect.
+// writer goroutine; closed signals reader-detected disconnect, exited the
+// writer's end.
 type tcpClient struct {
 	send      chan []byte
 	sessionID string
 	closed    chan struct{}
+	exited    chan struct{}
 }
 
 // NewTCPSinkPlugin creates a tcp sink through plugin factory
@@ -131,7 +141,7 @@ func NewTCPSinkPlugin(
 	if opts.KeepAlivePeriodMS <= 0 {
 		opts.KeepAlivePeriodMS = DefaultTCPKeepAlivePeriodMS
 	}
-	tlsCfg, err := tlsx.Server(opts.TLS)
+	tlsCfg, err := tlsx.Server(opts.TLS, opts.Host)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +158,8 @@ func NewTCPSinkPlugin(
 		network:      network,
 		input:        make(chan core.TransportEvent, opts.BufferSize),
 		done:         make(chan struct{}),
+		flush:        make(chan struct{}),
+		flushed:      make(chan struct{}),
 		logger:       logger,
 		clients:      make(map[uint64]*tcpClient),
 		conns:        make(map[net.Conn]struct{}),
@@ -223,7 +235,7 @@ func (t *TCPSink) Start(ctx context.Context) error {
 
 	t.wg.Add(2)
 	go t.acceptLoop()
-	go t.broadcastLoop(ctx)
+	go t.broadcastLoop()
 
 	// Pipeline context cancellation mirrors gnet engine stop: cease accepting
 	// and tear down existing connections
@@ -258,13 +270,27 @@ func (t *TCPSink) Stop() {
 		"total_processed", t.totalProcessed.Load())
 }
 
-// shutdown funnels ctx-cancel and Stop() teardown through a single path
+// shutdown funnels ctx-cancel and Stop() teardown through a single path.
+// Clients first receive what is queued, within sink.FlushBound, so a finite
+// input reaches them whole.
 func (t *TCPSink) shutdown() {
 	t.stopOnce.Do(func() {
-		close(t.done)
 		if t.listener != nil {
 			t.listener.Close() // unblocks acceptLoop
+			t.flushBy = time.Now().Add(sink.FlushBound(t.writeTimeout))
+			close(t.flush)
+			t.clientsMu.Lock()
+			t.flushing = true
+			clients := slices.Collect(maps.Values(t.clients))
+			t.clientsMu.Unlock()
+			for _, c := range clients {
+				select {
+				case <-c.exited:
+				case <-time.After(time.Until(t.flushBy)):
+				}
+			}
 		}
+		close(t.done)
 		t.clientsMu.Lock()
 		for conn := range t.conns {
 			conn.Close() // unblocks handshakes and per-connection readers
@@ -381,10 +407,17 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		send:      make(chan []byte, t.config.ClientBufferSize),
 		sessionID: sess.ID,
 		closed:    make(chan struct{}),
+		exited:    make(chan struct{}),
 	}
+	defer close(c.exited)
 	id := t.nextClientID.Add(1)
 
 	t.clientsMu.Lock()
+	if t.flushing {
+		t.clientsMu.Unlock()
+		t.proxy.RemoveSession(sess.ID)
+		return
+	}
 	t.clients[id] = c
 	t.clientsMu.Unlock()
 
@@ -422,23 +455,45 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 
 	// Writer: synchronous lib write with deadline. A failed write means
 	// the kernel buffer stayed full for the full deadline - connection is
-	// dead or hopelessly stalled, so disconnect immediately (no gnet-style
-	// consecutive-error counter needed for transient async callback errors).
+	// dead or hopelessly stalled, so disconnect immediately.
+	write := func(data []byte, deadline time.Time) bool {
+		if !deadline.IsZero() {
+			conn.SetWriteDeadline(deadline)
+		}
+		if _, err := conn.Write(data); err != nil {
+			t.writeErrors.Add(1)
+			t.logger.Debug("msg", "Write failed, closing client",
+				"component", "tcp_sink",
+				"remote_addr", remote,
+				"error", err)
+			return false
+		}
+		t.proxy.UpdateActivity(sess.ID)
+		return true
+	}
 	for {
 		select {
 		case data := <-c.send:
+			var deadline time.Time
 			if t.writeTimeout > 0 {
-				conn.SetWriteDeadline(time.Now().Add(t.writeTimeout))
+				deadline = time.Now().Add(t.writeTimeout)
 			}
-			if _, err := conn.Write(data); err != nil {
-				t.writeErrors.Add(1)
-				t.logger.Debug("msg", "Write failed, closing client",
-					"component", "tcp_sink",
-					"remote_addr", remote,
-					"error", err)
+			if !write(data, deadline) {
 				return
 			}
-			t.proxy.UpdateActivity(sess.ID)
+		case <-t.flushed:
+			// Nothing more will be queued: write the queue, then the tail
+			for len(c.send) > 0 {
+				if !write(<-c.send, t.flushBy) {
+					return
+				}
+			}
+			for _, data := range t.tail {
+				if !write(data, t.flushBy) {
+					return
+				}
+			}
+			return
 		case <-c.closed:
 			return
 		case <-t.done:
@@ -447,19 +502,22 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 	}
 }
 
-// broadcastLoop fans out transport events to all client queues, non-blocking
-func (t *TCPSink) broadcastLoop(ctx context.Context) {
+// broadcastLoop fans out transport events to all client queues until flush,
+// which shutdown closes on Stop and on context cancellation alike.
+func (t *TCPSink) broadcastLoop() {
 	defer t.wg.Done()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-t.flush: // first: a select with both ready picks at random
+			t.flushInput()
 			return
-		case <-t.done:
+		default:
+		}
+		select {
+		case <-t.flush:
+			t.flushInput()
 			return
-		case event, ok := <-t.input:
-			if !ok {
-				return
-			}
+		case event := <-t.input:
 			t.totalProcessed.Add(1)
 			t.lastProcessed.Store(time.Now())
 
@@ -475,6 +533,13 @@ func (t *TCPSink) broadcastLoop(ctx context.Context) {
 			t.clientsMu.Unlock()
 		}
 	}
+}
+
+// flushInput moves what remains of the input to tail for the writers
+func (t *TCPSink) flushInput() {
+	t.tail = sink.Drain(t.input)
+	t.totalProcessed.Add(uint64(len(t.tail)))
+	close(t.flushed)
 }
 
 // GetStats returns sink statistics

@@ -8,7 +8,11 @@ configure it, and — equally important — what it does not yet do.
 **Implemented:**
 
 - TLS 1.2 / 1.3 on all network sources and sinks.
-- Server certificate verification by dialers.
+- Server certificate verification by dialers, by a CA or by the pin of the
+  server's key (`pin_sha256`).
+- Certificates without files: listeners make theirs at startup, self-signed
+  or from an issuer CA, and `lw tls` makes a CA and certificates: see
+  [Certificates made at startup](#certificates-made-at-startup).
 - Mutual TLS (client certificate required and verified), at the transport
   layer.
 - Peer identity recorded per session.
@@ -26,16 +30,20 @@ configure it, and — equally important — what it does not yet do.
   [Startup Warnings](#startup-warnings).
 - Unknown configuration keys rejected: a typo in `tls`, `auth` or a table path
   fails startup.
-- Configuration input hardened (lixenwraith/config v0.2.2, reviewed with
-  adversarial tests and fuzzing like `auth`):
+- Configuration input hardened (lixenwraith/config v0.2.2 and
+  lixenwraith/toml v0.1.3, reviewed with adversarial tests and fuzzing like
+  `auth`):
+  - a document creates at most 65536 tables, so a small file cannot exhaust
+    memory, and unescaped control characters are refused in strings and
+    comments;
   - a string in the file is one list entry, so a filter pattern holding a
     comma is not split into patterns that match nothing;
   - the file is opened without blocking, so a FIFO swapped in for it cannot
     hang the watcher or a `SIGHUP` reload;
   - a permission change on the file is reported once and does not stop
     auto-reload;
-  - conversion errors name the key, never the value, so a secret placed in
-    the wrong key does not reach the log.
+  - parse and conversion errors name the key, never the value, so a secret
+    placed in the wrong key does not reach the log.
 
 **Not implemented:**
 
@@ -69,6 +77,11 @@ client_ca_file       = ""
 ca_file              = ""
 server_name          = ""
 insecure_skip_verify = false
+pin_sha256           = ""
+self_signed          = false
+issuer_cert_file     = ""
+issuer_key_file      = ""
+hosts                = []
 min_version          = "1.3"
 ```
 
@@ -76,11 +89,16 @@ Options by role, each with its default:
 
 - Both roles
   - `enabled` (`false`): master switch; when false the whole block is ignored.
-  - `cert_file`: local certificate; **required** for listeners, an optional
-    client identity for dialers.
+  - `cert_file`: local certificate; a listener needs it, `self_signed` or the
+    issuer files, a dialer may present it as its client identity.
   - `key_file`: private key for `cert_file`; set the two together.
   - `min_version` (`"1.3"`): `"1.2"` or `"1.3"`.
 - Listeners
+  - `self_signed` (`false`): make a self-signed certificate at startup.
+  - `issuer_cert_file`, `issuer_key_file`: make one at startup, signed by this
+    CA (`lw tls ca`).
+  - `hosts` (`[]`): names and addresses a made certificate carries, beyond the
+    listener's `host`, `os.Hostname()`, `localhost`, `127.0.0.1` and `::1`.
   - `client_auth` (`false`): require and verify a client certificate (mTLS).
   - `client_ca_file`: CA bundle that verifies client certificates; **required**
     when `client_auth` is true.
@@ -89,6 +107,9 @@ Options by role, each with its default:
   - `server_name` (the configured `host`): SNI and certificate name to verify
     against.
   - `insecure_skip_verify` (`false`): disable server verification.
+  - `pin_sha256`: `sha256//BASE64` of the server's public key, curl's
+    `--pinnedpubkey` form, `;` between several; it replaces the CA and name
+    checks.
 
 Listeners are the `tcp` and `http` sinks and the `tcp_chain` and `http_chain`
 sources; dialers are the `tcp_chain` and `http_chain` sinks.
@@ -102,7 +123,12 @@ sources; dialers are the `tcp_chain` and `http_chain` sinks.
 
 Misconfiguration fails at plugin construction, before the pipeline starts:
 
-- a listener with `enabled = true` and no `cert_file`/`key_file`
+- a listener with `enabled = true` and none of `cert_file`/`key_file`,
+  `self_signed`, `issuer_cert_file`/`issuer_key_file`, or more than one; an
+  issuer that is no CA (`lw tls ca` makes one)
+- `pin_sha256` with `ca_file` or `insecure_skip_verify`, or not of the
+  `sha256//BASE64` form; a listener key on a dialer, or `pin_sha256` on a
+  listener
 - `client_auth = true` with no `client_ca_file`
 - a dialer with only one of `cert_file` / `key_file`
 - a certificate or key that will not load, or a CA file containing no
@@ -298,20 +324,53 @@ Errors read like `auth: type "mtls" requires tls.client_auth`.
 Some settings work but are usually mistakes. Each plugin reports them at WARN
 when it is constructed, so startup and every reload repeat them:
 
-- a certificate in `cert_file`, `ca_file` or `client_ca_file` that has expired,
-  is not yet valid, or expires within 30 days
+- a certificate in `cert_file`, `ca_file`, `client_ca_file` or
+  `issuer_cert_file` that has expired, is not yet valid, or expires within 30
+  days
+- a self-signed listener, with the `pin_sha256` its dialers need
 - `insecure_skip_verify` on a dialer
 - an `allow_patterns` entry not anchored at both ends of every alternative
   (`^a|b$` admits `a…` and `…b`)
-- a `key_file`, `credentials_file` or `password_file` every local user can read
+- a `key_file`, `issuer_key_file`, `credentials_file` or `password_file` every
+  local user can read
   (once per path per process)
+
+## Certificates made at startup
+
+A listener needs no certificate files. With `self_signed = true`, or with
+`issuer_cert_file` and `issuer_key_file`, it makes an ECDSA P-256 key once per
+process and, at startup and every reload, a certificate for it valid 397 days
+(never past the issuer), for `hosts`, its `host` (unless a wildcard),
+`os.Hostname()`, `localhost`, `127.0.0.1` and `::1`.
+
+- **Self-signed.** No CA can vouch for it, so dialers pin its key:
+  `pin_sha256`, which the listener logs at WARN on every start. A reload
+  keeps the key and so the pin; a restart changes both, and every dialer must
+  be given the new pin. Suits one aggregator and a few edges, a test, or a
+  stream read by `curl --pinnedpubkey`.
+- **Issuer.** `lw tls ca` makes a CA once; the listener signs its own
+  certificate with it, and dialers verify it with `ca_file = ca.crt`, by name,
+  across restarts. The CA key then lives on the listener's host: give each
+  listener group its own CA, or issue certificates elsewhere with
+  `lw tls cert` and use `cert_file`.
+- **Pins.** A pin is the SHA-256 of the server's public key, not of its
+  certificate, so it survives reissue. `pin_sha256` accepts several, `;`
+  between them, for a rotation. It replaces chain, name and validity checks:
+  whoever holds the key is the server. `scram` dialers still bind every login
+  to that certificate.
+
+```bash
+lw tls ca -dir /etc/logwisp/pki                       # ca.crt, ca.key (0600)
+lw tls cert -ca-dir /etc/logwisp/pki -name agg.example.org -server
+lw tls cert -ca-dir /etc/logwisp/pki -name edge-01 -client
+```
 
 ## Enabling mTLS
 
 ### 1. Generate a CA and certificates
 
-LogWisp does not generate certificates; use `openssl`, `cfssl`, `step-cli`, or
-your existing PKI.
+`lw tls` makes them ([above](#certificates-made-at-startup)); with `openssl`,
+`cfssl`, `step-cli` or an existing PKI:
 
 ```bash
 # CA

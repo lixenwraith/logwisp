@@ -329,8 +329,9 @@ func (t *TCPChainSink) deliver(ctx context.Context, line []byte) bool {
 					return false
 				}
 				t.failures++
-				if errors.Is(err, authz.ErrRefused) {
-					// A refusal is configuration, not weather: show it by default
+				if errors.Is(err, authz.ErrRefused) || errors.As(err, new(*tls.CertificateVerificationError)) {
+					// A refusal, or a server failing its CA or pin, is
+					// configuration, not weather: show it by default
 					t.logger.Warn("msg", "Chain connect refused",
 						"component", "tcp_chain_sink",
 						"target", t.addr,

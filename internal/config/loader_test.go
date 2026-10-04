@@ -12,29 +12,20 @@ import (
 	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
-func TestResolveConfigArguments(t *testing.T) {
+// -c wins over the environment, which wins over discovery; only the
+// discovered default is not explicit, so only it may be missing.
+func TestResolveConfigPath(t *testing.T) {
 	isolateConfig(t)
-	for _, args := range [][]string{{"-c", "chosen.toml"}, {"--config", "chosen.toml"}, {"--config=chosen.toml"}, {"-c=chosen.toml"}, {"-c", "old.toml", "--config=chosen.toml"}} {
-		path, explicit, remaining, err := resolveConfigPath(append(args, "--quiet"))
-		if err != nil || path != "chosen.toml" || !explicit || !reflect.DeepEqual(remaining, []string{"--quiet"}) {
-			t.Fatalf("%v: %q %v %v %v", args, path, explicit, remaining, err)
-		}
-	}
-	for _, args := range [][]string{{"-c"}, {"--config"}, {"--config="}, {"-c="}, {"-c", "--quiet"}} {
-		if _, _, _, err := resolveConfigPath(args); err == nil {
-			t.Fatalf("missing path accepted: %v", args)
-		}
-	}
-	args := []string{"--", "-c", "ignored.toml"}
-	path, explicit, remaining, err := resolveConfigPath(args)
-	if err != nil || explicit || path != "logwisp.toml" || !reflect.DeepEqual(remaining, args) {
-		t.Fatalf("terminator ignored: %q %v %v %v", path, explicit, remaining, err)
+	if path, explicit := resolveConfigPath(""); path != "logwisp.toml" || explicit {
+		t.Fatalf("discovered default: %q %v", path, explicit)
 	}
 	t.Setenv("LOGWISP_CONFIG_DIR", "configs")
 	t.Setenv("LOGWISP_CONFIG_FILE", "env.toml")
-	path, explicit, _, err = resolveConfigPath(nil)
-	if err != nil || !explicit || path != filepath.Join("configs", "env.toml") {
-		t.Fatalf("environment path: %q %v %v", path, explicit, err)
+	if path, explicit := resolveConfigPath(""); path != filepath.Join("configs", "env.toml") || !explicit {
+		t.Fatalf("environment path: %q %v", path, explicit)
+	}
+	if path, explicit := resolveConfigPath("chosen.toml"); path != "chosen.toml" || !explicit {
+		t.Fatalf("-c path: %q %v", path, explicit)
 	}
 }
 
@@ -43,7 +34,7 @@ func TestLoadPrecedenceAndDetachedSnapshots(t *testing.T) {
 	testutil.WriteFile(t, "selected.toml", "config_file = \"ignored.toml\"\n[logging]\nlevel = \"error\"\n")
 	t.Setenv("LOGGING_LEVEL", "invalid-bare-variable")
 	t.Setenv("LOGWISP_LOGGING_LEVEL", "debug")
-	m, err := Load([]string{"--config", "selected.toml", "--logging.level=warn", "--quiet"})
+	m, err := Load(Args{File: "selected.toml", Overrides: []string{"--logging.level=warn", "--quiet"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +52,7 @@ func TestLoadPrecedenceAndDetachedSnapshots(t *testing.T) {
 	if _, aliased := second.Pipelines[0].PluginSources[0].Config["buffer_size"]; err != nil || second.Logging.Level != "warn" || aliased {
 		t.Fatalf("snapshot aliases another result: %+v %v", second, err)
 	}
-	env, err := Load([]string{"-c=selected.toml"})
+	env, err := Load(Args{File: "selected.toml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,19 +65,19 @@ func TestLoadPrecedenceAndDetachedSnapshots(t *testing.T) {
 
 func TestMissingFilesDoNotHideInvalidOverrides(t *testing.T) {
 	isolateConfig(t)
-	m, err := Load(nil)
+	m, err := Load(Args{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	m.Close()
-	if _, err := Load([]string{"-c", "missing.toml"}); !errors.Is(err, ErrConfigNotFound) {
+	if _, err := Load(Args{File: "missing.toml"}); !errors.Is(err, ErrConfigNotFound) {
 		t.Fatalf("missing explicit path: %v", err)
 	}
-	if _, err := Load([]string{"--logging.file.max_size_mb=1.5"}); err == nil || errors.Is(err, ErrConfigNotFound) {
+	if _, err := Load(Args{Overrides: []string{"--logging.file.max_size_mb=1.5"}}); err == nil || errors.Is(err, ErrConfigNotFound) {
 		t.Fatalf("invalid CLI hidden by missing default: %v", err)
 	}
 	t.Setenv("LOGWISP_STATUS_REPORTER", "invalid")
-	if _, err := Load(nil); err == nil || errors.Is(err, ErrConfigNotFound) {
+	if _, err := Load(Args{}); err == nil || errors.Is(err, ErrConfigNotFound) {
 		t.Fatalf("invalid environment hidden by missing default: %v", err)
 	}
 }
@@ -94,7 +85,7 @@ func TestMissingFilesDoNotHideInvalidOverrides(t *testing.T) {
 func TestReloadReadsDiskValidatesAndPreservesOldSnapshots(t *testing.T) {
 	isolateConfig(t)
 	testutil.WriteFile(t, "reload.toml", "status_reporter = true\n")
-	m, err := Load([]string{"-c", "reload.toml"})
+	m, err := Load(Args{File: "reload.toml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +128,7 @@ func TestReloadReadsDiskValidatesAndPreservesOldSnapshots(t *testing.T) {
 func TestWatchStartsOnSubscriptionAndCloses(t *testing.T) {
 	isolateConfig(t)
 	testutil.WriteFile(t, "watched.toml", "auto_reload = true\n")
-	m, err := Load([]string{"-c", "watched.toml"})
+	m, err := Load(Args{File: "watched.toml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +172,7 @@ server_name = "relay.example"
 type = "none"
 allow = ["one", "two"]
 `)
-	m, err := Load([]string{"-c", "plugins.toml"})
+	m, err := Load(Args{File: "plugins.toml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +212,7 @@ type = "tcp"
 [pipelines.plugin_sinks.config]
 port = 9000
 `+table+"\n")
-		m, err := Load([]string{"-c", "plugins.toml"})
+		m, err := Load(Args{File: "plugins.toml"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -257,7 +248,7 @@ type = "tcp"
 [pipelines.plugin_sinks.config]
 port = 9000
 `+body+"\n")
-		m, err := Load([]string{"-c", "typo.toml"})
+		m, err := Load(Args{File: "typo.toml"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -280,7 +271,7 @@ func TestNoConfigFileMeansQuietLogging(t *testing.T) {
 		if c.file != "" {
 			testutil.WriteFile(t, "logwisp.toml", c.file)
 		}
-		m, err := Load(nil)
+		m, err := Load(Args{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -292,7 +283,7 @@ func TestNoConfigFileMeansQuietLogging(t *testing.T) {
 	}
 	t.Setenv("LOGWISP_LOGGING_LEVEL", "debug")
 	os.Remove("logwisp.toml")
-	m, err := Load(nil)
+	m, err := Load(Args{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +300,7 @@ func TestFileStringIsOneListEntry(t *testing.T) {
 	testutil.WriteFile(t, "logwisp.toml", "[[pipelines]]\nname = \"p\"\n"+
 		"[[pipelines.plugin_sources]]\nid = \"in\"\ntype = \"null\"\n[[pipelines.plugin_sinks]]\nid = \"out\"\ntype = \"null\"\n"+
 		"[[pipelines.flow.filters]]\ntype = \"exclude\"\npatterns = \"password=\\\\S{8,64}\"\n")
-	m, err := Load(nil)
+	m, err := Load(Args{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,5 +308,27 @@ func TestFileStringIsOneListEntry(t *testing.T) {
 	cfg, err := m.Snapshot()
 	if err != nil || !reflect.DeepEqual(cfg.Pipelines[0].Flow.Filters[0].Patterns, []string{`password=\S{8,64}`}) {
 		t.Fatalf("patterns: %v %v", cfg.Pipelines[0].Flow.Filters, err)
+	}
+}
+
+// The top-level color is the default of every console sink, which may set
+// its own; other sinks do not take the key.
+func TestTopLevelColorIsEachConsoleSinksDefault(t *testing.T) {
+	isolateConfig(t)
+	m, err := Load(Args{Specs: specs("sink", "console", "sink", "console,color=never", "sink", "null"), Overrides: []string{"--color=always"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	cfg, err := m.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var colors []any
+	for _, s := range cfg.Pipelines[0].PluginSinks {
+		colors = append(colors, s.Config["color"])
+	}
+	if !reflect.DeepEqual(colors, []any{"always", "never", nil}) {
+		t.Fatalf("console sink colors: %v", colors)
 	}
 }

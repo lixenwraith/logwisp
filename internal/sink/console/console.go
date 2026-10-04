@@ -18,8 +18,10 @@ import (
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/sink"
 
+	"github.com/lixenwraith/color"
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
+	"github.com/lixenwraith/terminal/inline"
 	"golang.org/x/term"
 )
 
@@ -38,8 +40,9 @@ type ConsoleSink struct {
 	session *session.Session
 
 	// Configuration
-	config *config.ConsoleSinkOptions
-	escape bool
+	config  *config.ConsoleSinkOptions
+	escape  bool
+	painter *inline.Printer // paints level names; nil when color is off
 
 	// Application
 	input  chan core.TransportEvent
@@ -63,7 +66,22 @@ const (
 	DefaultConsoleTarget     = "stdout"
 	DefaultConsoleBufferSize = 1000
 	DefaultConsoleEscape     = "auto"
+	DefaultConsoleColor      = "auto"
 )
+
+// levelColors paints the first of a level's names in an entry, ANSI 16 so
+// the terminal's theme picks the shades and a text console renders them.
+// Names run longest first; cyan, not blue, stays readable on black.
+var levelColors = map[string]struct {
+	names []string
+	style inline.Style
+}{
+	"ERROR": {[]string{"ERROR", "FATAL", "ERR"}, inline.FgANSI(color.ANSIRed).Bold()},
+	"WARN":  {[]string{"WARNING", "WARN"}, inline.FgANSI(color.ANSIYellow)},
+	"INFO":  {[]string{"INFO", "INF"}, inline.FgANSI(color.ANSIGreen)},
+	"DEBUG": {[]string{"DEBUG", "DBG"}, inline.FgANSI(color.ANSICyan)},
+	"TRACE": {[]string{"TRACE"}, inline.FgANSI(color.ANSIBrightBlack)},
+}
 
 // NewConsoleSinkPlugin creates a console sink through plugin factory
 func NewConsoleSinkPlugin(
@@ -72,7 +90,7 @@ func NewConsoleSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	opts := &config.ConsoleSinkOptions{Target: DefaultConsoleTarget, Escape: DefaultConsoleEscape}
+	opts := &config.ConsoleSinkOptions{Target: DefaultConsoleTarget, Escape: DefaultConsoleEscape, Color: DefaultConsoleColor}
 
 	// Scan config map into struct
 	if err := config.Scan(configMap, opts); err != nil {
@@ -85,6 +103,9 @@ func NewConsoleSinkPlugin(
 	if err := lconfig.OneOf("auto", "always", "never")(opts.Escape); err != nil {
 		return nil, fmt.Errorf("escape: %w", err)
 	}
+	if err := lconfig.OneOf("auto", "always", "never")(opts.Color); err != nil {
+		return nil, fmt.Errorf("color: %w", err)
+	}
 
 	output := os.Stdout
 	if opts.Target == "stderr" {
@@ -95,17 +116,29 @@ func NewConsoleSinkPlugin(
 		opts.BufferSize = DefaultConsoleBufferSize
 	}
 
+	// inline decides auto: a terminal, NO_COLOR unset, TERM not dumb. Paint
+	// returns its text unchanged exactly when color is off.
+	printer := inline.New(output)
+	if opts.Color != "auto" {
+		printer.SetColor(opts.Color == "always")
+	}
+	var painter *inline.Printer
+	if printer.Paint("x", inline.Style{}) != "x" {
+		painter = printer
+	}
+
 	// Create and return plugin instance
 	cs := &ConsoleSink{
-		id:     id,
-		proxy:  proxy,
-		config: opts,
-		escape: opts.Escape == "always" || opts.Escape == "auto" && term.IsTerminal(int(output.Fd())),
-		input:  make(chan core.TransportEvent, opts.BufferSize),
-		output: output,
-		done:   make(chan struct{}),
-		exited: make(chan struct{}),
-		logger: logger,
+		id:      id,
+		proxy:   proxy,
+		config:  opts,
+		escape:  opts.Escape == "always" || opts.Escape == "auto" && term.IsTerminal(int(output.Fd())),
+		painter: painter,
+		input:   make(chan core.TransportEvent, opts.BufferSize),
+		output:  output,
+		done:    make(chan struct{}),
+		exited:  make(chan struct{}),
+		logger:  logger,
 	}
 	cs.lastProcessed.Store(time.Time{})
 
@@ -124,6 +157,7 @@ func NewConsoleSinkPlugin(
 		"instance_id", id,
 		"target", opts.Target,
 		"escape", cs.escape,
+		"color", painter != nil,
 	)
 
 	return cs, nil
@@ -187,6 +221,7 @@ func (cs *ConsoleSink) GetStats() sink.SinkStats {
 			"target":      cs.config.Target,
 			"buffer_size": cs.config.BufferSize,
 			"escape":      cs.escape,
+			"color":       cs.painter != nil,
 		},
 	}
 }
@@ -224,6 +259,9 @@ func (cs *ConsoleSink) write(event core.TransportEvent) {
 	if cs.escape {
 		payload = escapeControls(payload)
 	}
+	if cs.painter != nil {
+		payload = paintLevel(cs.painter, payload, event.Entry.Level)
+	}
 	if _, err := cs.output.Write(payload); err != nil {
 		cs.logger.Error("msg", "Failed to write to console",
 			"component", "console_sink",
@@ -233,6 +271,42 @@ func (cs *ConsoleSink) write(event core.TransportEvent) {
 	}
 	cs.totalProcessed.Add(1)
 	cs.lastProcessed.Store(time.Now())
+}
+
+// paintLevel colors the first whole-word, case-insensitive occurrence of a
+// name of level, after escaping: the escape sequences are the sink's own.
+func paintLevel(p *inline.Printer, payload []byte, level string) []byte {
+	lc, ok := levelColors[level]
+	if !ok {
+		return payload
+	}
+	for _, name := range lc.names {
+		for i := 0; i+len(name) <= len(payload); i++ {
+			j := i + len(name)
+			if !nameAt(payload[i:j], name) || i > 0 && word(payload[i-1]) || j < len(payload) && word(payload[j]) {
+				continue
+			}
+			out := make([]byte, 0, len(payload)+16)
+			out = append(out, payload[:i]...)
+			out = append(out, p.Paint(string(payload[i:j]), lc.style)...)
+			return append(out, payload[j:]...)
+		}
+	}
+	return payload
+}
+
+// nameAt compares ASCII letters without case; name is upper case
+func nameAt(b []byte, name string) bool {
+	for k := range len(name) {
+		if c := b[k]; c != name[k] && c != name[k]+'a'-'A' {
+			return false
+		}
+	}
+	return true
+}
+
+func word(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
 // escapeControls writes what a terminal would act on or reorder (C0 and C1

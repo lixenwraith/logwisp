@@ -43,7 +43,6 @@ const (
 	DefaultHTTPStreamPath       = "/stream"
 	DefaultHTTPStatusPath       = "/status"
 	HTTPReadHeaderTimeout       = 10 * time.Second
-	HTTPShutdownTimeout         = 2 * time.Second
 )
 
 // HTTPSink streams log entries via Server-Sent Events
@@ -80,8 +79,14 @@ type HTTPSink struct {
 	auth *authz.Policy
 	web  map[string]http.Handler // proxy mode: GET /auth/... browser files
 
-	// Runtime
+	// Runtime. Stop closes flush; the broker then moves what remains of its
+	// input to tail and closes flushed; each stream writes its queue, tail
+	// and the disconnect event on its own, until flushBy.
 	done      chan struct{}
+	flush     chan struct{}
+	flushed   chan struct{}
+	flushBy   time.Time
+	tail      [][]byte // read only once flushed is closed
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
 	startTime time.Time
@@ -145,7 +150,7 @@ func NewHTTPSinkPlugin(
 	if opts.ClientBufferSize <= 0 {
 		opts.ClientBufferSize = DefaultHTTPClientBufferSize
 	}
-	tlsCfg, err := tlsx.Server(opts.TLS)
+	tlsCfg, err := tlsx.Server(opts.TLS, opts.Host)
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +179,8 @@ func NewHTTPSinkPlugin(
 		network:      network,
 		input:        make(chan core.TransportEvent, opts.BufferSize),
 		done:         make(chan struct{}),
+		flush:        make(chan struct{}),
+		flushed:      make(chan struct{}),
 		logger:       logger,
 		clients:      make(map[uint64]*sseClient),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
@@ -276,7 +283,7 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	h.startTime = time.Now()
 
 	h.wg.Add(1)
-	go h.brokerLoop(ctx)
+	go h.brokerLoop()
 
 	serve := h.server.Serve
 	if h.tlsConfig != nil {
@@ -325,18 +332,21 @@ func (h *HTTPSink) Stop() {
 }
 
 // shutdown funnels ctx-cancel and Stop() teardown through a single path.
-// done is closed first so SSE handlers exit and Shutdown can complete;
-// Server.Close force-closes any handler stalled in a deadline-free write.
+// Server.Shutdown refuses new streams and waits for the open ones, which end
+// once they wrote what is queued, within sink.FlushBound; Server.Close cuts a
+// stream stalled past it.
 func (h *HTTPSink) shutdown() {
 	h.stopOnce.Do(func() {
-		close(h.done)
 		if h.server != nil {
-			sctx, cancel := context.WithTimeout(context.Background(), HTTPShutdownTimeout)
+			h.flushBy = time.Now().Add(sink.FlushBound(h.writeTimeout))
+			ctx, cancel := context.WithDeadline(context.Background(), h.flushBy)
 			defer cancel()
-			if err := h.server.Shutdown(sctx); err != nil {
+			close(h.flush)
+			if err := h.server.Shutdown(ctx); err != nil {
 				h.server.Close()
 			}
 		}
+		close(h.done)
 	})
 }
 
@@ -356,19 +366,22 @@ func (h *HTTPSink) removeClient(id uint64) {
 }
 
 // brokerLoop fans out transport events to all client queues, non-blocking,
-// and evicts clients whose sessions were idle-expired by the session manager
-func (h *HTTPSink) brokerLoop(ctx context.Context) {
+// and evicts clients whose sessions were idle-expired by the session manager,
+// until flush, which shutdown closes on Stop and on context cancellation.
+func (h *HTTPSink) brokerLoop() {
 	defer h.wg.Done()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-h.flush: // first: a select with both ready picks at random
+			h.flushInput()
 			return
-		case <-h.done:
+		default:
+		}
+		select {
+		case <-h.flush:
+			h.flushInput()
 			return
-		case event, ok := <-h.input:
-			if !ok {
-				return
-			}
+		case event := <-h.input:
 			h.totalProcessed.Add(1)
 			h.lastProcessed.Store(time.Now())
 
@@ -393,6 +406,13 @@ func (h *HTTPSink) brokerLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// flushInput moves what remains of the input to tail for the streams
+func (h *HTTPSink) flushInput() {
+	h.tail = sink.Drain(h.input)
+	h.totalProcessed.Add(uint64(len(h.tail)))
+	close(h.flushed)
 }
 
 // handleStream serves one client's SSE stream
@@ -483,6 +503,13 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	idle := time.NewTicker(h.keepalive)
 	defer idle.Stop()
 
+	send := func(payload []byte) bool {
+		if writeSSE(w, payload) != nil || rc.Flush() != nil {
+			return false
+		}
+		h.proxy.UpdateActivity(sess.ID)
+		return true
+	}
 	clientGone := r.Context().Done()
 	for {
 		select {
@@ -491,13 +518,9 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 				return // broker evicted (stale session)
 			}
 			h.armWrite(rc)
-			if err := writeSSE(w, payload); err != nil {
+			if !send(payload) {
 				return
 			}
-			if err := rc.Flush(); err != nil {
-				return
-			}
-			h.proxy.UpdateActivity(sess.ID)
 		case <-idle.C:
 			h.armWrite(rc)
 			if _, err := fmt.Fprint(w, ":\n\n"); err != nil {
@@ -509,7 +532,20 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			h.proxy.UpdateActivity(sess.ID)
 		case <-clientGone:
 			return
-		case <-h.done:
+		case <-h.flushed:
+			// Nothing more will be queued: write the queue and the tail, then
+			// say why the stream ends
+			_ = rc.SetWriteDeadline(h.flushBy)
+			for len(c.send) > 0 {
+				if payload, ok := <-c.send; !ok || !send(payload) {
+					return
+				}
+			}
+			for _, payload := range h.tail {
+				if !send(payload) {
+					return
+				}
+			}
 			fmt.Fprintf(w, "event: disconnect\ndata: {\"reason\":\"server_shutdown\"}\n\n")
 			rc.Flush()
 			return

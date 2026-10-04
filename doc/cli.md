@@ -4,7 +4,11 @@
 lw [options] [< input]
 lw -c <file> [options]
 lw --check [options]
+lw --dump [options]
+lw --preset NAME[,key=value...] [options]
 lw auth <command> [flags]
+lw tls <command> [flags]
+lw preset <name> [flags]
 lw help | -h | --help
 lw --version
 ```
@@ -14,9 +18,10 @@ stdout, line for line, until the end of input ([Built-in
 Defaults](#built-in-defaults)). With a file it runs the file's pipelines as a
 service.
 
-`lw auth` manages SCRAM credentials and logs in to `scram` listeners; see
-[below](#lw-auth). There is no certificate-generation command: use
-`openssl` or your PKI tooling — see [Security](security.md#enabling-mtls).
+A [preset](#presets) builds a common pipeline from a few keys. `lw auth`
+manages SCRAM credentials and logs in to `scram` listeners
+([below](#lw-auth)); `lw tls` makes a certificate authority and certificates
+([below](#lw-tls)). A command is recognized only as the first argument.
 
 ## Options
 
@@ -36,6 +41,11 @@ pipelines have [their own flags](#pipelines):
   `./logwisp.toml` ([Configuration](configuration.md#file-location))
 - `--check`: build every pipeline and plugin, bind nothing, report and exit;
   see [Usage Patterns](#usage-patterns)
+- `--dump`: print the effective configuration, flags, environment and presets
+  resolved into it, as TOML that `-c` reads back, and exit
+- `--color [auto|always|never]`: level names in color on console sinks,
+  default `auto` (a terminal, `NO_COLOR` unset, `TERM` not `dumb`); bare,
+  `always`. A console sink's own `color` wins ([console sink](sinks.md#console))
 - `--quiet`: silence lw's own log and notices, default `false`; pipeline
   output still flows
 - `--status_reporter=<bool>`: periodic status logging, default `true` with a
@@ -70,7 +80,10 @@ Pipeline flags define whole pipelines. They replace the configuration file's
 pipelines and the built-in default; every other key keeps its precedence.
 
 - `--pipeline NAME` starts a pipeline; specs before the first one go to a
-  pipeline named `cli`
+  pipeline named `cli`, or after the preset that starts them
+- `--preset SPEC` starts a pipeline with a [preset](#presets); later flags add
+  sources, sinks and filters to it, or replace its format, rate limit and
+  heartbeat
 - `--source SPEC`, `--sink SPEC` and `--filter SPEC` add a stage, repeatable
 - `--format SPEC`, `--rate-limit SPEC` and `--heartbeat SPEC`, once per pipeline
 - both `--flag SPEC` and `--flag=SPEC` work; `--` ends options
@@ -129,6 +142,61 @@ lw --pipeline app --source file,directory=/var/log/app \
 
 Pipelines over stdin and stdout are under [Usage Patterns](#usage-patterns).
 
+## Presets
+
+`--preset NAME,key=value,...` takes the [SPEC](#pipelines) syntax. A list
+key (`hosts`, `proxy`) takes several values, repeated (`hosts=a,hosts=b`) or
+`,`-separated; any other key takes one. `lw preset NAME [-key value ...]`
+prints the pipeline a preset expands to, ready for a configuration file;
+`lw preset NAME -h` lists its keys and defaults, `lw preset` the presets. An
+unknown key fails and lists the valid ones. A `path` is a file, a directory
+(its files) or a glob; a preset that takes one reads stdin without it, and
+`from` (`end`, or `start`) is where reading a file starts.
+
+- `pipe`: stdin to stdout, the built-in default
+  - `format` (`raw`)
+- `tail`: follow files to stdout, like `tail -F`
+  - `path` (required), `from`, `format` (`raw`)
+- `serve`: a live HTTP stream (SSE), an [http sink](sinks.md#http)
+  - `path`, `from`, `format` (`json`), `listen` (`127.0.0.1:8080`)
+  - `tls`: `off` (default), `self` (a self-signed certificate made at
+    startup), `issuer` (one signed by `issuer_cert` and `issuer_key`), or
+    `files` (`cert` and `key`); `hosts` adds names to a made certificate
+  - `users`: a credentials file; readers then log in with SCRAM
+  - `proxy`, `viewer=true`: the built-in login and viewer pages, which work
+    only behind the TLS-terminating proxies `proxy` names (a browser cannot
+    bind its login to the TLS channel); there is no standalone viewer
+- `edge`: forward to an aggregator over TLS (`tcp_chain`, or `http_chain`
+  with `transport=http`)
+  - `to` (required), `path`, `from`, `transport` (`tcp`), `node`
+  - verify the aggregator by `ca` (a CA file; default: system roots) or `pin`
+    (its `tls.pin_sha256`), and `server_name`
+  - authenticate by `user` and `password_file` (SCRAM), or a client `cert` and
+    `key` (mTLS): without either the preset refuses to run
+- `aggregator`: receive from edges over TLS, to stdout or files
+  - `listen` (`0.0.0.0:9000`), `transport` (`tcp`), `format` (`json`)
+  - `tls`: `self` (default), `issuer` or `files`, as for `serve`; never `off`
+  - authenticate by `users` (SCRAM) or `client_ca` (mTLS): one is required
+  - `out`: a directory for `aggregate*.log` files; default stdout
+
+```bash
+# follow a directory, level names in color on a terminal
+lw --preset tail,path=/var/log/app
+
+# serve it over HTTPS, self-signed, to SCRAM users; keep the result as a file
+lw --preset serve,path=/var/log/app,tls=self,users=/etc/logwisp/users.toml --dump > serve.toml
+
+# an aggregator with a certificate made at startup, and an edge pinning it
+lw --preset aggregator,users=/etc/logwisp/users.toml,out=/var/log/edges
+lw --preset edge,path=/var/log/app,to=agg.example.org:9000,pin=sha256//BASE64,\
+user=edge-01,password_file=/etc/logwisp/edge-01.pass
+```
+
+A self-signed aggregator logs its pin at startup (`pin_sha256`, a warning, so
+it shows without a configuration file too). The pin holds across reloads and
+changes when lw restarts; a fleet signs with an issuer instead, and edges set
+`ca`. See [Security](security.md#certificates-made-at-startup).
+
 ## Environment Variables
 
 Configuration paths map to environment variables by replacing `.` with `_`,
@@ -156,6 +224,7 @@ One pipeline can come from the environment, with the [SPEC](#pipelines) syntax.
 Any pipeline flag on the command line makes LogWisp ignore all of them.
 
 - `LOGWISP_PIPELINE`: the pipeline's name, default `cli`
+- `LOGWISP_PRESET`: the [preset](#presets) that starts it
 - `LOGWISP_SOURCE`, `LOGWISP_SINK`, `LOGWISP_FILTER`: one stage each
   - `LOGWISP_SOURCE_1` .. `LOGWISP_SOURCE_N` add more, after the unnumbered
     one in numeric order; likewise `LOGWISP_SINK_N` and `LOGWISP_FILTER_N`
@@ -211,7 +280,7 @@ service untouched; see [Configuration](configuration.md#hot-reload).
 ## Exit Codes
 
 - `0`: the end of input, a clean shutdown (`SIGINT`, `SIGTERM`), `--version` /
-  `--help`, or a valid `--check`
+  `--help`, `--dump`, or a valid `--check`
 - `1`: general error: a configuration load or validation failure (`--check`
   included), a logger init failure, a service bootstrap failure
 - `2`: an explicitly requested configuration file is not found
@@ -239,8 +308,8 @@ lw < app.log > copy.log
   - A line over 1 MiB continues in the next entry; no byte is lost.
 - Nothing is dropped: a slow reader slows the reading of stdin.
 - On a terminal, control characters are written as `<hex>` (`ESC` becomes
-  `<1b>`); pipes and files get the bytes unchanged
-  ([console sink](sinks.md#console)).
+  `<1b>`) and level names are in color; pipes and files get the bytes
+  unchanged ([console sink](sinks.md#console)).
 - When a console source reads a terminal, lw says so once on stderr, unless
   `--quiet`: `lw: reading standard input; Ctrl-D ends it (lw --help for usage)`.
 
@@ -255,10 +324,9 @@ values from the file, the environment or flags win.
 finishes when all its sources have ended, and once every pipeline has
 finished lw shuts down gracefully and exits 0. Only a console source ends on
 its own: file and network sources run until a signal, and so does a pipeline
-holding one. Console and file sinks write what is queued before the
-exit. The `http` and `tcp` sinks do not yet flush their clients' queues, so a
-connected client can miss the last entries of a finite input
-([To Do](todo.md)).
+holding one. Every sink writes what is queued before the exit; the `http`
+and `tcp` sinks give each connected client `write_timeout_ms`, at most 2 s,
+to take it.
 
 ## Usage Patterns
 
@@ -363,8 +431,9 @@ Neither touches a running LogWisp: send `SIGHUP`, since `auto_reload` does not
 watch the credentials file.
 
 **`token`** and **`stream`** build the same TLS and SCRAM client as a chain
-sink. TLS flags: `-ca-file` (default: system roots), `-server-name` (default:
-the host), and `-cert-file` / `-key-file` for a listener with `tls.client_auth`.
+sink. TLS flags: `-ca-file` (default: system roots) or `-pin-sha256` (the
+`tls.pin_sha256` a self-signed listener logs), `-server-name` (default: the
+host), and `-cert-file` / `-key-file` for a listener with `tls.client_auth`.
 There is no flag to skip verification: an unverified server could relay the
 login. Redirects are not followed. `-unbound` logs in to an `http` sink behind
 a TLS-terminating proxy (`auth.trusted_proxies`), still pinning the proxy's
@@ -402,4 +471,33 @@ curl --cacert ca.crt -H @<(printf 'Authorization: Bearer %s\n' \
 # follow a tcp sink
 lw auth stream -addr HOST:PORT -user viewer -password-file viewer.pass \
   -ca-file ca.crt
+```
+
+## `lw tls`
+
+Makes ECDSA P-256 certificates for `tls` blocks. It never replaces a file
+(remove one to replace it) and writes keys `0600`, certificates `0644`.
+
+```
+lw tls ca   -dir DIR [-name NAME] [-days 3650]
+lw tls cert -ca-dir DIR -name NAME [-host NAME,...] [-server] [-client]
+            [-days 397] [-out DIR]
+```
+
+- `ca`: `DIR/ca.crt` and `DIR/ca.key`, a CA that signs leaves only (path
+  length 0). `ca.crt` is what dialers set as `tls.ca_file` and listeners as
+  `tls.client_ca_file`; with `ca.key` it is a listener's
+  `tls.issuer_cert_file` and `tls.issuer_key_file`.
+- `cert`: `NAME.crt` and `NAME.key`, in `-out` (default: `-ca-dir`).
+  - `-server` for a listener: `-host` lists the DNS names and IP addresses it
+    carries, default `NAME`; `-client` for a dialer presenting a certificate;
+    both may be given.
+  - `NAME` is the subject CN, the identity `auth.type = "mtls"` matches.
+  - Valid 397 days (the longest browsers accept), never past the CA. It prints
+    the certificate's `pin_sha256`.
+
+```bash
+lw tls ca -dir /etc/logwisp/pki
+lw tls cert -ca-dir /etc/logwisp/pki -name agg.example.org -server
+lw tls cert -ca-dir /etc/logwisp/pki -name edge-01 -client
 ```

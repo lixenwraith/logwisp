@@ -7,7 +7,12 @@ type Config struct {
 	// Top-level flags for application control
 	ShowVersion bool `toml:"version"`
 	Check       bool `toml:"check"` // build every plugin, report, exit: lw --check
+	Dump        bool `toml:"dump"`  // print the effective configuration, exit: lw --dump
 	Quiet       bool `toml:"quiet"`
+
+	// Console sinks without their own color: "auto" (a terminal, NO_COLOR
+	// unset, TERM not dumb), "always", "never"
+	Color string `toml:"color"`
 
 	// Runtime behavior flags
 	StatusReporter   bool `toml:"status_reporter"`
@@ -85,7 +90,7 @@ type PipelineConfig struct {
 type FlowConfig struct {
 	Heartbeat *HeartbeatConfig `toml:"heartbeat"`
 	RateLimit *RateLimitConfig `toml:"rate_limit"`
-	Filters   []FilterConfig   `toml:"filters"`
+	Filters   []FilterConfig   `toml:"filters,omitempty"`
 	Format    *FormatConfig    `toml:"format"`
 }
 
@@ -105,9 +110,9 @@ type HeartbeatConfig struct {
 // FormatConfig is a polymorphic struct representing log entry formatting options
 type FormatConfig struct {
 	Type            string `toml:"type"` // "json", "txt", "raw"
-	Flags           int64  `toml:"flags"`
-	TimestampFormat string `toml:"timestamp_format"`
-	SanitizerPolicy string `toml:"sanitizer_policy"` // "raw", "json", "txt", "shell"
+	Flags           int64  `toml:"flags,omitempty"`
+	TimestampFormat string `toml:"timestamp_format,omitempty"`
+	SanitizerPolicy string `toml:"sanitizer_policy,omitempty"` // "raw", "json", "txt", "shell"
 }
 
 // --- Rate Limit Options ---
@@ -245,6 +250,7 @@ type ConsoleSinkOptions struct {
 	Target     string `toml:"target"` // "stdout", "stderr"
 	BufferSize int64  `toml:"buffer_size"`
 	Escape     string `toml:"escape"` // control characters as <hex>: "auto" (on a terminal), "always", "never"
+	Color      string `toml:"color"`  // level names in color: "auto", "always", "never"; default: the top-level color
 }
 
 // FileSinkOptions defines settings for a file-based sink
@@ -366,15 +372,24 @@ type AuthOptions struct {
 // --- TLS Options ---
 
 // TLSOptions is one shape for both roles. Listeners present cert_file and
-// key_file and verify clients with client_auth and client_ca_file; dialers
-// verify the server with ca_file and server_name and may present
-// cert_file and key_file.
+// key_file, or a certificate issued at startup (self_signed, or from the
+// issuer files), and verify clients with client_auth and client_ca_file;
+// dialers verify the server with ca_file and server_name, or pin_sha256, and
+// may present cert_file and key_file.
 type TLSOptions struct {
 	Enabled bool `toml:"enabled"`
 
 	// Local identity: required for listeners, optional for dialers (mTLS)
 	CertFile string `toml:"cert_file"`
 	KeyFile  string `toml:"key_file"`
+
+	// Listeners without cert_file: a certificate on a key made at startup,
+	// self-signed or signed by the issuer CA, for hosts plus the host option,
+	// os.Hostname(), localhost and the loopback addresses
+	SelfSigned     bool     `toml:"self_signed"`
+	IssuerCertFile string   `toml:"issuer_cert_file"`
+	IssuerKeyFile  string   `toml:"issuer_key_file"`
+	Hosts          []string `toml:"hosts"`
 
 	// Listener-side peer verification (mTLS)
 	ClientAuth   bool   `toml:"client_auth"`
@@ -384,6 +399,7 @@ type TLSOptions struct {
 	CAFile             string `toml:"ca_file"`     // empty = system trust store
 	ServerName         string `toml:"server_name"` // default: config host
 	InsecureSkipVerify bool   `toml:"insecure_skip_verify"`
+	PinSHA256          string `toml:"pin_sha256"` // sha256//BASE64 of the server key, ';' between several
 
 	// Minimum protocol version: "1.2" | "1.3" (default "1.3")
 	MinVersion string `toml:"min_version"`

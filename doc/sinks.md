@@ -27,6 +27,7 @@ type = "console"
 target      = "stdout"
 buffer_size = 1000
 escape      = "auto"
+color       = "auto"
 ```
 
 Options, each as type and default:
@@ -36,6 +37,9 @@ Options, each as type and default:
 - `escape` (string, `auto`): write control characters as `<hex>` of their
   bytes, `ESC` as `<1b>`: `auto` when the output is a terminal, `always`, or
   `never`.
+- `color` (string, the top-level `color`, itself `auto`): paint level names:
+  `auto` on a terminal with `NO_COLOR` unset and `TERM` not `dumb`, `always`,
+  or `never`.
 
 > `split` is **not** a valid target for this sink and is rejected at startup.
 > Level-based splitting exists only for LogWisp's own application log
@@ -50,6 +54,14 @@ Payloads are written as the formatter made them, one record per line.
   characters, such as the joiners emoji and Indic scripts need, are kept.
   `never` keeps an application's own ANSI colours; under `auto`, pipes and
   files get the bytes unchanged.
+- Color: the first whole word in a line, in any case, that names the entry's
+  level is painted: `DEBUG`/`DBG` cyan (blue is hard to read on black),
+  `INFO`/`INF` green, `WARNING`/`WARN` yellow, `ERROR`/`ERR`/`FATAL` bold red,
+  `TRACE` grey. The colors are ANSI 16, so the terminal's theme picks the
+  shades and a Linux or BSD text console renders them; the codes are the
+  sink's own, written after escaping. A line whose source found no level
+  stays plain. The codes go into whatever the format makes, JSON included:
+  for output another program parses keep `auto` or `never`, not `always`.
 - Backpressure: the sink never drops. When its output is slow (a slow reader,
   a paused terminal, a stalled log collector) the pipeline waits for it, with
   its other sinks. A service whose stdout may stall writes to a `file` sink
@@ -205,10 +217,11 @@ Options, each as type and default:
 - Clients whose session has been idle-expired by the session manager are
   evicted by the broker. With the idle comment above, that reaches only a peer
   that has stopped accepting bytes on a sink configured `write_timeout_ms = 0`.
-- On shutdown, connected clients receive
-  `event: disconnect / data: {"reason":"server_shutdown"}`. Entries still
-  queued for them are not flushed first, so a client can miss the last ones
-  of a finite input ([To Do](todo.md)).
+- On shutdown (a reload too), each stream writes its queue and what remains
+  of the sink's input, then
+  `event: disconnect / data: {"reason":"server_shutdown"}`, on its own and
+  within `write_timeout_ms`, at most 2 s; a client still behind is cut then,
+  and one that stopped reading costs the others nothing.
 - HTTP/2 is negotiated via ALPN when TLS is enabled; plaintext is HTTP/1.1.
 
 **Status endpoint** returns service and version identity, host, port, TLS flag,
@@ -287,8 +300,8 @@ Options, each as type and default:
   whole timeout, so the client is disconnected immediately rather than retried.
 - A client whose send queue is full has that event dropped (`dropped_writes`)
   and stays connected.
-- On shutdown, entries still queued for clients are not flushed first, as
-  with the `http` sink.
+- On shutdown, as with the `http` sink, each client receives what is queued,
+  within `write_timeout_ms`, at most 2 s, before it is disconnected.
 - With TLS enabled the handshake runs under a 10 s bound *after* the
   `max_connections` check, so concurrent handshakes are bounded too.
 - With an `auth` block, authorization runs after that handshake and *before*

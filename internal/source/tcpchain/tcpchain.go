@@ -97,7 +97,7 @@ func NewTCPChainSourcePlugin(
 	if opts.HelloTimeoutMS <= 0 {
 		opts.HelloTimeoutMS = DefaultChainSourceHelloTimeoutMS
 	}
-	tlsCfg, err := tlsx.Server(opts.TLS)
+	tlsCfg, err := tlsx.Server(opts.TLS, opts.Host)
 	if err != nil {
 		return nil, err
 	}

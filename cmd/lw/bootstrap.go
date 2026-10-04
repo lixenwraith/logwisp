@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	_ "github.com/lixenwraith/logwisp/internal/source/console"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/log/sanitizer"
+	"github.com/lixenwraith/toml"
 )
 
 // bootstrapInitial handles initial service startup with status reporter
@@ -127,6 +129,29 @@ func checkConfig(cfg *config.Config) int {
 		return 1
 	}
 	fmt.Printf("configuration ok: %d pipeline(s)\n", len(cfg.Pipelines))
+	return 0
+}
+
+// dumpConfig prints the effective configuration, flags and environment
+// resolved into it, as a file lw -c reads back.
+func dumpConfig(cfg *config.Config, w io.Writer) int {
+	cfg.Dump = false
+	// Snapshot gave each console sink the top-level color: keep it inherited
+	for _, p := range cfg.Pipelines {
+		for _, s := range p.PluginSinks {
+			if s.Type == "console" && s.Config["color"] == cfg.Color {
+				delete(s.Config, "color")
+			}
+		}
+	}
+	data, err := toml.Marshal(cfg)
+	if err == nil {
+		_, err = w.Write(data)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 	return 0
 }
 

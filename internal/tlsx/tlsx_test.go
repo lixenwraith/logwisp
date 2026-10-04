@@ -3,11 +3,15 @@ package tlsx
 import (
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"net"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
 // A dialer verifies an IPv6 target by its address: the zone names a local
@@ -45,6 +49,107 @@ func TestExpiryWarning(t *testing.T) {
 		got := expiryWarning(tc.cert, now)
 		if tc.want == "" && got != "" || !strings.Contains(got, tc.want) {
 			t.Errorf("%s: warning = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A self-signed listener is verified by the pin of the process key, which a
+// reload's reissued certificate keeps; any other pin, or none, fails.
+func TestSelfSignedListenerIsVerifiedByItsPin(t *testing.T) {
+	o := &config.TLSOptions{Enabled: true, SelfSigned: true, Hosts: []string{"agg.example"}}
+	first, err := Server(o, "0.0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Server(o, "0.0.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := reloaded.Certificates[0].Leaf
+	pin := PinSHA256(leaf)
+	if PinSHA256(first.Certificates[0].Leaf) != pin || !slices.Contains(leaf.DNSNames, "agg.example") ||
+		!slices.Contains(leaf.DNSNames, "localhost") || slices.ContainsFunc(leaf.IPAddresses, net.IP.IsUnspecified) {
+		t.Fatalf("pin %s, names %v %v", pin, leaf.DNSNames, leaf.IPAddresses)
+	}
+	other := "sha256//" + strings.Repeat("A", 43) + "="
+	for pins, want := range map[string]string{other + "; " + pin: "", other: "matches no tls.pin_sha256", "": "certificate"} {
+		client, err := Client(&config.TLSOptions{Enabled: true, PinSHA256: pins}, "agg.example")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = testutil.Handshake(t, reloaded, client)
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("pins %q: %v, want %q", pins, err, want)
+		}
+	}
+}
+
+// An issuer-signed listener chains to the CA file, for its host, and expires
+// with its issuer; a certificate that is no CA cannot issue.
+func TestIssuedListenerCertificateChainsToTheIssuer(t *testing.T) {
+	dir := t.TempDir()
+	ca, key, err := NewCA("test CA", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := EncodeKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caFile, keyFile := filepath.Join(dir, "ca.crt"), filepath.Join(dir, "ca.key")
+	testutil.WriteFile(t, caFile, string(EncodeCert(ca)))
+	testutil.WriteFile(t, keyFile, string(keyPEM))
+	server, err := Server(&config.TLSOptions{Enabled: true, IssuerCertFile: caFile, IssuerKeyFile: keyFile}, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf := server.Certificates[0].Leaf; !leaf.NotAfter.Equal(ca.NotAfter) {
+		t.Fatalf("leaf expires %s, issuer %s", leaf.NotAfter, ca.NotAfter)
+	}
+	client, err := Client(&config.TLSOptions{Enabled: true, CAFile: caFile}, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := testutil.Handshake(t, server, client); err != nil {
+		t.Fatalf("issued chain: %v", err)
+	}
+	leafFile := filepath.Join(dir, "leaf.crt")
+	testutil.WriteFile(t, leafFile, string(EncodeCert(server.Certificates[0].Leaf)))
+	if _, err := Server(&config.TLSOptions{Enabled: true, IssuerCertFile: leafFile, IssuerKeyFile: keyFile}, ""); err == nil {
+		t.Fatal("a leaf issued certificates")
+	}
+}
+
+// Each role takes one source of trust and one certificate source; keys of the
+// other role fail instead of doing nothing.
+func TestTLSOptionConflicts(t *testing.T) {
+	pin := "sha256//" + strings.Repeat("A", 43) + "="
+	for _, c := range []struct {
+		o      config.TLSOptions
+		server bool
+		want   string
+	}{
+		{config.TLSOptions{SelfSigned: true, CertFile: "c", KeyFile: "k"}, true, "set one of"},
+		{config.TLSOptions{SelfSigned: true, IssuerCertFile: "c"}, true, "set one of"},
+		{config.TLSOptions{IssuerCertFile: "c"}, true, "must be set together"},
+		{config.TLSOptions{CertFile: "c"}, true, "must be set together"},
+		{config.TLSOptions{Hosts: []string{"a"}, CertFile: "c", KeyFile: "k"}, true, "hosts applies to"},
+		{config.TLSOptions{SelfSigned: true, PinSHA256: pin}, true, "applies to dialers"},
+		{config.TLSOptions{}, true, "listeners need"},
+		{config.TLSOptions{SelfSigned: true}, false, "apply to listeners"},
+		{config.TLSOptions{PinSHA256: pin, CAFile: "ca"}, false, "set one"},
+		{config.TLSOptions{PinSHA256: pin, InsecureSkipVerify: true}, false, "set one"},
+		{config.TLSOptions{PinSHA256: "sha256//short"}, false, "want sha256//BASE64"},
+	} {
+		c.o.Enabled = true
+		var err error
+		if c.server {
+			_, err = Server(&c.o, "")
+		} else {
+			_, err = Client(&c.o, "host")
+		}
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%+v: %v, want %q", c.o, err, c.want)
 		}
 	}
 }

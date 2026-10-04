@@ -22,6 +22,9 @@ streams, or downstream LogWisp nodes.
 - **A Unix filter out of the box**: with no configuration, `lw` copies stdin
   to stdout line for line and exits at the end of input; flags add filters,
   formats, sources and sinks
+- **Presets**: `tail`, `serve`, `edge` and `aggregator` build the common
+  pipelines from a few keys (`lw --preset tail,path=/var/log/app`);
+  `lw --dump` turns any command line into a configuration file
 - **Independent pipelines**, each `sources → flow → sinks`, running concurrently
   in one process
 - **Fan-in and fan-out**: many sources and many sinks per pipeline
@@ -39,7 +42,8 @@ streams, or downstream LogWisp nodes.
 
 ### Outputs
 
-`console` (control characters escaped on a terminal), `file` (rotating with
+`console` (level names in color and control characters escaped on a
+terminal), `file` (rotating with
 retention), `http` (Server-Sent Events plus a
 JSON status endpoint), `tcp` (broadcast server), `null`, and the chain
 forwarders `tcp_chain` and `http_chain`.
@@ -64,6 +68,9 @@ exponential backoff and jitter.
 - TLS 1.2/1.3 on every network source and sink, listener and dialer alike
 - Mutual TLS: listeners can require and verify client certificates; dialers can
   present a client identity
+- Certificates without a PKI: `lw tls` makes a CA and certificates, and a
+  listener can make its own at startup, self-signed (dialers pin its key with
+  `pin_sha256`) or signed by a CA
 - Authorization by certificate identity: an `auth` block admits named peers
   (exact or RE2) rather than everything the CA issued, gates the `http` sink's
   stream and status endpoints, and lets a dialer pin the server it talks to
@@ -109,8 +116,7 @@ authentication designs for the rationale and what is deliberately left out.
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
 - [To Do](doc/todo.md): planned work in priority order: network access
-  control and the PROXY protocol, a hardening review of the config libraries,
-  packaging
+  control and the PROXY protocol, packaging
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](config/logwisp.toml).
@@ -135,6 +141,9 @@ journalctl -f | ./bin/lw --sink http,host=127.0.0.1,port=8080
 # tail a directory instead of stdin
 ./bin/lw --source 'file,directory=/var/log/myapp,pattern=*.log' \
     --format json,sanitizer_policy=json > all.json
+
+# the same with a preset; on a terminal the level names are in color
+./bin/lw --preset tail,path=/var/log/myapp
 ```
 
 As a service, a configuration file holds the pipelines:

@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/lixenwraith/logwisp/internal/core"
 
@@ -26,14 +25,18 @@ type Manager struct {
 	specs    []pipelineSpec // command-line or environment pipelines, kept across reloads
 }
 
+// Args is a parsed command line; cmd/lw owns its grammar.
+type Args struct {
+	File      string   // -c: the configuration file, "" for the environment or discovery
+	Specs     []Spec   // pipeline flags, in order
+	Overrides []string // --path=value settings, for lixenwraith/config
+}
+
 // Load reads the startup sources and validates the initial configuration.
 // Watching starts only when Watch is called after successful service startup.
-func Load(args []string) (*Manager, error) {
-	configPath, isExplicit, configArgs, err := resolveConfigPath(args)
-	if err != nil {
-		return nil, err
-	}
-	specs, configArgs, err := takePipelineSpecs(configArgs)
+func Load(args Args) (*Manager, error) {
+	configPath, isExplicit := resolveConfigPath(args.File)
+	specs, err := cliSpecs(args.Specs)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +56,7 @@ func Load(args []string) (*Manager, error) {
 	cfg, err := lconfig.NewBuilder().
 		WithTarget(initial).
 		WithEnvPrefix("LOGWISP_").
-		WithArgs(configArgs).
+		WithArgs(args.Overrides).
 		WithFile(configPath).
 		WithTypedValidator(func(cfg *Config) error {
 			effective := *cfg // the builder keeps cfg; only the copy is replaced
@@ -95,6 +98,17 @@ func (m *Manager) Snapshot() (*Config, error) {
 	cfg.ConfigFile = m.path
 	if err := m.usePipelines(cfg); err != nil {
 		return nil, err
+	}
+	// The top-level color is each console sink's default; the maps are fresh
+	for _, p := range cfg.Pipelines {
+		for i, s := range p.PluginSinks {
+			if _, set := s.Config["color"]; s.Type == "console" && !set {
+				if s.Config == nil {
+					p.PluginSinks[i].Config = map[string]any{}
+				}
+				p.PluginSinks[i].Config["color"] = cfg.Color
+			}
+		}
 	}
 	if err := checkFileKeys(m.path); err != nil {
 		return nil, fmt.Errorf("config file %q: %w", m.path, err)
@@ -145,6 +159,7 @@ func (m *Manager) Close() { m.config.StopAutoUpdate() }
 func defaults() *Config {
 	return &Config{
 		StatusReporter: true,
+		Color:          "auto",
 		Logging: &LogConfig{
 			Output: "stderr",
 			Level:  "info",
@@ -174,51 +189,28 @@ func pipeDefault(name string) PipelineConfig {
 	}
 }
 
-// resolveConfigPath consumes file-selection flags before schema CLI parsing.
-// The last selection wins, and -- terminates option handling.
-func resolveConfigPath(args []string) (path string, isExplicit bool, remaining []string, err error) {
-	remaining = make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			remaining = append(remaining, args[i:]...)
-			break
-		}
-		switch {
-		case arg == "-c" || arg == "--config":
-			if i+1 == len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-				return "", false, nil, fmt.Errorf("%s requires a configuration file path", arg)
-			}
-			i++
-			path, isExplicit = args[i], true
-		case strings.HasPrefix(arg, "--config=") || strings.HasPrefix(arg, "-c="):
-			_, path, _ = strings.Cut(arg, "=")
-			if path == "" {
-				return "", false, nil, fmt.Errorf("%s requires a configuration file path", arg)
-			}
-			isExplicit = true
-		default:
-			remaining = append(remaining, arg)
-		}
-	}
-	if isExplicit {
-		return path, true, remaining, nil
+// resolveConfigPath picks the file: -c, then LOGWISP_CONFIG_FILE and
+// LOGWISP_CONFIG_DIR, then the first of the user's and the working directory's
+// logwisp.toml. Only the discovered default may be missing.
+func resolveConfigPath(file string) (path string, isExplicit bool) {
+	if file != "" {
+		return file, true
 	}
 	if configFile := os.Getenv("LOGWISP_CONFIG_FILE"); configFile != "" {
 		path = configFile
 		if configDir := os.Getenv("LOGWISP_CONFIG_DIR"); configDir != "" {
 			path = filepath.Join(configDir, configFile)
 		}
-		return path, true, remaining, nil
+		return path, true
 	}
 	if configDir := os.Getenv("LOGWISP_CONFIG_DIR"); configDir != "" {
-		return filepath.Join(configDir, "logwisp.toml"), true, remaining, nil
+		return filepath.Join(configDir, "logwisp.toml"), true
 	}
 	if homeDir, err := os.UserHomeDir(); err == nil {
 		path = filepath.Join(homeDir, ".config", "logwisp", "logwisp.toml")
 		if _, err := os.Stat(path); err == nil {
-			return path, false, remaining, nil
+			return path, false
 		}
 	}
-	return "logwisp.toml", false, remaining, nil
+	return "logwisp.toml", false
 }
