@@ -116,7 +116,7 @@ func (p *Pipeline) initializeComponents() error {
 				sessionProxy,
 			)
 			if err != nil {
-				return fmt.Errorf("failed to create source %s: %w", srcCfg.ID, err)
+				return err // the registry names the plugin
 			}
 
 			// Check and inject capabilities using core interfaces
@@ -144,7 +144,7 @@ func (p *Pipeline) initializeComponents() error {
 				sessionProxy,
 			)
 			if err != nil {
-				return fmt.Errorf("failed to create sink %s: %w", sinkCfg.ID, err)
+				return err // the registry names the plugin
 			}
 
 			// Check and inject capabilities using core interfaces

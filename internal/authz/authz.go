@@ -532,6 +532,10 @@ func (p *Policy) NodeBinding() string {
 // Enabled reports whether a policy is in force
 func (p *Policy) Enabled() bool { return p != nil }
 
+// NeedsLogin reports a scram listener: its clients log in at /auth before any
+// protected request, where mtls admits by the certificate alone
+func (p *Policy) NeedsLogin() bool { return p != nil && p.listener != nil }
+
 // Unrestricted reports whether an mtls policy admits any identity the CA
 // vouches for. Under scram the credentials file is the allow list.
 func (p *Policy) Unrestricted() bool {

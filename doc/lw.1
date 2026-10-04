@@ -6,12 +6,12 @@
 .Nd LogWisp log transport
 .Sh SYNOPSIS
 .Nm
-.Op Fl \-check | Fl \-dump
+.Op Fl t | Fl \-dump
+.Op Fl q
 .Op Fl c Ar file
-.Op Fl \-quiet
 .Op Fl \-color Op Ar when
 .Op Fl \- Ns Ar key Ns = Ns Ar value ...
-.Op Fl \-preset Ar spec
+.Op Fl p Ar spec
 .Op Fl \-pipeline Ar name
 .Op Fl \-source Ar spec ...
 .Op Fl \-sink Ar spec ...
@@ -24,7 +24,7 @@
 .Ar command
 .Op Ar flags
 .Nm
-.Fl \-version
+.Fl V | Fl \-version
 .Nm
 .Cm help | Fl h | Fl \-help
 .Sh DESCRIPTION
@@ -107,6 +107,27 @@ service under a supervisor such as
 or
 .Xr daemon 8 .
 .Pp
+Every option has a long form, and the frequent ones a one-letter short form
+that stands for it in every command that has it.
+A value follows as the next argument or after
+.Ql = ;
+a value that starts with
+.Ql -
+follows
+.Ql = .
+Short options do not combine, and an unknown one is an error.
+The options of
+.Nm
+join words with
+.Ql - ;
+a configuration or preset key keeps its TOML spelling.
+The
+.Cm auth ,
+.Cm tls
+and
+.Cm preset
+commands also take a long option after a single dash.
+.Pp
 The options are as follows:
 .Bl -tag -width Ds
 .It Fl c Ar file , Fl \-config Ar file , Fl \-config= Ns Ar file
@@ -136,7 +157,7 @@ program parses keeps
 .Cm auto
 or
 .Cm never .
-.It Fl \-quiet
+.It Fl q , Fl \-quiet
 Turn off the log of
 .Nm
 and the terminal reminder; console sinks still write.
@@ -170,7 +191,7 @@ the default is
 with a configuration file and
 .Cm warn
 without.
-.It Fl \-check
+.It Fl t , Fl \-check
 Build every pipeline and plugin as a start would, loading options, TLS files
 and credentials files and printing startup warnings, without binding a port
 or opening, reading or creating a log file; print
@@ -183,7 +204,7 @@ Print the effective configuration, with the options, environment and
 presets resolved into it, as a file
 .Fl c
 reads back, and exit.
-.It Fl \-version
+.It Fl V , Fl \-version
 Print the version, commit and build time, and exit.
 .It Fl h , Fl \-help , Cm help
 Print usage and exit.
@@ -210,7 +231,7 @@ Specifications before the first
 belong to a pipeline named
 .Dq cli ,
 or after the preset that starts them.
-.It Fl \-preset Ar spec
+.It Fl p Ar spec , Fl \-preset Ar spec
 Start the pipeline with a preset, described in
 .Sx Presets ;
 later options add sources, sinks and filters to it, or replace its format.
@@ -260,10 +281,14 @@ A preset builds a common pipeline from a few keys:
 .Fl \-preset Ar name Ns Op , Ns Ar key Ns = Ns Ar value ... ,
 in the syntax of the other specifications;
 .Nm
-.Cm preset Ar name Op Fl Ns Ar key Ar value ...
+.Cm preset Ar name Op Fl \- Ns Ar key Ar value ...
 prints the pipeline it expands to, and
 .Fl h
-there lists its keys and defaults.
+there lists its keys and defaults; its flags are the keys, spelled as in the
+specification, and
+.Fl u
+is
+.Fl \-user .
 A
 .Ar path
 is a file, a directory, whose files are followed, or a glob; without one, a
@@ -292,10 +317,12 @@ or
 .Pq Cm cert No and Cm key ;
 .Cm users
 names a credentials file, so readers log in with SCRAM.
-The built-in login and viewer pages,
-.Cm viewer=true ,
-work only behind a TLS-terminating proxy named by
+A browser at the root gets a live viewer; with
+.Cm users ,
+only behind a TLS-terminating proxy named by
 .Cm proxy ,
+with
+.Cm viewer=true ,
 since a browser cannot bind its login to the TLS channel.
 .It Cm edge to Oo Cm path , transport , ca | pin , user , password_file , cert , key , node Oc
 Forward to an aggregator at
@@ -332,19 +359,19 @@ vouches for, and write to standard output or to files in
 makes ECDSA P-256 certificates; it never replaces a file, and writes keys
 with mode 0600.
 .Bl -tag -width Ds
-.It Cm ca Fl dir Ar dir Oo Fl name Ar name Oc Op Fl days Ar n
+.It Cm ca Fl \-dir Ar dir Oo Fl \-name Ar name Oc Op Fl \-days Ar n
 Create a certificate authority,
 .Pa dir/ca.crt
 and
 .Pa dir/ca.key ,
 valid 3650 days.
-.It Cm cert Fl ca-dir Ar dir Fl name Ar name Oo Fl host Ar names Oc Oo Fl server Oc Oo Fl client Oc Oo Fl days Ar n Oc Op Fl out Ar dir
+.It Cm cert Fl \-ca\-dir Ar dir Fl \-name Ar name Oo Fl \-host Ar names Oc Oo Fl \-server Oc Oo Fl \-client Oc Oo Fl \-days Ar n Oc Op Fl \-out Ar dir
 Issue
 .Pa name.crt
 and
 .Pa name.key
 from that authority, valid 397 days and never past it.
-.Fl host
+.Fl \-host
 lists the DNS names and addresses a server certificate carries
 .Pq default: Ar name ;
 .Ar name
@@ -378,33 +405,36 @@ restarts, so a fleet uses an issuer instead.
 .Nm
 .Cm auth
 manages SCRAM credentials files and logs in to SCRAM listeners.
+.Fl u
+is short for
+.Fl \-user .
 Changes to a credentials file apply when the server receives
 .Dv SIGHUP .
 .Bl -tag -width Ds
-.It Cm add-user Fl credentials Ar file Fl user Ar name Oo Fl password-file Ar file Oc Op Fl generate
+.It Cm add-user Fl \-credentials Ar file Fl u Ar name Oo Fl \-password\-file Ar file Oc Op Fl \-generate
 Add a user, or replace its password.
 The password is read from the
-.Fl password-file
+.Fl \-password\-file
 when it exists; otherwise one is generated and written there, or printed
 once to standard output.
-.Fl generate
+.Fl \-generate
 replaces an existing password without reading one.
 A missing or empty credentials file is created with mode 0600; an existing
 one keeps its owner and mode.
-.It Cm remove-user Fl credentials Ar file Fl user Ar name
+.It Cm remove-user Fl \-credentials Ar file Fl u Ar name
 Remove a user.
 The last user cannot be removed.
-.It Cm token Fl url Ar https://host:port Fl user Ar name Fl password-file Ar file Oo Ar tls-flags Oc Op Fl unbound
+.It Cm token Fl \-url Ar https://host:port Fl u Ar name Fl \-password\-file Ar file Oo Ar tls-flags Oc Op Fl \-unbound
 Log in to an
 .Cm http
 sink or
 .Cm http_chain
 source and print a bearer token.
-.Fl unbound
+.Fl \-unbound
 logs in without channel binding, to an
 .Cm http
 sink behind a TLS-terminating proxy; the URL may then carry the proxy's path.
-.It Cm stream Fl addr Ar host:port Fl user Ar name Fl password-file Ar file Op Ar tls-flags
+.It Cm stream Fl \-addr Ar host:port Fl u Ar name Fl \-password\-file Ar file Op Ar tls-flags
 Log in to a
 .Cm tcp
 sink and copy its stream to standard output until interrupted.
@@ -413,15 +443,15 @@ sink and copy its stream to standard output until interrupted.
 The
 .Ar tls-flags
 are
-.Fl ca-file Ar file
+.Fl \-ca\-file Ar file
 .Pq default: the system roots
 or
-.Fl pin-sha256 Ar pin ,
-.Fl server-name Ar name ,
+.Fl \-pin\-sha256 Ar pin ,
+.Fl \-server\-name Ar name ,
 and
-.Fl cert-file Ar file
+.Fl \-cert\-file Ar file
 with
-.Fl key-file Ar file
+.Fl \-key\-file Ar file
 for a listener that requires client certificates.
 There is no flag to skip server verification.
 An IPv6
@@ -507,8 +537,8 @@ The service's working directory on Linux and on
 .Nm
 exits 0 at the end of input, after a clean shutdown,
 .Fl \-version
-or help; 1 on a configuration, logger or startup error; and 2 when a
-configuration file named by
+or help; 1 on a command-line, configuration, logger or startup error; and 2
+when a configuration file named by
 .Fl c
 or
 .Ev LOGWISP_CONFIG_*
@@ -591,10 +621,10 @@ the authority, its certificate and a user for the edge; copy
 .Pa ca.crt
 and the password file to the edge; then run both:
 .Bd -literal -offset indent
-# lw tls ca \-dir /etc/logwisp/pki
-# lw tls cert \-ca-dir /etc/logwisp/pki \-name agg.example.org \-server
-# lw auth add-user \-credentials /etc/logwisp/users.toml \e
-    \-user edge-01 \-password-file /root/edge-01.pass
+# lw tls ca \-\-dir /etc/logwisp/pki
+# lw tls cert \-\-ca-dir /etc/logwisp/pki \-\-name agg.example.org \-\-server
+# lw auth add-user \-\-credentials /etc/logwisp/users.toml \e
+    \-\-user edge-01 \-\-password-file /root/edge-01.pass
 agg# lw \-\-preset aggregator,tls=files,users=/etc/logwisp/users.toml,\e
 cert=/etc/logwisp/pki/agg.example.org.crt,\e
 key=/etc/logwisp/pki/agg.example.org.key,out=/var/log/edges
@@ -619,8 +649,8 @@ generate the password into a file, then reload the server:
 .Bd -literal -offset indent
 # install \-m 0600 \-o logwisp \-g logwisp \e
     /dev/null /etc/logwisp/users.toml
-# lw auth add-user \-credentials /etc/logwisp/users.toml \e
-    \-user alice \-password-file /root/alice.pass
+# lw auth add-user \-\-credentials /etc/logwisp/users.toml \e
+    \-\-user alice \-\-password-file /root/alice.pass
 # systemctl reload logwisp
 .Ed
 .Sh SEE ALSO

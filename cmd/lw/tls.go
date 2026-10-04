@@ -20,21 +20,21 @@ import (
 const maxDays = 36500
 
 var tlsCommands = []subcommand{
-	{"ca", "-dir DIR [-name NAME] [-days N]",
+	{"ca", "--dir DIR [--name NAME] [--days N]",
 		"Create a certificate authority, DIR/ca.crt and DIR/ca.key, that signs certificates only",
 		[]string{"dir"}, defineCA},
-	{"cert", "-ca-dir DIR -name NAME [-host NAME,...] [-server] [-client] [-days N] [-out DIR]",
+	{"cert", "--ca-dir DIR --name NAME [--host NAME,...] [--server] [--client] [--days N] [--out DIR]",
 		"Issue a certificate and key, OUT/NAME.crt and OUT/NAME.key, from DIR/ca.crt and DIR/ca.key",
 		[]string{"ca-dir", "name"}, defineCert},
 }
 
 func defineCA(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
-	dir := fs.String("dir", "", "`directory` to write ca.crt and ca.key in, created when missing")
+	dir := fs.String("dir", "", "`dir`ectory to write ca.crt and ca.key in, created when missing")
 	name := fs.String("name", "logwisp CA", "subject common `name`")
-	days := fs.Int("days", int(tlsx.CAValidity/(24*time.Hour)), "validity in `days`")
+	days := fs.Int("days", int(tlsx.CAValidity/(24*time.Hour)), "validity in `n` days")
 	return func(_, stderr io.Writer) error {
 		if *days < 1 || *days > maxDays {
-			return usageError(fmt.Sprintf("-days must be 1 to %d", maxDays))
+			return usageError(fmt.Sprintf("--days must be 1 to %d", maxDays))
 		}
 		cert, key, err := tlsx.NewCA(*name, time.Duration(*days)*24*time.Hour)
 		if err != nil {
@@ -51,21 +51,21 @@ func defineCA(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 }
 
 func defineCert(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
-	caDir := fs.String("ca-dir", "", "`directory` holding ca.crt and ca.key (lw tls ca)")
+	caDir := fs.String("ca-dir", "", "`dir`ectory holding ca.crt and ca.key (lw tls ca)")
 	name := fs.String("name", "", "subject common `name`, the mtls identity, and the file names")
-	hosts := fs.String("host", "", "DNS `names` and IP addresses, ',' between them (default with -server: -name)")
+	hosts := fs.String("host", "", "DNS `names` and IP addresses, ',' between them (default with --server: --name)")
 	server := fs.Bool("server", false, "for listeners (TLS server authentication)")
 	client := fs.Bool("client", false, "for dialers presenting a certificate (TLS client authentication)")
-	days := fs.Int("days", int(tlsx.LeafValidity/(24*time.Hour)), "validity in `days`, at most the CA's")
-	out := fs.String("out", "", "`directory` to write in (default: -ca-dir)")
+	days := fs.Int("days", int(tlsx.LeafValidity/(24*time.Hour)), "validity in `n` days, at most the CA's")
+	out := fs.String("out", "", "`dir`ectory to write in (default: --ca-dir)")
 	return func(_, stderr io.Writer) error {
 		switch {
 		case !*server && !*client:
-			return usageError("-server, -client or both is required")
+			return usageError("--server, --client or both is required")
 		case *days < 1 || *days > maxDays:
-			return usageError(fmt.Sprintf("-days must be 1 to %d", maxDays))
+			return usageError(fmt.Sprintf("--days must be 1 to %d", maxDays))
 		case strings.ContainsAny(*name, `/\`) || *name == "ca" || strings.HasPrefix(*name, "."):
-			return usageError(fmt.Sprintf("-name %q cannot name the files", *name))
+			return usageError(fmt.Sprintf("--name %q cannot name the files", *name))
 		}
 		issuer, signer, err := tlsx.LoadIssuer(filepath.Join(*caDir, "ca.crt"), filepath.Join(*caDir, "ca.key"))
 		if err != nil {

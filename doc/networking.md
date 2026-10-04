@@ -25,7 +25,7 @@ Every listener and dialer keeps strictly to the family of its `host`:
   - `host` takes the bare address: `host = "::1"`. A bracketed host, one
     with a port, or an IPv4-mapped one (`::ffff:10.0.0.1`) fails at load.
   - Addresses and URLs bracket it: logs print `[::1]:8443`, and `lw auth`
-    takes `-addr [::1]:8443` and `-url https://[::1]:8443`. Older `curl`
+    takes `--addr [::1]:8443` and `--url https://[::1]:8443`. Older `curl`
     releases read the brackets as a glob; `-g` stops that and is harmless.
   - A link-local address carries its zone, `fe80::1%eth0`, escaped in URLs as
     `https://[fe80::1%25eth0]:8443`.
@@ -46,7 +46,8 @@ Every listener and dialer keeps strictly to the family of its `host`:
 Listeners:
 
 - `tcp` sink: raw stream; broadcasts formatted payloads to clients.
-- `http` sink: HTTP SSE; a browser-friendly live stream plus status JSON.
+- `http` sink: HTTP SSE; a browser viewer at `/`, the live stream and status
+  JSON.
 - `tcp_chain` source: chain v1; ingests a persistent NDJSON stream.
 - `http_chain` source: chain v1; ingests NDJSON batches over POST.
 
@@ -249,7 +250,7 @@ headers, and entry encoding.
   between the peers terminates TLS. Pass TLS through to LogWisp; the login
   cannot work otherwise, except on an `http` sink in proxy mode
   (`auth.trusted_proxies`), where `the client bound its proof to the proxy's
-  certificate` means a client that needs `lw auth token -unbound`, and
+  certificate` means a client that needs `lw auth token --unbound`, and
   `the client sent an unbound proof` the reverse. On an `http_chain` sink,
   `server certificate differs from the one the SCRAM login was bound to` means
   the certificate changed after the login: a rotation (the retry binds anew),

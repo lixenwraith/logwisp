@@ -1257,7 +1257,7 @@ next_steps() {
 			note "  status:  curl $_c$_u/status"
 			;;
 		mtls) note "  status:  curl --cacert CA --cert CERT --key KEY $_u/status" ;;
-		scram) note "  status:  curl with a bearer token from: lw auth token -url $_u -user USER -password-file FILE -ca-file CA (doc/cli.md)" ;;
+		scram) note "  status:  curl with a bearer token from: lw auth token --url $_u --user USER --password-file FILE --ca-file CA (doc/cli.md)" ;;
 		esac
 		note "  stream:  $_u/stream"
 	fi

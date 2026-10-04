@@ -28,29 +28,30 @@ var webTypes = map[string]string{
 	".html": "text/html; charset=utf-8",
 }
 
-func loginOn(o *config.HTTPSinkOptions) bool  { return o.LoginPage }
-func viewerOn(o *config.HTTPSinkOptions) bool { return o.ViewerPage }
-
-// webRoutes are served under /auth/ in proxy mode: the client library always,
-// so a site can load it, and the pages when enabled
+// webRoutes are the browser files under /auth/, each with the page that needs
+// it; "" marks a shared file, served with any page and always in proxy mode,
+// where a site may load the client library on its own
 var webRoutes = []struct {
-	name, file string
-	on         func(*config.HTTPSinkOptions) bool
+	name, file, page string
 }{
-	{"scram.js", "scram.js", func(*config.HTTPSinkOptions) bool { return true }},
-	{"style.css", "style.css", loginOn},
-	{"login", "login.html", loginOn},
-	{"login.js", "login.js", loginOn},
-	{"view", "view.html", viewerOn},
-	{"view.js", "view.js", viewerOn},
+	{"scram.js", "scram.js", ""},
+	{"style.css", "style.css", ""},
+	{"login", "login.html", "login"},
+	{"login.js", "login.js", "login"},
+	{"view", "view.html", "view"},
+	{"view.js", "view.js", "view"},
 }
 
-// webHandlers maps each enabled GET path to its file. The viewer learns a
-// custom status path from a meta tag, as the CSP allows no inline script.
-func webHandlers(o *config.HTTPSinkOptions) (map[string]http.Handler, error) {
+// webHandlers maps each GET path a browser uses to its handler. Without a
+// login (no auth, or mtls: the certificate is the login) the viewer is always
+// served; under scram the pages need proxy mode. The viewer learns the status
+// path and whether it logs in from meta tags, as the CSP allows no inline script.
+func webHandlers(o *config.HTTPSinkOptions, p *authz.Policy) (map[string]http.Handler, error) {
+	open := !p.NeedsLogin()
+	on := map[string]bool{"": open || p.BehindProxy(), "login": o.LoginPage, "view": open || o.ViewerPage}
 	handlers := make(map[string]http.Handler)
 	for _, r := range webRoutes {
-		if !r.on(o) {
+		if !on[r.page] {
 			continue
 		}
 		data, err := webFiles.ReadFile("web/" + r.file)
@@ -59,11 +60,30 @@ func webHandlers(o *config.HTTPSinkOptions) (map[string]http.Handler, error) {
 		}
 		if r.file == "view.html" {
 			status := html.EscapeString(strings.TrimPrefix(o.StatusPath, "/"))
-			data = bytes.Replace(data, []byte(`content="status"`), []byte(`content="`+status+`"`), 1)
+			data = bytes.Replace(data, []byte(`name="logwisp-status" content="status"`), []byte(`name="logwisp-status" content="`+status+`"`), 1)
+			if open {
+				data = bytes.Replace(data, []byte(`name="logwisp-login" content="scram"`), []byte(`name="logwisp-login" content="none"`), 1)
+			}
 		}
 		handlers[chain.AuthPath+"/"+r.name] = serveWebFile(data, webTypes[path.Ext(r.file)])
 	}
+	switch {
+	case o.StreamPath == "/" || o.StatusPath == "/": // the endpoint owns the root
+	case on["view"]:
+		handlers["/{$}"] = seeOther("auth/view")
+	case on["login"]:
+		handlers["/{$}"] = seeOther("auth/login")
+	}
 	return handlers, nil
+}
+
+// seeOther redirects to a relative target, which a proxy prefix keeps intact;
+// http.Redirect would resolve it against the backend's path
+func seeOther(target string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target)
+		w.WriteHeader(http.StatusSeeOther)
+	})
 }
 
 func serveWebFile(data []byte, contentType string) http.Handler {

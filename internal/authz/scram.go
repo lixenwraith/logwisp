@@ -355,9 +355,9 @@ func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState
 		p.rejected.Add(1)
 		switch {
 		case step.Binding != "" && l.proxy != nil:
-			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (lw auth token -unbound)", err)
+			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (lw auth token --unbound)", err)
 		case step.Binding == "" && l.cb != nil:
-			err = fmt.Errorf("%w; the client sent an unbound proof (-unbound), but this listener binds logins to its certificate", err)
+			err = fmt.Errorf("%w; the client sent an unbound proof (--unbound), but this listener binds logins to its certificate", err)
 		case step.Binding != "" && step.Binding != base64.StdEncoding.EncodeToString(l.cb):
 			l.bindingMismatch.Add(1)
 			err = fmt.Errorf("%w; the client saw another server certificate: TLS interception or a terminating proxy", err)

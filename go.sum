@@ -1,7 +1,7 @@
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
 github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
-github.com/lixenwraith/auth v0.0.0-20261002191639-3ed0e995807c h1:zwpVa85g267vo13UCzCao4lfVgUPaU79CmxPW9OdF8w=
-github.com/lixenwraith/auth v0.0.0-20261002191639-3ed0e995807c/go.mod h1:411JUqnbQgy9jgoFV+fH91TfVUEfzYA4dyPv7f4c264=
+github.com/lixenwraith/auth v0.5.1 h1:5/eKRyEO4af/vpSLsUgAXaFiECNbCKtQ0EEXnO/oPF4=
+github.com/lixenwraith/auth v0.5.1/go.mod h1:411JUqnbQgy9jgoFV+fH91TfVUEfzYA4dyPv7f4c264=
 github.com/lixenwraith/color v0.1.3 h1:vSuvtU4zh1mIZS/7UGHmMdsTr+a7eCjUYGbou7kzFn4=
 github.com/lixenwraith/color v0.1.3/go.mod h1:L/I3Vxp6pqslAIzWyZGgKCm2lyStHCA4vKaUoMUm7bU=
 github.com/lixenwraith/config v0.2.2 h1:X+l3Tf8Rbk49cipYBJU7/pfdw5wDwD4hRxtFH7rZgOc=

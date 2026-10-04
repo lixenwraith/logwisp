@@ -2,10 +2,14 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +53,27 @@ func serveTestHTTPSink(t *testing.T, h *HTTPSink) (*http.Client, string) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	t.Cleanup(client.CloseIdleConnections)
 	return client, "http://" + listener.Addr().String()
+}
+
+// trustPKI points client at https, trusting pki's CA and, with cert,
+// presenting its client certificate
+func trustPKI(t *testing.T, client *http.Client, baseURL string, pki *testutil.PKI, cert bool) string {
+	t.Helper()
+	caPEM, err := os.ReadFile(pki.CA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &tls.Config{RootCAs: x509.NewCertPool()}
+	cfg.RootCAs.AppendCertsFromPEM(caPEM)
+	if cert {
+		pair, err := tls.LoadX509KeyPair(pki.ClientCert, pki.ClientKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+	client.Transport = &http.Transport{TLSClientConfig: cfg}
+	return "https" + strings.TrimPrefix(baseURL, "http")
 }
 
 // scramCredentials writes a credentials file holding viewer-01 under a cheap

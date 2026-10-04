@@ -31,7 +31,7 @@ streams, or downstream LogWisp nodes.
   manual, [`lw.1`](lw.1)
 - [Operations](operations.md): running, monitoring, tuning, troubleshooting
 - [To Do](todo.md): planned work in priority order: network access control
-  and the PROXY protocol, packaging
+  and the PROXY protocol, packaging, smaller follow-ups
 
 A fully annotated configuration covering every option lives at
 [`config/logwisp.toml`](../config/logwisp.toml).

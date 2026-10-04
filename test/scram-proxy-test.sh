@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # logwisp browser login test: an http sink in proxy mode behind a TLS-terminating
 # reverse proxy that mounts it under /logs/; headless Chromium signs in through
-# the shipped pages, with cookies and without (token mode); the CLI unbound.
+# the shipped pages, with cookies and without (token mode); the CLI unbound; an
+# open sink's viewer streams with no login on a page the browser holds insecure.
 # Requires: bash 5+, go, openssl, curl; node with playwright and both builds
 # `playwright install chromium` fetches, or the browser checks skip.
 
@@ -15,13 +16,14 @@ PROXY_SRC=$RUN/proxy
 USERS=$AUTH/users.toml
 PORT_PROXY=15831 # the site: TLS ends here, logwisp is under /logs/
 PORT_SINK=15832  # logwisp http sink, plaintext, only for 127.0.0.2
+PORT_OPEN=15833  # logwisp http sink without auth
 PROXY_ADDR=127.0.0.2
 SITE="https://127.0.0.1:$PORT_PROXY"
 e2e_init "$@"
 
 section "Setup"
 need go openssl curl
-ports_free $PORT_PROXY $PORT_SINK
+ports_free $PORT_PROXY $PORT_SINK $PORT_OPEN
 # The launch each scenario makes: the module resolves without its browsers, and
 # chromium.executablePath() names full Chromium, not the default headless shell
 launches() { timeout 60 node -e 'require("playwright").chromium.launch(JSON.parse(process.argv[1])).then((b) => b.close())' "$1" >/dev/null 2>&1; }
@@ -118,6 +120,13 @@ viewer_page = true
 type = "scram"
 credentials_file = "$USERS"
 trusted_proxies = ["$PROXY_ADDR"]
+
+[[pipelines.plugin_sinks]]
+id = "open"
+type = "http"
+[pipelines.plugin_sinks.config]
+host = "127.0.0.1"
+port = $PORT_OPEN
 EOF
 
 cat >"$RUN/browser.cjs" <<'EOF'
@@ -147,7 +156,7 @@ const inlineLogin = (page) => page.waitForFunction(() =>
 
 const scenarios = {
   async cookie(context, page) {
-    await page.goto(base + "auth/view");
+    await page.goto(base);
     await page.waitForURL(/\/auth\/login\?next=view%23signed-in$/, { timeout: 10000 });
     out.redirected_to_login = 1;
     await signIn(page, "not-the-password");
@@ -235,6 +244,16 @@ const scenarios = {
     await inlineLogin(page);
     out.expired_asks_again = 1;
   },
+
+  // base names 127.0.0.1 as viewer.test, which the browser holds insecure
+  async open(context, page) {
+    await page.goto(base);
+    await page.waitForURL(/\/auth\/view$/, { timeout: 10000 });
+    await linesAtLeast(page, 3);
+    out.events = await lines(page);
+    out.secure = await page.evaluate(() => isSecureContext);
+    out.sign_in_ui = await page.evaluate(() => !document.getElementById("logout").hidden || !document.getElementById("login").hidden);
+  },
 };
 
 (async () => {
@@ -244,7 +263,8 @@ const scenarios = {
       // Full Chromium: the headless shell ignores a profile's Preferences
       context = await chromium.launchPersistentContext(profile, { ignoreHTTPSErrors: true, channel: "chromium" });
     } else {
-      context = await (await chromium.launch()).newContext({ ignoreHTTPSErrors: true });
+      const args = mode === "open" ? ["--host-resolver-rules=MAP viewer.test 127.0.0.1"] : [];
+      context = await (await chromium.launch({ args })).newContext({ ignoreHTTPSErrors: true });
     }
     const page = await context.newPage();
     page.on("console", (m) => { if (/Content Security Policy/i.test(m.text())) out.csp_violations++; });
@@ -266,6 +286,7 @@ spawn proxy "$PROXY_SRC/proxy" "127.0.0.1:$PORT_PROXY" "http://127.0.0.1:$PORT_S
 	"$PKI/site.crt" "$PKI/site.key"
 wait_port $PORT_SINK || abort "logwisp port $PORT_SINK is not listening" logwisp
 wait_port $PORT_PROXY || abort "proxy port $PORT_PROXY is not listening" proxy
+wait_port $PORT_OPEN || abort "logwisp port $PORT_OPEN is not listening" logwisp
 daemons_up
 write_env LW="$BIN" CA="$PKI/ca.crt" PW="$AUTH/viewer-01.pass" SITE="$SITE"
 
@@ -273,13 +294,14 @@ guide "logwisp browser login test" <<EOF
 Ports:
   $PORT_PROXY  the site: TLS-terminating reverse proxy, logwisp under /logs/
   $PORT_SINK  logwisp http sink, plaintext, trusted_proxies = ["$PROXY_ADDR"]
+  $PORT_OPEN  logwisp http sink without auth: its viewer at the root
 In a browser trusting $(short "$PKI/ca.crt"), sign in as viewer-01 with the
 password in $(short "$AUTH/viewer-01.pass"):
 > $SITE/logs/auth/view
 Shell setup (LW, CA, PW: viewer-01's password file, SITE):
 > . $(short "$RUN")/env
 The CLI, unbound through the proxy (bearer keeps the token off argv):
-> token=\$(\$LW auth token -unbound -url \$SITE/logs -user viewer-01 -password-file \$PW -ca-file \$CA)
+> token=\$(\$LW auth token --unbound --url \$SITE/logs --user viewer-01 --password-file \$PW --ca-file \$CA)
 > curl -N --cacert \$CA -H @<(bearer) \$SITE/logs/stream
 Logs: $(short "$LOG")/
 EOF
@@ -294,9 +316,9 @@ code_of() { # url [token] -> http_code; the header goes through a pipe, never ar
 	fi
 }
 
-browser() { # mode: runs browser.cjs, whose key=value lines val reads
+browser() { # mode [base]: runs browser.cjs, whose key=value lines val reads
 	info "browser: $1 (output in $(short "$LOG")/browser-$1.out)"
-	timeout 120 node "$RUN/browser.cjs" "$1" "$SITE/logs/" viewer-01 "$AUTH/viewer-01.pass" \
+	timeout 120 node "$RUN/browser.cjs" "$1" "${2:-$SITE/logs/}" viewer-01 "$AUTH/viewer-01.pass" \
 		"$RUN/profile" "${PIDS[0]}" >"$LOG/browser-$1.out" 2>"$LOG/browser-$1.err"
 	browser_out="$(cat "$LOG/browser-$1.out")"
 	[[ -z $(val error) ]] || info "${C_RED}browser error ($1): $(val error)$C_OFF"
@@ -308,7 +330,7 @@ csp_clean() { echo $(($(is "$(val error)" "") && $(is "$(val csp_violations)" 0)
 section "Scenario 1: a person in a browser"
 if ((BROWSER)); then
 	browser cookie
-	check "browser: an unauthenticated viewer is sent to the login page" $(is "$(val redirected_to_login)" 1)
+	check "browser: the mount sends an unauthenticated visitor to the viewer, then the login page" $(is "$(val redirected_to_login)" 1)
 	check "browser: a wrong password is refused on the page" $(is "$(val wrong_password_refused)" 1)
 	check "browser: login (Argon2 in the page, $(val login_ms) ms) opened the viewer" $(is_set "$(val login_ms)")
 	n=$(val events)
@@ -360,7 +382,7 @@ fi
 section "Scenario 3: the CLI through the proxy"
 token="$("$BIN" auth token -unbound -url "$SITE/logs" -user viewer-01 -password-file "$AUTH/viewer-01.pass" \
 	-ca-file "$PKI/ca.crt" 2>>"$LOG/auth-cli.out")"
-check "cli: lw auth token -unbound logged in through the proxy" $(is_set "$token")
+check "cli: lw auth token --unbound logged in through the proxy" $(is_set "$token")
 code="$(code_of "$SITE/logs/status" "$token")"
 check "cli: /logs/status served with the token (HTTP $code)" $(is "$code" 200)
 sse="$(timeout 3 curl -sN --noproxy '*' --cacert "$PKI/ca.crt" \
@@ -372,9 +394,20 @@ check "cli: /logs/status refused without a token (HTTP $code)" $(is "$code" 401)
 "$BIN" auth token -url "$SITE/logs" -user viewer-01 -password-file "$AUTH/viewer-01.pass" \
 	-ca-file "$PKI/ca.crt" >/dev/null 2>>"$LOG/auth-cli.out"
 rc=$?
-check "cli: a path without -unbound is a usage error (exit $rc)" $((rc == 2))
+check "cli: a path without --unbound is a usage error (exit $rc)" $((rc == 2))
 
-section "Scenario 4: around the proxy"
+section "Scenario 4: an open sink"
+if ((BROWSER)); then
+	browser open "http://viewer.test:$PORT_OPEN/"
+	n=$(val events)
+	check "open: the root led to the viewer, which streamed with no login on an insecure page (${n:-0} lines, secure $(val secure))" \
+		$((${n:-0} >= 3 && $(is "$(val secure)" false) && $(is "$(val sign_in_ui)" false)))
+	check "open: no CSP violations ($(val csp_violations))" $(csp_clean)
+else
+	skip "browser checks: node, playwright or its Chromium headless shell missing"
+fi
+
+section "Scenario 5: around the proxy"
 code="$(code_of "http://127.0.0.1:$PORT_SINK/auth/login")"
 check "direct: the login page refuses a peer that is not the proxy (HTTP $code)" $(is "$code" 403)
 code="$(code_of "http://127.0.0.1:$PORT_SINK/status" "$token")"

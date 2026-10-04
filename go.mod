@@ -3,7 +3,7 @@ module github.com/lixenwraith/logwisp
 go 1.27.1
 
 require (
-	github.com/lixenwraith/auth v0.0.0-20261002191639-3ed0e995807c
+	github.com/lixenwraith/auth v0.5.1
 	github.com/lixenwraith/color v0.1.3
 	github.com/lixenwraith/config v0.2.2
 	github.com/lixenwraith/log v0.1.11

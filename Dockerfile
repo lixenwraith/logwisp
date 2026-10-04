@@ -39,7 +39,7 @@ LABEL org.opencontainers.image.title="logwisp" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.licenses="BSD-3-Clause"
 
-# Dialers without tls.ca_file, and `lw auth` without -ca-file, verify against system roots.
+# Dialers without tls.ca_file, and `lw auth` without --ca-file, verify against system roots.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/lw /lw
 

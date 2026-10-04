@@ -1,8 +1,11 @@
 import { cookiesUsable, login, loginUnavailable, logout, stream } from "./scram.js";
 
 const base = new URL("..", location.href);
-// The server writes its status path here, relative to the mount
-const statusPath = document.querySelector('meta[name="logwisp-status"]').content;
+// The server writes its status path here, relative to the mount, and "none"
+// as the login when the browser needs none: no auth, or its mTLS certificate
+const meta = (name) => document.querySelector(`meta[name="logwisp-${name}"]`).content;
+const statusPath = meta("status");
+const open = meta("login") === "none";
 const MAX_LINES = 5000;
 const log = document.getElementById("log");
 const state = document.getElementById("state");
@@ -11,10 +14,11 @@ const form = document.getElementById("login");
 const progress = document.getElementById("progress");
 const status = document.getElementById("status");
 
-const unavailable = loginUnavailable();
+// A page without a login needs no WebCrypto, so plain http works too
+const unavailable = open ? "" : loginUnavailable();
 // Without cookies the session is a token in this variable only: never stored,
 // so it ends with the page, or earlier with its lifetime or sign-out
-let tokenMode = !unavailable && !cookiesUsable();
+let tokenMode = !open && !unavailable && !cookiesUsable();
 let token = null;
 // The login page comes back with this fragment: a 401 now means the browser
 // dropped the session cookie
@@ -45,7 +49,8 @@ async function connect() {
   } catch {
     return retry("server unreachable");
   }
-  if (res.status === 401) return sessionEnded();
+  // An open page has no session to end: a 401 there is a proxy's, so it retries
+  if (res.status === 401 && !open) return sessionEnded();
   fresh = false;
   const path = res.ok ? (await res.json().catch(() => ({})))?.endpoints?.stream : null;
   if (typeof path !== "string" || !path.startsWith("/")) {
@@ -168,5 +173,6 @@ if (unavailable) {
   state.textContent = unavailable;
   signOut.hidden = true;
 } else {
+  signOut.hidden = open;
   connect();
 }

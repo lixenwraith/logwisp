@@ -2,15 +2,15 @@
 
 ```
 lw [options] [< input]
-lw -c <file> [options]
-lw --check [options]
+lw -c|--config FILE [options]
+lw -p|--preset NAME[,KEY=VALUE...] [options]
+lw -t|--check [options]
 lw --dump [options]
-lw --preset NAME[,key=value...] [options]
-lw auth <command> [flags]
-lw tls <command> [flags]
-lw preset <name> [flags]
+lw auth COMMAND [flags]
+lw tls COMMAND [flags]
+lw preset NAME [flags]
 lw help | -h | --help
-lw --version
+lw -V | --version
 ```
 
 Without a configuration file or pipeline options, lw is a filter: stdin to
@@ -25,6 +25,23 @@ manages SCRAM credentials and logs in to `scram` listeners
 
 ## Options
 
+- lw's own options have a long form (`--config`), and the frequent ones a
+  one-letter short form that stands for it in every command that has it:
+  - `-c` `--config`, `-p` `--preset`, `-q` `--quiet`, `-t` `--check`,
+    `-V` `--version`, `-h` `--help`
+  - `-u` `--user` in `lw auth` and `lw preset edge`
+- A value follows as the next argument or after `=` (`-c FILE`, `-c=FILE`,
+  `--config FILE`, `--config=FILE`); a value that starts with `-` follows `=`,
+  and `--` ends the options.
+- Short options do not combine (`-q -t`, not `-qt`) or take an attached value
+  (`-cFILE`); an unknown single-dash option is an error.
+- lw's multiword options join words with `-` (`--rate-limit`,
+  `--password-file`); configuration keys, spec keys and preset keys keep
+  TOML's `_` and `.` (`--status_reporter`, `--sink http,tls.cert_file=F`,
+  `lw preset edge --password_file F`).
+- `lw auth`, `lw tls` and `lw preset` also take a long option after one dash
+  (`-user NAME`), as earlier releases documented.
+
 Any scalar configuration key is settable as a flag using its TOML path;
 pipelines have [their own flags](#pipelines):
 
@@ -36,27 +53,27 @@ pipelines have [their own flags](#pipelines):
 
 ### Common
 
-- `-c <path>`, `--config <path>`, `--config=<path>`: the configuration file;
-  unnamed, `~/.config/logwisp/logwisp.toml` if it exists, else
-  `./logwisp.toml` ([Configuration](configuration.md#file-location))
-- `--check`: build every pipeline and plugin, bind nothing, report and exit;
-  see [Usage Patterns](#usage-patterns)
+- `-c FILE`, `--config FILE`: the configuration file; unnamed,
+  `~/.config/logwisp/logwisp.toml` if it exists, else `./logwisp.toml`
+  ([Configuration](configuration.md#file-location))
+- `-t`, `--check`: build every pipeline and plugin, bind nothing, report and
+  exit; see [Usage Patterns](#usage-patterns)
 - `--dump`: print the effective configuration, flags, environment and presets
   resolved into it, as TOML that `-c` reads back, and exit
-- `--color [auto|always|never]`: level names in color on console sinks,
-  default `auto` (a terminal, `NO_COLOR` unset, `TERM` not `dumb`); bare,
-  `always`. A console sink's own `color` wins ([console sink](sinks.md#console))
-- `--quiet`: silence lw's own log and notices, default `false`; pipeline
-  output still flows
-- `--status_reporter=<bool>`: periodic status logging, default `true` with a
+- `--color [WHEN]`, WHEN `auto`, `always` or `never`: level names in color on
+  console sinks, default `auto` (a terminal, `NO_COLOR` unset, `TERM` not
+  `dumb`); bare, `always`. A console sink's own `color` wins
+  ([console sink](sinks.md#console))
+- `-q`, `--quiet`: silence lw's own log and notices, default `false`;
+  pipeline output still flows
+- `--status_reporter=BOOL`: periodic status logging, default `true` with a
   configuration file, `false` without
-- `--auto_reload=<bool>`: reload when the configuration file changes, default
+- `--auto_reload=BOOL`: reload when the configuration file changes, default
   `false`
-- `--version`: print the version and exit
+- `-V`, `--version`: print the version and exit
 - `-h`, `--help`, `help`: print usage and exit
 
-The last file-selection flag wins. `-c=<path>` also works. A missing or empty
-path returns an error, and `--` ends option parsing.
+The last `-c` wins; a missing or empty path is an error.
 
 ### Logging
 
@@ -81,12 +98,11 @@ pipelines and the built-in default; every other key keeps its precedence.
 
 - `--pipeline NAME` starts a pipeline; specs before the first one go to a
   pipeline named `cli`, or after the preset that starts them
-- `--preset SPEC` starts a pipeline with a [preset](#presets); later flags add
-  sources, sinks and filters to it, or replace its format, rate limit and
-  heartbeat
+- `-p SPEC`, `--preset SPEC` starts a pipeline with a [preset](#presets);
+  later flags add sources, sinks and filters to it, or replace its format,
+  rate limit and heartbeat
 - `--source SPEC`, `--sink SPEC` and `--filter SPEC` add a stage, repeatable
 - `--format SPEC`, `--rate-limit SPEC` and `--heartbeat SPEC`, once per pipeline
-- both `--flag SPEC` and `--flag=SPEC` work; `--` ends options
 - a pipeline without `--source` reads stdin (console source `stdin`), one
   without `--sink` writes stdout (console sink `stdout`)
 - stdin has one reader, so the whole configuration holds at most one console
@@ -124,7 +140,8 @@ A misspelled plugin key fails when the plugin is built, before any listener
 opens: `failed to create sink http: ... unknown key "tls.enabeld"`.
 
 ```bash
-# tail a directory, serve it over SSE on every interface
+# tail a directory, serve it over SSE on every interface; a browser at
+# http://HOST:8080/ shows it
 lw --source 'file,directory=/var/log/app,pattern=*.log' \
    --sink http,host=0.0.0.0,port=8080
 
@@ -146,8 +163,10 @@ Pipelines over stdin and stdout are under [Usage Patterns](#usage-patterns).
 
 `--preset NAME,key=value,...` takes the [SPEC](#pipelines) syntax. A list
 key (`hosts`, `proxy`) takes several values, repeated (`hosts=a,hosts=b`) or
-`,`-separated; any other key takes one. `lw preset NAME [-key value ...]`
-prints the pipeline a preset expands to, ready for a configuration file;
+`,`-separated; any other key takes one. `lw preset NAME [--key value ...]`
+prints the pipeline a preset expands to, ready for a configuration file; its
+flags are the keys, spelled as in the SPEC (`--password_file`), and `-u` is
+`--user`;
 `lw preset NAME -h` lists its keys and defaults, `lw preset` the presets. An
 unknown key fails and lists the valid ones. A `path` is a file, a directory
 (its files) or a glob; a preset that takes one reads stdin without it, and
@@ -157,15 +176,17 @@ unknown key fails and lists the valid ones. A `path` is a file, a directory
   - `format` (`raw`)
 - `tail`: follow files to stdout, like `tail -F`
   - `path` (required), `from`, `format` (`raw`)
-- `serve`: a live HTTP stream (SSE), an [http sink](sinks.md#http)
+- `serve`: a live stream, an [http sink](sinks.md#http): a browser at
+  `listen` gets the viewer, `/stream` is SSE
   - `path`, `from`, `format` (`json`), `listen` (`127.0.0.1:8080`)
   - `tls`: `off` (default), `self` (a self-signed certificate made at
     startup), `issuer` (one signed by `issuer_cert` and `issuer_key`), or
     `files` (`cert` and `key`); `hosts` adds names to a made certificate
-  - `users`: a credentials file; readers then log in with SCRAM
-  - `proxy`, `viewer=true`: the built-in login and viewer pages, which work
-    only behind the TLS-terminating proxies `proxy` names (a browser cannot
-    bind its login to the TLS channel); there is no standalone viewer
+  - without `users` the viewer needs no login, over plain http too
+  - `users`: a credentials file; readers then log in with SCRAM, and browsers
+    need `proxy` and `viewer=true`: the login page and viewer behind the
+    TLS-terminating proxies `proxy` names, since a browser cannot bind its
+    login to the TLS channel
 - `edge`: forward to an aggregator over TLS (`tcp_chain`, or `http_chain`
   with `transport=http`)
   - `to` (required), `path`, `from`, `transport` (`tcp`), `node`
@@ -182,6 +203,9 @@ unknown key fails and lists the valid ones. A `path` is a file, a directory
 ```bash
 # follow a directory, level names in color on a terminal
 lw --preset tail,path=/var/log/app
+
+# serve it to a browser at http://127.0.0.1:8080/
+lw --preset serve,path=/var/log/app
 
 # serve it over HTTPS, self-signed, to SCRAM users; keep the result as a file
 lw --preset serve,path=/var/log/app,tls=self,users=/etc/logwisp/users.toml --dump > serve.toml
@@ -281,7 +305,8 @@ service untouched; see [Configuration](configuration.md#hot-reload).
 
 - `0`: the end of input, a clean shutdown (`SIGINT`, `SIGTERM`), `--version` /
   `--help`, `--dump`, or a valid `--check`
-- `1`: general error: a configuration load or validation failure (`--check`
+- `1`: general error: a command-line error (an unknown option, a missing
+  `-c` path), a configuration load or validation failure (`--check`
   included), a logger init failure, a service bootstrap failure
 - `2`: an explicitly requested configuration file is not found
 - killed by `SIGPIPE` (shell status `141`): the reader of stdout went away, as
@@ -395,12 +420,14 @@ them as a viewer. See
 [Password Authentication](security.md#password-authentication-scram).
 
 ```
-lw auth add-user    -credentials FILE -user NAME [-password-file FILE] [-generate]
-lw auth remove-user -credentials FILE -user NAME
-lw auth token       -url https://HOST:PORT[/PATH] -user NAME -password-file FILE
-                    [-unbound] [TLS flags]
-lw auth stream      -addr HOST:PORT -user NAME -password-file FILE [TLS flags]
+lw auth add-user    --credentials FILE -u NAME [--password-file FILE] [--generate]
+lw auth remove-user --credentials FILE -u NAME
+lw auth token       --url https://HOST:PORT[/PATH] -u NAME --password-file FILE
+                    [--unbound] [TLS flags]
+lw auth stream      --addr HOST:PORT -u NAME --password-file FILE [TLS flags]
 ```
+
+`-u` is short for `--user`.
 
 - `add-user`: adds a user, or replaces its password
 - `remove-user`: removes a user; refuses the last one
@@ -409,18 +436,18 @@ lw auth stream      -addr HOST:PORT -user NAME -password-file FILE [TLS flags]
 - `stream`: logs in to a `tcp` sink and copies its stream to stdout until
   interrupted
 
-`lw auth <command> -h` lists a command's flags. The exit status is `0` on
+`lw auth COMMAND -h` lists a command's flags. The exit status is `0` on
 success, `1` on failure and `2` on a usage error.
 
 **`add-user`** creates the credentials file, with a fresh `decoy_key`, when it
 does not exist or is empty (create it empty first to choose its owner). The
-password comes from `-password-file` when that file exists (at least 8 bytes;
+password comes from `--password-file` when that file exists (at least 8 bytes;
 one trailing line break is trimmed). Otherwise a random
-26-character password (130 bits) is generated and written to `-password-file`,
+26-character password (130 bits) is generated and written to `--password-file`,
 or printed once to stdout when there is none. Replacing an existing user's
-password needs an existing `-password-file` or `-generate`, so a mistyped path
-cannot replace a working password; `-generate` always generates, overwriting
-`-password-file`. New users take the file's existing Argon2 profile.
+password needs an existing `--password-file` or `--generate`, so a mistyped path
+cannot replace a working password; `--generate` always generates, overwriting
+`--password-file`. New users take the file's existing Argon2 profile.
 
 Both file commands rewrite atomically (a temporary file in the same directory
 as the file, or a symlink's target, then a rename), create files `0600`, keep an
@@ -431,46 +458,46 @@ Neither touches a running LogWisp: send `SIGHUP`, since `auto_reload` does not
 watch the credentials file.
 
 **`token`** and **`stream`** build the same TLS and SCRAM client as a chain
-sink. TLS flags: `-ca-file` (default: system roots) or `-pin-sha256` (the
-`tls.pin_sha256` a self-signed listener logs), `-server-name` (default: the
-host), and `-cert-file` / `-key-file` for a listener with `tls.client_auth`.
+sink. TLS flags: `--ca-file` (default: system roots) or `--pin-sha256` (the
+`tls.pin_sha256` a self-signed listener logs), `--server-name` (default: the
+host), and `--cert-file` / `--key-file` for a listener with `tls.client_auth`.
 There is no flag to skip verification: an unverified server could relay the
-login. Redirects are not followed. `-unbound` logs in to an `http` sink behind
+login. Redirects are not followed. `--unbound` logs in to an `http` sink behind
 a TLS-terminating proxy (`auth.trusted_proxies`), still pinning the proxy's
-certificate across the two requests; only then may `-url` carry the path the
+certificate across the two requests; only then may `--url` carry the path the
 proxy mounts LogWisp at. `stream` exits `0` on `SIGINT` or `SIGTERM`, and `1`
 when the server ends the stream (a reload or shutdown).
 
 Addresses, as for the plugins ([Networking](networking.md#address-family)):
 
-- An IPv6 address goes in brackets: `-addr [::1]:PORT`,
-  `-url https://[::1]:PORT`; in a URL a link-local zone is escaped,
+- An IPv6 address goes in brackets: `--addr [::1]:PORT`,
+  `--url https://[::1]:PORT`; in a URL a link-local zone is escaped,
   `https://[fe80::1%25eth0]:PORT`.
 - The dial keeps to the address's family; a hostname resolves.
-- `-server-name` defaults to the host; an address, without brackets or zone,
+- `--server-name` defaults to the host; an address, without brackets or zone,
   must then be among the certificate's IP SANs.
 
 ```bash
 # listener host: a file the service user can read, users, then apply
 install -m 0640 -o root -g logwisp /dev/null /etc/logwisp/users.toml
-lw auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
-  -password-file /etc/logwisp/edge-01.pass
-lw auth add-user -credentials /etc/logwisp/users.toml -user viewer \
-  -password-file viewer.pass
+lw auth add-user --credentials /etc/logwisp/users.toml --user edge-01 \
+  --password-file /etc/logwisp/edge-01.pass
+lw auth add-user --credentials /etc/logwisp/users.toml --user viewer \
+  --password-file viewer.pass
 kill -HUP $(pidof lw)
 
 # rotate: new password into the file; SIGHUP, deploy the file, SIGHUP the edge
-lw auth add-user -credentials /etc/logwisp/users.toml -user edge-01 \
-  -password-file /etc/logwisp/edge-01.pass -generate
+lw auth add-user --credentials /etc/logwisp/users.toml --user edge-01 \
+  --password-file /etc/logwisp/edge-01.pass --generate
 
 # http sink status, with the token kept out of curl's argv
 curl --cacert ca.crt -H @<(printf 'Authorization: Bearer %s\n' \
-  "$(lw auth token -url https://HOST:PORT -user viewer \
-     -password-file viewer.pass -ca-file ca.crt)") https://HOST:PORT/status
+  "$(lw auth token --url https://HOST:PORT --user viewer \
+     --password-file viewer.pass --ca-file ca.crt)") https://HOST:PORT/status
 
 # follow a tcp sink
-lw auth stream -addr HOST:PORT -user viewer -password-file viewer.pass \
-  -ca-file ca.crt
+lw auth stream --addr HOST:PORT --user viewer --password-file viewer.pass \
+  --ca-file ca.crt
 ```
 
 ## `lw tls`
@@ -479,25 +506,25 @@ Makes ECDSA P-256 certificates for `tls` blocks. It never replaces a file
 (remove one to replace it) and writes keys `0600`, certificates `0644`.
 
 ```
-lw tls ca   -dir DIR [-name NAME] [-days 3650]
-lw tls cert -ca-dir DIR -name NAME [-host NAME,...] [-server] [-client]
-            [-days 397] [-out DIR]
+lw tls ca   --dir DIR [--name NAME] [--days 3650]
+lw tls cert --ca-dir DIR --name NAME [--host NAME,...] [--server] [--client]
+            [--days 397] [--out DIR]
 ```
 
 - `ca`: `DIR/ca.crt` and `DIR/ca.key`, a CA that signs leaves only (path
   length 0). `ca.crt` is what dialers set as `tls.ca_file` and listeners as
   `tls.client_ca_file`; with `ca.key` it is a listener's
   `tls.issuer_cert_file` and `tls.issuer_key_file`.
-- `cert`: `NAME.crt` and `NAME.key`, in `-out` (default: `-ca-dir`).
-  - `-server` for a listener: `-host` lists the DNS names and IP addresses it
-    carries, default `NAME`; `-client` for a dialer presenting a certificate;
+- `cert`: `NAME.crt` and `NAME.key`, in `--out` (default: `--ca-dir`).
+  - `--server` for a listener: `--host` lists the DNS names and IP addresses it
+    carries, default `NAME`; `--client` for a dialer presenting a certificate;
     both may be given.
   - `NAME` is the subject CN, the identity `auth.type = "mtls"` matches.
   - Valid 397 days (the longest browsers accept), never past the CA. It prints
     the certificate's `pin_sha256`.
 
 ```bash
-lw tls ca -dir /etc/logwisp/pki
-lw tls cert -ca-dir /etc/logwisp/pki -name agg.example.org -server
-lw tls cert -ca-dir /etc/logwisp/pki -name edge-01 -client
+lw tls ca --dir /etc/logwisp/pki
+lw tls cert --ca-dir /etc/logwisp/pki --name agg.example.org --server
+lw tls cert --ca-dir /etc/logwisp/pki --name edge-01 --client
 ```

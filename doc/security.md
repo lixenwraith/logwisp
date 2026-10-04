@@ -360,9 +360,9 @@ process and, at startup and every reload, a certificate for it valid 397 days
   to that certificate.
 
 ```bash
-lw tls ca -dir /etc/logwisp/pki                       # ca.crt, ca.key (0600)
-lw tls cert -ca-dir /etc/logwisp/pki -name agg.example.org -server
-lw tls cert -ca-dir /etc/logwisp/pki -name edge-01 -client
+lw tls ca --dir /etc/logwisp/pki                       # ca.crt, ca.key (0600)
+lw tls cert --ca-dir /etc/logwisp/pki --name agg.example.org --server
+lw tls cert --ca-dir /etc/logwisp/pki --name edge-01 --client
 ```
 
 ## Enabling mTLS
@@ -594,8 +594,8 @@ different users.
 - **Rollout.** Turning `scram` on cuts off every dialer of that listener that
   has no credentials. Upgrade every binary first, then add a second listener
   with `scram` on another port, move the dialers to it, and remove the old one.
-- **Password rotation.** `lw auth add-user -generate` with the user's
-  `-password-file` replaces verifier and password together. `SIGHUP` the
+- **Password rotation.** `lw auth add-user --generate` with the user's
+  `--password-file` replaces verifier and password together. `SIGHUP` the
   listener, deploy the password file, `SIGHUP` the dialer. Logins fail in
   between and the dialer retries under backoff, holding its current entry or
   batch while its input queue fills. To avoid the gap, add a second user, move
@@ -664,7 +664,7 @@ location /logs/ {
   `Path`, so it scopes itself to the mount (`/logs` above). Stream and status
   accept it or a bearer token, so `new EventSource("/logs/stream")` works on any
   page of the site, beside the site's own Basic auth too, and `lw auth token
-  -unbound` keeps working. `POST /auth` with `{"logout": true}` clears the
+  --unbound` keeps working. `POST /auth` with `{"logout": true}` clears the
   cookie and revokes the token until it expires. `/auth` takes only
   `application/json`, which a cross-origin page cannot send without a preflight.
 - **Private windows.** Private or incognito windows keep cookies in memory,
@@ -698,9 +698,10 @@ location /logs/ {
   - `cookiesUsable()` tells which applies: false when the session cookie would
     not stick. `loginUnavailable()`, asked first, names why neither can run
     (no secure context), or is empty.
-- **Pages.** Under `/auth/` the sink serves `scram.js` always, and with
-  `login_page` / `viewer_page` the login page and a minimal live viewer with
-  their script and style, under `default-src 'none'; script-src 'self';
+- **Pages.** Under `/auth/` the sink serves `scram.js` and `style.css` always,
+  and with `login_page` / `viewer_page` the login page and a minimal live
+  viewer with their scripts; `GET /` leads to the viewer, else the login page.
+  All are served under `default-src 'none'; script-src 'self';
   connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors
   'none'; base-uri 'none'`.
 
@@ -771,7 +772,7 @@ sets `proxy_protocol` per stream `server`, so route LogWisp SNIs without it:
   `listen`s with `proxy_protocol` and proxy_passes to LogWisp without it; that
   hop consumes the header.
 - Either way dialers must send the name: a `host` that is one, or
-  `tls.server_name` (`-server-name` for `lw auth`); an IP literal sends no SNI.
+  `tls.server_name` (`--server-name` for `lw auth`); an IP literal sends no SNI.
 - With HAProxy, leave `send-proxy` off the LogWisp backends.
 
 ```nginx
@@ -864,6 +865,10 @@ What each exposes when `auth.type = "none"`:
   header is omitted once an auth policy is set).
 - `http` sink `status_path`: host, port, TLS flag, uptime, client counts,
   throughput counters.
+- `http` sink `GET /` (`303` to `/auth/view`) and the viewer's files: static
+  pages that read the two endpoints above under the CSP and expose nothing
+  beyond them. Under `mtls` they are served before the allow list, while the
+  stream and status stay gated.
 - `tcp` sink: the full log stream to any client that connects.
 - `tcp_chain` and `http_chain` sources: ingest from any peer that can connect
   (with `client_auth`, any the CA vouches for), under any node label it

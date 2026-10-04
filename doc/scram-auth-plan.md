@@ -204,16 +204,16 @@ closed.
 ## CLI
 
 ```
-lw auth add-user    -credentials F -user U [-password-file P] [-generate]
-lw auth remove-user -credentials F -user U
-lw auth token  -url https://host:port[/path] -user U -password-file P [-unbound] [TLS flags]
-lw auth stream -addr host:port        -user U -password-file P [TLS flags]
+lw auth add-user    --credentials F --user U [--password-file P] [--generate]
+lw auth remove-user --credentials F --user U
+lw auth token  --url https://host:port[/path] --user U --password-file P [--unbound] [TLS flags]
+lw auth stream --addr host:port        --user U --password-file P [TLS flags]
 ```
 
-- `add-user` takes the password from `-password-file` when it exists (at least
+- `add-user` takes the password from `--password-file` when it exists (at least
   8 bytes); a new user without one gets a generated 130-bit password, written to
   that file (0600) or printed once. Rotating an existing user needs the file or
-  `-generate`, so a mistyped path cannot replace a password. The file's KDF
+  `--generate`, so a mistyped path cannot replace a password. The file's KDF
   profile and decoy key are reused, the result is validated with the daemon's
   own parser, and the rewrite (temp file beside the file or a symlink's target,
   rename) keeps the existing mode and owner, or fails.
@@ -222,10 +222,10 @@ lw auth stream -addr host:port        -user U -password-file P [TLS flags]
   credentials file.
 - `token` prints a bearer token for curl (`-H @<(...)` keeps it out of argv);
   `stream` authenticates to a `tcp` sink and copies the stream to stdout until
-  interrupted. `-url` takes a path only with `-unbound`, and redirects are not
+  interrupted. `--url` takes a path only with `--unbound`, and redirects are not
   followed.
-- TLS flags: `-ca-file`, `-server-name`, `-cert-file`, `-key-file`. There is no
-  insecure flag.
+- TLS flags: `--ca-file` or `--pin-sha256`, `--server-name`, `--cert-file`,
+  `--key-file`. There is no insecure flag.
 - Exit status: 0 success, 1 failure, 2 usage error.
 
 ## Rollout and Rotation
@@ -233,7 +233,7 @@ lw auth stream -addr host:port        -user U -password-file P [TLS flags]
 - Turning SCRAM on is per listener and cuts off unconfigured dialers. To migrate
   without a gap, upgrade binaries, add a second SCRAM listener, move dialers,
   then remove the old listener.
-- Password rotation: `add-user -generate`, `SIGHUP` the listener, deploy the new
+- Password rotation: `add-user --generate`, `SIGHUP` the listener, deploy the new
   password file, `SIGHUP` the dialer. The dialer retries under backoff in
   between.
 - Revocation: `remove-user`, `SIGHUP`. All tokens die with the reload.
@@ -261,7 +261,7 @@ sink into proxy mode; it is refused on every other plugin and with `identity`.
   proxy-to-LogWisp hop could relay a login, hence the address restriction and a
   startup warning for a plaintext hop to a proxy off this host. `tls` may stay
   off. Outside proxy mode nothing changes: proofs stay bound, and a bound proof
-  in proxy mode fails with a hint naming `-unbound`.
+  in proxy mode fails with a hint naming `--unbound`.
 
 **Session.** The proof step may ask for a cookie (`"session": "cookie"`, proxy
 mode only). The answer sets `logwisp_session` (`HttpOnly; Secure;
@@ -289,8 +289,10 @@ token in a page variable only: it lasts no longer than the page or its lifetime.
 pages is relative, so a proxy prefix works unchanged.
 
 - `POST /auth`: SCRAM hello, proof or logout; unbound in proxy mode.
-- `GET /auth/scram.js`: the client library, always served in proxy mode.
-- `GET /auth/login`, `login.js`, `style.css`: the login page (`login_page`).
+- `GET /auth/scram.js`, `style.css`: the client library and the pages' style,
+  always served in proxy mode, and with the viewer.
+- `GET /`: `303` to `auth/view`, else `auth/login`, when either is served.
+- `GET /auth/login`, `login.js`: the login page (`login_page`).
 - `GET /auth/view`, `view.js`: a minimal live viewer (`viewer_page`, needs
   `login_page`).
 
@@ -316,8 +318,8 @@ refuses redirects, and reports success only after verifying the server's
 signature. A 64 MiB login takes about 2 s on a desktop. The wire protocol above
 is the contract: a site may implement its own client.
 
-**CLI.** `lw auth token -unbound` logs in through the proxy, still pinning
-its certificate across the two requests; only then may `-url` carry the mount
+**CLI.** `lw auth token --unbound` logs in through the proxy, still pinning
+its certificate across the two requests; only then may `--url` carry the mount
 path.
 
 ## Verification
@@ -367,7 +369,7 @@ by sign-out, and no CSP violations; a cookie the browser drops leading to the
 viewer's own form, not a loop, its token kept out of storage and the URL; a
 profile blocking every cookie signing in on the viewer, its proofs asking for
 no cookie, streaming with a bearer, sign-out revoking the token, and a reload's
-`401` asking again; `token -unbound` and curl through the proxy; direct peers
+`401` asking again; `token --unbound` and curl through the proxy; direct peers
 and plaintext-forwarded requests `403`. The existing scripts keep passing.
 
 ## Not Implemented
