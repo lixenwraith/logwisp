@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log/formatter"
@@ -98,15 +98,21 @@ func (a *FormatterAdapter) FormatWithFlags(entry core.LogEntry, customFlags int6
 	return a.serialize(entry, customFlags), nil
 }
 
-// serialize renders an entry under the given flags. The returned slice is a
-// copy: the underlying formatter reuses one buffer and sinks retain payloads.
+// serialize renders an entry under the given flags as one record ending in
+// one newline, which raw output lacks unless the message carried it. The
+// result is a copy: the formatter reuses one buffer and sinks keep payloads.
 func (a *FormatterAdapter) serialize(entry core.LogEntry, flags int64) []byte {
 	args, flags := formatArgs(entry, flags)
 
 	a.mu.Lock()
-	out := bytes.Clone(a.formatter.Format(flags, entry.Time, mapLevel(entry.Level), sourceLabel(entry), args))
+	out := a.formatter.Format(flags, entry.Time, mapLevel(entry.Level), sourceLabel(entry), args)
+	record := make([]byte, len(out), len(out)+1)
+	copy(record, out)
 	a.mu.Unlock()
-	return out
+	if !bytes.HasSuffix(record, []byte{'\n'}) {
+		record = append(record, '\n')
+	}
+	return record
 }
 
 // formatArgs pairs the entry with its flags. FlagRaw keeps the fields JSON

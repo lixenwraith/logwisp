@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
-	"logwisp/internal/filter"
-	"logwisp/internal/format"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/filter"
+	"github.com/lixenwraith/logwisp/internal/format"
 
 	"github.com/lixenwraith/log"
 )

@@ -6,11 +6,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
-	"logwisp/internal/plugin"
-	"logwisp/internal/session"
-	"logwisp/internal/sink"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/plugin"
+	"github.com/lixenwraith/logwisp/internal/session"
+	"github.com/lixenwraith/logwisp/internal/sink"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
@@ -41,6 +41,8 @@ type FileSink struct {
 
 	// Runtime
 	done      chan struct{}
+	exited    chan struct{}
+	started   atomic.Bool
 	startTime time.Time
 
 	// Statistics
@@ -132,6 +134,7 @@ func NewFileSinkPlugin(
 		writer:       log.NewLogger(),
 		writerConfig: writerConfig,
 		done:         make(chan struct{}),
+		exited:       make(chan struct{}),
 		logger:       logger,
 	}
 	fs.lastProcessed.Store(time.Time{})
@@ -178,6 +181,7 @@ func (fs *FileSink) Start(ctx context.Context) error {
 	}
 
 	fs.startTime = time.Now()
+	fs.started.Store(true)
 	go fs.processLoop(ctx)
 
 	fs.logger.Info("msg", "File sink started",
@@ -205,7 +209,11 @@ func (fs *FileSink) Stop() {
 		"directory", fs.config.Directory,
 		"name", fs.config.Name)
 
+	// The loop writes what is queued before the writer shuts down
 	close(fs.done)
+	if fs.started.Load() {
+		<-fs.exited
+	}
 
 	// Remove session
 	if fs.session != nil {
@@ -240,27 +248,37 @@ func (fs *FileSink) GetStats() sink.SinkStats {
 	}
 }
 
-// processLoop reads transport events and writes to file
+// processLoop writes transport events until stopped, then what is queued
 func (fs *FileSink) processLoop(ctx context.Context) {
+	defer close(fs.exited)
 	for {
 		select {
-		case event, ok := <-fs.input:
-			if !ok {
-				return
-			}
-
-			// Write the pre-formatted payload directly
-			// The writer handles rotation automatically based on configuration
-			fs.writer.Write(string(event.Payload))
-
-			fs.totalProcessed.Add(1)
-			fs.lastProcessed.Store(time.Now())
-
+		case event := <-fs.input:
+			fs.write(event)
 		case <-ctx.Done():
+			fs.drain()
 			return
-
 		case <-fs.done:
+			fs.drain()
 			return
 		}
 	}
+}
+
+func (fs *FileSink) drain() {
+	for {
+		select {
+		case event := <-fs.input:
+			fs.write(event)
+		default:
+			return
+		}
+	}
+}
+
+// write hands the formatted payload to the writer, which rotates files
+func (fs *FileSink) write(event core.TransportEvent) {
+	fs.writer.Write(string(event.Payload))
+	fs.totalProcessed.Add(1)
+	fs.lastProcessed.Store(time.Now())
 }

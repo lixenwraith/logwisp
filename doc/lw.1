@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 3, 2026
 .Dt LW 1
 .Os
 .Sh NAME
@@ -36,14 +36,65 @@ forward to other nodes.
 Every network source and sink can use TLS, mutual TLS and
 Argon2id-SCRAM password authentication.
 .Pp
+With no configuration file and no pipeline options,
 .Nm
-stays in the foreground and logs to standard output; run it under a
-supervisor such as
+is a filter like
+.Xr cat 1 :
+it copies standard input to standard output line by line and exits 0 at the
+end of input.
+This built-in pipeline,
+.Dq pipe ,
+joins the console source
+.Dq stdin
+to the console sink
+.Dq stdout
+in the raw format, without a filter or rate limit; a configuration file that
+defines no pipelines runs it too.
+Each line is written with one newline, whether it ended in a newline, a
+carriage return and newline, or nothing; blank lines are skipped, and a line
+over 1 MiB continues in the next one.
+When standard input is a terminal,
+.Nm
+prints a reminder on standard error that Control-D ends the input.
+.Pp
+A pipeline finishes when all its sources have ended.
+Only a console source ends, at the end of standard input; every other
+source runs until shutdown.
+When every pipeline has finished,
+.Nm
+shuts down gracefully and exits 0.
+Console and file sinks first write what they hold; the
+.Cm http
+and
+.Cm tcp
+sinks do not yet, so a client can miss the last lines of a finite input.
+Under a supervisor, standard input is usually
+.Pa /dev/null :
+a console source there ends at once.
+.Pp
+The console source and sink never drop a line.
+A busy pipeline slows the reading of standard input; a console sink whose
+output is slow makes its pipeline wait, other sinks included.
+On a terminal the console sink writes control characters, escape sequences
+included, as the hex of their bytes in angle brackets, such as
+.Ql <1b> ,
+so that a log line cannot drive the terminal; pipes and files get the bytes
+unchanged.
+Its
+.Cm escape
+option sets this:
+.Cm auto
+.Pq the default ,
+.Cm always
+or
+.Cm never .
+.Pp
+.Nm
+stays in the foreground and logs to standard error; run a configuration as a
+service under a supervisor such as
 .Xr systemd 1
 or
 .Xr daemon 8 .
-With no configuration file it runs a demonstration pipeline: a synthetic
-generator writing JSON to standard output.
 .Pp
 The options are as follows:
 .Bl -tag -width Ds
@@ -59,23 +110,39 @@ A bare
 .Fl \- Ns Ar key
 sets a boolean to true.
 .It Fl \-quiet
-Suppress console output.
+Turn off the log of
+.Nm
+and the terminal reminder; console sinks still write.
 .It Fl \-status_reporter= Ns Ar bool
 Log pipeline statistics every 30 seconds at the debug level
-.Pq default true .
+.Pq default true with a configuration file, false without .
 .It Fl \-auto_reload= Ns Ar bool
 Reload when the configuration file changes
 .Pq default false .
 .It Fl \-logging.output= Ns Ar mode
 One of
-.Cm file , stdout , stderr , split , all
+.Cm stderr
+.Pq the default ,
+.Cm stdout ,
+.Cm split
+.Pq warnings and errors to standard error, the rest to standard output ,
+.Cm file ,
+.Cm all
+.Pq split and file
 or
 .Cm none .
+The modes that use standard output mix the log into what a console sink
+writes there.
 .It Fl \-logging.level= Ns Ar level
 One of
 .Cm debug , info , warn
 or
-.Cm error .
+.Cm error ;
+the default is
+.Cm info
+with a configuration file and
+.Cm warn
+without.
 .It Fl \-check
 Build every pipeline and plugin as a start would, loading options, TLS files
 and credentials files and printing startup warnings, without binding a port
@@ -97,6 +164,12 @@ the configuration file.
 They then replace the file's pipelines and the built-in default; every other
 key keeps its usual precedence.
 A reload rereads the file but keeps these pipelines.
+A pipeline without a source reads standard input with the console source
+.Dq stdin ;
+one without a sink writes standard output with the console sink
+.Dq stdout .
+Standard input has one reader: a second console source anywhere in the
+configuration fails validation.
 .Bl -tag -width Ds
 .It Fl \-pipeline Ar name
 Start a new pipeline.
@@ -265,7 +338,7 @@ The service's working directory on Linux and on
 .El
 .Sh EXIT STATUS
 .Nm
-exits 0 after a clean shutdown,
+exits 0 at the end of input, after a clean shutdown,
 .Fl \-version
 or help; 1 on a configuration, logger or startup error; and 2 when a
 configuration file named by
@@ -273,6 +346,15 @@ configuration file named by
 or
 .Ev LOGWISP_CONFIG_*
 does not exist.
+A reader of standard output that goes away, as in
+.Ql lw | head ,
+ends
+.Nm
+with
+.Dv SIGPIPE ,
+as it ends
+.Xr cat 1 ;
+the shell reports status 141.
 .Pp
 .Nm
 .Cm auth
@@ -287,15 +369,50 @@ every pipeline.
 An invalid configuration leaves the running service untouched.
 .El
 .Sh EXAMPLES
+Copy a file line by line:
+.Bd -literal -offset indent
+$ lw < app.log > copy.log
+.Ed
+.Pp
+Follow a log and keep only errors and warnings:
+.Bd -literal -offset indent
+$ tail \-F app.log | lw \-\-filter include,patterns=ERROR,patterns=WARN
+.Ed
+.Pp
+Prefix each line with the time, the level found in it and the source:
+.Bd -literal -offset indent
+$ tail \-F app.log | lw \-\-format txt
+.Ed
+.Pp
+Serve standard input as a live stream on the loopback address only, since
+the
+.Cm http
+sink listens on every address by default, and read it from another terminal
+as server-sent events; a client gets the lines that arrive while it is
+connected:
+.Bd -literal -offset indent
+$ journalctl \-f | lw \-\-sink http,host=127.0.0.1,port=8080
+$ curl \-N http://127.0.0.1:8080/stream
+.Ed
+.Pp
+Follow every
+.Pa .log
+file in a directory, as
+.Ql tail \-F
+does, and write the new lines unparsed to one file:
+.Bd -literal -offset indent
+$ lw \-\-source 'file,directory=/var/log/app,pattern=*.log,raw=true' \e
+    > all.log
+.Ed
+.Pp
+Check a configuration without binding a port or touching a log file:
+.Bd -literal -offset indent
+$ lw \-\-check \-c /etc/logwisp/logwisp.toml
+.Ed
+.Pp
 Run a configuration in the foreground with debug logging:
 .Bd -literal -offset indent
 $ lw \-c /etc/logwisp/logwisp.toml \-\-logging.level=debug
-.Ed
-.Pp
-Tail a directory and serve it as a live stream, without a file:
-.Bd -literal -offset indent
-$ lw \-\-source 'file,directory=/var/log/app,pattern=*.log' \e
-    \-\-sink http,host=127.0.0.1,port=8080
 .Ed
 .Pp
 Create a credentials file the service account can read, add a user,
@@ -303,7 +420,8 @@ letting
 .Nm
 generate the password into a file, then reload the server:
 .Bd -literal -offset indent
-# install \-m 0600 \-o logwisp \-g logwisp /dev/null /etc/logwisp/users.toml
+# install \-m 0600 \-o logwisp \-g logwisp \e
+    /dev/null /etc/logwisp/users.toml
 # lw auth add-user \-credentials /etc/logwisp/users.toml \e
     \-user alice \-password-file /root/alice.pass
 # systemctl reload logwisp

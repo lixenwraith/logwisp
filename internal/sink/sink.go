@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/core"
 )
 
 // Sink represents an output data stream.

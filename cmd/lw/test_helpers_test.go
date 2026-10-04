@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"logwisp/internal/config"
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 
 	"github.com/lixenwraith/log"
 )

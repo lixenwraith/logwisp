@@ -3,9 +3,10 @@ package chain
 import (
 	"encoding/json"
 	"fmt"
-	"logwisp/internal/core"
 	"math/rand/v2"
 	"time"
+
+	"github.com/lixenwraith/logwisp/internal/core"
 )
 
 // ProtocolVersion is declared in the hello preamble

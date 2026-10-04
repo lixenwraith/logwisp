@@ -38,6 +38,7 @@ func ValidateConfig(cfg *Config) error {
 		return fmt.Errorf("logging: %w", err)
 	}
 
+	stdinReader := ""
 	for i, p := range cfg.Pipelines {
 		if err := lconfig.NonEmpty(p.Name); err != nil {
 			return fmt.Errorf("pipeline[%d].name: %w", i, err)
@@ -47,6 +48,15 @@ func ValidateConfig(cfg *Config) error {
 		}
 		if len(p.PluginSinks) == 0 {
 			return fmt.Errorf("pipeline[%d]: no sinks defined", i)
+		}
+		for _, src := range p.PluginSources {
+			if src.Type != "console" {
+				continue
+			}
+			if stdinReader != "" {
+				return fmt.Errorf("pipeline %q: a console source already reads stdin in pipeline %q", p.Name, stdinReader)
+			}
+			stdinReader = p.Name
 		}
 	}
 

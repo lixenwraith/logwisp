@@ -3,11 +3,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/core"
 
 	lconfig "github.com/lixenwraith/config"
 )
@@ -44,6 +45,11 @@ func Load(args []string) (*Manager, error) {
 	}
 	m := &Manager{path: configPath, explicit: isExplicit, specs: specs}
 	initial := defaults()
+	if _, err := os.Stat(configPath); errors.Is(err, fs.ErrNotExist) {
+		// Without a file lw is a command-line tool: warnings and errors only
+		initial.Logging.Level = "warn"
+		initial.StatusReporter = false
+	}
 	cfg, err := lconfig.NewBuilder().
 		WithTarget(initial).
 		WithEnvPrefix("LOGWISP_").
@@ -134,20 +140,13 @@ func (m *Manager) Watch() <-chan string {
 
 func (m *Manager) Close() { m.config.StopAutoUpdate() }
 
-// defaults provides the default configuration values for the application
+// defaults provides the default configuration values for the application.
+// Data goes to stdout, so lw's own log goes to stderr.
 func defaults() *Config {
 	return &Config{
-		// Top-level flag defaults
-		ShowVersion: false,
-		Quiet:       false,
-
-		// Runtime behavior defaults
-		StatusReporter:   true,
-		ConfigAutoReload: false,
-
-		// Existing defaults
+		StatusReporter: true,
 		Logging: &LogConfig{
-			Output: "stdout",
+			Output: "stderr",
 			Level:  "info",
 			Format: "txt",
 			File: &LogFileConfig{
@@ -158,45 +157,20 @@ func defaults() *Config {
 				RetentionHours: 168, // 7 days
 			},
 			Console: &LogConsoleConfig{
-				Target: "stdout",
+				Target: "stderr",
 			},
 		},
-		Pipelines: []PipelineConfig{
-			{
-				Name: "default_pipeline",
-				Flow: &FlowConfig{
-					RateLimit: &RateLimitConfig{
-						Rate:              5,
-						Burst:             10,
-						Policy:            "drop",
-						MaxEntrySizeBytes: 65536,
-					},
-					Format: &FormatConfig{
-						Type:            "json",
-						SanitizerPolicy: "json",
-					},
-				},
-				PluginSources: []PluginSourceConfig{
-					{
-						ID:   "default_source",
-						Type: "random",
-						Config: map[string]any{
-							"special": true,
-						},
-					},
-				},
-				PluginSinks: []PluginSinkConfig{
-					{
-						ID:   "default_sink",
-						Type: "console",
-						Config: map[string]any{
-							"target":      "stdout",
-							"buffer_size": 100,
-						},
-					},
-				},
-			},
-		},
+		Pipelines: []PipelineConfig{pipeDefault("pipe")},
+	}
+}
+
+// pipeDefault is a filter in the Unix sense: stdin to stdout, line for line
+func pipeDefault(name string) PipelineConfig {
+	return PipelineConfig{
+		Name:          name,
+		Flow:          &FlowConfig{Format: &FormatConfig{Type: "raw"}},
+		PluginSources: []PluginSourceConfig{{ID: "stdin", Type: "console", Config: map[string]any{}}},
+		PluginSinks:   []PluginSinkConfig{{ID: "stdout", Type: "console", Config: map[string]any{}}},
 	}
 }
 

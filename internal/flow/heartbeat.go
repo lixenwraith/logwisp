@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
-	"logwisp/internal/format"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/format"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"

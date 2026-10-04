@@ -16,7 +16,8 @@ sibling sinks are unaffected.
 
 ## console
 
-Writes formatted payloads to stdout or stderr.
+Writes formatted payloads to stdout or stderr. It is the sink of the built-in
+`pipe` pipeline, and of every spec pipeline given no `--sink`.
 
 ```toml
 [[pipelines.plugin_sinks]]
@@ -25,19 +26,35 @@ type = "console"
 [pipelines.plugin_sinks.config]
 target      = "stdout"
 buffer_size = 1000
+escape      = "auto"
 ```
 
 Options, each as type and default:
 
 - `target` (string, `stdout`): `stdout` or `stderr`.
 - `buffer_size` (int, `1000`): sink input queue depth.
+- `escape` (string, `auto`): write control characters as `<hex>` of their
+  bytes, `ESC` as `<1b>`: `auto` when the output is a terminal, `always`, or
+  `never`.
 
 > `split` is **not** a valid target for this sink and is rejected at startup.
 > Level-based splitting exists only for LogWisp's own application log
 > (`logging.output = "split"`).
 
-Payloads are written verbatim; the sink adds no framing. Whether entries are
-newline-terminated is decided by the formatter.
+Payloads are written as the formatter made them, one record per line.
+
+- Escaping: a log line must not drive the terminal that shows it (cursor and
+  screen control, title changes, OSC 52 clipboard writes, bidi spoofing). C0
+  and C1 controls other than tab, DEL, the bidi controls, the line and
+  paragraph separators and invalid UTF-8 are escaped; other invisible
+  characters, such as the joiners emoji and Indic scripts need, are kept.
+  `never` keeps an application's own ANSI colours; under `auto`, pipes and
+  files get the bytes unchanged.
+- Backpressure: the sink never drops. When its output is slow (a slow reader,
+  a paused terminal, a stalled log collector) the pipeline waits for it, with
+  its other sinks. A service whose stdout may stall writes to a `file` sink
+  instead. A closed stdout pipe ends lw with `SIGPIPE`, as it ends `cat`.
+- On stop it writes what is queued.
 
 ---
 
@@ -68,7 +85,8 @@ Options, each as type and default:
 - `max_total_size_mb` (int, `1000`): cap across all rotated files.
 - `min_disk_free_mb` (int, `0`): free-space floor before writing; `0` = none.
 - `retention_hours` (float, `168.0`): delete rotated files older than this.
-- `buffer_size` (int, `1000`): sink input queue depth.
+- `buffer_size` (int, `1000`): sink input queue depth, and the depth of the
+  internal writer's queue, which drops and counts when full.
 - `flush_interval_ms` (int, `100`): forced flush interval.
 
 > `min_disk_free_mb` has an unusual default. The constructor replaces only
@@ -76,7 +94,8 @@ Options, each as type and default:
 > free-space floor. Set it explicitly if you want one.
 
 The sink drives an internal writer configured for raw output with timestamps and
-levels disabled, so what lands on disk is exactly the formatted payload.
+levels disabled, so what lands on disk is exactly the formatted payload. On stop
+it hands the writer what is queued before closing the file.
 
 ---
 
@@ -187,7 +206,9 @@ Options, each as type and default:
   evicted by the broker. With the idle comment above, that reaches only a peer
   that has stopped accepting bytes on a sink configured `write_timeout_ms = 0`.
 - On shutdown, connected clients receive
-  `event: disconnect / data: {"reason":"server_shutdown"}`.
+  `event: disconnect / data: {"reason":"server_shutdown"}`. Entries still
+  queued for them are not flushed first, so a client can miss the last ones
+  of a finite input ([To Do](todo.md)).
 - HTTP/2 is negotiated via ALPN when TLS is enabled; plaintext is HTTP/1.1.
 
 **Status endpoint** returns service and version identity, host, port, TLS flag,
@@ -266,6 +287,8 @@ Options, each as type and default:
   whole timeout, so the client is disconnected immediately rather than retried.
 - A client whose send queue is full has that event dropped (`dropped_writes`)
   and stays connected.
+- On shutdown, entries still queued for clients are not flushed first, as
+  with the `http` sink.
 - With TLS enabled the handshake runs under a 10 s bound *after* the
   `max_connections` check, so concurrent handshakes are bounded too.
 - With an `auth` block, authorization runs after that handshake and *before*

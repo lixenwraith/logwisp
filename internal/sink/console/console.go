@@ -1,21 +1,26 @@
 package console
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
-	"logwisp/internal/plugin"
-	"logwisp/internal/session"
-	"logwisp/internal/sink"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/plugin"
+	"github.com/lixenwraith/logwisp/internal/session"
+	"github.com/lixenwraith/logwisp/internal/sink"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
+	"golang.org/x/term"
 )
 
 // init registers the component in plugin factory
@@ -25,7 +30,7 @@ func init() {
 	}
 }
 
-// ConsoleSink writes log entries to the console (stdout/stderr) using an dedicated logger instance
+// ConsoleSink writes formatted entries to stdout or stderr
 type ConsoleSink struct {
 	// Plugin identity and session management
 	id      string
@@ -34,6 +39,7 @@ type ConsoleSink struct {
 
 	// Configuration
 	config *config.ConsoleSinkOptions
+	escape bool
 
 	// Application
 	input  chan core.TransportEvent
@@ -42,6 +48,9 @@ type ConsoleSink struct {
 
 	// Runtime
 	done      chan struct{}
+	exited    chan struct{}
+	started   atomic.Bool
+	stopOnce  sync.Once
 	startTime time.Time
 
 	// Statistics
@@ -53,6 +62,7 @@ const (
 	// Defaults
 	DefaultConsoleTarget     = "stdout"
 	DefaultConsoleBufferSize = 1000
+	DefaultConsoleEscape     = "auto"
 )
 
 // NewConsoleSinkPlugin creates a console sink through plugin factory
@@ -62,28 +72,22 @@ func NewConsoleSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	opts := &config.ConsoleSinkOptions{}
+	opts := &config.ConsoleSinkOptions{Target: DefaultConsoleTarget, Escape: DefaultConsoleEscape}
 
 	// Scan config map into struct
 	if err := config.Scan(configMap, opts); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Validate and apply defaults
-	if opts.Target == "" {
-		opts.Target = DefaultConsoleTarget
-	} else {
-		validateTarget := lconfig.OneOf("stdout", "stderr")
-		if err := validateTarget(opts.Target); err != nil {
-			return nil, fmt.Errorf("target: %w", err)
-		}
+	if err := lconfig.OneOf("stdout", "stderr")(opts.Target); err != nil {
+		return nil, fmt.Errorf("target: %w", err)
+	}
+	if err := lconfig.OneOf("auto", "always", "never")(opts.Escape); err != nil {
+		return nil, fmt.Errorf("escape: %w", err)
 	}
 
-	var output io.Writer
-	switch opts.Target {
-	case "stdout":
-		output = os.Stdout
-	case "stderr":
+	output := os.Stdout
+	if opts.Target == "stderr" {
 		output = os.Stderr
 	}
 
@@ -96,9 +100,11 @@ func NewConsoleSinkPlugin(
 		id:     id,
 		proxy:  proxy,
 		config: opts,
+		escape: opts.Escape == "always" || opts.Escape == "auto" && term.IsTerminal(int(output.Fd())),
 		input:  make(chan core.TransportEvent, opts.BufferSize),
 		output: output,
 		done:   make(chan struct{}),
+		exited: make(chan struct{}),
 		logger: logger,
 	}
 	cs.lastProcessed.Store(time.Time{})
@@ -117,6 +123,7 @@ func NewConsoleSinkPlugin(
 		"component", "console_sink",
 		"instance_id", id,
 		"target", opts.Target,
+		"escape", cs.escape,
 	)
 
 	return cs, nil
@@ -126,6 +133,7 @@ func NewConsoleSinkPlugin(
 func (cs *ConsoleSink) Capabilities() []core.Capability {
 	return []core.Capability{
 		core.CapSessionAware, // Single output session
+		core.CapBackpressure, // a slow reader slows the pipeline, as with any filter
 	}
 }
 
@@ -137,6 +145,7 @@ func (cs *ConsoleSink) Input() chan<- core.TransportEvent {
 // Start begins the processing loop
 func (cs *ConsoleSink) Start(ctx context.Context) error {
 	cs.startTime = time.Now()
+	cs.started.Store(true)
 	go cs.processLoop(ctx)
 	cs.logger.Info("msg", "Console sink started",
 		"component", "console_sink",
@@ -144,7 +153,7 @@ func (cs *ConsoleSink) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the sink
+// Stop writes what is queued, then returns
 func (cs *ConsoleSink) Stop() {
 	cs.logger.Info("msg", "Stopping console sink", "target", cs.config.Target)
 
@@ -153,12 +162,14 @@ func (cs *ConsoleSink) Stop() {
 		cs.proxy.RemoveSession(cs.session.ID)
 	}
 
-	close(cs.done)
+	cs.stopOnce.Do(func() { close(cs.done) })
+	if cs.started.Load() {
+		<-cs.exited
+	}
 
 	cs.logger.Info("msg", "Console sink stopped",
 		"instance_id", cs.id,
 		"target", cs.config.Target,
-		"instance_id", cs.id,
 	)
 }
 
@@ -175,35 +186,100 @@ func (cs *ConsoleSink) GetStats() sink.SinkStats {
 		Details: map[string]any{
 			"target":      cs.config.Target,
 			"buffer_size": cs.config.BufferSize,
+			"escape":      cs.escape,
 		},
 	}
 }
 
-// processLoop reads transport events and writes to console
+// processLoop writes transport events until stopped, then what is queued
 func (cs *ConsoleSink) processLoop(ctx context.Context) {
+	defer close(cs.exited)
 	for {
 		select {
-		case event, ok := <-cs.input:
-			if !ok {
-				return
-			}
-
-			// Write pre-formatted payload directly to output
-			if _, err := cs.output.Write(event.Payload); err != nil {
-				cs.logger.Error("msg", "Failed to write to console",
-					"component", "console_sink",
-					"target", cs.config.Target,
-					"error", err)
-				continue
-			}
-
-			cs.totalProcessed.Add(1)
-			cs.lastProcessed.Store(time.Now())
-
+		case event := <-cs.input:
+			cs.write(event)
 		case <-ctx.Done():
+			cs.drain()
 			return
 		case <-cs.done:
+			cs.drain()
 			return
 		}
 	}
+}
+
+func (cs *ConsoleSink) drain() {
+	for {
+		select {
+		case event := <-cs.input:
+			cs.write(event)
+		default:
+			return
+		}
+	}
+}
+
+func (cs *ConsoleSink) write(event core.TransportEvent) {
+	payload := event.Payload
+	if cs.escape {
+		payload = escapeControls(payload)
+	}
+	if _, err := cs.output.Write(payload); err != nil {
+		cs.logger.Error("msg", "Failed to write to console",
+			"component", "console_sink",
+			"target", cs.config.Target,
+			"error", err)
+		return
+	}
+	cs.totalProcessed.Add(1)
+	cs.lastProcessed.Store(time.Now())
+}
+
+// escapeControls writes what a terminal would act on or reorder (C0 and C1
+// controls but tab, DEL, bidi controls, line separators, invalid UTF-8) as
+// <hex>, keeping the final newline: a log line cannot drive the terminal.
+// Other invisible characters stay: emoji and Indic scripts need ZWJ.
+func escapeControls(p []byte) []byte {
+	body, newline := bytes.CutSuffix(p, []byte{'\n'})
+	if printableASCII(body) {
+		return p
+	}
+	out := make([]byte, 0, len(p)+16)
+	for len(body) > 0 {
+		r, n := utf8.DecodeRune(body)
+		if !terminalControl(r, n) {
+			out = append(out, body[:n]...)
+		} else {
+			out = append(out, '<')
+			out = hex.AppendEncode(out, body[:n])
+			out = append(out, '>')
+		}
+		body = body[n:]
+	}
+	if newline {
+		out = append(out, '\n')
+	}
+	return out
+}
+
+func terminalControl(r rune, size int) bool {
+	switch {
+	case r == utf8.RuneError && size == 1:
+		return true
+	case r < 0x20:
+		return r != '\t'
+	case r >= 0x7f && r <= 0x9f, r == 0x061c, r == 0x200e, r == 0x200f,
+		r >= 0x2028 && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		return true
+	}
+	return false
+}
+
+func printableASCII(b []byte) bool {
+	for _, c := range b {
+		if (c < 0x20 || c > 0x7e) && c != '\t' {
+			return false
+		}
+	}
+	return true
 }

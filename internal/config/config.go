@@ -244,6 +244,7 @@ type NullSinkOptions struct{}
 type ConsoleSinkOptions struct {
 	Target     string `toml:"target"` // "stdout", "stderr"
 	BufferSize int64  `toml:"buffer_size"`
+	Escape     string `toml:"escape"` // control characters as <hex>: "auto" (on a terminal), "always", "never"
 }
 
 // FileSinkOptions defines settings for a file-based sink

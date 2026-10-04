@@ -5,16 +5,31 @@ Running, monitoring, and maintaining LogWisp.
 ## Starting
 
 ```bash
-# foreground, explicit config
-lw -c /etc/logwisp/logwisp.toml
+# a filter: stdin to stdout, exits 0 at the end of input
+lw < app.log > copy.log
+tail -F app.log | lw --filter include,patterns=ERROR
 
-# no config: built-in demo pipeline (random source -> stdout)
-lw
+# a service: the file's pipelines, until SIGINT or SIGTERM
+lw -c /etc/logwisp/logwisp.toml
 ```
+
+lw exits on its own only at the end of input: once every pipeline has
+finished, a pipeline finishing when all its sources have ended. Only a console
+source ends, when stdin does; file and network sources run until a signal, and
+lw shuts down gracefully, exit 0, either way.
+Console and file sinks write what is queued before the exit; the `http` and
+`tcp` sinks do not yet flush their clients' queues ([To Do](todo.md)). See
+[CLI](cli.md#built-in-defaults).
 
 There is no built-in daemon mode. Run LogWisp in the foreground under a
 supervisor — systemd, rc.d, or a container runtime — which is where restart,
 log capture, and resource limits belong. See [Installation](installation.md).
+
+A supervisor's stdin is `/dev/null` (systemd's default, `docker run` without
+`-i`), where a console source ends at once. So a service defines its
+pipelines: a file without `[[pipelines]]` runs the built-in stdin-to-stdout
+pipeline and exits 0 at once, which `Restart=on-failure` does not restart, and
+a container configured through variables needs a `LOGWISP_SOURCE`.
 
 **systemd**
 
@@ -64,6 +79,9 @@ What reload does *not* do:
   construction and `auto_reload` watches only the configuration file, so
   rotation requires `SIGHUP`.
 
+Standard input survives a reload: one reader serves the process, so the new
+console source continues where the old one stopped, and no line is read twice.
+
 Plan reloads on a busy relay the way you would plan a restart.
 Listener bind/start failures happen after the old service stops; these can leave
 the application without working pipelines until a corrected configuration reloads.
@@ -94,8 +112,9 @@ proves itself when the pipeline is actually built.
 
 ### Status reporter
 
-Enabled by default, every 30 seconds. It logs at **DEBUG**, so it produces
-nothing unless `logging.level = "debug"` — a common surprise.
+Enabled by default with a configuration file (off without one), every 30
+seconds. It logs at **DEBUG**, so it produces nothing unless
+`logging.level = "debug"` — a common surprise.
 
 ```toml
 status_reporter = true
@@ -153,10 +172,12 @@ query it with a client certificate or a token from `lw auth token`.
 
 Each counter, where it is reported, and what a rise means:
 
-- `dropped_entries` (source): downstream cannot keep up with the source
+- `dropped_entries` (source): downstream cannot keep up with the source; the
+  console source never drops, it reads stdin slower
 - `total_dropped` (flow): the rate limit or filters are discarding entries,
   often by intent
-- `total_dropped_by_sink` (pipeline): a sink's input queue is full
+- `total_dropped_by_sink` (pipeline): a sink's input queue is full; a console
+  sink waits instead, so its entries count only when shutdown cuts the wait
 - `dropped_writes` (`tcp` and `http` sinks): a client's queue overflowed,
   because it is too slow or one burst exceeded `client_buffer_size`
 - `rejected_conns` (`tcp` sink, `tcp_chain` source), `rejected_clients`
@@ -172,7 +193,11 @@ Each counter, where it is reported, and what a rise means:
 
 ## Log Management
 
-LogWisp's own operational log:
+LogWisp's own operational log goes to stderr by default, at `info` with a
+configuration file and at `warn` without one; explicit values win. A container
+configured only through variables or flags therefore logs at `warn`: pass
+`-e LOGWISP_LOGGING_LEVEL=info`. `lw-deploy.sh` always passes `-c`, so its
+nodes log at `info`. To files:
 
 ```toml
 [logging]
@@ -252,6 +277,14 @@ freshness, raise `max_batch_count` and `max_batch_bytes` for throughput. Use
 Walk the pipeline in order and read the counters: source `total_entries` (is
 anything being produced?), flow `total_dropped` (filters or rate limit?),
 pipeline `total_dropped_by_sink` (sink backed up?), sink `total_processed`.
+
+**A pipeline stalls behind a console sink**
+
+A console sink never drops: when its output is slow (a paused terminal, a full
+pipe, a stalled log collector) its pipeline waits, and the pipeline's other
+sinks with it. Stdin is read slower; other sources queue, then drop and count
+`dropped_entries`. Where a service's stdout may stall, give it a `file` sink
+instead. A closed stdout pipe ends lw with `SIGPIPE`.
 
 **File source reads nothing**
 

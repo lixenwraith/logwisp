@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
 // The host literal picks the family, strictly: an IPv4 literal or the empty

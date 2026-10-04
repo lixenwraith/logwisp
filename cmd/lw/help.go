@@ -2,15 +2,18 @@ package main
 
 import (
 	"fmt"
-	"logwisp/internal/version"
 	"os"
+
+	"github.com/lixenwraith/logwisp/internal/version"
 )
 
 // helpText is the CLI usage reference. Scalar flags map 1:1 to TOML config paths.
 const helpText = `LogWisp %s - log collection, processing, and distribution
 
 Usage:
-  lw [options]
+  lw [options] [< input]        No file, no pipeline options: stdin to stdout,
+                                line for line, like cat; exits at end of input
+  lw -c <file> [options]        Run the file's pipelines
   lw --check [options]          Build every pipeline and plugin, report, exit
   lw help | -h | --help
   lw --version
@@ -25,10 +28,12 @@ Scalar configuration keys are settable as flags using their TOML paths:
 Common options:
   -c, --config <path>           Configuration file (default: ./logwisp.toml)
       --quiet                   Suppress console output
-      --status_reporter=<bool>  Periodic status logging (default: true)
+      --status_reporter=<bool>  Periodic status logging (default: true with
+                                a configuration file)
       --auto_reload=<bool>      Config hot reload on file change (default: false)
 
-Logging:
+Logging (lw's own log goes to stderr, at info with a configuration file and
+at warn without one):
       --logging.output=<mode>   file|stdout|stderr|split|all|none
       --logging.level=<level>   debug|info|warn|error
       --logging.file.directory=<path>
@@ -41,8 +46,16 @@ Pipelines (replace the file's pipelines; see doc/cli.md):
       --format <spec>           json|txt|raw[,key=value...]
       --rate-limit <spec>       rate=N[,burst=N,policy=drop|pass]
       --heartbeat <spec>        interval_ms=N[,include_stats=true,...]
+  A pipeline without --source reads stdin, one without --sink writes stdout.
   Keys nest with '.' (tls.cert_file=...), a repeated key makes a list, and
   '\' escapes ',' '=' '\' in values. -- ends option parsing.
+
+Examples:
+  lw < app.log > copy.log                         Copy, line for line
+  tail -F app.log | lw --filter include,patterns=ERROR,patterns=WARN
+  journalctl -f | lw --sink http,host=127.0.0.1,port=8080
+                                                  Serve stdin as a live stream
+  lw --source file,directory=/var/log/app,pattern='*.log' --format txt
 
 Environment:
   LOGWISP_<PATH>                Config path, '.' -> '_', uppercase
@@ -59,7 +72,7 @@ Signals:
   SIGHUP, SIGUSR1               Reload configuration
 
 Exit codes:
-  0  success
+  0  success, including the end of input
   1  general error
   2  configuration file not found
 `

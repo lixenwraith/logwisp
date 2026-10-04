@@ -853,3 +853,9 @@ Choose a sanitizer policy that matches the sink — `json` for JSON output,
 `txt` for files and consoles — so control characters in log data cannot break
 framing or inject terminal escapes downstream. See
 [Formatters](formatters.md).
+
+The `raw` format passes control characters through. A console sink writing to
+a terminal escapes them itself (`escape = "auto"`), so a log line cannot move
+the cursor, retitle the window, write the clipboard (OSC 52) or reorder text
+with bidi controls; pipes and files get the bytes unchanged. See
+[Sinks](sinks.md#console).

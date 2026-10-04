@@ -41,9 +41,9 @@ runtime metadata and cannot be redirected by a `config_file` key inside the file
 Top-level keys, each as type and default:
 
 - `quiet` (bool, `false`): disable all application logging and console
-  diagnostics.
-- `status_reporter` (bool, `true`): emit a status report every 30 s at DEBUG
-  level.
+  diagnostics; pipeline output still flows.
+- `status_reporter` (bool, `true` with a configuration file, `false` without):
+  emit a status report every 30 s at DEBUG level.
 - `auto_reload` (bool, `false`): watch the config file and reload pipelines on
   change.
 
@@ -56,11 +56,12 @@ Note that `status_reporter` writes at DEBUG level, so it produces nothing unless
 ## Application Logging
 
 This configures LogWisp's own operational log, not the log data it transports.
+It goes to stderr by default, so stdout carries only a console sink's data.
 
 ```toml
 [logging]
-output = "stdout"      # file | stdout | stderr | split | all | none
-level  = "info"        # debug | info | warn | error
+output = "stderr"      # file | stdout | stderr | split | all | none
+level  = "info"        # debug | info | warn | error; warn without a file
 format = "txt"         # raw | txt | json
 # sanitization = ""    # raw | json | txt | shell
 
@@ -81,7 +82,15 @@ retention_hours   = 168.0
 - `all`: files plus split console.
 - `none`: no application logging.
 
-`[logging.file]` applies only to the `file` and `all` modes.
+`[logging.file]` applies only to the `file` and `all` modes. The `stdout`,
+`split` and `all` modes mix the log into a console sink's stdout.
+
+Without a configuration file (none named, none found) lw is a command-line
+tool: `level` defaults to `warn` and `status_reporter` to `false`. Explicit
+values from the environment or flags still win. A container configured only
+through variables or flags passes `LOGWISP_LOGGING_LEVEL=info` to log as a
+service; the image does not set it, since a variable would override a mounted
+file's value.
 
 > `[logging.console].target` is accepted and validated (`stdout`, `stderr`,
 > `split`) but **not applied**. The console destination is derived from

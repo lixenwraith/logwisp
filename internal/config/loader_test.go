@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"logwisp/internal/testutil"
+	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
 func TestResolveConfigArguments(t *testing.T) {
@@ -56,9 +56,9 @@ func TestLoadPrecedenceAndDetachedSnapshots(t *testing.T) {
 		t.Fatalf("snapshot: %+v %v", first, err)
 	}
 	first.Logging.Level = "mutated"
-	first.Pipelines[0].PluginSources[0].Config["special"] = false
+	first.Pipelines[0].PluginSources[0].Config["buffer_size"] = 1
 	second, err := m.Snapshot()
-	if err != nil || second.Logging.Level != "warn" || second.Pipelines[0].PluginSources[0].Config["special"] != true {
+	if _, aliased := second.Pipelines[0].PluginSources[0].Config["buffer_size"]; err != nil || second.Logging.Level != "warn" || aliased {
 		t.Fatalf("snapshot aliases another result: %+v %v", second, err)
 	}
 	env, err := Load([]string{"-c=selected.toml"})
@@ -266,5 +266,38 @@ port = 9000
 		if err == nil || !strings.Contains(err.Error(), `"`+key+`"`) {
 			t.Errorf("unknown key %s: err = %v", key, err)
 		}
+	}
+}
+
+// A file makes lw a service, logging at info with the status reporter; without
+// one it is a command-line tool that reports warnings and errors only.
+func TestNoConfigFileMeansQuietLogging(t *testing.T) {
+	isolateConfig(t)
+	for _, c := range []struct {
+		file, level string
+		reporter    bool
+	}{{"", "warn", false}, {"[logging]\noutput = \"stderr\"\n", "info", true}} {
+		if c.file != "" {
+			testutil.WriteFile(t, "logwisp.toml", c.file)
+		}
+		m, err := Load(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := m.Snapshot()
+		m.Close()
+		if err != nil || cfg.Logging.Level != c.level || cfg.StatusReporter != c.reporter || cfg.Logging.Output != "stderr" {
+			t.Fatalf("file %q: %+v %+v %v", c.file, cfg, cfg.Logging, err)
+		}
+	}
+	t.Setenv("LOGWISP_LOGGING_LEVEL", "debug")
+	os.Remove("logwisp.toml")
+	m, err := Load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if cfg, err := m.Snapshot(); err != nil || cfg.Logging.Level != "debug" {
+		t.Fatalf("environment over the file-less default: %+v %v", cfg, err)
 	}
 }

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"logwisp/internal/chain"
-	"logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/chain"
+	"github.com/lixenwraith/logwisp/internal/config"
 
 	"github.com/lixenwraith/auth"
 )

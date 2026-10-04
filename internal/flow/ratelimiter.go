@@ -5,9 +5,9 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"logwisp/internal/config"
-	"logwisp/internal/core"
-	"logwisp/internal/tokenbucket"
+	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/tokenbucket"
 
 	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
