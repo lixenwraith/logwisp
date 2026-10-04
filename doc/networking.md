@@ -213,6 +213,9 @@ headers, and entry encoding.
   `client_ca_file` does not contain the issuer of the client certificate.
 - `certificate is not valid for any names` / SAN mismatch — the dialed `host`
   is not covered by the server certificate's SANs; set `server_name`.
+- `server key sha256//... matches no tls.pin_sha256` — the listener is not the
+  one pinned, or a self-signed listener restarted and made a new key: take the
+  pin from its startup warning, or move it to an issuer and `ca_file`.
 - `protocol version not supported` — one side is pinned to `min_version = "1.3"`
   and the other cannot negotiate it.
 - Listeners log handshake failures at WARN with the remote address (the `tcp`

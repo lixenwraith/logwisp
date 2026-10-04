@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -118,6 +119,40 @@ func (p *PKI) Leaf(t testing.TB, name, cn string, client bool) (certFile, keyFil
 		t.Fatal(err)
 	}
 	return writePEM(t, p.dir, name+".crt", "CERTIFICATE", der), writePEM(t, p.dir, name+".key", "PRIVATE KEY", keyDER)
+}
+
+// Handshake runs a TLS handshake between the two configurations over
+// loopback TCP, whose buffers let a failing side's alert go out without a
+// reader, and returns the client's error, else the server's.
+func Handshake(t testing.TB, server, client *tls.Config) error {
+	t.Helper()
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		serverErr <- tls.Server(conn, server).Handshake()
+	}()
+	conn, err := net.Dial("tcp4", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	err = tls.Client(conn, client).Handshake()
+	conn.Close()
+	if serr := <-serverErr; err == nil {
+		err = serr
+	}
+	return err
 }
 
 func writePEM(t testing.TB, dir, name, blockType string, der []byte) string {

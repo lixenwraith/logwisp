@@ -28,15 +28,7 @@ import (
 
 const reloadHint = "send SIGHUP to logwisp to apply (auto_reload does not watch the credentials file)"
 
-// authCommand is one `lw auth` subcommand: define registers its flags
-// and returns the command, which runs once they are parsed and checked.
-type authCommand struct {
-	name, synopsis, summary string
-	required                []string
-	define                  func(fs *flag.FlagSet) func(stdout, stderr io.Writer) error
-}
-
-var authCommands = []authCommand{
+var authCommands = []subcommand{
 	{"add-user", "-credentials FILE -user NAME [-password-file FILE] [-generate]",
 		"Add a user to a credentials file, or replace its password",
 		[]string{"credentials", "user"}, defineAddUser},
@@ -49,77 +41,6 @@ var authCommands = []authCommand{
 	{"stream", "-addr HOST:PORT -user NAME -password-file FILE [TLS flags]",
 		"Log in to a tcp sink and copy its stream to stdout until interrupted",
 		[]string{"addr", "user", "password-file"}, defineStream},
-}
-
-// usageError is a command-line mistake: exit status 2 rather than 1
-type usageError string
-
-func (e usageError) Error() string { return string(e) }
-
-// runAuth runs `lw auth` and returns the exit status: 0 success or
-// help, 1 failure, 2 usage error.
-func runAuth(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || slices.Contains([]string{"-h", "-help", "--help", "help"}, args[0]) {
-		printAuthUsage(stderr)
-		if len(args) == 0 {
-			return 2
-		}
-		return 0
-	}
-	i := slices.IndexFunc(authCommands, func(c authCommand) bool { return c.name == args[0] })
-	if i < 0 {
-		fmt.Fprintf(stderr, "lw auth: unknown command %q\n\n", args[0])
-		printAuthUsage(stderr)
-		return 2
-	}
-	c := authCommands[i]
-	fs := flag.NewFlagSet("lw auth "+c.name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: %s %s\n\n%s.\n\n", fs.Name(), c.synopsis, c.summary)
-		fs.PrintDefaults()
-	}
-	run := c.define(fs)
-	if err := fs.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2 // already reported by flag, with the usage
-	}
-	err := checkArgs(fs, c.required)
-	if err == nil {
-		err = run(stdout, stderr)
-	}
-	if err == nil {
-		return 0
-	}
-	fmt.Fprintf(stderr, "%s: %v\n", fs.Name(), err)
-	if _, ok := errors.AsType[usageError](err); ok {
-		fs.Usage()
-		return 2
-	}
-	return 1
-}
-
-func printAuthUsage(w io.Writer) {
-	fmt.Fprint(w, "Usage: lw auth <command> [flags]\n\n")
-	for _, c := range authCommands {
-		fmt.Fprintf(w, "  %-12s %s\n", c.name, c.summary)
-	}
-	fmt.Fprint(w, "\nRun lw auth <command> -h for its flags. Credential changes apply on SIGHUP.\n"+
-		"Exit status: 0 success, 1 failure, 2 usage error.\n")
-}
-
-func checkArgs(fs *flag.FlagSet, required []string) error {
-	if fs.NArg() > 0 {
-		return usageError(fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
-	}
-	for _, name := range required {
-		if fs.Lookup(name).Value.String() == "" {
-			return usageError("-" + name + " is required")
-		}
-	}
-	return nil
 }
 
 func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
@@ -323,6 +244,7 @@ func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 func tlsFlags(fs *flag.FlagSet) *config.TLSOptions {
 	o := &config.TLSOptions{Enabled: true}
 	fs.StringVar(&o.CAFile, "ca-file", "", "CA `file` that verifies the server (default: system roots)")
+	fs.StringVar(&o.PinSHA256, "pin-sha256", "", "sha256//BASE64 `pin` of the server key, in place of -ca-file (a self_signed listener logs it)")
 	fs.StringVar(&o.ServerName, "server-name", "", "`name` the server certificate must carry (default: the host)")
 	fs.StringVar(&o.CertFile, "cert-file", "", "client certificate `file`, for listeners with tls.client_auth")
 	fs.StringVar(&o.KeyFile, "key-file", "", "client key `file`")

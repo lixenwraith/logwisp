@@ -43,6 +43,9 @@ const (
 
 	ShutdownTimeout = 10 * time.Second
 
+	// Bounds the flush of a network sink's queues at Stop
+	SinkFlushTimeout = 2 * time.Second
+
 	ConfigReloadTimeout = 30 * time.Second
 
 	LoggerShutdownTimeout = 2 * time.Second

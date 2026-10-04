@@ -122,16 +122,7 @@ connection level, below TLS, so a refused peer costs no handshake.
   - Denied and allowed clients; per-client SCRAM budgets behind one proxy
     address.
 
-## 2. Flush network sinks at shutdown
-
-At the end of a finite input lw shuts down, and the `http` and `tcp` sinks
-disconnect their clients without writing the entries still queued for them, so
-a client can miss the last ones. On `Stop`, each sink's broker should first move
-its input queue into the client queues, then let every client writer drain its
-queue within a bound (`write_timeout_ms`) before the disconnect frame. Verify
-with a finite stdin into each sink and a connected client counting lines.
-
-## 3. Packaging: AUR, FreeBSD ports, Debian
+## 2. Packaging: AUR, FreeBSD ports, Debian
 
 The foundation exists:
 - The `lw` binary name, free in Arch (official repositories and AUR), Ubuntu

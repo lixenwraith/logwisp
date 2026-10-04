@@ -46,9 +46,12 @@ Top-level keys, each as type and default:
   emit a status report every 30 s at DEBUG level.
 - `auto_reload` (bool, `false`): watch the config file and reload pipelines on
   change.
+- `color` (string, `"auto"`): level names in color on console sinks, which may
+  set their own: `"auto"` (a terminal, `NO_COLOR` unset, `TERM` not `dumb`),
+  `"always"` or `"never"`; see the [console sink](sinks.md#console).
 
-`--version` prints version information and exits; it is not a persistent
-setting.
+`--version`, `--check` and `--dump` print and exit; they are not persistent
+settings.
 
 Note that `status_reporter` writes at DEBUG level, so it produces nothing unless
 `logging.level = "debug"`.
@@ -311,6 +314,7 @@ What a reload applies:
   - pipelines, sources, sinks
   - filters, formatters, rate limits, heartbeats
   - `status_reporter`
+  - `color`
 - Not reloaded:
   - `logging.*`: applied once at startup
   - `quiet`

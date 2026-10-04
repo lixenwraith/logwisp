@@ -26,6 +26,7 @@
 quiet = false                           # No log of lw's own; pipeline output still flows
 status_reporter = true                  # Periodic status logging (30s, DEBUG level); false without a file
 auto_reload = false                     # Watch file; read at startup (signals always reread it)
+color = "auto"                          # auto|always|never: level names on console sinks; auto on a terminal, NO_COLOR unset
 
 ###############################################################################
 ### Logging (LogWisp's internal operational logging)
@@ -93,10 +94,12 @@ name = "default"
 ### TLS (shared shape; applies to every network source and sink)
 ###
 ### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
-###   cert_file + key_file are REQUIRED; client_auth + client_ca_file enable mTLS.
+###   cert_file + key_file, self_signed, or issuer_cert_file + issuer_key_file
+###   (exactly one); client_auth + client_ca_file enable mTLS.
 ### Dialers    (tcp_chain/http_chain sinks):
-###   ca_file + server_name verify the server; cert_file + key_file present a
-###   client identity for mTLS.
+###   ca_file + server_name, or pin_sha256, verify the server; cert_file +
+###   key_file present a client identity for mTLS.
+### `lw tls ca` / `lw tls cert` make a CA and certificates.
 ###
 ### enabled = false      Master switch
 ### cert_file = ""       Local certificate
@@ -105,7 +108,15 @@ name = "default"
 ### client_ca_file = ""  Listener: CA bundle verifying client certs
 ### ca_file = ""         Dialer: CA bundle verifying the server (empty = system)
 ### server_name = ""     Dialer: SNI / name to verify (empty = configured host)
+### self_signed = false  Listener: make a self-signed certificate at startup;
+###                      it logs the pin_sha256 dialers set (changes on restart)
+### issuer_cert_file = "" Listener: make one at startup signed by this CA ...
+### issuer_key_file = ""   ... and its key (lw tls ca writes both)
+### hosts = []           Listener: names/addresses of a made certificate, beyond
+###                      host, os.Hostname(), localhost, 127.0.0.1, ::1
 ### insecure_skip_verify = false   Dialer: disable verification (never in prod)
+### pin_sha256 = ""      Dialer: sha256//BASE64 of the server key, in place of
+###                      ca_file; ';' between several
 ### min_version = "1.3"  "1.2" or "1.3". No max_version, no cipher_suites.
 ###
 ### TLS alone is a CA membership check: ANY certificate the CA signed is
@@ -257,6 +268,7 @@ type = "console"
 target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # buffer_size = 1000
 # escape = "auto"                       # auto|always|never: control characters as <hex>, auto on a terminal
+# color = "auto"                        # auto|always|never: level names in color (default: top-level color)
 
 ## File sink (rotating)
 # [[pipelines.plugin_sinks]]

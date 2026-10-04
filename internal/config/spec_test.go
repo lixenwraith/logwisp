@@ -10,9 +10,18 @@ import (
 	"github.com/lixenwraith/logwisp/internal/testutil"
 )
 
-func loadPipelines(t *testing.T, args ...string) []PipelineConfig {
+// specs pairs flags with values: specs("sink", "null") is --sink null
+func specs(pairs ...string) []Spec {
+	var out []Spec
+	for i := 0; i < len(pairs); i += 2 {
+		out = append(out, Spec{pairs[i], pairs[i+1]})
+	}
+	return out
+}
+
+func loadPipelines(t *testing.T, pairs ...string) []PipelineConfig {
 	t.Helper()
-	m, err := Load(args)
+	m, err := Load(Args{Specs: specs(pairs...)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,15 +36,14 @@ func loadPipelines(t *testing.T, args ...string) []PipelineConfig {
 func TestPipelineSpecGrammar(t *testing.T) {
 	isolateConfig(t)
 	got := loadPipelines(t,
-		"--source", `file,directory=/var/log/a\,b,pattern=*.log`,
-		`--source=file,id=app,directory=x\=y`,
-		"--source", `file,directory=c:\\logs\\`,
-		"--sink", "http,port=8080,auth.type=scram,auth.credentials_file=users.toml,tls.cert_file=c",
-		"--filter", "include,patterns=ERROR,patterns=WARN",
-		"--filter", `exclude,patterns=\d{1\,3}`,
-		"--format", `txt,timestamp_format=Jan 2\, 2006`,
-		"--pipeline", "b", "--source", "null", "--sink", "null", "--sink", "null", "--heartbeat", "interval_ms=1000",
-		"--", "--source", "random")
+		"source", `file,directory=/var/log/a\,b,pattern=*.log`,
+		"source", `file,id=app,directory=x\=y`,
+		"source", `file,directory=c:\\logs\\`,
+		"sink", "http,port=8080,auth.type=scram,auth.credentials_file=users.toml,tls.cert_file=c",
+		"filter", "include,patterns=ERROR,patterns=WARN",
+		"filter", `exclude,patterns=\d{1\,3}`,
+		"format", `txt,timestamp_format=Jan 2\, 2006`,
+		"pipeline", "b", "source", "null", "sink", "null", "sink", "null", "heartbeat", "interval_ms=1000")
 	want := []PipelineConfig{{
 		Name: "cli",
 		Flow: &FlowConfig{
@@ -67,17 +75,17 @@ func TestPipelineSpecGrammar(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("pipelines:\n got %+v\nwant %+v", got, want)
 	}
-	for want, args := range map[string][]string{
-		`--sink http,port: missing "="`:                                  {"--sink", "http,port"},
-		`--source directory=/x: missing TYPE`:                            {"--source", "directory=/x"},
-		`--source file,type=x: TYPE already sets "type"`:                 {"--source", "file,type=x"},
-		`--sink http,tls.cert_file=c: "tls" is both a value and a table`: {"--sink", "http,tls=1,tls.cert_file=c"},
-		`--sink requires a value`:                                        {"--sink="},
-		`--format txt: pipeline "cli" already has one`:                   {"--format", "json", "--format", "txt"},
-		`--rate-limit rate=1,polcy=drop: unknown key "polcy"`:            {"--rate-limit", "rate=1,polcy=drop"},
+	for want, pairs := range map[string][]string{
+		`--sink http,port: missing "="`:                                  {"sink", "http,port"},
+		`--source directory=/x: missing TYPE`:                            {"source", "directory=/x"},
+		`--source file,type=x: TYPE already sets "type"`:                 {"source", "file,type=x"},
+		`--sink http,tls.cert_file=c: "tls" is both a value and a table`: {"sink", "http,tls=1,tls.cert_file=c"},
+		`--sink requires a value`:                                        {"sink", ""},
+		`--format txt: pipeline "cli" already has one`:                   {"format", "json", "format", "txt"},
+		`--rate-limit rate=1,polcy=drop: unknown key "polcy"`:            {"rate-limit", "rate=1,polcy=drop"},
 	} {
-		if _, err := Load(args); err == nil || err.Error() != want {
-			t.Errorf("%q: err = %v, want %s", args, err, want)
+		if _, err := Load(Args{Specs: specs(pairs...)}); err == nil || err.Error() != want {
+			t.Errorf("%q: err = %v, want %s", pairs, err, want)
 		}
 	}
 }
@@ -86,7 +94,7 @@ func TestPipelineSpecGrammar(t *testing.T) {
 // must not split into several, wider entries.
 func TestSpecValueIsOneListEntry(t *testing.T) {
 	isolateConfig(t)
-	sink := loadPipelines(t, "--source", "null", "--sink",
+	sink := loadPipelines(t, "source", "null", "sink",
 		`tcp,auth.type=mtls,auth.allow_patterns=^edge-\d{1\,3}$,auth.allow=CN=a\,O=b,auth.allow=CN=c`)[0].PluginSinks[0]
 	var opts TCPSinkOptions
 	if err := Scan(sink.Config, &opts); err != nil {
@@ -115,7 +123,7 @@ func TestEnvironmentPipeline(t *testing.T) {
 	} {
 		t.Setenv(name, value)
 	}
-	m, err := Load(nil)
+	m, err := Load(Args{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +144,7 @@ func TestCommandLinePipelinesIgnoreEnvironment(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv("LOGWISP_SOURCE", "random")
 	t.Setenv("LOGWISP_SINK", "console")
-	got := loadPipelines(t, "--source", "null", "--sink", "null")
+	got := loadPipelines(t, "source", "null", "sink", "null")
 	if len(got) != 1 || len(got[0].PluginSources) != 1 || got[0].PluginSources[0].Type != "null" ||
 		len(got[0].PluginSinks) != 1 || got[0].PluginSinks[0].Type != "null" {
 		t.Fatalf("environment specs mixed into command-line pipelines: %+v", got)
@@ -147,7 +155,7 @@ func TestCommandLinePipelinesIgnoreEnvironment(t *testing.T) {
 func TestSpecPipelinesReplaceFilePipelines(t *testing.T) {
 	isolateConfig(t)
 	testutil.WriteFile(t, "file.toml", "[logging]\nlevel = \"warn\"\n[[pipelines]]\nname = \"file\"\n")
-	m, err := Load([]string{"-c", "file.toml", "--source", "null", "--sink", "null", "--status_reporter=false"})
+	m, err := Load(Args{File: "file.toml", Specs: specs("source", "null", "sink", "null"), Overrides: []string{"--status_reporter=false"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,12 +173,12 @@ func TestSpecPipelinesReplaceFilePipelines(t *testing.T) {
 // stdout, as a filter does; two pipelines cannot both read stdin.
 func TestSpecPipelinesDefaultToStdio(t *testing.T) {
 	isolateConfig(t)
-	got := loadPipelines(t, "--filter", "include,patterns=ERROR")
+	got := loadPipelines(t, "filter", "include,patterns=ERROR")
 	if p := got[0]; len(p.PluginSources) != 1 || p.PluginSources[0].Type != "console" || p.PluginSources[0].ID != "stdin" ||
 		len(p.PluginSinks) != 1 || p.PluginSinks[0].Type != "console" || p.PluginSinks[0].ID != "stdout" {
 		t.Fatalf("pipeline: %+v", p)
 	}
-	_, err := Load([]string{"--pipeline", "a", "--sink", "null", "--pipeline", "b", "--sink", "null"})
+	_, err := Load(Args{Specs: specs("pipeline", "a", "sink", "null", "pipeline", "b", "sink", "null")})
 	if err == nil || !strings.Contains(err.Error(), `console source already reads stdin in pipeline "a"`) {
 		t.Fatalf("second stdin reader: %v", err)
 	}
@@ -181,7 +189,7 @@ func TestSpecPipelinesDefaultToStdio(t *testing.T) {
 // removal fails the reload instead of keeping the removed file's values.
 func TestReloadKeepsSpecPipelines(t *testing.T) {
 	isolateConfig(t)
-	m, err := Load([]string{"--source", "random,special=true", "--sink", "null"})
+	m, err := Load(Args{Specs: specs("source", "random,special=true", "sink", "null")})
 	if err != nil {
 		t.Fatal(err)
 	}

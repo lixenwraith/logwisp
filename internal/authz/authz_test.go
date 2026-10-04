@@ -167,10 +167,13 @@ func TestNewValidation(t *testing.T) {
 	}
 
 	// The rows' bases are valid: a dialer needs TLS but not client_auth, as it
-	// pins the server's identity
+	// pins the server's identity; tls.pin_sha256 verifies in place of the chain
+	pinned := &tls.Config{InsecureSkipVerify: true, VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error { return nil }}
 	for _, o := range []*config.AuthOptions{{Type: MethodMTLS}, dialer(config.AuthOptions{})} {
-		if _, err := New(o, &tls.Config{}, RoleDialer, TCP); err != nil {
-			t.Fatalf("dialer policy %s rejected: %v", o.Type, err)
+		for _, c := range []*tls.Config{{}, pinned} {
+			if _, err := New(o, c, RoleDialer, TCP); err != nil {
+				t.Fatalf("dialer policy %s rejected: %v", o.Type, err)
+			}
 		}
 	}
 	if _, err := New(listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, RoleListener, HTTP); err != nil {

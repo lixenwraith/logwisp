@@ -26,7 +26,9 @@ nodes can filter and reformat as if the entries were local.
 
 Both chain sources can feed a single pipeline (fan-in) whose sinks then fan the
 merged stream out. `test/chain-test.sh` builds the two-independent-pipelines
-variant; `test/chain-aggregate-test.sh` builds the fan-in variant.
+variant; `test/chain-aggregate-test.sh` builds the fan-in variant. The `edge`
+and `aggregator` [presets](cli.md#presets) build an authenticated TLS link of
+either transport from a few keys.
 
 ## Node Identity
 

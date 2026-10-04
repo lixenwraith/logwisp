@@ -26,16 +26,36 @@ const (
 	expiryWindow = 30 * 24 * time.Hour
 )
 
-// Server builds the *tls.Config for listener plugins
-// (tcp/http sinks, tcp_chain/http_chain sources). Returns (nil, nil) when disabled.
-func Server(o *config.TLSOptions) (*tls.Config, error) {
+// Server builds the *tls.Config for listener plugins (tcp/http sinks,
+// tcp_chain/http_chain sources) from cert_file and key_file, or issues one on
+// the process key: self-signed or from the issuer files, for host, hosts and
+// this machine's names. Returns (nil, nil) when disabled.
+func Server(o *config.TLSOptions, host string) (*tls.Config, error) {
 	if o == nil || !o.Enabled {
 		return nil, nil
 	}
-	if o.CertFile == "" || o.KeyFile == "" {
-		return nil, fmt.Errorf("tls: cert_file and key_file are required for listeners")
+	files, issuer := o.CertFile != "" || o.KeyFile != "", o.IssuerCertFile != "" || o.IssuerKeyFile != ""
+	switch {
+	case o.PinSHA256 != "":
+		return nil, fmt.Errorf("tls: pin_sha256 applies to dialers")
+	case files && (issuer || o.SelfSigned) || issuer && o.SelfSigned:
+		return nil, fmt.Errorf("tls: set one of cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file")
+	case len(o.Hosts) > 0 && !issuer && !o.SelfSigned:
+		return nil, fmt.Errorf("tls: hosts applies to self_signed and issuer certificates")
+	case files && (o.CertFile == "" || o.KeyFile == ""):
+		return nil, fmt.Errorf("tls: cert_file and key_file must be set together")
+	case issuer && (o.IssuerCertFile == "" || o.IssuerKeyFile == ""):
+		return nil, fmt.Errorf("tls: issuer_cert_file and issuer_key_file must be set together")
+	case !files && !issuer && !o.SelfSigned:
+		return nil, fmt.Errorf("tls: listeners need cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file")
 	}
-	cert, err := tls.LoadX509KeyPair(o.CertFile, o.KeyFile)
+	var cert tls.Certificate
+	var err error
+	if files {
+		cert, err = tls.LoadX509KeyPair(o.CertFile, o.KeyFile)
+	} else {
+		cert, err = generated(o.IssuerCertFile, o.IssuerKeyFile, host, o.Hosts)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("tls: load keypair: %w", err)
 	}
@@ -64,10 +84,17 @@ func Server(o *config.TLSOptions) (*tls.Config, error) {
 // Client builds the *tls.Config for dialer plugins (tcp_chain/http_chain
 // sinks). host seeds ServerName when no override is set; Go verifies IP SANs
 // when host is an address, without its zone, which names a local interface
-// and no certificate carries. Returns (nil, nil) when disabled.
+// and no certificate carries. pin_sha256 replaces chain and name checks.
+// Returns (nil, nil) when disabled.
 func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 	if o == nil || !o.Enabled {
 		return nil, nil
+	}
+	switch {
+	case o.SelfSigned || o.IssuerCertFile != "" || o.IssuerKeyFile != "" || len(o.Hosts) > 0:
+		return nil, fmt.Errorf("tls: self_signed, issuer_cert_file, issuer_key_file and hosts apply to listeners")
+	case o.PinSHA256 != "" && (o.CAFile != "" || o.InsecureSkipVerify):
+		return nil, fmt.Errorf("tls: pin_sha256 replaces ca_file and insecure_skip_verify: set one")
 	}
 	mv, err := minVersion(o.MinVersion)
 	if err != nil {
@@ -80,6 +107,12 @@ func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 	}
 	if cfg.ServerName == "" {
 		cfg.ServerName, _, _ = strings.Cut(host, "%")
+	}
+	if o.PinSHA256 != "" {
+		if cfg.VerifyPeerCertificate, err = verifyPins(o.PinSHA256); err != nil {
+			return nil, err
+		}
+		cfg.InsecureSkipVerify = true // the pin check above replaces it
 	}
 	if o.CAFile != "" {
 		pool, err := loadPool(o.CAFile)
@@ -149,13 +182,22 @@ func LogWarnings(l *log.Logger, component, id string, o *config.TLSOptions, list
 	if o == nil || !o.Enabled {
 		return
 	}
+	if key, err := processKey(); listener && o.SelfSigned && err == nil {
+		// Without a CA, a dialer verifies this listener by its pin only
+		l.Warn("msg", "Serving a self-signed certificate; it changes when lw restarts",
+			"component", component,
+			"instance_id", id,
+			"pin_sha256", pinOfKey(key),
+			"hint", "dialers set tls.pin_sha256; for a stable identity use issuer_cert_file or cert_file")
+	}
 	var warnings []string
 	if !listener && o.InsecureSkipVerify {
 		warnings = append(warnings, "tls.insecure_skip_verify disables server verification: any peer can impersonate the server")
 	}
-	files := []struct{ key, path string }{{"cert_file", o.CertFile}, {"ca_file", o.CAFile}}
+	type file struct{ key, path string }
+	files := []file{{"cert_file", o.CertFile}, {"ca_file", o.CAFile}}
 	if listener {
-		files[1] = struct{ key, path string }{"client_ca_file", o.ClientCAFile}
+		files = []file{{"cert_file", o.CertFile}, {"client_ca_file", o.ClientCAFile}, {"issuer_cert_file", o.IssuerCertFile}}
 	}
 	now := time.Now()
 	for _, f := range files {
@@ -165,8 +207,10 @@ func LogWarnings(l *log.Logger, component, id string, o *config.TLSOptions, list
 			}
 		}
 	}
-	if w := SecretFileWarning("tls.key_file", o.KeyFile); w != "" {
-		warnings = append(warnings, w)
+	for _, key := range []file{{"tls.key_file", o.KeyFile}, {"tls.issuer_key_file", o.IssuerKeyFile}} {
+		if w := SecretFileWarning(key.key, key.path); w != "" {
+			warnings = append(warnings, w)
+		}
 	}
 	for _, w := range warnings {
 		l.Warn("msg", w, "component", component, "instance_id", id)

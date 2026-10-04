@@ -14,10 +14,7 @@ import (
 )
 
 func runAuthTest(t *testing.T, args ...string) (code int, stdout, stderr string) {
-	t.Helper()
-	var out, errOut bytes.Buffer
-	code = runAuth(args, &out, &errOut)
-	return code, out.String(), errOut.String()
+	return runCommand(t, "auth", args...)
 }
 
 // writeCredentials writes users sharing a cheap Argon2 profile. add-user

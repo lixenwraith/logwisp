@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -317,5 +318,75 @@ func TestSSEFramesEveryLineAsData(t *testing.T) {
 	want := "data: a\ndata: event: disconnect\ndata: retry: 99999999\ndata: id: x\n\n"
 	if got := rec.Body.String(); got != want {
 		t.Fatalf("framed %q, want %q", got, want)
+	}
+}
+
+// Stop writes what is queued, in the sink and per stream, then the
+// disconnect event, to a client that keeps reading, whatever another that
+// stopped reading does; Stop returns at the flush bound.
+func TestStopWritesQueuedEventsToReadingStreams(t *testing.T) {
+	const n = 2000 // of 8 KiB: more than a silent peer's socket buffers hold
+	httpSink, _ := newTestHTTPSink(t, map[string]any{"buffer_size": int64(n), "client_buffer_size": int64(64), "write_timeout_ms": int64(500)})
+	client, baseURL := serveTestHTTPSink(t, httpSink)
+	var scanners []*bufio.Scanner
+	for range 2 {
+		resp, err := client.Get(baseURL + "/stream")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(nil, 64*1024)
+		for scanner.Scan() && scanner.Text() != "event: connected" {
+		}
+		scanners = append(scanners, scanner)
+	}
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		httpSink.clientsMu.Lock()
+		registered := len(httpSink.clients)
+		httpSink.clientsMu.Unlock()
+		if registered == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("streams never registered")
+		}
+	}
+	type result struct {
+		lines      int
+		disconnect bool
+	}
+	done := make(chan result)
+	go func() {
+		var r result
+		for scanners[0].Scan() {
+			switch line := scanners[0].Text(); {
+			case strings.HasPrefix(line, "data: line "):
+				r.lines++
+			case line == "event: disconnect":
+				r.disconnect = true
+			}
+		}
+		done <- r
+	}()
+	// Held, the lock keeps the input queued until Stop has begun its flush
+	httpSink.clientsMu.Lock()
+	padding := strings.Repeat("x", 8192)
+	for i := range n {
+		httpSink.Input() <- core.TransportEvent{Payload: fmt.Appendf(nil, "line %d %s\n", i, padding)}
+	}
+	stopped := make(chan time.Duration)
+	go func() {
+		start := time.Now()
+		httpSink.Stop()
+		stopped <- time.Since(start)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	httpSink.clientsMu.Unlock()
+	if d := <-stopped; d > 1500*time.Millisecond {
+		t.Errorf("Stop took %v past a 500 ms flush bound", d)
+	}
+	if r := <-done; r.lines != n || !r.disconnect {
+		t.Fatalf("reading stream received %d of %d lines, disconnect %v", r.lines, n, r.disconnect)
 	}
 }

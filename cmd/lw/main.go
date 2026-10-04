@@ -20,19 +20,23 @@ import (
 var logger *log.Logger
 
 func main() {
-	// Before handleHelp, so `lw auth <command> -h` prints the auth usage
-	if len(os.Args) > 1 && os.Args[1] == "auth" {
-		os.Exit(runAuth(os.Args[2:], os.Stdout, os.Stderr))
+	inv, err := parseCommandLine(os.Args[1:])
+	switch {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	case inv.command != nil:
+		os.Exit(inv.command.run(inv.args, os.Stdout, os.Stderr))
+	case inv.help:
+		printHelp()
+		os.Exit(0)
 	}
 
 	// --- 1. Initial setup ---
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
 
-	// Before config parsing: the loader has no help flag
-	handleHelp(os.Args[1:])
-
-	manager, err := config.Load(os.Args[1:])
+	manager, err := config.Load(inv.load)
 	if err != nil {
 		if errors.Is(err, config.ErrConfigNotFound) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -56,6 +60,9 @@ func main() {
 	}
 	if cfg.Check {
 		os.Exit(checkConfig(cfg))
+	}
+	if cfg.Dump {
+		os.Exit(dumpConfig(cfg, os.Stdout))
 	}
 
 	if err := initializeLogger(cfg); err != nil {

@@ -16,11 +16,28 @@ type specKind struct {
 	flag  string
 	typed bool // SPEC starts with TYPE
 	many  bool // repeatable within a pipeline; the environment adds _1.._N
+	first bool // starts its pipeline, and names it by TYPE unless --pipeline did
 	apply func(p *PipelineConfig, typ string, opts map[string]any) error
 }
 
 var specKinds = []specKind{
-	{"source", true, true, func(p *PipelineConfig, typ string, opts map[string]any) error {
+	{"preset", true, false, true, func(p *PipelineConfig, typ string, opts map[string]any) error {
+		values := map[string][]string{}
+		for k, v := range opts {
+			switch v := v.(type) {
+			case string:
+				values[k] = []string{v}
+			case []any: // a repeated key
+				for _, e := range v {
+					values[k] = append(values[k], e.(string))
+				}
+			default:
+				return fmt.Errorf("preset keys do not nest: %q", k)
+			}
+		}
+		return applyPreset(p, typ, values)
+	}},
+	{"source", true, true, false, func(p *PipelineConfig, typ string, opts map[string]any) error {
 		ids := make([]string, len(p.PluginSources))
 		for i, s := range p.PluginSources {
 			ids[i] = s.ID
@@ -29,7 +46,7 @@ var specKinds = []specKind{
 		p.PluginSources = append(p.PluginSources, PluginSourceConfig{ID: id, Type: typ, Config: opts})
 		return err
 	}},
-	{"sink", true, true, func(p *PipelineConfig, typ string, opts map[string]any) error {
+	{"sink", true, true, false, func(p *PipelineConfig, typ string, opts map[string]any) error {
 		ids := make([]string, len(p.PluginSinks))
 		for i, s := range p.PluginSinks {
 			ids[i] = s.ID
@@ -38,24 +55,24 @@ var specKinds = []specKind{
 		p.PluginSinks = append(p.PluginSinks, PluginSinkConfig{ID: id, Type: typ, Config: opts})
 		return err
 	}},
-	{"filter", true, true, func(p *PipelineConfig, typ string, opts map[string]any) error {
+	{"filter", true, true, false, func(p *PipelineConfig, typ string, opts map[string]any) error {
 		opts["type"] = typ
 		f := FilterConfig{}
 		err := Scan(opts, &f)
 		p.Flow.Filters = append(p.Flow.Filters, f)
 		return err
 	}},
-	{"format", true, false, func(p *PipelineConfig, typ string, opts map[string]any) error {
+	{"format", true, false, false, func(p *PipelineConfig, typ string, opts map[string]any) error {
 		opts["type"] = typ
 		p.Flow.Format = &FormatConfig{}
 		return Scan(opts, p.Flow.Format)
 	}},
 	// Naming a stage turns it on: the file defaults (pass, disabled) would not.
-	{"rate-limit", false, false, func(p *PipelineConfig, _ string, opts map[string]any) error {
+	{"rate-limit", false, false, false, func(p *PipelineConfig, _ string, opts map[string]any) error {
 		p.Flow.RateLimit = &RateLimitConfig{Policy: "drop"}
 		return Scan(opts, p.Flow.RateLimit)
 	}},
-	{"heartbeat", false, false, func(p *PipelineConfig, _ string, opts map[string]any) error {
+	{"heartbeat", false, false, false, func(p *PipelineConfig, _ string, opts map[string]any) error {
 		p.Flow.Heartbeat = &HeartbeatConfig{Enabled: true}
 		return Scan(opts, p.Flow.Heartbeat)
 	}},
@@ -68,33 +85,36 @@ type pipelineSpec struct {
 	value string
 }
 
-// takePipelineSpecs consumes the pipeline flags, which lixenwraith/config
-// would report as unrecognized.
-func takePipelineSpecs(args []string) (specs []pipelineSpec, rest []string, err error) {
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--" {
-			return specs, append(rest, args[i:]...), nil
-		}
-		name, value, inline := strings.Cut(args[i], "=")
+// Spec is one pipeline flag: its name without dashes, and its value.
+type Spec struct{ Flag, Value string }
+
+// SpecFlags names the pipeline flags, for the command-line parser.
+func SpecFlags() []string {
+	flags := []string{"pipeline"}
+	for _, k := range specKinds {
+		flags = append(flags, k.flag)
+	}
+	return flags
+}
+
+// cliSpecs looks up the kind of each command-line spec.
+func cliSpecs(in []Spec) ([]pipelineSpec, error) {
+	var specs []pipelineSpec
+	for _, s := range in {
 		var kind *specKind
-		if name != "--pipeline" {
-			k := slices.IndexFunc(specKinds, func(k specKind) bool { return "--"+k.flag == name })
+		if s.Flag != "pipeline" {
+			k := slices.IndexFunc(specKinds, func(k specKind) bool { return k.flag == s.Flag })
 			if k < 0 {
-				rest = append(rest, args[i])
-				continue
+				return nil, fmt.Errorf("--%s is no pipeline flag", s.Flag)
 			}
 			kind = &specKinds[k]
 		}
-		if !inline && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-			i++
-			value = args[i]
+		if s.Value == "" {
+			return nil, fmt.Errorf("--%s requires a value", s.Flag)
 		}
-		if value == "" {
-			return nil, nil, fmt.Errorf("%s requires a value", name)
-		}
-		specs = append(specs, pipelineSpec{name, kind, value})
+		specs = append(specs, pipelineSpec{"--" + s.Flag, kind, s.Value})
 	}
-	return specs, rest, nil
+	return specs, nil
 }
 
 // envPipelineSpecs reads the one-pipeline environment form. An empty variable
@@ -131,46 +151,56 @@ func envPipelineSpecs() []pipelineSpec {
 }
 
 // buildPipelines turns specs, in order, into pipelines; specs before the first
-// --pipeline go to one named "cli". A pipeline without a source reads stdin,
-// one without a sink writes stdout. Every call returns fresh maps.
+// --pipeline go to one named "cli". Every call returns fresh maps.
 func buildPipelines(specs []pipelineSpec) ([]PipelineConfig, error) {
 	var pipelines []PipelineConfig
 	var seen map[*specKind]bool
 	for _, s := range specs {
-		if s.kind == nil || pipelines == nil {
-			name := "cli"
-			if s.kind == nil {
-				name = s.value
-			}
-			pipelines = append(pipelines, PipelineConfig{Name: name, Flow: &FlowConfig{}})
+		if s.kind == nil {
+			pipelines = append(pipelines, PipelineConfig{Name: s.value, Flow: &FlowConfig{}})
 			seen = map[*specKind]bool{}
-			if s.kind == nil {
-				continue
-			}
+			continue
 		}
-		p := &pipelines[len(pipelines)-1]
-		if seen[s.kind] && !s.kind.many {
-			return nil, fmt.Errorf("%s %s: pipeline %q already has one", s.name, s.value, p.Name)
-		}
-		seen[s.kind] = true
 		typ, opts, err := parseSpec(s.value, s.kind.typed)
 		if err != nil {
 			return nil, fmt.Errorf("%s %w", s.name, err)
 		}
+		if pipelines == nil {
+			name := "cli"
+			if s.kind.first {
+				name = typ
+			}
+			pipelines = append(pipelines, PipelineConfig{Name: name, Flow: &FlowConfig{}})
+			seen = map[*specKind]bool{}
+		}
+		p := &pipelines[len(pipelines)-1]
+		switch {
+		case seen[s.kind] && !s.kind.many:
+			return nil, fmt.Errorf("%s %s: pipeline %q already has one", s.name, s.value, p.Name)
+		case s.kind.first && len(seen) > 0:
+			return nil, fmt.Errorf("%s %s: must start its pipeline", s.name, s.value)
+		}
+		seen[s.kind] = true
 		if err := s.kind.apply(p, typ, opts); err != nil {
 			return nil, fmt.Errorf("%s %s: %w", s.name, s.value, err)
 		}
 	}
 	for i := range pipelines {
-		pipe := pipeDefault(pipelines[i].Name)
-		if len(pipelines[i].PluginSources) == 0 {
-			pipelines[i].PluginSources = pipe.PluginSources
-		}
-		if len(pipelines[i].PluginSinks) == 0 {
-			pipelines[i].PluginSinks = pipe.PluginSinks
-		}
+		useStdio(&pipelines[i])
 	}
 	return pipelines, nil
+}
+
+// useStdio makes a pipeline without a source read stdin, and one without a
+// sink write stdout, as a filter does.
+func useStdio(p *PipelineConfig) {
+	pipe := pipeDefault(p.Name)
+	if len(p.PluginSources) == 0 {
+		p.PluginSources = pipe.PluginSources
+	}
+	if len(p.PluginSinks) == 0 {
+		p.PluginSinks = pipe.PluginSinks
+	}
 }
 
 // parseSpec reads [TYPE,]key=value,...: dotted keys nest, a repeated key makes

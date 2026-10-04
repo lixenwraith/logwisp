@@ -35,3 +35,27 @@ type SinkStats struct {
 	LastProcessed     time.Time
 	Details           map[string]any
 }
+
+// FlushBound is how long a network sink's Stop gives its clients to take
+// what is queued: write_timeout_ms, at most core.SinkFlushTimeout, which a
+// reload also waits out for a client that stopped reading.
+func FlushBound(writeTimeout time.Duration) time.Duration {
+	if writeTimeout > 0 && writeTimeout < core.SinkFlushTimeout {
+		return writeTimeout
+	}
+	return core.SinkFlushTimeout
+}
+
+// Drain takes the payloads queued in input without waiting: a network sink's
+// last events, which each client then writes on its own.
+func Drain(input <-chan core.TransportEvent) [][]byte {
+	var tail [][]byte
+	for {
+		select {
+		case event := <-input:
+			tail = append(tail, event.Payload)
+		default:
+			return tail
+		}
+	}
+}

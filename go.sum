@@ -2,10 +2,14 @@ github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63Y
 github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
 github.com/lixenwraith/auth v0.0.0-20261002191639-3ed0e995807c h1:zwpVa85g267vo13UCzCao4lfVgUPaU79CmxPW9OdF8w=
 github.com/lixenwraith/auth v0.0.0-20261002191639-3ed0e995807c/go.mod h1:411JUqnbQgy9jgoFV+fH91TfVUEfzYA4dyPv7f4c264=
+github.com/lixenwraith/color v0.0.0-20261004042426-912b93708f95 h1:64BAixbU3RAsDacvCDgxMKKddPuMxL0h2KKsqsG9iWU=
+github.com/lixenwraith/color v0.0.0-20261004042426-912b93708f95/go.mod h1:p02MsAGqlmZu3sc6BPYCKmaedF+lqBoijnuu5cOrYeo=
 github.com/lixenwraith/config v0.2.2 h1:X+l3Tf8Rbk49cipYBJU7/pfdw5wDwD4hRxtFH7rZgOc=
 github.com/lixenwraith/config v0.2.2/go.mod h1:yfJQwKS+/6Dg70GIoHeYc0eYztOPETpqe6nUIbakcyg=
 github.com/lixenwraith/log v0.1.11 h1:dKWLnaR8dhXxj4l/aU5XZiFIsr8geaJQbOf8m7SiKhU=
 github.com/lixenwraith/log v0.1.11/go.mod h1:EE8i5nSAW2yZBTytKuhdgehmgzrby6kW1k5DyH1SvBg=
+github.com/lixenwraith/terminal v0.0.0-20261004045005-5932e53ea549 h1:bHTXM5Cb/GUmO3DzmEcj8fg1THlHDkG6m5am8UvDjlk=
+github.com/lixenwraith/terminal v0.0.0-20261004045005-5932e53ea549/go.mod h1:C0xs6U03AryazSXmparj1P6KzOoD9Lc1af2SWVLzn7g=
 github.com/lixenwraith/toml v0.1.3 h1:mhnNVLNogdaqjGd3eC4rV9ZqY3j1Sv+DK1erZ+SPFeI=
 github.com/lixenwraith/toml v0.1.3/go.mod h1:itcT/Vt5mwmX9KVGCMsWZr6vbU/JgZ24wV/I0J5cMt0=
 golang.org/x/crypto v0.57.0 h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=

@@ -12,6 +12,8 @@ require (
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/lixenwraith/color v0.0.0-20261004042426-912b93708f95 // indirect
+	github.com/lixenwraith/terminal v0.0.0-20261004045005-5932e53ea549 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 )

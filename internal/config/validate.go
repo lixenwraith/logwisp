@@ -34,6 +34,10 @@ func ValidateConfig(cfg *Config) error {
 		names[p.Name] = struct{}{}
 	}
 
+	if err := lconfig.OneOf("auto", "always", "never")(cfg.Color); err != nil {
+		return fmt.Errorf("color: %w", err)
+	}
+
 	if err := validateLogConfig(cfg.Logging); err != nil {
 		return fmt.Errorf("logging: %w", err)
 	}

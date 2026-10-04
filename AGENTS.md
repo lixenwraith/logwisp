@@ -76,7 +76,12 @@ change touches.
 - Plugin options decode through `config.Scan`, never `lconfig.ScanMap`: unknown
   keys must fail at any depth. Set defaults on the options struct before the
   call; `TestEveryPluginRejectsUnknownKeys` covers every registered plugin.
-- Network security has two seams: `tlsx` (TLS configs, startup warnings) and
+- `cmd/lw/cli.go` owns the command line: lw's own flags, and the commands
+  table whose groups (`auth`, `tls`, `preset`) share one flag mechanism;
+  `config.Load` takes the parsed `config.Args`. Presets are rows of one table
+  in `internal/config/preset.go`.
+- Network security has two seams: `tlsx` (TLS configs, certificates made at
+  startup or by `lw tls`, pins, startup warnings) and
   `authz`. Listeners admit only through `Admit`/`AuthorizeRequest`, dialers
   through `Greet`/`Prepare`; `Authorize` refuses under scram, so a plugin gated
   on it alone fails closed. Nil policies are valid: keep call sites branch-free.
