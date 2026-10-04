@@ -301,3 +301,21 @@ func TestNoConfigFileMeansQuietLogging(t *testing.T) {
 		t.Fatalf("environment over the file-less default: %+v %v", cfg, err)
 	}
 }
+
+// A string in the file is one list entry: split at its comma, an exclude
+// pattern such as password=\S{8,64} would become two that match nothing
+func TestFileStringIsOneListEntry(t *testing.T) {
+	isolateConfig(t)
+	testutil.WriteFile(t, "logwisp.toml", "[[pipelines]]\nname = \"p\"\n"+
+		"[[pipelines.plugin_sources]]\nid = \"in\"\ntype = \"null\"\n[[pipelines.plugin_sinks]]\nid = \"out\"\ntype = \"null\"\n"+
+		"[[pipelines.flow.filters]]\ntype = \"exclude\"\npatterns = \"password=\\\\S{8,64}\"\n")
+	m, err := Load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	cfg, err := m.Snapshot()
+	if err != nil || !reflect.DeepEqual(cfg.Pipelines[0].Flow.Filters[0].Patterns, []string{`password=\S{8,64}`}) {
+		t.Fatalf("patterns: %v %v", cfg.Pipelines[0].Flow.Filters, err)
+	}
+}
