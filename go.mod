@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/lixenwraith/auth v0.0.0-20261002191639-3ed0e995807c
-	github.com/lixenwraith/config v0.2.1
+	github.com/lixenwraith/config v0.2.2-0.20261004020843-30f7de2dab69
 	github.com/lixenwraith/log v0.1.11
 	github.com/lixenwraith/toml v0.0.0-20261001212158-cede215365c0
 	golang.org/x/term v0.46.0

@@ -26,6 +26,16 @@ configure it, and — equally important — what it does not yet do.
   [Startup Warnings](#startup-warnings).
 - Unknown configuration keys rejected: a typo in `tls`, `auth` or a table path
   fails startup.
+- Configuration input hardened (lixenwraith/config v0.2.2, reviewed with
+  adversarial tests and fuzzing like `auth`):
+  - a string in the file is one list entry, so a filter pattern holding a
+    comma is not split into patterns that match nothing;
+  - the file is opened without blocking, so a FIFO swapped in for it cannot
+    hang the watcher or a `SIGHUP` reload;
+  - a permission change on the file is reported once and does not stop
+    auto-reload;
+  - conversion errors name the key, never the value, so a secret placed in
+    the wrong key does not reach the log.
 
 **Not implemented:**
 

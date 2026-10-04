@@ -131,34 +131,12 @@ its input queue into the client queues, then let every client writer drain its
 queue within a bound (`write_timeout_ms`) before the disconnect frame. Verify
 with a finite stdin into each sink and a connected client counting lines.
 
-## 3. Hardening review of `lixenwraith/config` and `lixenwraith/toml`
+## 3. Bump `lixenwraith/toml`
 
-Both parse untrusted-shaped input (config files, environment, command line)
-and were not reviewed with the auth work. Review them as `auth` was reviewed:
-adversarial lenses, reproduction before belief, a fix per confirmed finding in
-the library repository, then a dependency bump here.
-
-- toml parser:
-  - Limits on nesting depth, key count, string and array length, and number
-    sizes.
-  - Behaviour on invalid UTF-8, duplicate keys and tables, dotted-key and
-    inline-table redefinition.
-  - Fuzz targets (`go test -fuzz`) seeded with the TOML test suite.
-- config:
-  - The weakly typed decoder: string-to-number overflow, duration and size
-    parsing, the comma split into slices.
-  - `maxValueDepth` and `MaxValueSize`, environment and CLI precedence, and
-    unknown-key reporting.
-- Files:
-  - `PreventPathTraversal`, symlink handling and the file-size cap.
-  - The watcher: polling, debounce, a file replaced by rename or symlink swap,
-    TOCTOU between stat and read.
-- Errors: values must never echo secrets (a misplaced password in a config
-  value reported back in an error).
-- Deliverables:
-  - Findings per library.
-  - Fuzz targets committed in the library repositories.
-  - A note in this repository's security.md once done.
+Its hardening commits (a table budget, TOML 1.1 escapes, control characters
+refused outside strings, bounded errors that never print a value) wait to merge
+in that repository. Then bump it here and drop this item; security.md's library
+note already covers it.
 
 ## 4. Packaging: AUR, FreeBSD ports, Debian
 
