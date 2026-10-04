@@ -117,6 +117,9 @@ func main() {
 		logger.Info("msg", "Shutdown complete")
 	}()
 
+	// Closed when every pipeline's input ended (stdin); nil while none runs
+	done := svc.Done()
+
 	reload := func(fromDisk bool) {
 		var next *config.Config
 		var err error
@@ -135,8 +138,12 @@ func main() {
 			return
 		}
 		newSvc, newCfg, newStatusCancel, err := handleReload(ctx, next, svc, statusReporterCancel)
-		if err == nil {
+		switch {
+		case err == nil:
 			svc, cfg, statusReporterCancel = newSvc, newCfg, newStatusCancel
+			done = svc.Done()
+		case errors.Is(err, errServiceStopped):
+			done = nil // the stopped service's pipelines did not reach the end of input
 		}
 	}
 
@@ -163,7 +170,7 @@ func main() {
 				reload(false)
 			}
 
-		case <-svc.Done():
+		case <-done:
 			logger.Info("msg", "Every pipeline finished: its input ended")
 			return
 

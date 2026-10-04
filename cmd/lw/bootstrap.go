@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -48,6 +49,10 @@ func bootstrapInitial(ctx context.Context, cfg *config.Config) (*service.Service
 	return svc, statusCancel, nil
 }
 
+// errServiceStopped is a reload that failed after the old service stopped:
+// no pipeline runs until a later reload succeeds.
+var errServiceStopped = errors.New("old service stopped, new one failed to start")
+
 // handleReload orchestrates the entire hot-reload process including status reporter lifecycle
 func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Service, statusCancel context.CancelFunc) (*service.Service, *config.Config, context.CancelFunc, error) {
 	logger.Info("msg", "Starting configuration hot reload")
@@ -78,7 +83,7 @@ func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Se
 	if err := newService.Start(); err != nil {
 		newService.Shutdown()
 		logger.Error("msg", "Failed to start new service pipelines after reload. The application may be in a non-functional state.", "error", err)
-		return nil, nil, nil, fmt.Errorf("failed to start new service: %w", err)
+		return nil, nil, nil, fmt.Errorf("%w: %w", errServiceStopped, err)
 	}
 
 	// Manage status reporter lifecycle

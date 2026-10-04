@@ -61,7 +61,12 @@ check "--filter keeps matching lines" "$(is "$(printf 'x INFO\ny ERROR\n' | lw b
 check "control bytes reach a pipe unchanged" "$(is "$(printf 'a\033[31mb\n' | lw bare | od -An -tx1 | tr -d ' ')" 611b5b33316d620a)"
 check "escape=always writes them as <hex>" "$(is "$(printf 'a\033[31mb\n' | lw bare --sink console,escape=always)" 'a<1b>[31mb')"
 
-# 9. a configuration file makes lw a service: info on stderr, data on stdout
+# 9. at the end of input the file sink writes its queue before lw exits
+seq 1 5000 | lw bare --sink "file,directory=$RUN/fsink,name=out,buffer_size=10000"
+n=$(cat "$RUN"/fsink/out*.log 2>/dev/null | wc -l)
+check "file sink holds all 5000 lines at exit ($n)" "$((n == 5000))"
+
+# 10. a configuration file makes lw a service: info on stderr, data on stdout
 out=$(printf 'x\n' | lw withfile 2>"$LOG/withfile.err")
 check "with a file: data still on stdout" "$(is "$out" x)"
 check "with a file: info logging on stderr" "$(grep -q 'LogWisp starting' "$LOG/withfile.err" && echo 1 || echo 0)"

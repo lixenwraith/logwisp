@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -236,9 +235,10 @@ func (cs *ConsoleSink) write(event core.TransportEvent) {
 	cs.lastProcessed.Store(time.Now())
 }
 
-// escapeControls writes what a terminal would act on (C0 and C1 controls,
-// DEL, format characters such as bidi overrides, invalid UTF-8) as <hex>,
-// keeping tabs and the final newline: a log line cannot drive the terminal.
+// escapeControls writes what a terminal would act on or reorder (C0 and C1
+// controls but tab, DEL, bidi controls, line separators, invalid UTF-8) as
+// <hex>, keeping the final newline: a log line cannot drive the terminal.
+// Other invisible characters stay: emoji and Indic scripts need ZWJ.
 func escapeControls(p []byte) []byte {
 	body, newline := bytes.CutSuffix(p, []byte{'\n'})
 	if printableASCII(body) {
@@ -247,7 +247,7 @@ func escapeControls(p []byte) []byte {
 	out := make([]byte, 0, len(p)+16)
 	for len(body) > 0 {
 		r, n := utf8.DecodeRune(body)
-		if r == '\t' || strconv.IsPrint(r) && (r != utf8.RuneError || n > 1) {
+		if !terminalControl(r, n) {
 			out = append(out, body[:n]...)
 		} else {
 			out = append(out, '<')
@@ -260,6 +260,19 @@ func escapeControls(p []byte) []byte {
 		out = append(out, '\n')
 	}
 	return out
+}
+
+func terminalControl(r rune, size int) bool {
+	switch {
+	case r == utf8.RuneError && size == 1:
+		return true
+	case r < 0x20:
+		return r != '\t'
+	case r >= 0x7f && r <= 0x9f, r == 0x061c, r == 0x200e, r == 0x200f,
+		r >= 0x2028 && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+		return true
+	}
+	return false
 }
 
 func printableASCII(b []byte) bool {

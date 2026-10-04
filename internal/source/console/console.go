@@ -272,6 +272,11 @@ func (s *ConsoleSource) publish(entry core.LogEntry) bool {
 
 	for _, ch := range s.subscribers {
 		select {
+		case ch <- entry: // first: a select with both ready picks at random
+			continue
+		default:
+		}
+		select {
 		case ch <- entry:
 		case <-s.done:
 			return false

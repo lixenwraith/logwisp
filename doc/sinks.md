@@ -45,9 +45,11 @@ Payloads are written as the formatter made them, one record per line.
 
 - Escaping: a log line must not drive the terminal that shows it (cursor and
   screen control, title changes, OSC 52 clipboard writes, bidi spoofing). C0
-  and C1 controls other than tab, DEL, Unicode format characters and invalid
-  UTF-8 are escaped. `never` keeps an application's own ANSI colours; under
-  `auto`, pipes and files get the bytes unchanged.
+  and C1 controls other than tab, DEL, the bidi controls, the line and
+  paragraph separators and invalid UTF-8 are escaped; other invisible
+  characters, such as the joiners emoji and Indic scripts need, are kept.
+  `never` keeps an application's own ANSI colours; under `auto`, pipes and
+  files get the bytes unchanged.
 - Backpressure: the sink never drops. When its output is slow (a slow reader,
   a paused terminal, a stalled log collector) the pipeline waits for it, with
   its other sinks. A service whose stdout may stall writes to a `file` sink
