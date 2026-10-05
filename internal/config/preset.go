@@ -97,6 +97,7 @@ var presets = []Preset{
 			default:
 				return fmt.Errorf("viewer %q (valid: true, false)", v["viewer"])
 			}
+			sink["replay_lines"] = int64(1000) // a browser opened late sees the recent entries
 			p.Flow.Format = &FormatConfig{Type: v["format"]}
 			p.PluginSinks = append(p.PluginSinks, PluginSinkConfig{ID: "http", Type: "http", Config: sink})
 			return nil

@@ -1,0 +1,12 @@
+<svg viewBox="1 1 98 98" xmlns="http://www.w3.org/2000/svg">
+  <!-- The wisps of logwisp-logo.svg, broadened to read at 16 px -->
+  <defs>
+    <path id="wisp" d="M50,50 C50,37 59.2,27 71,25.8 C83.5,24.6 92,33.5 97.2,48
+      A3.6,3.6 0 0 1 90.6,51.8 C86.6,46.2 80.6,43.6 74,43.9 C65.5,44.3 57,46.6 50,50 Z"/>
+  </defs>
+  <use href="#wisp" fill="#E0409A"/>
+  <use href="#wisp" fill="#D4640A" transform="rotate(72 50 50)"/>
+  <use href="#wisp" fill="#169B58" transform="rotate(144 50 50)"/>
+  <use href="#wisp" fill="#0891B2" transform="rotate(216 50 50)"/>
+  <use href="#wisp" fill="#8E5CF0" transform="rotate(288 50 50)"/>
+</svg>
