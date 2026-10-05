@@ -17,10 +17,10 @@ lw exits on its own only at the end of input: once every pipeline has
 finished, a pipeline finishing when all its sources have ended. Only a console
 source ends, when stdin does; file and network sources run until a signal, and
 lw shuts down gracefully, exit 0, either way.
-Every sink writes what is queued before the exit; the `http` and `tcp` sinks
-give each client `write_timeout_ms`, at most 2 s, to take it. A reload stops
-the old sinks the same way, so a client that stopped reading delays it by
-that much. See
+Every sink writes what is queued before the exit; a network sink gives its
+clients or its downstream its `write_timeout_ms` (`request_timeout_ms` for
+`http_chain`), at most 2 s, to take it. A reload stops the old sinks the same
+way, so a stalled client or downstream delays it by that much. See
 [CLI](cli.md#built-in-defaults).
 
 There is no built-in daemon mode. Run LogWisp in the foreground under a

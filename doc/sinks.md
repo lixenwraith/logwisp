@@ -391,6 +391,9 @@ Options, each as type and default:
   exponential backoff plus ±20 % jitter between attempts. The delay keeps
   growing until a link outlives `backoff_min_ms`, so a source that drops every
   link right after accepting it is not retried in a tight loop.
+- On shutdown (a reload too) the sink delivers what is queued, connecting
+  first if it must, within `write_timeout_ms`, at most 2 s; then the link
+  closes and what is left is lost.
 - A source never writes once a link is up, so the sink watches each link: a
   line from the source is a refusal (a sink without `scram` facing a `scram`
   source), logged at WARN as `Chain link refused`; EOF ends the link at once
@@ -477,7 +480,9 @@ Options, each as type and default:
 - Redirects are never followed; a `3xx` is permanent too. Following one would
   resend the batch wherever the response points, plaintext `http` included.
 - HTTP/2 is off by design; batched NDJSON POSTs gain nothing from it.
-- On shutdown a single best-effort flush of the pending batch is attempted.
+- On shutdown (a reload too) the sink delivers what is queued and batched
+  within `request_timeout_ms`, at most 2 s; each batch still undelivered then
+  is dropped and logged at WARN.
 
 **Statistics**: `target`, `node`, `tls`, `auth`, `batches_sent`,
 `request_errors`, `dropped_batches`, `synthesized`; under `scram` also
