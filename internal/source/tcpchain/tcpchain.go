@@ -366,6 +366,9 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		"type": "tcp_chain",
 		"node": connNode,
 	}
+	if peer := netacl.PeerAddr(conn); peer != "" {
+		meta["peer_addr"] = peer
+	}
 	if tlsState != nil {
 		meta["tls"] = true
 		if cn := tlsx.PeerCN(*tlsState); cn != "" {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -344,6 +345,26 @@ func TestProxyModeRefusesDirectPeers(t *testing.T) {
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s %s from an untrusted peer: %d, want 403", target.method, target.path, resp.StatusCode)
 		}
+	}
+}
+
+// A PROXY header names the client a stream's session records; the proxy
+// stays as its peer_addr
+func TestProxiedStreamSessionKeepsTheProxy(t *testing.T) {
+	h, manager := newTestHTTPSink(t, map[string]any{"acl": map[string]any{"proxy_protocol": "required", "proxy_from": []any{"127.0.0.1"}}})
+	_, baseURL := serveTestHTTPSink(t, h)
+	conn, err := net.Dial("tcp4", strings.TrimPrefix(baseURL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	fmt.Fprint(conn, "PROXY TCP4 198.51.100.7 127.0.0.1 40000 8081\r\nGET /stream HTTP/1.1\r\nHost: logwisp\r\n\r\n")
+	if _, err := http.ReadResponse(bufio.NewReader(conn), nil); err != nil { // its body is the stream
+		t.Fatal(err)
+	}
+	sessions := manager.GetActiveSessions()
+	if len(sessions) != 1 || sessions[0].RemoteAddr != "198.51.100.7:40000" || sessions[0].Metadata["peer_addr"] != conn.LocalAddr().String() {
+		t.Fatalf("sessions %+v, proxy %s", sessions, conn.LocalAddr())
 	}
 }
 

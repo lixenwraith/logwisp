@@ -312,4 +312,7 @@ or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
 - `deploy-test.sh`: the configurations `deploy/lw-deploy.sh` writes, deployed
   and checked; ports 15871-15879
 - `acl-test.sh`: each listener admitting or refusing peers by address before
-  TLS, with clients from 127.0.0.1 and 127.0.0.2; ports 15881-15889
+  TLS, with clients from 127.0.0.1 and 127.0.0.2, then by the client a PROXY
+  header names behind a stub proxy on 127.0.0.11-13 (and nginx `stream` on
+  127.0.0.14 when installed), per-client login throttling included; ports
+  15881-15889; skips (exit 77) where 127.0.0.2 cannot be bound
