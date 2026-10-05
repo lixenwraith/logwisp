@@ -11,8 +11,10 @@ import (
 
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 
 	"github.com/lixenwraith/auth"
+	"github.com/lixenwraith/log"
 )
 
 // forwarding is the proxy's half of every request: the client and https
@@ -76,6 +78,34 @@ func TestProxyModeTrustsOnlyItsProxies(t *testing.T) {
 		case tc.want != "" && (err != nil || got != tc.want):
 			t.Errorf("%s: client %q, %v; want %s", tc.name, got, err, tc.want)
 		}
+	}
+}
+
+// In proxy mode a forwarded client passes the acl rules too, as the proxy
+// passed them as the peer; a refusal counts in acl_denied
+func TestForwardedClientIsRefusedByTheRules(t *testing.T) {
+	f := newFixture(t)
+	acl, err := netacl.New(&config.ACLOptions{Allow: []string{"127.0.0.1", "203.0.113.0/24"}, Deny: []string{"203.0.113.66"}},
+		"127.0.0.1", netacl.HTTPProxied, log.NewLogger(), "test", "acl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := New(&config.AuthOptions{Type: MethodSCRAM, CredentialsFile: f.creds, TrustedProxies: []string{"127.0.0.1"}},
+		nil, acl, RoleListener, HTTP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for client, admitted := range map[string]bool{"203.0.113.7": true, "203.0.113.66": false, "198.51.100.1": false} {
+		r := httptest.NewRequest(http.MethodGet, "/status", nil)
+		r.RemoteAddr = "127.0.0.1:5000"
+		r.Header.Set("X-Forwarded-For", client)
+		r.Header.Set("X-Forwarded-Proto", "https")
+		if _, err := l.ClientAddr(r); (err == nil) != admitted {
+			t.Errorf("forwarded %s: %v", client, err)
+		}
+	}
+	if denied, _ := acl.Refused(); denied != 2 {
+		t.Fatalf("acl_denied %d, want 2", denied)
 	}
 }
 

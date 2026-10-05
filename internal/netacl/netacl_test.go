@@ -7,8 +7,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,7 +24,7 @@ import (
 
 func mustNew(t *testing.T, host string, o config.ACLOptions) *Policy {
 	t.Helper()
-	p, err := New(&o, host, log.NewLogger(), "test", "acl")
+	p, err := New(&o, host, HTTP, log.NewLogger(), "test", "acl")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +60,8 @@ func TestDenyWinsThenAllowListAdmitsOnlyItsEntries(t *testing.T) {
 // Entries are of the family core.Network gives the listener's host, as its
 // sockets carry no other: IPv4 on an IPv4 listener, IPv6 on an IPv6 one,
 // either behind a hostname; never IPv4-mapped, never with a zone. Behind
-// proxy_from, which keeps that family, deny takes both: the proxy names either.
+// proxy_from, which keeps that family, or trusted_proxies, deny takes both: the
+// proxy names either.
 func TestEntriesFollowTheListenerFamily(t *testing.T) {
 	for _, c := range []struct {
 		host, from, entry string
@@ -78,9 +82,12 @@ func TestEntriesFollowTheListenerFamily(t *testing.T) {
 		if c.from != "" {
 			o.ProxyProtocol, o.ProxyFrom = "required", []string{c.from}
 		}
-		if _, err := New(o, c.host, log.NewLogger(), "test", "acl"); (err == nil) != c.ok {
+		if _, err := New(o, c.host, HTTP, log.NewLogger(), "test", "acl"); (err == nil) != c.ok {
 			t.Errorf("%s behind %q on %q: %v", c.entry, c.from, c.host, err)
 		}
+	}
+	if _, err := New(&config.ACLOptions{Deny: []string{"2001:db8::/32"}}, "127.0.0.1", HTTPProxied, log.NewLogger(), "test", "acl"); err != nil {
+		t.Errorf("IPv6 entry behind trusted_proxies: %v", err)
 	}
 }
 
@@ -124,7 +131,7 @@ func TestProxyProtocolAndProxyFromComeTogether(t *testing.T) {
 		{"always", nil, false},
 		{"optional", []string{"127.0.0.1"}, true},
 	} {
-		_, err := New(&config.ACLOptions{ProxyProtocol: c.mode, ProxyFrom: c.from}, "127.0.0.1", log.NewLogger(), "test", "acl")
+		_, err := New(&config.ACLOptions{ProxyProtocol: c.mode, ProxyFrom: c.from}, "127.0.0.1", HTTP, log.NewLogger(), "test", "acl")
 		if (err == nil) != c.ok {
 			t.Errorf("proxy_protocol %q with proxy_from %v: %v", c.mode, c.from, err)
 		}
@@ -217,7 +224,7 @@ func TestHeaderFromUnlistedPeerIsRefused(t *testing.T) {
 			t.Errorf("%q from an unlisted peer: read %q, %v", c.send, b, err)
 		}
 	}
-	if n := p.Denied(); n != 2 {
+	if n := p.denied.Load(); n != 2 {
 		t.Fatalf("acl_denied = %d", n)
 	}
 }
@@ -273,11 +280,11 @@ func TestSlowHeaderHoldsOnlyItsConnection(t *testing.T) {
 	slow := dial("127.0.0.1")
 	slow.Write([]byte("PROXY TCP4 198"))
 	dial("192.0.2.9")
-	if got := accept(t, ln).RemoteAddr().String(); !strings.HasPrefix(got, "192.0.2.9:") || p.Denied() != 0 {
-		t.Fatalf("Accept returned %s after %d refusals", got, p.Denied())
+	if got := accept(t, ln).RemoteAddr().String(); !strings.HasPrefix(got, "192.0.2.9:") || p.denied.Load() != 0 {
+		t.Fatalf("Accept returned %s after %d refusals", got, p.denied.Load())
 	}
 	closed(t, slow)
-	if n := p.Denied(); n != 1 {
+	if n := p.denied.Load(); n != 1 {
 		t.Fatalf("acl_denied = %d", n)
 	}
 }
@@ -292,6 +299,151 @@ func TestCloseReleasesHeadersInFlight(t *testing.T) {
 	closed(t, slow)
 	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Accept after Close: %v", err)
+	}
+}
+
+// A client holds at most max_connections_per_client at once, counted by the
+// address it ends with: behind proxy_from, the one its header names. Closing
+// a connection returns its slot; refusals count in acl_limited.
+func TestConnectionsPerClientAreCapped(t *testing.T) {
+	p := mustNew(t, "127.0.0.1", config.ACLOptions{MaxConnectionsPerClient: 2, ProxyProtocol: "optional", ProxyFrom: []string{"127.0.0.1"}})
+	ln, dial := listening(t, p)
+	dial("192.0.2.1")
+	first := accept(t, ln)
+	dial("192.0.2.1")
+	accept(t, ln)
+	third := dial("127.0.0.1")
+	third.Write([]byte("PROXY TCP4 192.0.2.1 192.0.2.9 40000 443\r\n"))
+	closed(t, third)
+	go dial("127.0.0.1").Write([]byte("PROXY TCP4 192.0.2.2 192.0.2.9 40000 443\r\n"))
+	accept(t, ln)
+	first.Close()
+	dial("192.0.2.1")
+	accept(t, ln)
+	if denied, limited := p.Refused(); denied != 0 || limited != 1 {
+		t.Fatalf("acl_denied %d, acl_limited %d", denied, limited)
+	}
+}
+
+// A capped connection still half-closes, as net/http does before dropping one
+// with a body unread
+func TestCappedConnectionHalfCloses(t *testing.T) {
+	inner, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := mustNew(t, "127.0.0.1", config.ACLOptions{MaxConnectionsPerClient: 1}).Listener(inner)
+	t.Cleanup(func() { ln.Close() })
+	peer, err := net.Dial("tcp4", inner.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { peer.Close() })
+	if cw, ok := accept(t, ln).(interface{ CloseWrite() error }); !ok || cw.CloseWrite() != nil {
+		t.Fatal("the accepted connection cannot half-close")
+	}
+	closed(t, peer)
+}
+
+// requests_per_second_per_client answers 429 to a client past its budget, a
+// second's worth and at least one request, counted by the address client
+// names, with the seconds until its next; refusals count in acl_limited
+func TestRequestsPerClientAreRateLimited(t *testing.T) {
+	p := mustNew(t, "127.0.0.1", config.ACLOptions{RequestsPerSecondPerClient: 0.5})
+	h := p.Requests(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		func(r *http.Request) string { return r.Header.Get("X-Client") })
+	get := func(client string) *httptest.ResponseRecorder {
+		w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Header.Set("X-Client", client)
+		h.ServeHTTP(w, r)
+		return w
+	}
+	for i, want := range []int{http.StatusOK, http.StatusTooManyRequests} {
+		if got := get("192.0.2.1"); got.Code != want {
+			t.Fatalf("request %d: %d, want %d", i, got.Code, want)
+		}
+	}
+	if got := get("192.0.2.1").Header().Get("Retry-After"); got != "2" {
+		t.Fatalf("Retry-After %q, want 2", got)
+	}
+	if got := get("192.0.2.2:5000"); got.Code != http.StatusOK {
+		t.Fatalf("another client: %d", got.Code)
+	}
+	if _, limited := p.Refused(); limited != 2 {
+		t.Fatalf("acl_limited %d", limited)
+	}
+}
+
+// Limits count an IPv6 client by its /64, which one host holds whole, and a
+// link-local one per link; an IPv4-mapped client counts as IPv4
+func TestKeyGroupsOneHostsAddresses(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{"2001:db8::1", "2001:db8::2", true},
+		{"2001:db8::1", "2001:db8:0:1::1", false},
+		{"fe80::1%eth0", "fe80::2%eth0", true},
+		{"fe80::1%eth0", "fe80::1%eth1", false},
+		{"::ffff:192.0.2.1", "192.0.2.1", true},
+		{"192.0.2.1", "192.0.2.2", false},
+	} {
+		a, b := Key(netip.MustParseAddr(c.a)), Key(netip.MustParseAddr(c.b))
+		if (a == b) != c.same {
+			t.Errorf("%s keys %q, %s keys %q", c.a, a, c.b, b)
+		}
+	}
+}
+
+// Refunded attempts cost nothing and released ones keep their cost; slots are
+// capped from the moment they are taken, so concurrent attempts cannot all
+// pass; a full table refuses new clients, and the sweep frees clients whose
+// holds expired or whose bucket is full again.
+func TestTableBounds(t *testing.T) {
+	tb := NewTable(10, 1, 4)
+	for i := range 20 {
+		if !tb.Take("10.0.0.1") {
+			t.Fatalf("refunded attempt %d refused", i)
+		}
+		tb.Hold("10.0.0.1", strconv.Itoa(i), time.Now().Add(time.Minute))
+		tb.Done("10.0.0.1", strconv.Itoa(i))
+		tb.Refund("10.0.0.1")
+	}
+	for i := range 4 {
+		if !tb.Take("10.0.0.2") {
+			t.Fatalf("slot %d refused", i)
+		}
+	}
+	if tb.Take("10.0.0.2") {
+		t.Fatal("an attempt beyond the slots was admitted before any hold")
+	}
+	tb.Release("10.0.0.2")
+	if !tb.Take("10.0.0.2") {
+		t.Fatal("a released slot still counts")
+	}
+	for range 10 {
+		tb.Take("10.0.0.3")
+		tb.Release("10.0.0.3")
+	}
+	if tb.Take("10.0.0.3") {
+		t.Fatal("releasing its slots refilled a client's bucket")
+	}
+	for i := len(tb.clients); i < maxClients; i++ {
+		tb.clients[netip.AddrFrom4([4]byte{10, 1, byte(i >> 8), byte(i)}).String()] = &client{
+			seen: time.Now(), held: map[string]time.Time{"abandoned": time.Now().Add(time.Second)},
+		}
+	}
+	if tb.Take("192.0.2.1") {
+		t.Fatal("a full table admitted a new client")
+	}
+	tb.sweep(time.Now().Add(2 * tb.idle))
+	if len(tb.clients) != 1 { // 10.0.0.2 still holds its slots
+		t.Fatalf("%d clients left after their holds expired, want 1", len(tb.clients))
+	}
+	rate := NewTable(1, 1, 0)
+	rate.Take("10.0.0.4")
+	if rate.sweep(time.Now().Add(1100 * time.Millisecond)); len(rate.clients) != 0 {
+		t.Fatal("a client outlived the refill of its bucket")
 	}
 }
 

@@ -66,7 +66,7 @@ func TestPeerIdentityModes(t *testing.T) {
 
 func TestNewDisabled(t *testing.T) {
 	for _, o := range []*config.AuthOptions{nil, {}, {Type: MethodNone}} {
-		p, err := New(o, nil, RoleListener, TCP)
+		p, err := New(o, nil, nil, RoleListener, TCP)
 		if err != nil {
 			t.Fatalf("New(%+v) error: %v", o, err)
 		}
@@ -160,7 +160,7 @@ func TestNewValidation(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := New(tc.auth, tc.tls, tc.role, tc.transport); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := New(tc.auth, tc.tls, nil, tc.role, tc.transport); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error %v, want one naming %q", err, tc.want)
 			}
 		})
@@ -171,16 +171,16 @@ func TestNewValidation(t *testing.T) {
 	pinned := &tls.Config{InsecureSkipVerify: true, VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error { return nil }}
 	for _, o := range []*config.AuthOptions{{Type: MethodMTLS}, dialer(config.AuthOptions{})} {
 		for _, c := range []*tls.Config{{}, pinned} {
-			if _, err := New(o, c, RoleDialer, TCP); err != nil {
+			if _, err := New(o, c, nil, RoleDialer, TCP); err != nil {
 				t.Fatalf("dialer policy %s rejected: %v", o.Type, err)
 			}
 		}
 	}
-	if _, err := New(listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, RoleListener, HTTP); err != nil {
+	if _, err := New(listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, nil, RoleListener, HTTP); err != nil {
 		t.Fatalf("scram listener rejected: %v", err)
 	}
 	// Behind proxies TLS ends at the proxy, so the hop may be plaintext
-	if _, err := New(listener(config.AuthOptions{TrustedProxies: proxies}), nil, RoleListener, HTTP); err != nil {
+	if _, err := New(listener(config.AuthOptions{TrustedProxies: proxies}), nil, nil, RoleListener, HTTP); err != nil {
 		t.Fatalf("proxy-mode listener rejected: %v", err)
 	}
 }
@@ -190,7 +190,7 @@ func TestAuthorizeMatching(t *testing.T) {
 		Type:          MethodMTLS,
 		Allow:         []string{"edge-01", " edge-02 "},
 		AllowPatterns: []string{`^relay-\d{2}$`},
-	}, mtlsListenerTLS(), RoleListener, TCP)
+	}, mtlsListenerTLS(), nil, RoleListener, TCP)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestAuthorizeMatching(t *testing.T) {
 // Empty allow and allow_patterns admits any CA-vouched identity, but still
 // records it and still refuses a certificate with no usable identity field
 func TestAuthorizeUnrestricted(t *testing.T) {
-	p, err := New(&config.AuthOptions{Type: MethodMTLS}, mtlsListenerTLS(), RoleListener, TCP)
+	p, err := New(&config.AuthOptions{Type: MethodMTLS}, mtlsListenerTLS(), nil, RoleListener, TCP)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAuthorizeUnrestricted(t *testing.T) {
 
 func TestResolveNodeBindings(t *testing.T) {
 	newChain := func(binding string) *Policy {
-		p, err := New(&config.AuthOptions{Type: MethodMTLS, NodeBinding: binding}, mtlsListenerTLS(), RoleChainListener, TCP)
+		p, err := New(&config.AuthOptions{Type: MethodMTLS, NodeBinding: binding}, mtlsListenerTLS(), nil, RoleChainListener, TCP)
 		if err != nil {
 			t.Fatalf("New(%q): %v", binding, err)
 		}
@@ -332,7 +332,7 @@ func TestIdentityApply(t *testing.T) {
 
 func TestVerifyConnectionPinsServer(t *testing.T) {
 	p, err := New(&config.AuthOptions{Type: MethodMTLS, Allow: []string{"relay.internal"}},
-		&tls.Config{}, RoleDialer, TCP)
+		&tls.Config{}, nil, RoleDialer, TCP)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

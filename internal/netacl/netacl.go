@@ -1,8 +1,8 @@
 // Package netacl is the address seam of the network listeners, beside tlsx
 // and authz: a Policy reads the PROXY header of the proxies it trusts, then
-// refuses a peer by its client's address, before TLS or a byte of the
-// protocol is read. New returns nil when nothing is set, and every method
-// tolerates a nil receiver.
+// refuses a peer by its client's address, or past its client's limits, before
+// TLS or a byte of the protocol is read. New returns nil when nothing is set,
+// and every method tolerates a nil receiver.
 package netacl
 
 import (
@@ -12,7 +12,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"net"
+	"net/http"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -29,7 +31,7 @@ import (
 )
 
 const (
-	// warnEvery spaces the WARNs reporting refused peers; acl_denied counts all
+	// warnEvery spaces the WARNs reporting refusals; acl_denied and acl_limited count all
 	warnEvery = time.Minute
 	v1Max     = 107  // the longest PROXY v1 line, CRLF included
 	v2Max     = 2048 // the longest PROXY v2 address block, TLVs included
@@ -46,10 +48,22 @@ var (
 		netip.MustParsePrefix("fe80::/10"), netip.MustParsePrefix("::1/128"),
 	}
 	errScreened = errors.New("PROXY header from a peer outside proxy_from")
+	// ErrDenied marks a refusal by the rules, which the Policy has reported
+	ErrDenied = errors.New("refused by acl")
 	// v2Families holds the family bytes v2 defines, each with the address
 	// bytes taken under PROXY: TCP over IPv4 and IPv6 name the client, the
 	// rest keep the socket address
 	v2Families = map[byte]int{0x00: 0, 0x11: 12, 0x12: 0, 0x21: 36, 0x22: 0, 0x31: 0, 0x32: 0}
+)
+
+// Kind is what a listener serves, which decides the limits it takes and whose
+// addresses its rules judge
+type Kind int
+
+const (
+	TCP         Kind = iota
+	HTTP             // takes requests_per_second_per_client
+	HTTPProxied      // HTTP behind trusted_proxies: rules judge each forwarded client too
 )
 
 // Policy is the compiled form of config.ACLOptions for one listener
@@ -57,23 +71,25 @@ type Policy struct {
 	allow, deny, proxyFrom []netip.Prefix
 	mode                   string        // proxy_protocol, when proxy_from is set
 	headerWait             time.Duration // for a proxy's header: tlsx.HandshakeTimeout
+	conns, requests        *Table        // max_connections_per_client, requests_per_second_per_client
 	logger                 *log.Logger
 	component, id          string
 
-	denied, headers atomic.Uint64
-	epoch           time.Time    // a monotonic base: a stepped clock neither mutes nor floods the WARN
-	nextWarn        atomic.Int64 // nanoseconds since epoch
+	denied, limited, headers atomic.Uint64
+	epoch                    time.Time    // a monotonic base: a stepped clock neither mutes nor floods the WARN
+	nextWarn                 atomic.Int64 // nanoseconds since epoch
 }
 
-// New compiles the rules of a listener on host and warns of what they leave
-// open. Entries are of the family core.Network gives host, as one the sockets
-// never carry is a mistake; behind proxy_from, allow and deny take both, as
-// the proxy names clients of either.
-func New(o *config.ACLOptions, host string, l *log.Logger, component, id string) (*Policy, error) {
+// New compiles the rules of a kind of listener on host, and warns of what they
+// leave open. Entries are of the family core.Network gives host, as one the
+// sockets never carry is a mistake; behind a proxy, allow and deny take both,
+// as it names clients of either.
+func New(o *config.ACLOptions, host string, kind Kind, l *log.Logger, component, id string) (*Policy, error) {
 	if o == nil {
 		return nil, nil
 	}
 	proxied := o.ProxyProtocol == "optional" || o.ProxyProtocol == "required"
+	rps := o.RequestsPerSecondPerClient
 	switch {
 	case !proxied && o.ProxyProtocol != "" && o.ProxyProtocol != "off":
 		return nil, fmt.Errorf("acl: proxy_protocol %q is none of off, optional and required", o.ProxyProtocol)
@@ -81,7 +97,15 @@ func New(o *config.ACLOptions, host string, l *log.Logger, component, id string)
 		return nil, fmt.Errorf("acl: proxy_protocol %s needs proxy_from, the proxies that may send the header", o.ProxyProtocol)
 	case !proxied && len(o.ProxyFrom) > 0:
 		return nil, errors.New("acl: proxy_from needs proxy_protocol optional or required")
-	case len(o.Allow)+len(o.Deny)+len(o.ProxyFrom) == 0:
+	case o.MaxConnectionsPerClient < 0:
+		return nil, fmt.Errorf("acl: max_connections_per_client %d is negative", o.MaxConnectionsPerClient)
+	case !(rps >= 0) || math.IsInf(rps, 0):
+		return nil, fmt.Errorf("acl: requests_per_second_per_client %v is not a rate", rps)
+	case rps > 0 && kind == TCP:
+		return nil, errors.New("acl: requests_per_second_per_client applies only to HTTP listeners")
+	case o.MaxConnectionsPerClient > 0 && kind == HTTPProxied:
+		return nil, errors.New("acl: max_connections_per_client counts connections, behind trusted_proxies the proxy's; cap clients at the proxy")
+	case len(o.Allow)+len(o.Deny)+len(o.ProxyFrom) == 0 && o.MaxConnectionsPerClient == 0 && rps == 0:
 		return nil, nil
 	}
 	network, err := core.Network(host)
@@ -92,7 +116,7 @@ func New(o *config.ACLOptions, host string, l *log.Logger, component, id string)
 	compile := func(key, network string, entries []string) ([]netip.Prefix, error) {
 		var rules []netip.Prefix
 		for _, e := range entries {
-			prefix, err := parse(e, network)
+			prefix, err := Parse(e, network)
 			if err != nil {
 				return nil, fmt.Errorf("acl: %s entry %q: %w", key, e, err)
 			}
@@ -107,7 +131,7 @@ func New(o *config.ACLOptions, host string, l *log.Logger, component, id string)
 	if p.proxyFrom, err = compile("proxy_from", network, o.ProxyFrom); err != nil {
 		return nil, err
 	}
-	if proxied {
+	if proxied || kind == HTTPProxied {
 		network = "tcp"
 	}
 	if p.allow, err = compile("allow", network, o.Allow); err != nil {
@@ -116,11 +140,18 @@ func New(o *config.ACLOptions, host string, l *log.Logger, component, id string)
 	if p.deny, err = compile("deny", network, o.Deny); err != nil {
 		return nil, err
 	}
+	if o.MaxConnectionsPerClient > 0 {
+		p.conns = NewTable(0, 0, int(o.MaxConnectionsPerClient))
+	}
+	if rps > 0 {
+		p.requests = NewTable(max(rps, 1), rps, 0) // a second's worth, at least one
+	}
 	p.logStartup(host, widened)
 	return p, nil
 }
 
-func parse(entry, network string) (netip.Prefix, error) {
+// Parse reads an address or CIDR of network's family ("tcp": either)
+func Parse(entry, network string) (netip.Prefix, error) {
 	entry = strings.TrimSpace(entry)
 	prefix, err := netip.ParsePrefix(entry)
 	if err != nil {
@@ -137,6 +168,15 @@ func parse(entry, network string) (netip.Prefix, error) {
 		return netip.Prefix{}, fmt.Errorf("not of the listener's family (%s)", network)
 	}
 	return prefix, nil
+}
+
+// ParseHost reads an address with or without a port, an IPv4-mapped one as IPv4
+func ParseHost(s string) (netip.Addr, bool) {
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return ap.Addr().Unmap(), true
+	}
+	addr, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"))
+	return addr.Unmap(), err == nil
 }
 
 func (p *Policy) logStartup(host string, widened []string) {
@@ -281,10 +321,10 @@ func (l *listener) proxied(c net.Conn) {
 	pc := &conn{Conn: c, r: br}
 	switch {
 	case err != nil:
-		l.p.refuse(c, "PROXY header: "+err.Error())
+		l.p.refuse(c, &l.p.denied, "PROXY header: "+err.Error())
 		return
 	case !found && l.p.mode == "required":
-		l.p.refuse(c, "no PROXY header")
+		l.p.refuse(c, &l.p.denied, "no PROXY header")
 		return
 	case found:
 		l.p.headers.Add(1)
@@ -295,11 +335,26 @@ func (l *listener) proxied(c net.Conn) {
 	l.admit(pc)
 }
 
-// admit hands c to Accept if the rules admit the address it ends with
+// admit hands c to Accept if the rules admit the address it ends with, and
+// that client has a connection to spare, which closing c returns
 func (l *listener) admit(c net.Conn) {
-	if !l.p.admits(addrOf(c)) {
-		l.p.refuse(c, "address rules")
+	addr := addrOf(c)
+	if !l.p.admits(addr) {
+		l.p.refuse(c, &l.p.denied, "address rules")
 		return
+	}
+	if l.p.conns != nil {
+		key := Key(addr)
+		if !l.p.conns.Take(key) {
+			l.p.refuse(c, &l.p.limited, "max_connections_per_client")
+			return
+		}
+		pc, ok := c.(*conn)
+		if !ok {
+			pc = &conn{Conn: c}
+		}
+		pc.release = func() { l.p.conns.Release(key) }
+		c = pc
 	}
 	l.deliver(c, nil)
 }
@@ -316,36 +371,80 @@ func (l *listener) deliver(c net.Conn, err error) bool {
 	}
 }
 
-// refuse closes c, counts it and WARNs at most once per warnEvery
-func (p *Policy) refuse(c net.Conn, reason string) {
-	n := p.denied.Add(1) // first: a peer that sees the close sees the count
+// refuse closes c and counts it, first: a peer that sees the close sees the
+// count
+func (p *Policy) refuse(c net.Conn, count *atomic.Uint64, reason string) {
+	count.Add(1)
 	c.Close()
+	p.report("Connection", fmt.Sprint(c.RemoteAddr()), PeerAddr(c), reason)
+}
+
+// report WARNs of a refusal at most once per warnEvery; the counts keep the rest
+func (p *Policy) report(what, client, peer, reason string) {
 	now, next := int64(time.Since(p.epoch)), p.nextWarn.Load()
 	if now < next || !p.nextWarn.CompareAndSwap(next, now+int64(warnEvery)) {
 		return
 	}
-	fields := []any{"msg", "Connection refused by acl; more within a minute are only counted",
+	fields := []any{"msg", what + " refused by acl; more within a minute are only counted",
 		"component", p.component,
 		"instance_id", p.id,
-		"remote_addr", fmt.Sprint(c.RemoteAddr()),
+		"remote_addr", client,
 		"reason", reason,
-		"acl_denied", n}
-	if peer := PeerAddr(c); peer != "" {
+		"acl_denied", p.denied.Load(),
+		"acl_limited", p.limited.Load()}
+	if peer != "" {
 		fields = append(fields, "peer_addr", peer)
 	}
 	p.logger.Warn(fields...)
 }
 
+// Requests answers 429 to a client past requests_per_second_per_client.
+// client names it in a request (nil: the socket peer); a nil Policy, or one
+// without the limit, returns next.
+func (p *Policy) Requests(next http.Handler, client func(*http.Request) string) http.Handler {
+	if p == nil || p.requests == nil {
+		return next
+	}
+	if client == nil {
+		client = func(r *http.Request) string { return r.RemoteAddr }
+	}
+	retry := strconv.FormatFloat(math.Ceil(1/p.requests.rate), 'f', 0, 64) // until a request's token is back
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		addr, _ := ParseHost(client(r))
+		if !p.requests.Take(Key(addr)) {
+			p.limited.Add(1)
+			p.report("Request", client(r), ContextPeerAddr(r.Context()), "requests_per_second_per_client")
+			w.Header().Set("Retry-After", retry)
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Forwarded applies the rules to a client an L7 proxy, peer, forwarded, the
+// proxy having passed them at connect; a refusal counts in acl_denied
+func (p *Policy) Forwarded(client netip.Addr, peer string) error {
+	if p == nil || p.admits(client) {
+		return nil
+	}
+	p.denied.Add(1)
+	p.report("Request", client.String(), peer, "address rules")
+	return fmt.Errorf("forwarded client %s %w", client, ErrDenied)
+}
+
 // conn is read through the buffer its first bytes went to: past a PROXY
 // header, whose client it reports, or under a screen refusing one from a peer
-// outside proxy_from at the first Read
+// outside proxy_from at the first Read. Closing it releases its client's slot.
 type conn struct {
 	net.Conn
-	r      *bufio.Reader
-	client net.Addr // nil keeps the socket's
-	screen *Policy
-	once   sync.Once
-	err    error
+	r       *bufio.Reader // nil: read the socket
+	client  net.Addr      // nil keeps the socket's
+	screen  *Policy
+	release func() // nil without max_connections_per_client
+	once    sync.Once
+	closed  sync.Once
+	err     error
 }
 
 func (c *conn) Read(b []byte) (int, error) {
@@ -355,13 +454,32 @@ func (c *conn) Read(b []byte) (int, error) {
 		}
 		if v, _ := signature(c.r); v != 0 {
 			c.err = errScreened
-			c.screen.refuse(c, errScreened.Error())
+			c.screen.refuse(c, &c.screen.denied, errScreened.Error())
 		}
 	})
-	if c.err != nil {
+	switch {
+	case c.err != nil:
 		return 0, c.err
+	case c.r == nil:
+		return c.Conn.Read(b)
 	}
 	return c.r.Read(b)
+}
+
+func (c *conn) Close() error {
+	if c.release != nil {
+		c.closed.Do(c.release)
+	}
+	return c.Conn.Close()
+}
+
+// CloseWrite keeps the half-close net/http sends before dropping a connection
+// with a body unread, lest the peer get a reset instead of the answer
+func (c *conn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errors.ErrUnsupported
 }
 
 func (c *conn) RemoteAddr() net.Addr {
@@ -511,14 +629,21 @@ func (p *Policy) Describe() string {
 	if len(p.proxyFrom) > 0 {
 		s += fmt.Sprintf(" proxy_protocol=%s proxy_from=%d", p.mode, len(p.proxyFrom))
 	}
+	if p.conns != nil {
+		s += fmt.Sprintf(" max_connections_per_client=%d", p.conns.slots)
+	}
+	if p.requests != nil {
+		s += fmt.Sprintf(" requests_per_second_per_client=%g", p.requests.rate)
+	}
 	return s
 }
 
-func (p *Policy) Denied() uint64 {
+// Refused counts the refusals by the rules and by the per-client limits
+func (p *Policy) Refused() (denied, limited uint64) {
 	if p == nil {
-		return 0
+		return 0, 0
 	}
-	return p.denied.Load()
+	return p.denied.Load(), p.limited.Load()
 }
 
 // Stats reports the policy for a plugin's stats details, merged in with
@@ -527,5 +652,6 @@ func (p *Policy) Stats() map[string]any {
 	if p == nil {
 		return nil
 	}
-	return map[string]any{"acl": p.Describe(), "acl_denied": p.denied.Load(), "acl_proxy_headers": p.headers.Load()}
+	return map[string]any{"acl": p.Describe(), "acl_denied": p.denied.Load(), "acl_limited": p.limited.Load(),
+		"acl_proxy_headers": p.headers.Load()}
 }

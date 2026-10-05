@@ -118,11 +118,11 @@ func NewHTTPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleChainListener, authz.HTTP)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.HTTP, logger, "http_chain_source", id)
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, logger, "http_chain_source", id)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, authz.RoleChainListener, authz.HTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -192,8 +192,8 @@ func (s *HTTPChainSource) Start() error {
 
 	mux := http.NewServeMux()
 	// Method-scoped pattern: mux answers 405 with Allow header on non-POST
-	mux.HandleFunc(http.MethodPost+" "+s.config.IngestPath, s.handleIngest)
-	// Answers 404 unless the policy is scram
+	mux.Handle(http.MethodPost+" "+s.config.IngestPath, s.acl.Requests(http.HandlerFunc(s.handleIngest), nil))
+	// Answers 404 unless the policy is scram, whose throttling limits it
 	mux.HandleFunc(http.MethodPost+" "+chain.AuthPath, s.handleAuth)
 
 	s.server = &http.Server{

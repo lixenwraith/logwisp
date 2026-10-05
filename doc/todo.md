@@ -4,45 +4,7 @@ Planned work, in order of priority. Each item names what to build, how it fits
 the existing seams, and how to verify it. Finished items move to the design doc
 they belong to.
 
-## 1. Network access control (ACL)
-
-The seam exists: `internal/netacl` wraps each listener's socket before TLS,
-reads the PROXY header of the L4 proxies `proxy_from` lists, and the `acl`
-block's `allow` and `deny` refuse the client by address
-([Security](security.md#the-acl-block)). Every limit except SCRAM throttling
-is still global.
-
-### 1.1 Per-client limits
-
-- Generalize the SCRAM limiter in `internal/authz/scram.go` (token bucket per
-  key, bounded table that fails closed, idle sweep, IPv6 per /64 via
-  `throttleKey`) into the shared per-key limiter. One mechanism (AGENTS.md):
-  SCRAM throttling then uses it too.
-- Keys in the `acl` block:
-  - `max_connections_per_client` on every listener (concurrent connections per
-    client), applied by the netacl listener after the rules.
-  - `requests_per_second_per_client` on HTTP listeners (ingest, stream and
-    status requests).
-- A full table refuses new clients and counts them in `acl_limited`, beside
-  `acl_denied` and `acl_proxy_headers`.
-- Later: per-identity limits once a peer is authenticated (the mtls plan's
-  deferred item 2), keyed by identity instead of address.
-
-### 1.2 Address rules for forwarded clients
-
-- In HTTP proxy mode, `X-Forwarded-For` is applied by `authz.ClientAddr` after
-  the connection-level decision, so rules for forwarded HTTP clients belong in
-  a second, request-level check there, reusing the compiled `netacl` rules.
-  `authz.parseProxies` then takes netacl's address-or-CIDR parsing too.
-
-### 1.3 Verification
-
-- Go tests, one per rule: the per-client connection cap; the request rate; the
-  limiter table failing closed; a forwarded client refused by the rules.
-- `test/acl-test.sh` adds per-client connection caps, behind its stub proxy
-  too.
-
-## 2. Packaging: AUR, FreeBSD ports, Debian
+## 1. Packaging: AUR, FreeBSD ports, Debian
 
 The foundation exists:
 - The `lw` binary name, free in Arch (official repositories and AUR), Ubuntu
@@ -99,9 +61,9 @@ identity, and both skeletons download the tagged source.
 6. A packaging CI job: build the AUR package in an Arch container and the port
    in a FreeBSD VM, run `lw --version` and `make image-check`.
 
-## 3. Follow-ups
+## 2. Follow-ups
 
-Smaller items found along the way; each is independent of the ACL.
+Smaller items found along the way, each independent of the others.
 
 1. A late browser sees no backlog: the `http` sink keeps none, so the viewer
    shows entries from when it connects. A bounded replay (a `replay_lines`

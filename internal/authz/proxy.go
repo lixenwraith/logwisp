@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lixenwraith/logwisp/internal/netacl"
+
 	"github.com/lixenwraith/auth"
 )
 
@@ -32,15 +34,9 @@ type proxyMode struct {
 func parseProxies(entries []string) (*proxyMode, error) {
 	m := &proxyMode{}
 	for _, e := range entries {
-		e = strings.TrimSpace(e)
-		prefix, err := netip.ParsePrefix(e)
+		prefix, err := netacl.Parse(e, "tcp")
 		if err != nil {
-			addr, aerr := netip.ParseAddr(e)
-			if aerr != nil {
-				return nil, fmt.Errorf("auth: trusted_proxies entry %q is neither an address nor a CIDR", e)
-			}
-			addr = addr.Unmap()
-			prefix = netip.PrefixFrom(addr, addr.BitLen())
+			return nil, fmt.Errorf("auth: trusted_proxies entry %q: %w", e, err)
 		}
 		m.trusted = append(m.trusted, prefix.Masked())
 	}
@@ -51,15 +47,6 @@ func (m *proxyMode) trusts(addr netip.Addr) bool {
 	return slices.ContainsFunc(m.trusted, func(p netip.Prefix) bool { return p.Contains(addr) })
 }
 
-// parseHop reads a forwarded or peer address, with or without a port
-func parseHop(s string) (netip.Addr, bool) {
-	if ap, err := netip.ParseAddrPort(s); err == nil {
-		return ap.Addr().Unmap(), true
-	}
-	addr, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"))
-	return addr.Unmap(), err == nil
-}
-
 // exposedHop reports a plaintext hop from a proxy that may be on another host
 func (m *proxyMode) exposedHop() bool {
 	return m.plaintext && slices.ContainsFunc(m.trusted, func(p netip.Prefix) bool { return !p.Addr().IsLoopback() })
@@ -68,25 +55,25 @@ func (m *proxyMode) exposedHop() bool {
 // client is the rightmost X-Forwarded-For hop that is not a trusted proxy:
 // hops to its left come from the client and prove nothing. When every hop is
 // trusted, the client sits inside a proxy range and the leftmost hop is it.
-func (m *proxyMode) client(peer string, h http.Header) (string, error) {
-	if addr, ok := parseHop(peer); !ok || !m.trusts(addr) {
-		return "", fmt.Errorf("%s is not a trusted proxy", peer)
+func (m *proxyMode) client(peer string, h http.Header) (netip.Addr, error) {
+	if addr, ok := netacl.ParseHost(peer); !ok || !m.trusts(addr) {
+		return netip.Addr{}, fmt.Errorf("%s is not a trusted proxy", peer)
 	}
 	protos := headerList(h, "X-Forwarded-Proto")
 	if len(protos) == 0 || slices.ContainsFunc(protos, func(v string) bool { return !strings.EqualFold(v, "https") }) {
-		return "", fmt.Errorf("proxy forwarded X-Forwarded-Proto %q; sessions need https", strings.Join(protos, ","))
+		return netip.Addr{}, fmt.Errorf("proxy forwarded X-Forwarded-Proto %q; sessions need https", strings.Join(protos, ","))
 	}
 	hops := headerList(h, "X-Forwarded-For")
 	if len(hops) == 0 {
-		return "", errors.New("proxy sent no client address in X-Forwarded-For")
+		return netip.Addr{}, errors.New("proxy sent no client address in X-Forwarded-For")
 	}
 	for i := len(hops) - 1; ; i-- {
-		addr, ok := parseHop(hops[i])
+		addr, ok := netacl.ParseHost(hops[i])
 		if !ok {
-			return "", fmt.Errorf("malformed X-Forwarded-For hop %q", hops[i])
+			return netip.Addr{}, fmt.Errorf("malformed X-Forwarded-For hop %q", hops[i])
 		}
 		if i == 0 || !m.trusts(addr) {
-			return addr.String(), nil
+			return addr, nil
 		}
 	}
 }
@@ -140,7 +127,8 @@ func (p *Policy) BehindProxy() bool {
 
 // ClientAddr is the address throttling, sessions and logs name: the socket
 // peer, or in proxy mode the forwarded client. A proxy-mode request from an
-// untrusted peer, or one the proxy did not receive over https, is refused.
+// untrusted peer, one the proxy did not receive over https, or one for a
+// client the acl rules refuse, is refused.
 func (p *Policy) ClientAddr(r *http.Request) (string, error) {
 	peer := remoteIP(r.RemoteAddr)
 	if !p.BehindProxy() {
@@ -151,7 +139,10 @@ func (p *Policy) ClientAddr(r *http.Request) (string, error) {
 		p.rejected.Add(1)
 		return "", fmt.Errorf("%w: %w", ErrRefused, err)
 	}
-	return addr, nil
+	if err := p.acl.Forwarded(addr, r.RemoteAddr); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	return addr.String(), nil
 }
 
 // presentedToken is the bearer token or, in proxy mode, the session cookie.

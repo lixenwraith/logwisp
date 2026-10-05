@@ -103,11 +103,11 @@ func NewTCPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleChainListener, authz.TCP)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, logger, "tcp_chain_source", id)
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, logger, "tcp_chain_source", id)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, authz.RoleChainListener, authz.TCP)
 	if err != nil {
 		return nil, err
 	}

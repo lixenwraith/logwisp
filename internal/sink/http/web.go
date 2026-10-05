@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"html"
 	"net/http"
 	"path"
@@ -12,6 +13,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/authz"
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 )
 
 //go:embed web/*.js web/*.html web/*.css
@@ -101,18 +103,21 @@ func serveWebFile(data []byte, contentType string) http.Handler {
 // clientKey carries the forwarded client address from proxyGate
 type clientKey struct{}
 
-// proxyGate admits only the trusted proxies, and records the client they
-// forward for logs and sessions. ServeAuth and AuthorizeRequest check again.
+// proxyGate admits only the trusted proxies, forwarding a client the acl
+// rules admit, and records that client for logs, sessions and the request
+// rate. ServeAuth and AuthorizeRequest check again.
 func (h *HTTPSink) proxyGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		addr, err := h.auth.ClientAddr(r)
 		if err != nil {
-			h.logger.Warn("msg", "Request refused: not through a trusted proxy over https",
-				"component", "http_sink",
-				"instance_id", h.id,
-				"remote_addr", r.RemoteAddr,
-				"path", r.URL.Path,
-				"error", err)
+			if !errors.Is(err, netacl.ErrDenied) { // reported by netacl, once a minute
+				h.logger.Warn("msg", "Request refused: not through a trusted proxy over https",
+					"component", "http_sink",
+					"instance_id", h.id,
+					"remote_addr", r.RemoteAddr,
+					"path", r.URL.Path,
+					"error", err)
+			}
 			authz.Refuse(w, http.StatusForbidden)
 			return
 		}

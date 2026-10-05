@@ -138,7 +138,7 @@ func NewTCPChainSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleDialer, authz.TCP)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, nil, authz.RoleDialer, authz.TCP)
 	if err != nil {
 		return nil, err
 	}
