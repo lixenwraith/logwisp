@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,9 +17,9 @@ import (
 )
 
 // lw's own flags: a short is its long flag, an unknown single-dash one fails,
-// the last -c wins, a pipeline flag or --color takes the next argument unless
-// it starts with '-', -- ends lw's flags, and a command is only the first
-// argument. Everything else is a setting for config.
+// the last -c wins, a flag takes the next argument unless it starts with '-',
+// a switch takes none, and a command is only the first argument. A setting
+// reaches config as --path=value or a bare switch.
 func TestCommandLineGrammar(t *testing.T) {
 	for _, c := range []struct {
 		argv []string
@@ -30,15 +31,14 @@ func TestCommandLineGrammar(t *testing.T) {
 			invocation{load: config.Args{Specs: []config.Spec{{Flag: "source", Value: "null"}, {Flag: "sink", Value: "http,port=1"}, {Flag: "filter"}, {Flag: "sink"}}}}},
 		{[]string{"--preset", "tail,path=x", "--pipeline", "b"}, invocation{load: config.Args{Specs: []config.Spec{{Flag: "preset", Value: "tail,path=x"}, {Flag: "pipeline", Value: "b"}}}}},
 		{[]string{"--color", "--color", "never", "--color=auto"}, invocation{load: config.Args{Overrides: []string{"--color=always", "--color=never", "--color=auto"}}}},
-		{[]string{"--quiet", "--", "-c", "x", "--source", "null"}, invocation{load: config.Args{Overrides: []string{"--quiet", "--", "-c", "x", "--source", "null"}}}},
+		{[]string{"--quiet", "--"}, invocation{load: config.Args{Overrides: []string{"--quiet"}}}},
 		{[]string{"--quiet", "-h"}, invocation{help: true, load: config.Args{Overrides: []string{"--quiet"}}}},
 		{[]string{"-c", "-h"}, invocation{help: true}},
-		{[]string{"help"}, invocation{help: true, load: config.Args{Overrides: []string{"help"}}}},
+		{[]string{"help"}, invocation{help: true}},
 		{[]string{"tls", "ca", "-h"}, invocation{command: &commands[1], args: []string{"ca", "-h"}}},
-		{[]string{"--quiet", "tls"}, invocation{load: config.Args{Overrides: []string{"--quiet", "tls"}}}},
-		{[]string{"-q", "-t", "-V", "-p", "tail,path=x", "-c=a.toml", "--logging.file.retention_hours", "-1"},
+		{[]string{"-q", "-t", "-V", "-p", "tail,path=x", "-c=a.toml", "--logging.level", "debug", "--logging.file.retention_hours=-1", "--dump=false"},
 			invocation{load: config.Args{File: "a.toml", Specs: []config.Spec{{Flag: "preset", Value: "tail,path=x"}},
-				Overrides: []string{"--quiet", "--check", "--version", "--logging.file.retention_hours", "-1"}}}},
+				Overrides: []string{"--quiet", "--check", "--version", "--logging.level=debug", "--logging.file.retention_hours=-1", "--dump=false"}}}},
 	} {
 		got, err := parseCommandLine(c.argv)
 		if err != nil || !reflect.DeepEqual(got, c.want) {
@@ -46,9 +46,52 @@ func TestCommandLineGrammar(t *testing.T) {
 		}
 	}
 	for _, argv := range [][]string{{"-c"}, {"--config"}, {"--config="}, {"-c="}, {"-c", "--quiet"},
-		{"-v"}, {"-qt"}, {"-u", "x"}, {"-config", "x"}} {
+		{"-v"}, {"-qt"}, {"-u", "x"}, {"-config", "x"}, {"--logging.level"}, {"--logging.file.retention_hours", "-1"}} {
 		if _, err := parseCommandLine(argv); err == nil {
 			t.Errorf("%q accepted", argv)
+		}
+	}
+}
+
+// lw takes no positional argument: a word no flag takes is named, not passed
+// to config, whose bool would take it as its value
+func TestAWordNoFlagTakesIsAnError(t *testing.T) {
+	for _, c := range []struct {
+		argv []string
+		word string
+	}{
+		{[]string{"tail"}, "tail"}, {[]string{"-t", "x.toml"}, "x.toml"}, {[]string{"--quiet", "tls"}, "tls"},
+		{[]string{"--status_reporter", "false"}, "false"}, {[]string{"--logging.level", "debug", "x"}, "x"},
+		{[]string{"--color=never", "x"}, "x"}, {[]string{"--", "-c"}, "-c"}, {[]string{"-1"}, "-1"},
+	} {
+		_, err := parseCommandLine(c.argv)
+		if err == nil || !strings.Contains(err.Error(), "unexpected argument "+strconv.Quote(c.word)) {
+			t.Errorf("%q: %v", c.argv, err)
+		}
+	}
+}
+
+// An option lw does not know is an error, whatever follows it
+func TestAnUnknownOptionIsAnError(t *testing.T) {
+	for _, argv := range [][]string{{"--nosuch"}, {"--nosuch=1"}, {"--nosuch", "x"}, {"--check", "--nosuch"}} {
+		_, err := parseCommandLine(argv)
+		if err == nil || err.Error() != "unknown option --nosuch (lw --help lists them)" {
+			t.Errorf("%q: %v", argv, err)
+		}
+	}
+}
+
+// flag writes a long flag with one dash; lw names it with two, then the usage
+func TestFlagErrorsNameLongFlagsWithTwoDashes(t *testing.T) {
+	for args, want := range map[string]string{
+		"--user":   "lw auth add-user: flag needs an argument: --user\nUsage: ",
+		"-u":       "lw auth add-user: flag needs an argument: -u\nUsage: ",
+		"-nosuch":  "lw auth add-user: flag provided but not defined: --nosuch\nUsage: ",
+		"--user=x": "lw auth add-user: --credentials is required\nUsage: ",
+	} {
+		code, _, stderr := runCommand(t, "auth", "add-user", args)
+		if code != 2 || !strings.HasPrefix(stderr, want) || strings.Count(stderr, "Usage: ") != 1 {
+			t.Errorf("lw auth add-user %s: exit %d:\n%s", args, code, stderr)
 		}
 	}
 }
@@ -63,6 +106,9 @@ func TestUsageListsEachFlagOnce(t *testing.T) {
 			s.define(fs)
 			want := 0
 			fs.VisitAll(func(f *flag.Flag) {
+				if f.Usage == "" {
+					return // an earlier name, unlisted
+				}
 				want++
 				head := "      --" + f.Name
 				for letter, short := range shorts {
@@ -139,13 +185,25 @@ func TestEveryPresetBuilds(t *testing.T) {
 	}
 }
 
+// --host, the earlier name of lw tls cert --hosts, still sets the hosts
+func TestTLSCertHostIsHosts(t *testing.T) {
+	dir := t.TempDir()
+	if code, _, stderr := runCommand(t, "tls", "ca", "--dir", dir); code != 0 {
+		t.Fatalf("ca: exit %d: %s", code, stderr)
+	}
+	code, _, stderr := runCommand(t, "tls", "cert", "--ca-dir", dir, "--name", "agg", "--server", "--host", "a.example")
+	if code != 0 || !strings.Contains(stderr, "for [a.example CN=agg]") {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+}
+
 // lw tls ca and lw tls cert write a chain a dialer verifies by the CA file,
 // keys private, and never replace a file
 func TestTLSCommandsIssueAVerifiableChain(t *testing.T) {
 	dir := t.TempDir()
 	steps := [][]string{
 		{"ca", "-dir", dir, "-name", "test CA"},
-		{"cert", "-ca-dir", dir, "-name", "agg", "-server", "-host", "127.0.0.1"},
+		{"cert", "-ca-dir", dir, "-name", "agg", "-server", "-hosts", "127.0.0.1"},
 	}
 	for _, args := range steps {
 		if code, _, stderr := runCommand(t, "tls", args...); code != 0 {
