@@ -170,6 +170,9 @@ Options, each as type and default:
 - `client_buffer_size` (int, `256`): per-client send queue depth.
 - `write_timeout_ms` (int, `0`): per-event write deadline; `0` = none.
 - `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited.
+- `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
+  a new stream gets after its `connected` event, before the live ones, so a
+  browser opened late sees a backlog; `0` = none.
 - `login_page` (bool, `false`): `scram` in proxy mode only (an error
   elsewhere): the browser login page at `/auth/login`.
 - `viewer_page` (bool, `false`): `scram` in proxy mode only (an error
@@ -212,8 +215,8 @@ Options, each as type and default:
   - never under `scram` on the sink's own TLS, which a browser cannot log in
     to: `/` is refused like any other path;
   - an endpoint at `/` keeps the root, and the viewer stays at `/auth/view`.
-  The viewer shows entries from when it connects (the sink keeps no backlog)
-  and holds one stream against `max_connections`.
+  The viewer starts with the `replay_lines` backlog, holds one stream against
+  `max_connections`, and says so when all are taken (`server full`).
 - Refusals are logged at WARN and counted in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
   `auth_identity`.

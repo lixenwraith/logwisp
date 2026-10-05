@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,8 +68,9 @@ type HTTPSink struct {
 	input  chan core.TransportEvent
 	logger *log.Logger
 
-	// Client registry
+	// Client registry, and the last replay_lines entries, under clientsMu
 	clients      map[uint64]*sseClient
+	replay       [][]byte
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
 	writeTimeout time.Duration
@@ -399,6 +401,9 @@ func (h *HTTPSink) brokerLoop() {
 
 			var stale []uint64
 			h.clientsMu.Lock()
+			if n := int(h.config.ReplayLines); n > 0 {
+				h.replay = append(h.replay[max(len(h.replay)+1-n, 0):], event.Payload)
+			}
 			for id, c := range h.clients {
 				if _, exists := h.proxy.GetSession(c.sessionID); !exists {
 					stale = append(stale, id)
@@ -506,18 +511,6 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Registered only now: a client the broker can queue into before its reader
-	// reaches the loop below loses a burst to a buffer nobody is draining.
-	h.clientsMu.Lock()
-	h.clients[id] = c
-	h.clientsMu.Unlock()
-
-	// A stream with nothing to carry still has to prove the peer is there. The
-	// comment refreshes the session the broker evicts on, and fails on a peer
-	// that stopped reading.
-	idle := time.NewTicker(h.keepalive)
-	defer idle.Stop()
-
 	send := func(payload []byte) bool {
 		if writeSSE(w, payload) != nil || rc.Flush() != nil {
 			return false
@@ -525,6 +518,27 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 		h.proxy.UpdateActivity(sess.ID)
 		return true
 	}
+
+	// Registered only now: a client the broker can queue into before its reader
+	// reaches the loop below loses a burst to a buffer nobody is draining. The
+	// backlog is taken under the same lock, so it ends where the queue begins.
+	h.clientsMu.Lock()
+	h.clients[id] = c
+	backlog := slices.Clone(h.replay)
+	h.clientsMu.Unlock()
+	for _, payload := range backlog {
+		h.armWrite(rc)
+		if !send(payload) {
+			return
+		}
+	}
+
+	// A stream with nothing to carry still has to prove the peer is there. The
+	// comment refreshes the session the broker evicts on, and fails on a peer
+	// that stopped reading.
+	idle := time.NewTicker(h.keepalive)
+	defer idle.Stop()
+
 	clientGone := r.Context().Done()
 	for {
 		select {

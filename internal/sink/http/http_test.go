@@ -229,7 +229,7 @@ func TestProxyModeServesBrowserFiles(t *testing.T) {
 	client, baseURL := serveTestHTTPSink(t, h)
 	for file, ctype := range map[string]string{
 		"scram.js": "text/javascript", "login": "text/html", "login.js": "text/javascript",
-		"style.css": "text/css", "view": "text/html", "view.js": "text/javascript",
+		"style.css": "text/css", "view": "text/html", "view.js": "text/javascript", "favicon.svg": "image/svg+xml",
 	} {
 		req, _ := http.NewRequest(http.MethodGet, baseURL+"/auth/"+file, nil)
 		resp, err := client.Do(proxied(req))
@@ -239,7 +239,7 @@ func TestProxyModeServesBrowserFiles(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), ctype) ||
-			!strings.Contains(resp.Header.Get("Content-Security-Policy"), "script-src 'self'") {
+			!strings.Contains(resp.Header.Get("Content-Security-Policy"), "script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self';") {
 			t.Errorf("/auth/%s: %d %q %q", file, resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Security-Policy"))
 		}
 		if file == "view" && !bytes.Contains(body, []byte(`content="api/status"`)) {
@@ -472,5 +472,47 @@ func TestStopWritesQueuedEventsToReadingStreams(t *testing.T) {
 	}
 	if r := <-done; r.lines != n || !r.disconnect {
 		t.Fatalf("reading stream received %d of %d lines, disconnect %v", r.lines, n, r.disconnect)
+	}
+}
+
+// A stream that connects late gets the last replay_lines entries after its
+// connected event, then the live ones, none twice
+func TestLateStreamGetsTheBacklog(t *testing.T) {
+	httpSink, _ := newTestHTTPSink(t, map[string]any{"replay_lines": int64(2)})
+	client, baseURL := serveTestHTTPSink(t, httpSink)
+	until := func(cond func() bool) {
+		for deadline := time.Now().Add(2 * time.Second); !cond(); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("timed out")
+			}
+		}
+	}
+	for i := range 3 {
+		httpSink.Input() <- core.TransportEvent{Payload: fmt.Appendf(nil, "line %d\n", i)}
+	}
+	until(func() bool { return httpSink.totalProcessed.Load() == 3 })
+	resp, err := client.Get(baseURL + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() && scanner.Text() != "event: connected" {
+	}
+	scanner.Scan() // its data
+	until(func() bool {
+		httpSink.clientsMu.Lock()
+		defer httpSink.clientsMu.Unlock()
+		return len(httpSink.clients) == 1
+	})
+	httpSink.Input() <- core.TransportEvent{Payload: []byte("line 3\n")}
+	var got []string
+	for len(got) < 3 && scanner.Scan() {
+		if line, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
+			got = append(got, line)
+		}
+	}
+	if !slices.Equal(got, []string{"line 1", "line 2", "line 3"}) {
+		t.Fatalf("stream got %q", got)
 	}
 }

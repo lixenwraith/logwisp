@@ -36,8 +36,9 @@ function append(line) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
-// The status answer names the stream path; its 401 is the only way to tell an
-// ended session apart, since EventSource hides the status of a failure.
+// The status answer names the stream path and whether the stream has room; its
+// 401 is the only way to tell an ended session apart, since EventSource hides
+// the status of a failure.
 async function connect() {
   if (tokenMode && !token) return showLogin("");
   let res;
@@ -52,10 +53,14 @@ async function connect() {
   // An open page has no session to end: a 401 there is a proxy's, so it retries
   if (res.status === 401 && !open) return sessionEnded();
   fresh = false;
-  const path = res.ok ? (await res.json().catch(() => ({})))?.endpoints?.stream : null;
+  const body = res.ok ? await res.json().catch(() => ({})) : {};
+  const path = body?.endpoints?.stream;
   if (typeof path !== "string" || !path.startsWith("/")) {
     return retry(`status unavailable (${res.status})`);
   }
+  // The stream would answer 503, which EventSource hides
+  const { active_clients: active, max_connections: max } = body?.server ?? {};
+  if (max > 0 && active >= max) return retry(`server full (${active} of ${max} streams)`);
   // Stream paths are absolute in logwisp; the proxy may mount it under a prefix
   const url = new URL("./" + path.replace(/^\/+/, ""), base);
   if (tokenMode) streamWithToken(url);

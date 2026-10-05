@@ -335,6 +335,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # client_buffer_size = 256              # Per-client send queue
 # write_timeout_ms = 0                  # Per-event deadline, 0 = none
 # max_connections = 0                   # 0 = unlimited
+# replay_lines = 0                      # Last entries a new stream gets first, 0 = none
 # login_page = false                    # GET /auth/login; scram behind auth.trusted_proxies
 # viewer_page = false                   # GET /auth/view, needs login_page; scram + trusted_proxies only
                                         # (without auth or under mtls the viewer is always on)

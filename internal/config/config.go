@@ -293,6 +293,7 @@ type HTTPSinkOptions struct {
 	ClientBufferSize int64        `toml:"client_buffer_size"` // per-client send queue
 	WriteTimeoutMS   int64        `toml:"write_timeout_ms"`   // per-SSE-write deadline, 0 = none
 	MaxConnections   int64        `toml:"max_connections"`    // 0 = unlimited
+	ReplayLines      int64        `toml:"replay_lines"`       // entries a new stream gets first, 0 = none
 	LoginPage        bool         `toml:"login_page"`         // GET /auth/login, needs auth.trusted_proxies
 	ViewerPage       bool         `toml:"viewer_page"`        // GET /auth/view, needs login_page
 	Auth             *AuthOptions `toml:"auth"`
