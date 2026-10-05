@@ -60,14 +60,3 @@ identity, and both skeletons download the tagged source.
 5. Shell completion for bash, zsh and fish, installed by `make install`.
 6. A packaging CI job: build the AUR package in an Arch container and the port
    in a FreeBSD VM, run `lw --version` and `make image-check`.
-
-## 2. Follow-ups
-
-Smaller items found along the way, each independent of the others.
-
-1. TLS: the generated-certificate key is one per process, so a pin taken from a
-   `self_signed` listener also matches an `issuer` listener of the same
-   process; document it or key per listener. Pins are checked in
-   `VerifyPeerCertificate`, which Go skips on resumption: guard it if a dialer
-   ever keeps a `ClientSessionCache`.
-2. `core.ShutdownTimeout` is unused.
