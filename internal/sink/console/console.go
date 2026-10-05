@@ -69,18 +69,14 @@ const (
 	DefaultConsoleColor      = "auto"
 )
 
-// levelColors paints the first of a level's names in an entry, ANSI 16 so
-// the terminal's theme picks the shades and a text console renders them.
-// Names run longest first; cyan, not blue, stays readable on black.
-var levelColors = map[string]struct {
-	names []string
-	style inline.Style
-}{
-	"ERROR": {[]string{"ERROR", "FATAL", "ERR"}, inline.FgANSI(color.ANSIRed).Bold()},
-	"WARN":  {[]string{"WARNING", "WARN"}, inline.FgANSI(color.ANSIYellow)},
-	"INFO":  {[]string{"INFO", "INF"}, inline.FgANSI(color.ANSIGreen)},
-	"DEBUG": {[]string{"DEBUG", "DBG"}, inline.FgANSI(color.ANSICyan)},
-	"TRACE": {[]string{"TRACE"}, inline.FgANSI(color.ANSIBrightBlack)},
+// levelStyles colors the levels in ANSI 16, so the terminal's theme picks the
+// shades and a text console renders them; cyan, not blue, stays readable on black
+var levelStyles = map[string]inline.Style{
+	"ERROR": inline.FgANSI(color.ANSIRed).Bold(),
+	"WARN":  inline.FgANSI(color.ANSIYellow),
+	"INFO":  inline.FgANSI(color.ANSIGreen),
+	"DEBUG": inline.FgANSI(color.ANSICyan),
+	"TRACE": inline.FgANSI(color.ANSIBrightBlack),
 }
 
 // NewConsoleSinkPlugin creates a console sink through plugin factory
@@ -273,40 +269,21 @@ func (cs *ConsoleSink) write(event core.TransportEvent) {
 	cs.lastProcessed.Store(time.Now())
 }
 
-// paintLevel colors the first whole-word, case-insensitive occurrence of a
-// name of level, after escaping: the escape sequences are the sink's own.
+// paintLevel colors the first word naming the entry's level, after escaping:
+// the escape sequences are the sink's own
 func paintLevel(p *inline.Printer, payload []byte, level string) []byte {
-	lc, ok := levelColors[level]
+	level, _, _ = core.LevelWord(level, "")
+	style, ok := levelStyles[level]
 	if !ok {
 		return payload
 	}
-	for _, name := range lc.names {
-		for i := 0; i+len(name) <= len(payload); i++ {
-			j := i + len(name)
-			if !nameAt(payload[i:j], name) || i > 0 && word(payload[i-1]) || j < len(payload) && word(payload[j]) {
-				continue
-			}
-			out := make([]byte, 0, len(payload)+16)
-			out = append(out, payload[:i]...)
-			out = append(out, p.Paint(string(payload[i:j]), lc.style)...)
-			return append(out, payload[j:]...)
-		}
+	if _, i, j := core.LevelWord(payload, level); i < j {
+		out := make([]byte, 0, len(payload)+16)
+		out = append(out, payload[:i]...)
+		out = append(out, p.Paint(string(payload[i:j]), style)...)
+		return append(out, payload[j:]...)
 	}
 	return payload
-}
-
-// nameAt compares ASCII letters without case; name is upper case
-func nameAt(b []byte, name string) bool {
-	for k := range len(name) {
-		if c := b[k]; c != name[k] && c != name[k]+'a'-'A' {
-			return false
-		}
-	}
-	return true
-}
-
-func word(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
 // escapeControls writes what a terminal would act on or reorder (C0 and C1

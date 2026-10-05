@@ -65,11 +65,7 @@ identity, and both skeletons download the tagged source.
 
 Smaller items found along the way, each independent of the others.
 
-1. Level detection. `source.ExtractLogLevel` needs a delimiter after the name
-   (`ERROR:`, `[WARN]`, ` INFO `), so `warning disk full` or `DBG x` get no
-   level, hence no color. Match the names as words, as the console sink's
-   painter does, with one table for both.
-2. Command line:
+1. Command line:
    - a positional word at the top level (`lw tail`, `lw -t FILE`) still reaches
      config with an unclear message; name it ("unexpected argument X; the file
      is -c FILE");
@@ -79,9 +75,9 @@ Smaller items found along the way, each independent of the others.
    - `lw tls cert --host` could become `--hosts` (keeping `--host`), to match
      `tls.hosts` and the preset key;
    - top-level usage errors exit 1, subcommand ones 2.
-3. TLS: the generated-certificate key is one per process, so a pin taken from a
+2. TLS: the generated-certificate key is one per process, so a pin taken from a
    `self_signed` listener also matches an `issuer` listener of the same
    process; document it or key per listener. Pins are checked in
    `VerifyPeerCertificate`, which Go skips on resumption: guard it if a dialer
    ever keeps a `ClientSessionCache`.
-4. `core.ShutdownTimeout` is unused.
+3. `core.ShutdownTimeout` is unused.
