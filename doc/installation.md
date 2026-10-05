@@ -42,7 +42,8 @@ The Makefile works with GNU make and BSD make alike. Targets:
 - Container
   - `make image`, `make image-check`: see [Container Image](#container-image)
 - Install
-  - `make install`, `make uninstall`, `make deb`: see [Installing](#installing)
+  - `make install`, `make uninstall`, `make deb`, `make arch`: see
+    [Installing](#installing)
 
 Variables:
 
@@ -64,8 +65,9 @@ checkout.
 ## Installing
 
 `make install` copies what a package ships and compiles nothing, so build
-first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `BINDIR` (default
-`$PREFIX/bin`, the path the systemd unit and the rc.d script run `lw` from):
+first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR`, `BINDIR` (default
+`$PREFIX/bin`, the path the systemd unit and the rc.d script run `lw` from)
+and `SERVICE`:
 
 - Linux defaults: `PREFIX=/usr`, `SYSCONFDIR=/etc`. Outside a package
   manager, prefer `PREFIX=/usr/local`; systemd reads units, sysusers and
@@ -73,6 +75,8 @@ first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `BINDIR` (default
 - FreeBSD defaults: `PREFIX=/usr/local`, `SYSCONFDIR=/usr/local/etc`.
 - `INSTALL_OS` (default: `uname -s`) picks the layout, so
   `INSTALL_OS=FreeBSD DESTDIR=...` stages the FreeBSD one on another system.
+- `SERVICE`: `yes` (default) adds the service and its configuration; `no`
+  installs `lw` alone ([Without a Service](#without-a-service)).
 - `BASHCOMPDIR`, `ZSHCOMPDIR`, `FISHCOMPDIR`: where the shell completion
   goes, by default `$PREFIX/share/bash-completion/completions`,
   `$PREFIX/share/zsh/site-functions` (`/usr/share/zsh/vendor-completions`
@@ -84,7 +88,7 @@ make release
 sudo make install PREFIX=/usr/local
 ```
 
-Every system gets:
+Every install gets:
 
 - `$BINDIR/lw` and the manual `$PREFIX/share/man/man1/lw.1`
 - completion for `lw`, its commands, flags, files and preset names:
@@ -92,10 +96,13 @@ Every system gets:
 - `$PREFIX/share/doc/logwisp/` (this documentation) and
   `$PREFIX/share/licenses/logwisp/LICENSE`
 
+A service install also gets the service files below and, on Linux and
+FreeBSD alike, `$SYSCONFDIR/logwisp/logwisp.toml`: the annotated sample
+configuration, placed when none is there and otherwise kept. Edit it before
+starting the service.
+
 ### Linux (systemd)
 
-- `$SYSCONFDIR/logwisp/logwisp.toml`: the annotated sample configuration,
-  kept when one is already there. Edit it before starting the service.
 - `$PREFIX/lib/systemd/system/logwisp.service`: runs
   `lw -c $SYSCONFDIR/logwisp/logwisp.toml` as the `logwisp` user, from
   `/var/lib/logwisp`; `systemctl reload` sends `SIGHUP`.
@@ -133,11 +140,11 @@ sudo systemctl reload logwisp
 
 ### FreeBSD (rc.d)
 
-- `$SYSCONFDIR/logwisp/logwisp.toml.sample`, copied to `logwisp.toml` when
-  none exists and `DESTDIR` is empty
-- `$PREFIX/etc/rc.d/logwisp`: runs `lw` through `daemon(8)` as
-  `logwisp_user`, with its output in syslog under the tag `logwisp`;
-  `service logwisp reload` sends `SIGHUP`
+`$PREFIX/etc/rc.d/logwisp` runs `lw` through `daemon(8)` as `logwisp_user`,
+with its output in syslog under the tag `logwisp`; `service logwisp reload`
+sends `SIGHUP`. The port in `deploy/package/freebsd/` places the
+configuration the ports way, to the same effect: `@sample` installs
+`logwisp.toml.sample` and copies it to `logwisp.toml` when none exists.
 
 ```bash
 sudo pw useradd logwisp -d /nonexistent -s /usr/sbin/nologin -c "LogWisp log transport"
@@ -172,18 +179,93 @@ sudo systemctl enable --now logwisp
 
 - Installing creates the `logwisp` account and its directories where
   `systemd-sysusers` and `systemd-tmpfiles` exist; the service waits to be
-  enabled, and an upgrade restarts it if it runs.
-- `/etc/logwisp/logwisp.toml` is a conffile: an upgrade keeps your edits,
-  and only a purge removes it.
+  enabled, and an upgrade or reinstall restarts it if it runs.
+- `/etc/logwisp/logwisp.toml` is a conffile: an upgrade or reinstall keeps
+  your edits, and only a purge removes it.
+- The same version again: `sudo apt install --reinstall ./bin/logwisp_*.deb`.
 - Removing stops and disables the service. The account, its directories
   and any credentials in `/etc/logwisp` stay, as with `make uninstall`.
+
+### Arch Linux (makepkg)
+
+`make arch` builds the PKGBUILD in `deploy/package/arch/` from the working
+tree, committed or not, into `bin/arch/`, then prints the `pacman -U` line
+that installs the package. It needs `base-devel` and `go`, and runs as a
+user: `makepkg` refuses root.
+
+```bash
+make arch
+sudo pacman -U bin/arch/logwisp-<version>-1-x86_64.pkg.tar.zst
+sudo systemctl enable --now logwisp
+```
+
+- pacman's hooks create the `logwisp` account and its directories; the
+  service waits to be enabled.
+- `/etc/logwisp/logwisp.toml` is a `backup` file: an upgrade or reinstall
+  keeps your edits, and a shipped version that changed lands beside it as
+  `logwisp.toml.pacnew`. `pacman -R` keeps an edited one as
+  `logwisp.toml.pacsave`.
+- Reinstall: `make arch` and the same `pacman -U`. pacman does not restart
+  the service: `sudo systemctl restart logwisp`.
+- An earlier `sudo make install` conflicts with the package
+  (`PREFIX=/usr`) or overrides it (`PREFIX=/usr/local`, whose unit and `lw`
+  come first): `sudo make uninstall` with that `PREFIX` first. The
+  configuration it keeps is no conflict: pacman keeps it, and when it was
+  edited, the shipped one lands beside it as `logwisp.toml.pacnew`.
+
+### Reinstalling
+
+Every method runs again over its own installation, for an upgrade or the
+same version, and keeps an edited configuration: `make install` leaves an
+existing `$SYSCONFDIR/logwisp/logwisp.toml` alone, and the packages treat it
+as above. Only the `.deb` restarts a running service; otherwise restart it
+(`sudo systemctl restart logwisp`, `sudo service logwisp restart`). To see
+what a release changed in the shipped configuration:
+
+```bash
+d=$(mktemp -d); lw config init --out "$d/logwisp.toml"; diff "$d/logwisp.toml" /etc/logwisp/logwisp.toml
+```
+
+### Without a Service
+
+`SERVICE=no` installs `lw`, its manual, completion and documentation, and
+nothing else: no service files, account or configuration. For one user,
+without root:
+
+```bash
+make release
+make install SERVICE=no PREFIX="$HOME/.local"
+lw config init
+```
+
+- `~/.local/bin` goes on `PATH`. `man lw` then finds the manual, and bash
+  and fish the completion; zsh needs
+  `fpath=(~/.local/share/zsh/site-functions $fpath)` before `compinit`.
+- `make uninstall PREFIX="$HOME/.local"` removes it.
+
+For every user: `sudo make install SERVICE=no PREFIX=/usr/local`.
+
+`lw config init` writes the shipped, annotated configuration, never over an
+existing file, where you choose:
+
+- `lw config init`: `~/.config/logwisp/logwisp.toml`, which `lw` reads
+  without `-c` unless a `LOGWISP_CONFIG_*` variable names another file. With
+  it in place, `lw` without pipeline options runs its
+  pipelines instead of copying stdin to stdout; pipeline options and presets
+  still replace them.
+- `sudo lw config init --out /usr/local/etc/logwisp/logwisp.toml`: a file
+  for every user, named with `-c`, or without it by
+  `LOGWISP_CONFIG_DIR=/usr/local/etc/logwisp`
+  ([File Location](configuration.md#file-location)).
+
+`lw --check` (with the same `-c`) then validates it.
 
 ### Uninstall
 
 `sudo make uninstall` (with the `PREFIX` used to install) removes everything
 `make install` wrote except `$SYSCONFDIR/logwisp`, which holds configuration
-and credentials. Remove that, the working directories and the account by
-hand.
+and credentials, and any file `lw config init` wrote. Remove those, the
+working directories and the account by hand.
 
 ## Container Image
 
@@ -269,15 +351,21 @@ docker run -d --name logwisp \
 
 In place:
 
-- `make install` with `DESTDIR`, `PREFIX` and `SYSCONFDIR`, the manual,
-  shell completion and the service files in `deploy/package/`
-- `make deb`
+- `make install` with `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `SERVICE`, the
+  manual, shell completion and the service files in `deploy/package/`
+- `make deb`, and `make arch` building the PKGBUILD from the working tree
 - skeletons: `deploy/package/arch/PKGBUILD` and a `sysutils/logwisp` port in
   `deploy/package/freebsd/`
-- `.github/workflows/package.yml`, on changes to them: `makepkg` on the
-  PKGBUILD in an Arch container, the `.deb` installed, started, removed and
-  purged on Ubuntu, BSD make building, installing and running the rc.d
-  service on FreeBSD, and `make image image-check`
+- `.github/workflows/package.yml`, on changes to them:
+  - Arch container: `make arch`, installed over an edited configuration,
+    reinstalled keeping it, removed
+  - Ubuntu: the `.deb` installed, started, reinstalled keeping an edited
+    configuration, removed and purged
+  - Ubuntu, without a service: `make install SERVICE=no` into a home twice,
+    then `lw config init` writing the file `lw` reads, once
+  - FreeBSD: BSD make building, installing twice keeping an edited
+    configuration, and running the rc.d service
+  - `make image image-check`
 
 Still missing: release tags, which both skeletons download; submitting the
 AUR package and the port; a Debian source package for a PPA or the archive.

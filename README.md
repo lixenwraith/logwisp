@@ -186,8 +186,11 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
 ```
 
 `sudo make install` installs the binary, the manual, shell completion, a
-sample configuration and a systemd unit or FreeBSD rc.d script; `make deb`
-packages them for Debian and Ubuntu. See [Installation](doc/installation.md).
+systemd unit or FreeBSD rc.d script and its configuration; `make deb` and
+`make arch` package them for Debian, Ubuntu and Arch. Without a service,
+`make install SERVICE=no PREFIX="$HOME/.local"` installs `lw` alone and
+`lw config init` writes the annotated configuration it reads. See
+[Installation](doc/installation.md).
 
 ## System Requirements
 

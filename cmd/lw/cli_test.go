@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	shipped "github.com/lixenwraith/logwisp/config"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/testutil"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
@@ -258,6 +259,35 @@ func TestTLSCommandsIssueAVerifiableChain(t *testing.T) {
 	}
 	if code, _, stderr := runCommand(t, "tls", steps[0]...); code != 1 || !strings.Contains(stderr, "exists") {
 		t.Fatalf("second ca: exit %d: %s", code, stderr)
+	}
+}
+
+// lw config init writes the shipped configuration to the file lw reads without
+// -c, or to --out, says how lw finds it, and never replaces a file
+func TestConfigInitWritesTheShippedFileOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("LOGWISP_CONFIG_FILE", "")
+	t.Setenv("LOGWISP_CONFIG_DIR", "")
+	other := filepath.Join(t.TempDir(), "etc", "logwisp.toml")
+	for _, c := range []struct {
+		args []string
+		hint string
+	}{
+		{[]string{"init"}, "lw reads it without -c"},
+		{[]string{"init", "--out", other}, "lw -c " + other},
+	} {
+		if code, _, stderr := runCommand(t, "config", c.args...); code != 0 || !strings.Contains(stderr, c.hint) {
+			t.Fatalf("lw config %v: exit %d: %s", c.args, code, stderr)
+		}
+		if code, _, stderr := runCommand(t, "config", c.args...); code != 1 || !strings.Contains(stderr, "exists") {
+			t.Fatalf("lw config %v again: exit %d: %s", c.args, code, stderr)
+		}
+	}
+	for _, path := range []string{filepath.Join(home, ".config", "logwisp", "logwisp.toml"), other} {
+		if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, shipped.Sample) {
+			t.Errorf("%s is not the shipped configuration: %v", path, err)
+		}
 	}
 }
 
