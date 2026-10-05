@@ -56,10 +56,17 @@ BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
 DOCDIR ?= $(PREFIX)/share/doc/logwisp
 LICENSEDIR ?= $(PREFIX)/share/licenses/logwisp
+BASHCOMPDIR ?= $(PREFIX)/share/bash-completion/completions
+# Debian's zsh reads /usr/share/zsh/vendor-completions, not site-functions
+ZSHCOMPDIR_DEFAULT != [ '$(PREFIX)' = /usr ] && [ -f /etc/debian_version ] && \
+	echo /usr/share/zsh/vendor-completions || echo '$(PREFIX)/share/zsh/site-functions'
+ZSHCOMPDIR ?= $(ZSHCOMPDIR_DEFAULT)
+FISHCOMPDIR ?= $(PREFIX)/share/fish/vendor_completions.d
+DEB_MAINTAINER ?= Maintainer <maintainer@example.org>
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-go build release dev test verify e2e image image-check install uninstall clean version
+.PHONY: help check-go build release dev test verify e2e image image-check install uninstall deb completion clean version
 
 help:
 	@echo "Usage: make <target> [VARIABLE=value ...]"
@@ -69,6 +76,7 @@ help:
 	@echo "  release      Build it static, stripped and trimmed (CGO_ENABLED=0)"
 	@echo "  dev          Build it with the race detector"
 	@echo "  version      Print the version metadata a build embeds"
+	@echo "  completion   Regenerate $(PKG_DIR)/completion from lw's command tables"
 	@echo "  clean        Remove $(BIN_DIR)/"
 	@echo "Check:"
 	@echo "  test         Run the Go tests"
@@ -79,13 +87,16 @@ help:
 	@echo "  image-check  Run it read-only, offline, without capabilities: --version, then"
 	@echo "               --check on $(IMAGE_CHECK_CONFIG)"
 	@echo "Install (build or release first):"
-	@echo "  install      Binary, manual, sample config, service files, licence and docs"
+	@echo "  install      Binary, manual, sample config, service files, shell completion,"
+	@echo "               licence and docs"
 	@echo "  uninstall    Remove them, keeping $(SYSCONFDIR)/logwisp"
+	@echo "  deb          Package a release build as $(BIN_DIR)/logwisp_VERSION_ARCH.deb (dpkg-deb)"
 	@echo ""
 	@echo "Variables: GO=$(GO) PREFIX=$(PREFIX) SYSCONFDIR=$(SYSCONFDIR) DESTDIR=$(DESTDIR)"
 	@echo "  INSTALL_OS=$(INSTALL_OS) (the layout install uses: FreeBSD or any other)"
 	@echo "  GO_BUILDFLAGS, GO_LDFLAGS (extra go build and linker flags), E2E (scripts),"
-	@echo "  CONTAINER_ENGINE, IMAGE, IMAGE_TAG, BUILD_CA, IMAGE_BUILD_FLAGS, IMAGE_CHECK_CONFIG"
+	@echo "  CONTAINER_ENGINE, IMAGE, IMAGE_TAG, BUILD_CA, IMAGE_BUILD_FLAGS, IMAGE_CHECK_CONFIG,"
+	@echo "  BASHCOMPDIR, ZSHCOMPDIR, FISHCOMPDIR, DEB_MAINTAINER"
 
 check-go:
 	@command -v $(GO) >/dev/null 2>&1 || { \
@@ -107,6 +118,10 @@ dev: check-go
 
 test: check-go
 	$(GO) test ./...
+
+# A test fails when the committed scripts differ from what the tables generate
+completion: check-go
+	$(GO) test ./cmd/lw -run '^TestCompletionScriptsAreCurrent$$' -args -update
 
 # gofmt checks the Go files changed since the branch forked from GOFMT_BASE,
 # exact renames aside, or the whole tree without git or that ref: older files
@@ -189,6 +204,9 @@ install:
 	root='$(DESTDIR)'; etc="$$root$(SYSCONFDIR)/logwisp"; \
 	put 0755 $(BIN_DIR)/$(BINARY) "$$root$(BINDIR)/$(BINARY)"; \
 	put 0644 doc/lw.1 "$$root$(MANDIR)/man1/lw.1"; \
+	put 0644 $(PKG_DIR)/completion/lw.bash "$$root$(BASHCOMPDIR)/lw"; \
+	put 0644 $(PKG_DIR)/completion/_lw "$$root$(ZSHCOMPDIR)/_lw"; \
+	put 0644 $(PKG_DIR)/completion/lw.fish "$$root$(FISHCOMPDIR)/lw.fish"; \
 	put 0644 LICENSE "$$root$(LICENSEDIR)/LICENSE"; \
 	for src in README.md doc/*.md; do put 0644 "$$src" "$$root$(DOCDIR)/$$src"; done; \
 	case '$(INSTALL_OS)' in \
@@ -207,6 +225,7 @@ install:
 uninstall:
 	@set -eu; root='$(DESTDIR)'; \
 	for f in "$$root$(BINDIR)/$(BINARY)" "$$root$(MANDIR)/man1/lw.1" \
+		"$$root$(BASHCOMPDIR)/lw" "$$root$(ZSHCOMPDIR)/_lw" "$$root$(FISHCOMPDIR)/lw.fish" \
 		"$$root$(PREFIX)/lib/systemd/system/logwisp.service" \
 		"$$root$(PREFIX)/lib/sysusers.d/logwisp.conf" "$$root$(PREFIX)/lib/tmpfiles.d/logwisp.conf" \
 		"$$root$(PREFIX)/etc/rc.d/logwisp" "$$root$(SYSCONFDIR)/logwisp/logwisp.toml.sample"; do \
@@ -217,6 +236,37 @@ uninstall:
 		if [ -d "$$d" ]; then rm -rf "$$d"; echo "remove  $$d"; fi; \
 	done; \
 	echo "keep    $$root$(SYSCONFDIR)/logwisp (configuration and credentials)"
+
+# deb stages install in Debian's layout and takes the architecture from the
+# binary. An untagged or modified tree's version sorts below every release and
+# by build time, so each build upgrades the last.
+deb: release
+	@set -eu; stage=$(BIN_DIR)/deb; doc="$$stage/usr/share/doc/logwisp"; rm -rf "$$stage"; \
+	$(MAKE) install DESTDIR="$$stage" PREFIX=/usr SYSCONFDIR=/etc INSTALL_OS=Linux \
+		LICENSEDIR=/usr/share/doc/logwisp ZSHCOMPDIR=/usr/share/zsh/vendor-completions >/dev/null; \
+	meta=$$($(GO) version -m $(BIN_DIR)/$(BINARY)); \
+	case $$meta in *GOOS=linux*) ;; *) echo "$(BIN_DIR)/$(BINARY) is not a Linux build" >&2; exit 1 ;; esac; \
+	arch=$$(echo "$$meta" | sed -n 's/^[[:space:]]*build[[:space:]]*GOARCH=//p'); \
+	case $$arch in 386) arch=i386 ;; arm) arch=armhf ;; ppc64le) arch=ppc64el ;; \
+		mipsle) arch=mipsel ;; mips64le) arch=mips64el ;; esac; \
+	stamp=$$(echo '$(BUILD_TIME)' | tr -dc 0-9); \
+	version=$$(echo '$(VERSION)' | sed -e 's/^v//' -e 's/-dirty$$/+dirty/' \
+		-e 's/-\([0-9][0-9]*\)-g/+\1.g/' -e 's/-/~/g'); \
+	case $$version in \
+	[0-9]*.*+dirty) version="$$version.$$stamp" ;; \
+	[0-9]*.*) ;; \
+	*) version="0~$$stamp.$$version" ;; \
+	esac; \
+	mv "$$doc/LICENSE" "$$doc/copyright"; gzip -9n "$$stage/usr/share/man/man1/lw.1"; \
+	install -d -m 0755 "$$stage/DEBIAN"; \
+	for f in postinst prerm postrm; do install -m 0755 $(PKG_DIR)/deb/$$f "$$stage/DEBIAN/$$f"; done; \
+	echo /etc/logwisp/logwisp.toml > "$$stage/DEBIAN/conffiles"; \
+	(cd "$$stage" && find usr -type f -exec md5sum {} + | LC_ALL=C sort -k 2) > "$$stage/DEBIAN/md5sums"; \
+	size=$$(du -sk --apparent-size "$$stage/usr" "$$stage/etc" | awk '{ s += $$1 } END { print s }'); \
+	{ printf 'Package: logwisp\nVersion: %s\nArchitecture: %s\nMaintainer: %s\nInstalled-Size: %s\n' \
+		"$$version" "$$arch" "$(DEB_MAINTAINER)" "$$size"; cat $(PKG_DIR)/deb/control; \
+		sed -e 's/^$$/./' -e 's/^/ /' $(PKG_DIR)/freebsd/pkg-descr; } > "$$stage/DEBIAN/control"; \
+	dpkg-deb --root-owner-group --build "$$stage" "$(BIN_DIR)/logwisp_$${version}_$$arch.deb"
 
 clean:
 	rm -rf $(BIN_DIR)

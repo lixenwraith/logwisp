@@ -1,0 +1,4 @@
+Section: admin
+Priority: optional
+Homepage: https://github.com/lixenwraith/logwisp
+Description: Pipeline-based log transport with TLS and SCRAM authentication

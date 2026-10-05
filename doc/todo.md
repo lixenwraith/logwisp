@@ -11,14 +11,18 @@ The foundation exists:
   24.04 and 26.04, and the FreeBSD 15.1 ports tree.
 - The canonical module path `github.com/lixenwraith/logwisp`, which
   `go install`, FreeBSD's `USES=go:modules` and Debian's dh-golang expect.
-- `make install` with `DESTDIR`, `PREFIX` and `SYSCONFDIR`.
-- The `doc/lw.1` manual.
-- Service files in `deploy/package/`: systemd unit, sysusers, tmpfiles and the
-  FreeBSD rc.d script.
+- `make install` with `DESTDIR`, `PREFIX` and `SYSCONFDIR`: the binary, the
+  `doc/lw.1` manual, bash, zsh and fish completion generated from `cmd/lw`'s
+  `shorts` and `commands` tables, and the service files in `deploy/package/`
+  (systemd unit, sysusers, tmpfiles, FreeBSD rc.d script).
+- `make deb`, a binary package built with `dpkg-deb`.
 - Skeletons in `deploy/package/arch/` and `deploy/package/freebsd/`.
+- `.github/workflows/package.yml`: `makepkg` on the PKGBUILD, the `.deb`
+  installed, started and purged, BSD make and the rc.d service on FreeBSD
+  15.1, and `make image image-check`.
 
-What remains. Steps 1 to 3 are the maintainer's: they need push rights and an
-identity, and both skeletons download the tagged source.
+What remains is the maintainer's: it needs push rights, an identity or a
+release tag, and both skeletons download the tagged source.
 
 1. Tag the release on the merged main commit, `vX.Y.Z`:
    ```
@@ -52,14 +56,18 @@ identity, and both skeletons download the tagged source.
    - `portlint -AC`, `poudriere testport` on 14.x and 15.x jails, then a
      Bugzilla report with the port directory and the UIDs/GIDs diff.
 4. Debian:
-   - Debian policy wants every Go dependency packaged; the four `lixenwraith`
-     libraries are not.
-   - Either package them too (dh-golang), or start with an `.deb` built by the
-     Makefile `install` target (nfpm or `dpkg-deb`) and a PPA, and move to the
-     archive later.
-5. Shell completion for bash, zsh and fish, installed by `make install`.
-6. A packaging CI job: build the AUR package in an Arch container and the port
-   in a FreeBSD VM, run `lw --version` and `make image-check`.
+   - `make deb` serves direct installs. A PPA builds from a signed source
+     package without network access: a `debian/` directory (changelog,
+     control, rules) and the Go modules vendored into the source tarball.
+   - The archive wants every Go dependency packaged (dh-golang); the four
+     `lixenwraith` libraries are not.
+   - `lintian` on the `make deb` package reports `no-changelog` (a source
+     package's `debian/changelog` provides it), `statically-linked-binary`
+     (lw is static by design) and `maintainer-script-calls-systemctl` (dh's
+     scripts use `deb-systemd-helper` instead).
+5. With a tag, the packaging workflow's FreeBSD job can build the port itself
+   from a ports tree (`make stage check-plist` in a copy of
+   `deploy/package/freebsd/`), rather than BSD make on the checkout.
 
 ## 2. `lw --tui` and the configuration engine it shares with lixen.com
 
