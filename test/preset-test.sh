@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # logwisp preset test: colors, presets, --dump, lw tls, listeners that make
 # their certificate (self-signed and pinned, or issued), the serve preset's
-# browser viewer, and the http and tcp sinks writing a finite input whole.
+# browser viewer, and the network sinks delivering a finite input whole.
 # One-shot: both modes run the checks.
 # Ports: 15890-15896 on 127.0.0.1.
 # Requires: bash 5+, coreutils, curl, openssl. Linux dev host only.
@@ -114,5 +114,13 @@ wait "$fpid"
 n=$(grep -c '^data: flush ' "$RUN/flush-http.out")
 check "an http stream gets all 20000 lines, then the disconnect event ($n)" \
 	"$( ((n == 20000)) && tail -3 "$RUN/flush-http.out" | grep -q '^event: disconnect' && echo 1 || echo 0)"
+# 1000 lines: the chain sink's queue, which holds them until the link is up
+flushed() { cat "$RUN/out/$1"/aggregate*.log 2>/dev/null | grep -c '"flush '; }
+seq 1 1000 | sed 's/^/flush /' | lw --preset "edge,to=127.0.0.1:15893,pin=$PIN,user=edge-01,password_file=$RUN/edge-01.pass" 2>"$LOG/flush-tcp-chain.err"
+wait_until 5 eval '(( $(flushed self) >= 1000 ))'
+check "a tcp_chain edge delivers all 1000 lines before it exits ($(flushed self))" "$(( $(flushed self) == 1000 ))"
+seq 1 1000 | sed 's/^/flush /' | lw --preset "edge,to=127.0.0.1:15894,transport=http,ca=$RUN/pki/ca.crt,user=edge-01,password_file=$RUN/edge-01.pass" 2>"$LOG/flush-http-chain.err"
+wait_until 5 eval '(( $(flushed issuer) >= 1000 ))'
+check "an http_chain edge delivers all 1000 lines before it exits ($(flushed issuer))" "$(( $(flushed issuer) == 1000 ))"
 
 summary

@@ -36,14 +36,32 @@ type SinkStats struct {
 	Details           map[string]any
 }
 
-// FlushBound is how long a network sink's Stop gives its clients to take
-// what is queued: write_timeout_ms, at most core.SinkFlushTimeout, which a
-// reload also waits out for a client that stopped reading.
+// FlushBound is how long a network sink's Stop gives what is queued to reach
+// its clients or its downstream: its write or request timeout, at most
+// core.SinkFlushTimeout, which a reload also waits out for a stalled peer.
 func FlushBound(writeTimeout time.Duration) time.Duration {
 	if writeTimeout > 0 && writeTimeout < core.SinkFlushTimeout {
 		return writeTimeout
 	}
 	return core.SinkFlushTimeout
+}
+
+// FlushContext is ctx ending FlushBound(timeout) after done closes: a sink
+// that dials runs its loop under it, so Stop leaves its queue that long.
+func FlushContext(ctx context.Context, done <-chan struct{}, timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-done:
+			select {
+			case <-time.After(FlushBound(timeout)):
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		}
+		cancel()
+	}()
+	return ctx, cancel
 }
 
 // Drain takes the payloads queued in input without waiting: a network sink's
