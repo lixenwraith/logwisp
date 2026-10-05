@@ -177,7 +177,8 @@ unknown key fails and lists the valid ones. A `path` is a file, a directory
 - `tail`: follow files to stdout, like `tail -F`
   - `path` (required), `from`, `format` (`raw`)
 - `serve`: a live stream, an [http sink](sinks.md#http): a browser at
-  `listen` gets the viewer, `/stream` is SSE
+  `listen` gets the viewer, `/stream` is SSE, each stream starting with the
+  last 1000 entries
   - `path`, `from`, `format` (`json`), `listen` (`127.0.0.1:8080`)
   - `tls`: `off` (default), `self` (a self-signed certificate made at
     startup), `issuer` (one signed by `issuer_cert` and `issuer_key`), or

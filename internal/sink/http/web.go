@@ -16,18 +16,19 @@ import (
 	"github.com/lixenwraith/logwisp/internal/netacl"
 )
 
-//go:embed web/*.js web/*.html web/*.css
+//go:embed web/*.js web/*.html web/*.css web/*.svg
 var webFiles embed.FS
 
-// pageCSP confines the pages to their own scripts and styles: no inline code,
-// no other origin, no framing
+// pageCSP confines the pages to their own scripts, styles and icon: no inline
+// code, no other origin, no framing
 const pageCSP = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; " +
-	"form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+	"img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
 
 var webTypes = map[string]string{
 	".js":   "text/javascript; charset=utf-8",
 	".css":  "text/css; charset=utf-8",
 	".html": "text/html; charset=utf-8",
+	".svg":  "image/svg+xml",
 }
 
 // webRoutes are the browser files under /auth/, each with the page that needs
@@ -38,6 +39,7 @@ var webRoutes = []struct {
 }{
 	{"scram.js", "scram.js", ""},
 	{"style.css", "style.css", ""},
+	{"favicon.svg", "favicon.svg", ""},
 	{"login", "login.html", "login"},
 	{"login.js", "login.js", "login"},
 	{"view", "view.html", "view"},
