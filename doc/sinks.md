@@ -217,8 +217,9 @@ Options, each as type and default:
   - an endpoint at `/` keeps the root, and the viewer stays at `/auth/view`.
   The viewer starts with the `replay_lines` backlog, holds one stream against
   `max_connections`, and says so when all are taken (`server full`). Its
-  search keeps the lines containing a text, in any case, and its level list
-  the entries at or above a level, read as the sources read it.
+  search keeps the lines containing a text, in any case unless its `Aa` toggle
+  matches case, and its level list the entries at or above a level, read as
+  the sources read it.
 - Refusals are logged at WARN and counted in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
   `auth_identity`.

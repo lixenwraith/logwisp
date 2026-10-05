@@ -28,7 +28,7 @@ func main() {
 	case inv.command != nil:
 		os.Exit(inv.command.run(inv.args, os.Stdout, os.Stderr))
 	case inv.help:
-		printHelp()
+		printHelp(os.Stdout)
 		os.Exit(0)
 	}
 
