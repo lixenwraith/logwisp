@@ -215,8 +215,9 @@ Options, each as type and default:
 - `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
   see [Security](security.md#the-auth-block).
 - `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
-  before TLS, and `proxy_protocol` with `proxy_from` for the client a PROXY
-  header names; see [Security](security.md#the-acl-block).
+  before TLS, `proxy_protocol` with `proxy_from` for the client a PROXY header
+  names, and `max_connections_per_client`; see
+  [Security](security.md#the-acl-block).
 
 For passwords instead of certificates, the `auth` block takes `type = "scram"`
 and a `credentials_file`, and `client_auth` becomes optional; see
@@ -251,8 +252,8 @@ and a `credentials_file`, and `client_auth` becomes optional; see
 **Statistics**: `active_connections`, `rejected_conns`, `parse_errors`,
 `tls_handshake_errors`, `trust_node`, `auth`, `auth_allowed`, `auth_rejected`,
 `node_binding`; under `scram` also `auth_users`, `auth_throttled`, `auth_busy`
-and `auth_binding_mismatch`; with `acl` rules or `proxy_from` also `acl`,
-`acl_denied` and `acl_proxy_headers`.
+and `auth_binding_mismatch`; with a non-empty `acl` block also `acl`,
+`acl_denied`, `acl_limited` and `acl_proxy_headers`.
 
 ---
 
@@ -304,8 +305,9 @@ Options, each as type and default:
 - `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
   see [Security](security.md#the-auth-block).
 - `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
-  before TLS, and `proxy_protocol` with `proxy_from` for the client a PROXY
-  header names; see [Security](security.md#the-acl-block).
+  before TLS, `proxy_protocol` with `proxy_from` for the client a PROXY header
+  names, and the per-client `max_connections_per_client` and
+  `requests_per_second_per_client`; see [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -332,8 +334,8 @@ Options, each as type and default:
 **Statistics**: `total_requests`, `rejected_requests`, `parse_errors`,
 `cached_sessions`, `trust_node`, `auth`, `auth_allowed`, `auth_rejected`,
 `node_binding`; under `scram` also `auth_users`, `auth_throttled`, `auth_busy`,
-`auth_binding_mismatch` and `auth_token_lifetime_ms`; with `acl` rules or
-`proxy_from` also `acl`, `acl_denied` and `acl_proxy_headers`.
+`auth_binding_mismatch` and `auth_token_lifetime_ms`; with a non-empty `acl`
+block also `acl`, `acl_denied`, `acl_limited` and `acl_proxy_headers`.
 
 ---
 

@@ -82,8 +82,9 @@ change touches.
   in `internal/config/preset.go`.
 - Network security has three seams: `tlsx` (TLS configs, certificates made at
   startup or by `lw tls`, pins, startup warnings), `authz`, and `netacl`
-  (address rules: a listener wraps the socket `core.Listen` returns in
-  `Policy.Listener`, before TLS). Listeners admit only through
+  (address rules and per-client limits: a listener wraps the socket
+  `core.Listen` returns in `Policy.Listener`, before TLS; its `Table` is the
+  one per-client limiter, SCRAM throttling's too). Listeners admit only through
   `Admit`/`AuthorizeRequest`, dialers through `Greet`/`Prepare`; `Authorize`
   refuses under scram, so a plugin gated on it alone fails closed. Nil policies
   are valid: keep call sites branch-free.

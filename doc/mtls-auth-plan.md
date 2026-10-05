@@ -305,9 +305,10 @@ The remaining phase-4 items, in rough order of value:
    operators with existing CRL infrastructure. The allow-list covers the same
    ground with fewer moving parts, so this is only worth doing for a fleet whose
    revocation already flows through a CRL.
-2. **Per-identity rate limits.** The natural follow-on now that identity exists,
-   and the natural home for the per-IP limiting that was also removed. Kept out
-   of scope here so this feature stayed reviewable.
+2. **Per-identity rate limits.** The natural follow-on now that identity exists:
+   the `acl` block's per-client limits count addresses
+   ([Security](security.md#per-client-limits)), and would be keyed by identity
+   once a peer is authenticated.
 3. **Per-client identity in the `http` sink's status output.** The endpoint
    reports the policy and counters, but not which identities are currently
    connected; session metadata has the data.

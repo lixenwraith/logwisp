@@ -26,9 +26,10 @@ configure it, and — equally important — what it does not yet do.
   [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy).
 - Server pinning by dialers: certificate identity (`mtls`), bound certificate
   (`scram`).
-- Address rules on every listener, applied before TLS, to the client a PROXY
-  header (v1 or v2) from a listed L4 proxy names: see
-  [The ACL Block](#the-acl-block).
+- Address rules and per-client connection and request limits on every
+  listener, applied before TLS to the client a PROXY header (v1 or v2) from a
+  listed L4 proxy names, and per request to the client an L7 proxy forwards:
+  see [The ACL Block](#the-acl-block).
 - Startup warnings for expiring certificates and risky settings: see
   [Startup Warnings](#startup-warnings).
 - Unknown configuration keys rejected: a typo in `tls`, `auth`, `acl` or a
@@ -52,10 +53,11 @@ configure it, and — equally important — what it does not yet do.
 
 - Certificate revocation lists (CRL) or OCSP: revoke by editing the allow-list
   or credentials file.
-- Per-address connection or request limits: only SCRAM logins are throttled
-  per address.
-- Address rules for `X-Forwarded-For` clients: in the `http` sink's proxy mode
-  `acl` sees the L7 proxy, never the client it forwards.
+- Per-identity limits: the per-client limits count addresses, not the
+  identities `auth` proves.
+- Per-client stream caps: under HTTP/2 `max_connections_per_client` bounds a
+  client's connections, not the streams each carries; the request rate only
+  slows how fast it opens them.
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
@@ -334,25 +336,53 @@ allow = ["192.0.2.0/24", "198.51.100.7"] # addresses or CIDRs; empty: all
 deny  = ["192.0.2.66"]                   # refused, listed in allow or not
 proxy_protocol = "required"              # off (default), optional, required
 proxy_from = ["10.0.0.5"]                # L4 proxies sending PROXY headers
+max_connections_per_client = 4           # at once; 0 (default): no cap
+requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
 ```
 
 - `deny` wins; then a non-empty `allow` admits only its entries, an empty one
   every address `deny` does not list.
 - Entries are of the listener's [family](networking.md#address-family): IPv4
   on an IPv4 listener, IPv6 on an IPv6 one, either behind a hostname (only the
-  family it binds ever matches). Behind `proxy_from` they take either, as a
-  header may name a client of either. An entry of the other family, an
+  family it binds ever matches). Behind `proxy_from` or the `http` sink's
+  `trusted_proxies` they take either, as the proxy may name a client of
+  either. An entry of the other family, an
   IPv4-mapped address, one with a zone, or anything but an address or CIDR
   fails construction. A link-local peer matches without its zone.
-- A refused connection is closed at once and counted in `acl_denied` (plugin
-  stats, the `http` sink's status). A WARN names the peer, the reason and the
-  count, at most once a minute per listener; the refusals in between are only
-  counted.
+- A refused connection is closed at once and counted in `acl_denied`, or
+  `acl_limited` past a [limit](#per-client-limits) (plugin stats, the `http`
+  sink's status). A WARN names the client, the reason and the counts, at most
+  once a minute per listener; the refusals in between are only counted.
 - The rules see the client: the socket peer, or the client a PROXY header
-  names. Behind the `http` sink's `trusted_proxies` they see the L7 proxy.
+  names. Behind the `http` sink's `trusted_proxies` they judge the L7 proxy
+  as the peer, then each request's forwarded client (`403` when refused,
+  counted in `acl_denied`): allow both.
 - The `serve` and `aggregator` presets take `allow` and `deny` list keys.
 - Dialers have no `acl`: on a `tcp_chain` or `http_chain` sink it is an
   unknown key.
+
+### Per-client limits
+
+- `max_connections_per_client` caps the connections a client holds at once,
+  on every listener; past it a connection is closed like a refused one.
+  - HTTP keep-alive connections count, idle ones too, and a browser opens up
+    to six; under HTTP/2 one connection carries a client's many requests.
+  - Behind `trusted_proxies` every connection is the proxy's, so the key
+    fails construction: cap clients at the proxy.
+- `requests_per_second_per_client`, on the `http` sink and the `http_chain`
+  source, admits a second's worth of requests at once (at least one),
+  refilled at that rate; past it a request gets `429`, with `Retry-After` the
+  seconds until its next (1 at a rate of 1 or more).
+  - Every request counts but the SCRAM exchange (`POST /auth`), which
+    [throttling](#throttling) limits: stream, status, ingest and the viewer's
+    files, about six for a viewer's first load.
+- A client is the address the rules see, an IPv6 one by its /64 and a
+  link-local one per link, so the hosts of one /64 (a SLAAC LAN) share a
+  budget; behind `trusted_proxies` the request rate counts the forwarded
+  client.
+- Each limit tracks up to 65,536 clients, a client until its budget is whole
+  again, and refuses new ones when full, failing closed. SCRAM throttling
+  keeps its budgets the same way.
 
 ### PROXY protocol
 
@@ -906,7 +936,8 @@ sink's stream and status endpoints stop being open to anyone who can reach the
 port.
 
 **`acl`** — an address check, per listener, before TLS: it narrows who can
-reach the other layers, never proves who a peer is.
+reach the other layers and how much each address may take, never proves who a
+peer is.
 
 **Revocation** is the allow-list or the credentials file, not a CRL. Remove the
 identity or user and send `SIGHUP`: the reload rebuilds every pipeline, so the
@@ -938,8 +969,9 @@ What each exposes when `auth.type = "none"`:
   (with `client_auth`, any the CA vouches for), under any node label it
   claims.
 
-`max_connections` bounds concurrency on all of them but does not distinguish
-callers.
+`max_connections` bounds concurrency on all but the `http_chain` source; the
+`acl` block's [per-client limits](#per-client-limits) bound each caller's
+share.
 
 Both methods require TLS on the listener, except an `http` sink in proxy mode,
 where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.

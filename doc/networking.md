@@ -116,11 +116,10 @@ sink, and the `tcp_chain` source. `0` means unlimited.
 The `http_chain` source has no connection cap; it bounds work with
 `max_body_bytes` and `read_timeout_ms` instead.
 
-Apart from SCRAM logins, which are throttled per address (see
-[Security](security.md#throttling)), there is **no** per-IP limiting; `acl`
-admits or refuses peers by address ([Security](security.md#the-acl-block)).
-`flow.rate_limit` is a pipeline-wide entry rate limit, not a network-level
-one — it cannot distinguish or throttle an individual peer.
+Per client, the `acl` block caps connections on every listener and requests
+on the HTTP ones ([Security](security.md#per-client-limits)), and SCRAM logins
+are throttled ([Security](security.md#throttling)). `flow.rate_limit` is a
+pipeline-wide entry rate limit: it cannot distinguish or throttle a peer.
 
 ## Keep-Alive
 
@@ -208,13 +207,16 @@ headers, and entry encoding.
 - Check the port is not already bound by another pipeline in the same process.
 
 **Closed as soon as it connects, before TLS**
-- The listener's `acl` refused it: `acl_denied` rises, and its log has
-  `Connection refused by acl` at WARN with a `reason`, once a minute at most.
-  The dialer sees `EOF` or `connection reset by peer` (curl: exit 52 or 56).
+- The listener's `acl` refused it: `acl_denied` or `acl_limited` rises, and
+  its log has `Connection refused by acl` at WARN with a `reason`, once a
+  minute at most. The dialer sees `EOF` or `connection reset by peer` (curl:
+  exit 52 or 56).
   - `address rules` — `allow` or `deny` excludes the client: the one a PROXY
     header names (`remote_addr`, the proxy as `peer_addr`), else the socket
     peer. Behind the `http` sink's `auth.trusted_proxies` that is the proxy:
     allow it.
+  - `max_connections_per_client` — the client holds that many already, or the
+    listener tracks 65,536 clients; HTTP keep-alive connections count too.
   - `no PROXY header` — a peer in `proxy_from` sent none under
     `proxy_protocol = "required"`: the proxy lacks `proxy_protocol on` (nginx)
     or `send-proxy` (HAProxy), or the proxy's host dialed directly.
@@ -223,7 +225,14 @@ headers, and entry encoding.
     the connection opened: list the proxy in `proxy_from`.
 - `acl: allow entry "...": not of the listener's family` at startup — an IPv4
   entry on an IPv6 `host`, or the reverse: each family's listener takes its own.
-  Behind `proxy_from`, `allow` and `deny` take both; `proxy_from` its own.
+  Behind `proxy_from` or `trusted_proxies`, `allow` and `deny` take both;
+  `proxy_from` its own.
+
+**HTTP `429 Too Many Requests` with `Retry-After`**
+- `requests_per_second_per_client`: `acl_limited` rises and the log has
+  `Request refused by acl`, once a minute at most. A browser's page load
+  takes several requests; raise the rate rather than retry faster. From
+  `/auth` with `too many attempts`, it is SCRAM throttling (below).
 
 **TLS handshake failure**
 - `client didn't provide a certificate` — the listener has `client_auth = true`
@@ -277,7 +286,8 @@ headers, and entry encoding.
 - `403` from an `http` sink in proxy mode, with `not a trusted proxy` or
   `X-Forwarded-Proto` in its WARN line — the request did not come from a listed
   proxy, or the proxy did not forward `X-Forwarded-Proto: https` and
-  `X-Forwarded-For`.
+  `X-Forwarded-For`. With `Request refused by acl` (once a minute at most) or
+  none, the `acl` rules refuse the forwarded client (`acl_denied`).
 - `too many attempts` — the address failed or abandoned logins faster than one
   per second beyond a burst of 10, or has 4 unfinished; it clears within seconds
   once the failing peer stops. Peers behind one NAT, or one passthrough proxy

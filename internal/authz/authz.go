@@ -21,6 +21,7 @@ import (
 
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 
 	"github.com/lixenwraith/log"
@@ -78,7 +79,8 @@ type Policy struct {
 	allow     map[string]struct{}
 	patterns  []*regexp.Regexp
 	binding   string
-	secrets   []secretFile // reported at startup when every local user can read them
+	secrets   []secretFile   // reported at startup when every local user can read them
+	acl       *netacl.Policy // a forwarded client's rules, in proxy mode
 
 	listener *scramListener // scram listener state
 	dialer   *scramDialer   // scram dialer state
@@ -110,7 +112,8 @@ func (id Identity) Apply(meta map[string]any) {
 // New compiles an auth policy, returning (nil, nil) when auth is disabled.
 // tlsCfg is what tlsx built from the sibling `tls` block: a policy the
 // transport cannot enforce is rejected here rather than silently accepted.
-func New(o *config.AuthOptions, tlsCfg *tls.Config, role Role, transport Transport) (*Policy, error) {
+// acl is netacl's from the `acl` block, nil for a dialer.
+func New(o *config.AuthOptions, tlsCfg *tls.Config, acl *netacl.Policy, role Role, transport Transport) (*Policy, error) {
 	if o == nil {
 		return nil, nil
 	}
@@ -139,7 +142,7 @@ func New(o *config.AuthOptions, tlsCfg *tls.Config, role Role, transport Transpo
 	if err != nil {
 		return nil, err
 	}
-	p := &Policy{role: role, transport: transport, method: o.Type, binding: binding}
+	p := &Policy{role: role, transport: transport, method: o.Type, binding: binding, acl: acl}
 	if o.Type == MethodMTLS {
 		err = p.compileMTLS(o, tlsCfg)
 	} else {

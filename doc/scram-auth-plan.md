@@ -174,8 +174,9 @@ one per /64), on handshake starts: a token bucket (burst 10, 1/s) refunded on
 success, and at most 4 unfinished exchanges. An unanswered HTTP challenge holds
 its slot for the `auth` handshake timeout (30 s); abandoned TCP exchanges
 release their slot, and their entry in the `auth` handshake table,
-immediately. The address table holds 65,536 entries, drops one idle for a
-minute once its challenges have expired, and fails closed when full; the SCRAM
+immediately. The address table, `netacl.Table` as for the `acl` block's
+per-client limits, holds 65,536 entries, drops one once its bucket has
+refilled and its challenges have expired, and fails closed when full; the SCRAM
 server itself caps in-flight handshakes at 4,096 (`busy`).
 
 Counters: `auth_allowed` counts logins; `auth_rejected` every refusal — failed
@@ -332,8 +333,8 @@ indistinguishable from an unknown user, another certificate refused and counted,
 hello and policy disagreeing either way, a dialer cut short by its context, an
 abandoned exchange freeing its handshake and limiter slots, a refusal after the
 exchange sent as a reason rather than a final, certificate-to-user binding for
-logins and tokens); only failed attempts throttled, the limiter bounds
-(reservation under concurrency, the sweep of abandoned challenges); pre-auth
+logins and tokens); only failed attempts throttled (the limiter's bounds are
+`netacl`'s, under the per-client limits); pre-auth
 input capped at 4 KiB; the decoy salt stable across restarts; a dialer refusing
 a challenge below its Argon2 floor; the HTTP exchange on a TLS test server
 (token accepted, garbage and foreign tokens `401`, forged final yields no token,

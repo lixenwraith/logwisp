@@ -179,8 +179,9 @@ Options, each as type and default:
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
 - `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
-  before TLS, and `proxy_protocol` with `proxy_from` for the client a PROXY
-  header names; see [Security](security.md#the-acl-block).
+  before TLS, `proxy_protocol` with `proxy_from` for the client a PROXY header
+  names, and the per-client `max_connections_per_client` and
+  `requests_per_second_per_client`; see [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -247,13 +248,13 @@ Options, each as type and default:
 the compiled auth policy and acl, active client count, sink and per-client
 buffer sizes, connection limit, write timeout, uptime, endpoint paths, and the
 `total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected` /
-`acl_denied` counters.
+`acl_denied` / `acl_limited` counters.
 
 **Statistics**: `dropped_writes`, `rejected_clients`, `auth`, `auth_allowed`,
 `auth_rejected`; under `scram` also `auth_users`, `auth_throttled`,
 `auth_busy`, `auth_binding_mismatch` and `auth_token_lifetime_ms`, and in
-proxy mode `auth_trusted_proxies`; with `acl` rules or `proxy_from` also
-`acl`, `acl_denied` and `acl_proxy_headers`.
+proxy mode `auth_trusted_proxies`; with a non-empty `acl` block also `acl`,
+`acl_denied`, `acl_limited` and `acl_proxy_headers`.
 
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read
@@ -307,8 +308,9 @@ Options, each as type and default:
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
 - `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
-  before TLS, and `proxy_protocol` with `proxy_from` for the client a PROXY
-  header names; see [Security](security.md#the-acl-block).
+  before TLS, `proxy_protocol` with `proxy_from` for the client a PROXY header
+  names, and `max_connections_per_client`; see
+  [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -335,7 +337,7 @@ Options, each as type and default:
 **Statistics**: `write_errors`, `dropped_writes`, `rejected_conns`,
 `tls_handshake_errors`, `auth`, `auth_allowed`, `auth_rejected`; under `scram`
 also `auth_users`, `auth_throttled`, `auth_busy` and `auth_binding_mismatch`;
-with `acl` rules or `proxy_from` also `acl`, `acl_denied` and
+with a non-empty `acl` block also `acl`, `acl_denied`, `acl_limited` and
 `acl_proxy_headers`.
 
 ---

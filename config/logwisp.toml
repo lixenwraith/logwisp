@@ -11,8 +11,8 @@
 ### sink (the [...tls] blocks below), the [...auth] blocks authenticate peers by
 ### certificate (mtls) or password (scram; credentials via `lw auth`), and the
 ### listeners' [...acl] blocks admit peers by address, or by the client an L4
-### proxy's PROXY header names. Unknown keys anywhere in this file or in any
-### plugin config are rejected at startup.
+### proxy's PROXY header names, and limit each client. Unknown keys anywhere in
+### this file or in any plugin config are rejected at startup.
 ###
 ### Environment overrides use the LOGWISP_ prefix
 ### (LOGWISP_QUIET, LOGWISP_LOGGING_LEVEL, ...). Bare names are ignored.
@@ -163,9 +163,10 @@ name = "default"
 ### ACL (beside [...tls] and [...auth] on the listeners; dialers have none)
 ###
 ### Applied as a connection is accepted, before TLS: a refused peer is closed
-### at once and counted in acl_denied, with a WARN at most once a minute.
+### at once and counted in acl_denied (acl_limited past a limit), with a WARN
+### at most once a minute.
 ### allow = []   addresses or CIDRs of the listener's family (either behind
-###              proxy_from); empty = all
+###              proxy_from or trusted_proxies); empty = all
 ### deny = []    refused, listed in allow or not
 ### proxy_protocol = "off"   off | optional | required: PROXY v1/v2 headers,
 ###                          read before TLS; the rules then see the client.
@@ -173,6 +174,11 @@ name = "default"
 ###                          proxy: use it only while rolling headers out
 ### proxy_from = []          the proxies that may send one; a header from any
 ###                          other peer is refused
+### max_connections_per_client = 0       per client (an IPv6 one by its /64);
+###                                      refused behind trusted_proxies
+### requests_per_second_per_client = 0   HTTP listeners, /auth aside: past it,
+###                                      429; behind trusted_proxies, per
+###                                      forwarded client
 ###============================================================================
 
 ###============================================================================
@@ -246,6 +252,7 @@ from = "end"                            # "end" or "start" of a newly discovered
 # deny = []
 # proxy_protocol = "off"                # off | optional | required
 # proxy_from = []                       # proxies that may send a PROXY header
+# max_connections_per_client = 0       # per client at once; 0 = unlimited
 
 ## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
 # [[pipelines.plugin_sources]]
@@ -278,6 +285,8 @@ from = "end"                            # "end" or "start" of a newly discovered
 # deny = []
 # proxy_protocol = "off"                # off | optional | required
 # proxy_from = []                       # proxies that may send a PROXY header
+# max_connections_per_client = 0       # per client at once; 0 = unlimited
+# requests_per_second_per_client = 0   # per client, a second's worth at once; 0 = unlimited
 
 ###============================================================================
 ### Sinks (1+ required, fan-out)
@@ -348,6 +357,8 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # deny = []
 # proxy_protocol = "off"                # off | optional | required
 # proxy_from = []                       # proxies that may send a PROXY header
+# max_connections_per_client = 0       # per client at once; 0 = unlimited
+# requests_per_second_per_client = 0   # per client, a second's worth at once; 0 = unlimited
 
 ## TCP sink (streaming server)
 # [[pipelines.plugin_sinks]]
@@ -379,6 +390,7 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # deny = []
 # proxy_protocol = "off"                # off | optional | required
 # proxy_from = []                       # proxies that may send a PROXY header
+# max_connections_per_client = 0       # per client at once; 0 = unlimited
 
 ## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
 ## Do NOT point a chain sink at a chain source in the SAME pipeline: entries

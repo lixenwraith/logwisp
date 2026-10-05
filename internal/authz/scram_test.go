@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/testutil"
 
 	"github.com/lixenwraith/auth"
@@ -100,7 +102,7 @@ func (f *fixture) pool(t *testing.T) *x509.CertPool {
 func (f *fixture) listener(t *testing.T, o config.AuthOptions, tlsCfg *tls.Config, role Role, transport Transport) *Policy {
 	t.Helper()
 	o.Type, o.CredentialsFile = MethodSCRAM, f.creds
-	p, err := New(&o, tlsCfg, role, transport)
+	p, err := New(&o, tlsCfg, nil, role, transport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +116,7 @@ func (f *fixture) listener(t *testing.T, o config.AuthOptions, tlsCfg *tls.Confi
 func (f *fixture) dialer(t *testing.T, user, password string) *Policy {
 	t.Helper()
 	pw := f.write(t, user+"-"+strings.ReplaceAll(password, "/", "_")+".pass", password+"\n")
-	p, err := New(&config.AuthOptions{Type: MethodSCRAM, Username: user, PasswordFile: pw}, f.clientTLS, RoleDialer, TCP)
+	p, err := New(&config.AuthOptions{Type: MethodSCRAM, Username: user, PasswordFile: pw}, f.clientTLS, nil, RoleDialer, TCP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,11 +296,10 @@ func TestAbandonedExchangeReleasesItsSlot(t *testing.T) {
 	if _, err := l.listener.server.Load().ProcessClientFinalMessage(step.Challenge.FullNonce, "AAAA"); !errors.Is(err, auth.ErrSCRAMInvalidNonce) {
 		t.Fatalf("abandoned handshake still pending: %v", err)
 	}
-	lim := &l.listener.limit
-	lim.mu.Lock()
-	defer lim.mu.Unlock()
-	if pl := lim.peers["pipe"]; pl == nil || len(pl.pending) != 0 || pl.reserved != 0 {
-		t.Fatalf("limiter still holds the abandoned exchange: %+v", pl)
+	for i := range limitPending { // a pipe's peer has no address
+		if !l.listener.limit.Take(netacl.Key(netip.Addr{})) {
+			t.Fatalf("limiter still holds the abandoned exchange: slot %d taken", i)
+		}
 	}
 }
 
@@ -417,15 +418,6 @@ func TestDialerRefusesACheapChallenge(t *testing.T) {
 	}
 }
 
-// Link-local peers share one budget per link, not one across every link: the
-// zone names the link and stays in the key.
-func TestLinkLocalBudgetIsPerLink(t *testing.T) {
-	a, b, other := throttleKey("fe80::1%eth0"), throttleKey("fe80::2%eth0"), throttleKey("fe80::1%eth1")
-	if a != b || a == other {
-		t.Fatalf("keys %q, %q on one link, %q on another", a, b, other)
-	}
-}
-
 // Only failed attempts drain an address's budget; beyond it the listener
 // answers "too many attempts" without running the exchange.
 func TestOnlyFailedAttemptsAreThrottled(t *testing.T) {
@@ -444,46 +436,6 @@ func TestOnlyFailedAttemptsAreThrottled(t *testing.T) {
 	_, _, err := f.connect(t, l, f.serverTLS, right, nil)
 	if err == nil || !strings.Contains(err.Error(), "too many attempts") || l.listener.throttled.Load() != 1 {
 		t.Fatalf("attempt over budget: %v, throttled %d", err, l.listener.throttled.Load())
-	}
-}
-
-// Successes are refunded; unfinished exchanges are capped per address from
-// the moment they start, so concurrent hellos cannot all pass; a full table
-// refuses new addresses, and the sweep frees addresses whose challenges were
-// abandoned.
-func TestLimiterBounds(t *testing.T) {
-	var l limiter
-	for i := range 2 * limitBurst {
-		if !l.start("10.0.0.1") {
-			t.Fatalf("successful attempt %d throttled", i)
-		}
-		l.track("10.0.0.1", "n")
-		l.done("10.0.0.1", "n")
-		l.succeeded("10.0.0.1")
-	}
-	for i := range limitPending {
-		if !l.start("10.0.0.2") {
-			t.Fatalf("pending exchange %d throttled", i)
-		}
-	}
-	if l.start("10.0.0.2") {
-		t.Fatal("an exchange beyond the pending cap was admitted before any challenge")
-	}
-	l.release("10.0.0.2")
-	if !l.start("10.0.0.2") {
-		t.Fatal("a released reservation still counts")
-	}
-	for i := len(l.peers); i < limitPeers; i++ {
-		l.peers[net.IPv4(10, 1, byte(i>>8), byte(i)).String()] = &peerLimit{
-			seen: time.Now(), pending: map[string]time.Time{"abandoned": time.Now().Add(time.Second)},
-		}
-	}
-	if l.start("192.0.2.1") {
-		t.Fatal("a full table admitted a new address")
-	}
-	l.sweep(time.Now().Add(2 * limitIdle))
-	if len(l.peers) != 1 { // 10.0.0.2 still holds its reservations
-		t.Fatalf("%d addresses left after their challenges expired, want 1", len(l.peers))
 	}
 }
 

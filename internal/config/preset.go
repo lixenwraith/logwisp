@@ -41,7 +41,7 @@ var (
 		{Name: "hosts", List: true, Help: "names and addresses, beyond this host's, of a self or issuer certificate; ',' between them"},
 	}
 	aclParams = []PresetParam{
-		{Name: "allow", List: true, Help: "addresses or CIDRs that may connect, of listen's family; default: all; ',' between them"},
+		{Name: "allow", List: true, Help: "addresses or CIDRs that may connect, of listen's family (either behind proxy=); default: all; ',' between them"},
 		{Name: "deny", List: true, Help: "addresses or CIDRs refused, allow or not; ',' between them"},
 	}
 	transportParam = PresetParam{Name: "transport", Default: "tcp", Help: "tcp|http: tcp_chain or http_chain"}

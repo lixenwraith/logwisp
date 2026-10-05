@@ -184,7 +184,7 @@ every key.
 - filters, rate limits, heartbeat, formatter flags and timestamp layouts
 - more than one pipeline; both chain transports, or a further hop, on one node
 - proxy mode: browser logins through a TLS-terminating proxy
-- `acl` on the listeners: address rules, PROXY headers
+- `acl` on the listeners: address rules, PROXY headers, per-client limits
 - mtls identities other than the certificate CN; `node_binding` other than
   `force`
 - creating certificates
