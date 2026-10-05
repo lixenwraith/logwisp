@@ -1,0 +1,5 @@
+#!/bin/sh
+# A purge removes logwisp.toml; credentials in /etc/logwisp, /var/lib/logwisp,
+# /var/log/logwisp and the logwisp user stay, as make uninstall keeps them.
+set -e
+if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi

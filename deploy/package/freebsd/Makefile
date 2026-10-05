@@ -33,6 +33,15 @@ PORTDOCS=	*
 
 post-install:
 	${INSTALL_MAN} ${WRKSRC}/doc/lw.1 ${STAGEDIR}${PREFIX}/share/man/man1
+	${MKDIR} ${STAGEDIR}${PREFIX}/share/bash-completion/completions \
+		${STAGEDIR}${PREFIX}/share/fish/vendor_completions.d \
+		${STAGEDIR}${PREFIX}/share/zsh/site-functions
+	${INSTALL_DATA} ${WRKSRC}/deploy/package/completion/lw.bash \
+		${STAGEDIR}${PREFIX}/share/bash-completion/completions/lw
+	${INSTALL_DATA} ${WRKSRC}/deploy/package/completion/lw.fish \
+		${STAGEDIR}${PREFIX}/share/fish/vendor_completions.d
+	${INSTALL_DATA} ${WRKSRC}/deploy/package/completion/_lw \
+		${STAGEDIR}${PREFIX}/share/zsh/site-functions
 	${MKDIR} ${STAGEDIR}${ETCDIR}
 	${INSTALL_DATA} ${WRKSRC}/config/logwisp.toml ${STAGEDIR}${ETCDIR}/logwisp.toml.sample
 

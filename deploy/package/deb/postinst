@@ -1,0 +1,13 @@
+#!/bin/sh
+# sysusers and tmpfiles need no running systemd (a chroot); a first install
+# leaves the service to systemctl enable --now logwisp, an upgrade restarts it
+# if it runs. As in debhelper's scripts, only the account is fatal.
+set -e
+if [ "$1" = configure ]; then
+	if command -v systemd-sysusers >/dev/null; then systemd-sysusers logwisp.conf; fi
+	if command -v systemd-tmpfiles >/dev/null; then systemd-tmpfiles --create logwisp.conf || true; fi
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+		if [ -n "$2" ]; then systemctl try-restart logwisp.service || true; fi
+	fi
+fi

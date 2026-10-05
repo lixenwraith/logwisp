@@ -1,0 +1,102 @@
+name: Package
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - Makefile
+      - Dockerfile
+      - go.mod
+      - go.sum
+      - config/logwisp.toml
+      - doc/lw.1
+      - deploy/package/**
+      - .github/workflows/package.yml
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  # The AUR package from this commit: makepkg finds the tarball the PKGBUILD
+  # names next to it and skips the download, then builds, tests and packages.
+  # checkout's safe.directory lasts only its own step; root owns .git here.
+  arch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: archlinux:base-devel
+    steps:
+      - run: pacman -Syu --noconfirm --needed git go
+      - uses: actions/checkout@v5
+      - run: |
+          ver=$(sed -n 's/^pkgver=//p' deploy/package/arch/PKGBUILD)
+          dir=$(mktemp -d)
+          git -c safe.directory="$PWD" archive --prefix="logwisp-$ver/" -o "$dir/logwisp-$ver.tar.gz" HEAD
+          cp deploy/package/arch/PKGBUILD "$dir"
+          useradd -m build
+          chown -R build "$dir"
+          su build -c "cd '$dir' && makepkg --noconfirm"
+          pacman -U --noconfirm "$dir"/logwisp-*.pkg.tar.zst
+      - run: |
+          lw --version
+          test -f /usr/share/bash-completion/completions/lw
+          test -f /usr/share/zsh/site-functions/_lw
+          test -f /usr/share/fish/vendor_completions.d/lw.fish
+          pacman -R --noconfirm logwisp
+          test ! -e /usr/bin/lw
+  # make deb on a host with systemd: the service runs from the package's
+  # configuration; remove stops and disables it and leaves the conffile, purge
+  # removes that too
+  deb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: make deb
+      - run: |
+          sudo apt-get install -y ./bin/logwisp_*.deb
+          lw --version
+          test -f /usr/share/zsh/vendor-completions/_lw
+          sudo systemctl enable --now logwisp
+          sleep 3
+          systemctl is-active logwisp || { sudo journalctl -u logwisp --no-pager; exit 1; }
+          sudo apt-get remove -y logwisp
+          test ! -e /usr/bin/lw
+          test ! -e /usr/lib/systemd/system/logwisp.service
+          test ! -e /etc/systemd/system/multi-user.target.wants/logwisp.service
+          if systemctl is-active --quiet logwisp; then exit 1; fi
+          test -f /etc/logwisp/logwisp.toml
+          sudo apt-get purge -y logwisp
+          test ! -e /etc/logwisp/logwisp.toml
+  # BSD make on FreeBSD: build, install, run the rc.d service, uninstall
+  freebsd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
+        with:
+          release: "15.1"
+          copyback: false
+          prepare: pkg install -y go127
+          run: |
+            set -e
+            make release
+            make install
+            lw --version
+            pw groupadd logwisp
+            pw useradd logwisp -g logwisp -d /nonexistent -s /usr/sbin/nologin
+            service logwisp onestart
+            sleep 3
+            service logwisp onestatus
+            service logwisp onestop
+            make uninstall
+            test ! -e /usr/local/bin/lw
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: make image image-check

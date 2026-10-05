@@ -136,18 +136,7 @@ func TestHelpAndManualListEveryOption(t *testing.T) {
 	}
 	var help bytes.Buffer
 	printHelp(&help)
-	options := map[string]string{} // long -> its short, if lw takes one
-	for _, long := range config.SpecFlags() {
-		options[long] = ""
-	}
-	for long := range config.Settings() {
-		options[long] = ""
-	}
-	for letter, short := range shorts {
-		if short.top {
-			options[short.long] = letter
-		}
-	}
+	options := options()
 	// mdoc's Fl writes the first dash, and the others as \-
 	fl := func(flag string) string { return regexp.QuoteMeta("Fl " + strings.ReplaceAll(flag[1:], "-", `\-`)) }
 	for long, letter := range options {
@@ -269,5 +258,28 @@ func TestTLSCommandsIssueAVerifiableChain(t *testing.T) {
 	}
 	if code, _, stderr := runCommand(t, "tls", steps[0]...); code != 1 || !strings.Contains(stderr, "exists") {
 		t.Fatalf("second ca: exit %d: %s", code, stderr)
+	}
+}
+
+var update = flag.Bool("update", false, "rewrite the completion scripts: make completion")
+
+// The installed completion scripts are what lw's tables generate
+func TestCompletionScriptsAreCurrent(t *testing.T) {
+	for _, sh := range shells {
+		script := sh.script()
+		path := filepath.Join("../../deploy/package/completion", sh.file)
+		if *update {
+			if err := os.WriteFile(path, script, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		have, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(have, script) {
+			t.Errorf("%s is not what lw's tables generate: run make completion", path)
+		}
 	}
 }
