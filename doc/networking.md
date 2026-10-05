@@ -208,13 +208,22 @@ headers, and entry encoding.
 - Check the port is not already bound by another pipeline in the same process.
 
 **Closed as soon as it connects, before TLS**
-- The listener's `acl` refused the address: `acl_denied` rises, and its log has
-  `Connection refused by acl` at WARN, once a minute at most. The dialer sees
-  `EOF` or `connection reset by peer` (curl: exit 52 or 56).
-- Behind a proxy (an L4 passthrough, or the `http` sink's
-  `auth.trusted_proxies`) every peer has the proxy's address: allow the proxy.
+- The listener's `acl` refused it: `acl_denied` rises, and its log has
+  `Connection refused by acl` at WARN with a `reason`, once a minute at most.
+  The dialer sees `EOF` or `connection reset by peer` (curl: exit 52 or 56).
+  - `address rules` — `allow` or `deny` excludes the client: the one a PROXY
+    header names (`remote_addr`, the proxy as `peer_addr`), else the socket
+    peer. Behind the `http` sink's `auth.trusted_proxies` that is the proxy:
+    allow it.
+  - `no PROXY header` — a peer in `proxy_from` sent none under
+    `proxy_protocol = "required"`: the proxy lacks `proxy_protocol on` (nginx)
+    or `send-proxy` (HAProxy), or the proxy's host dialed directly.
+  - `PROXY header: …` — malformed, too long, or incomplete after 10 s.
+  - `PROXY header from a peer outside proxy_from` — at the first read, after
+    the connection opened: list the proxy in `proxy_from`.
 - `acl: allow entry "...": not of the listener's family` at startup — an IPv4
   entry on an IPv6 `host`, or the reverse: each family's listener takes its own.
+  Behind `proxy_from`, `allow` and `deny` take both; `proxy_from` its own.
 
 **TLS handshake failure**
 - `client didn't provide a certificate` — the listener has `client_auth = true`
@@ -271,9 +280,9 @@ headers, and entry encoding.
   `X-Forwarded-For`.
 - `too many attempts` — the address failed or abandoned logins faster than one
   per second beyond a burst of 10, or has 4 unfinished; it clears within seconds
-  once the failing peer stops. Peers behind one NAT or one passthrough proxy
-  share the budget. `busy` — 4,096 logins in flight, or the listener is
-  stopping.
+  once the failing peer stops. Peers behind one NAT, or one passthrough proxy
+  that sends no PROXY header, share the budget. `busy` — 4,096 logins in
+  flight, or the listener is stopping.
 - `authentication not enabled` — the dialer has `scram`; the listener's
   `auth.type` is `none` or `mtls`.
 - `no challenge within 10s (older logwisp, or not a scram listener)` — the
@@ -301,20 +310,18 @@ headers, and entry encoding.
   proxy mode, the proxy gate.
 
 **Behind an L4 proxy**
-- Every connection through the proxy fails: it sends a PROXY header (nginx
-  `stream` with `proxy_protocol on`, HAProxy `send-proxy`) to a LogWisp TLS
-  listener, which cannot read one yet. The header lands in front of the TLS
-  handshake, which fails; the listener logs the proxy's address and
-  `first record does not look like a TLS handshake` (the `tcp` sink at DEBUG).
-  Route LogWisp without it: see
-  [Behind nginx or another proxy](security.md#behind-nginx-or-another-proxy).
-- All peers share one throttling budget behind a passthrough proxy: without
-  PROXY every `scram` peer arrives from the proxy's address. One client failing
-  logins exhausts everyone's, and a fifth login while 4 are unfinished (edges
-  reconnecting together after a restart) is refused; both answer
-  `too many attempts` ([Throttling](security.md#throttling)).
-  Expose the LogWisp ports directly, or keep the proxy hop on a trusted
-  network so only trusted clients share the budget.
+- Every connection through the proxy fails, the listener logging the proxy's
+  address and `first record does not look like a TLS handshake` (the `tcp`
+  sink at DEBUG): the proxy sends a PROXY header (nginx `stream` with
+  `proxy_protocol on`, HAProxy `send-proxy`) to a listener without
+  `acl.proxy_protocol`. Set it, with the proxy in `proxy_from`: see
+  [PROXY protocol](security.md#proxy-protocol).
+- All peers share one throttling budget and logs name the proxy: it sends no
+  PROXY header, so every `scram` peer arrives from its address. One client
+  failing logins exhausts everyone's, and a fifth login while 4 are unfinished
+  (edges reconnecting together after a restart) is refused; both answer
+  `too many attempts` ([Throttling](security.md#throttling)). Have the proxy
+  send the header.
 
 **Entries not arriving over a chain link**
 - Check the sink's `connected` statistic and its `reconnects` count.

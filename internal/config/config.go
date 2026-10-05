@@ -374,11 +374,14 @@ type AuthOptions struct {
 }
 
 // ACLOptions is a listener's address rules, entries being addresses or CIDRs:
-// deny wins, then a set allow list admits only its entries. Validation is in
-// internal/netacl.
+// deny wins, then a set allow list admits only its entries. proxy_from lists
+// the L4 proxies whose PROXY header names the client the rules then see.
+// Validation is in internal/netacl.
 type ACLOptions struct {
-	Allow []string `toml:"allow"`
-	Deny  []string `toml:"deny"`
+	Allow         []string `toml:"allow"`
+	Deny          []string `toml:"deny"`
+	ProxyProtocol string   `toml:"proxy_protocol"` // off, optional or required
+	ProxyFrom     []string `toml:"proxy_from"`
 }
 
 // --- TLS Options ---

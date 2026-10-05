@@ -179,7 +179,8 @@ Options, each as type and default:
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
 - `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
-  before TLS; see [Security](security.md#the-acl-block).
+  before TLS, and `proxy_protocol` with `proxy_from` for the client a PROXY
+  header names; see [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -251,8 +252,8 @@ buffer sizes, connection limit, write timeout, uptime, endpoint paths, and the
 **Statistics**: `dropped_writes`, `rejected_clients`, `auth`, `auth_allowed`,
 `auth_rejected`; under `scram` also `auth_users`, `auth_throttled`,
 `auth_busy`, `auth_binding_mismatch` and `auth_token_lifetime_ms`, and in
-proxy mode `auth_trusted_proxies`; with `acl` rules also `acl` and
-`acl_denied`.
+proxy mode `auth_trusted_proxies`; with `acl` rules or `proxy_from` also
+`acl`, `acl_denied` and `acl_proxy_headers`.
 
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read
@@ -306,7 +307,8 @@ Options, each as type and default:
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
 - `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
-  before TLS; see [Security](security.md#the-acl-block).
+  before TLS, and `proxy_protocol` with `proxy_from` for the client a PROXY
+  header names; see [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -333,7 +335,8 @@ Options, each as type and default:
 **Statistics**: `write_errors`, `dropped_writes`, `rejected_conns`,
 `tls_handshake_errors`, `auth`, `auth_allowed`, `auth_rejected`; under `scram`
 also `auth_users`, `auth_throttled`, `auth_busy` and `auth_binding_mismatch`;
-with `acl` rules also `acl` and `acl_denied`.
+with `acl` rules or `proxy_from` also `acl`, `acl_denied` and
+`acl_proxy_headers`.
 
 ---
 
