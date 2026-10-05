@@ -112,10 +112,13 @@ that stands for it in every command that has it.
 A value follows as the next argument or after
 .Ql = ;
 a value that starts with
-.Ql -
-follows
+.Ql - ,
+and a switch's, follows
 .Ql = .
-Short options do not combine, and an unknown one is an error.
+Short options do not combine.
+.Nm
+takes options only: an unknown option, or a word no option takes, is a usage
+error.
 The options of
 .Nm
 join words with
@@ -375,13 +378,14 @@ Create a certificate authority,
 and
 .Pa dir/ca.key ,
 valid 3650 days.
-.It Cm cert Fl \-ca\-dir Ar dir Fl \-name Ar name Oo Fl \-host Ar names Oc Oo Fl \-server Oc Oo Fl \-client Oc Oo Fl \-days Ar n Oc Op Fl \-out Ar dir
+.It Cm cert Fl \-ca\-dir Ar dir Fl \-name Ar name Oo Fl \-hosts Ar names Oc Oo Fl \-server Oc Oo Fl \-client Oc Oo Fl \-days Ar n Oc Op Fl \-out Ar dir
 Issue
 .Pa name.crt
 and
 .Pa name.key
 from that authority, valid 397 days and never past it.
-.Fl \-host
+.Fl \-hosts
+.Pq or Fl \-host
 lists the DNS names and addresses a server certificate carries
 .Pq default: Ar name ;
 .Ar name
@@ -547,8 +551,8 @@ The service's working directory on Linux and on
 .Nm
 exits 0 at the end of input, after a clean shutdown,
 .Fl \-version
-or help; 1 on a command-line, configuration, logger or startup error; and 2
-when a configuration file named by
+or help; 1 on a configuration, logger or startup error; and 2 on a usage
+error or when a configuration file named by
 .Fl c
 or
 .Ev LOGWISP_CONFIG_*
@@ -568,7 +572,7 @@ the shell reports status 141.
 .Cm tls
 and
 .Cm preset
-exit 0 on success or help, 1 on failure, and 2 on a usage error.
+do the same: 0 on success or help, 1 on failure, and 2 on a usage error.
 .Sh SIGNALS
 .Bl -tag -width "SIGINT, SIGTERM"
 .It Dv SIGINT , SIGTERM

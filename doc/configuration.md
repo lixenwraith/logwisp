@@ -234,17 +234,12 @@ lw --logging.level debug          # space form also works
 lw --quiet                        # bare flag means true
 ```
 
-A bare flag is accepted only for a boolean key: `--logging.file.directory
---quiet` fails with `--logging.file.directory needs a value`. Unrecognized `--`
-flags and positional words are reported on stderr before the logger exists and
-are then ignored:
-
-```
-Warning: unrecognized flags ignored: [nosuch.key]
-```
-
-Single-dash options are lw's own ([CLI](cli.md#options)); an unknown one is
-an error.
+A bare flag is accepted only for a boolean key, which takes its value only
+after `=`: `--logging.file.directory --quiet` fails with
+`--logging.file.directory needs a value`, and `--quiet false` with `unexpected
+argument "false"`. An unknown key is an error too (`unknown option
+--nosuch.key`); each is a usage error, exit code 2. Single-dash options are
+lw's own ([CLI](cli.md#options)).
 
 An empty `LOGWISP_<PATH>` variable counts as unset, as the pipeline variables
 do.

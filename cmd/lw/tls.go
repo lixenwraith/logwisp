@@ -23,7 +23,7 @@ var tlsCommands = []subcommand{
 	{"ca", "--dir DIR [--name NAME] [--days N]",
 		"Create a certificate authority, DIR/ca.crt and DIR/ca.key, that signs certificates only",
 		[]string{"dir"}, defineCA},
-	{"cert", "--ca-dir DIR --name NAME [--host NAME,...] [--server] [--client] [--days N] [--out DIR]",
+	{"cert", "--ca-dir DIR --name NAME [--hosts NAME,...] [--server] [--client] [--days N] [--out DIR]",
 		"Issue a certificate and key, OUT/NAME.crt and OUT/NAME.key, from DIR/ca.crt and DIR/ca.key",
 		[]string{"ca-dir", "name"}, defineCert},
 }
@@ -53,7 +53,8 @@ func defineCA(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 func defineCert(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	caDir := fs.String("ca-dir", "", "`dir`ectory holding ca.crt and ca.key (lw tls ca)")
 	name := fs.String("name", "", "subject common `name`, the mtls identity, and the file names")
-	hosts := fs.String("host", "", "DNS `names` and IP addresses, ',' between them (default with --server: --name)")
+	hosts := fs.String("hosts", "", "DNS `names` and IP addresses, ',' between them (default with --server: --name)")
+	fs.Var(fs.Lookup("hosts").Value, "host", "") // its earlier name, unlisted like a short
 	server := fs.Bool("server", false, "for listeners (TLS server authentication)")
 	client := fs.Bool("client", false, "for dialers presenting a certificate (TLS client authentication)")
 	days := fs.Int("days", int(tlsx.LeafValidity/(24*time.Hour)), "validity in `n` days, at most the CA's")

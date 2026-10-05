@@ -23,8 +23,8 @@ Usage:
 Commands (lw COMMAND -h lists its subcommands):
 %s
 Options: a short option is its long one; a value follows as the next argument
-or after '=' (-c FILE, --config=FILE), one that starts with '-' after '=';
-short options do not combine.
+or after '=' (-c FILE, --config=FILE), one that starts with '-' or a switch's
+after '='; short options do not combine. lw takes options only.
   -c, --config FILE             Configuration file (default:
                                 ~/.config/logwisp/logwisp.toml if it exists,
                                 else ./logwisp.toml)
@@ -94,9 +94,8 @@ Signals:
 
 Exit codes:
   0  success, including the end of input
-  1  general error, including an error in lw's own options (lw COMMAND
-     exits 2 on a usage error)
-  2  configuration file not found
+  1  general error, including a configuration that does not load
+  2  usage error, or a named configuration file not found
 `
 
 func printHelp() {
