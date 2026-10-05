@@ -26,7 +26,8 @@ configure it, and — equally important — what it does not yet do.
   [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy).
 - Server pinning by dialers: certificate identity (`mtls`), bound certificate
   (`scram`).
-- Address rules on every listener, applied before TLS: see
+- Address rules on every listener, applied before TLS, to the client a PROXY
+  header (v1 or v2) from a listed L4 proxy names: see
   [The ACL Block](#the-acl-block).
 - Startup warnings for expiring certificates and risky settings: see
   [Startup Warnings](#startup-warnings).
@@ -53,11 +54,8 @@ configure it, and — equally important — what it does not yet do.
   or credentials file.
 - Per-address connection or request limits: only SCRAM logins are throttled
   per address.
-- Address rules for clients behind a proxy: `acl` sees the proxy, never the
-  client a PROXY header or `X-Forwarded-For` names.
-- PROXY protocol: behind a proxy that passes TLS through, every peer shares the
-  proxy's address; see
-  [Behind nginx or another proxy](#behind-nginx-or-another-proxy).
+- Address rules for `X-Forwarded-For` clients: in the `http` sink's proxy mode
+  `acl` sees the L7 proxy, never the client it forwards.
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
@@ -334,24 +332,62 @@ peer costs no handshake and never reaches `auth`.
 [pipelines.plugin_sources.config.acl]
 allow = ["192.0.2.0/24", "198.51.100.7"] # addresses or CIDRs; empty: all
 deny  = ["192.0.2.66"]                   # refused, listed in allow or not
+proxy_protocol = "required"              # off (default), optional, required
+proxy_from = ["10.0.0.5"]                # L4 proxies sending PROXY headers
 ```
 
 - `deny` wins; then a non-empty `allow` admits only its entries, an empty one
   every address `deny` does not list.
 - Entries are of the listener's [family](networking.md#address-family): IPv4
   on an IPv4 listener, IPv6 on an IPv6 one, either behind a hostname (only the
-  family it binds ever matches). An entry of the other family, an IPv4-mapped
-  address, one with a zone, or anything but an address or CIDR fails
-  construction. A link-local peer matches without its zone.
+  family it binds ever matches). Behind `proxy_from` they take either, as a
+  header may name a client of either. An entry of the other family, an
+  IPv4-mapped address, one with a zone, or anything but an address or CIDR
+  fails construction. A link-local peer matches without its zone.
 - A refused connection is closed at once and counted in `acl_denied` (plugin
-  stats, the `http` sink's status). A WARN names the peer and the count, at
-  most once a minute per listener; the refusals in between are only counted.
-- The rules see the socket peer: behind a proxy (an L4 passthrough, or the
-  `http` sink's `trusted_proxies`), the proxy (see
-  [Behind nginx or another proxy](#behind-nginx-or-another-proxy)).
+  stats, the `http` sink's status). A WARN names the peer, the reason and the
+  count, at most once a minute per listener; the refusals in between are only
+  counted.
+- The rules see the client: the socket peer, or the client a PROXY header
+  names. Behind the `http` sink's `trusted_proxies` they see the L7 proxy.
 - The `serve` and `aggregator` presets take `allow` and `deny` list keys.
 - Dialers have no `acl`: on a `tcp_chain` or `http_chain` sink it is an
   unknown key.
+
+### PROXY protocol
+
+Behind an L4 proxy that passes TLS through (nginx `stream`, HAProxy
+`mode tcp`) every peer comes from the proxy's address. With `proxy_protocol`
+the proxy names the client in a PROXY header, v1 (text) or v2 (binary), sent
+before the TLS ClientHello; LogWisp still ends TLS, so channel binding and
+client certificates are unchanged.
+
+- `proxy_protocol` and `proxy_from` come together; `proxy_from` holds the
+  proxies' addresses or CIDRs, of the listener's family. A peer with a zone
+  (link-local IPv6) is never a proxy.
+- A peer in `proxy_from`:
+  - sends its header within `tlsx.HandshakeTimeout` (10 s); a malformed,
+    oversized (v1 over 107 bytes, a v2 block over 2048) or late one is
+    refused;
+  - under `required` is refused without a header; under `optional` it keeps
+    its socket address, after up to 10 s if it sends nothing at first. A
+    client the proxy forwards without a header then passes as the proxy, so
+    `optional` (which warns at startup) suits only a rollout; set `required`
+    once every route from `proxy_from` sends the header;
+  - keeps its socket address for `LOCAL` (v2) and `UNKNOWN` (v1), the proxies'
+    health checks, and for v2 families other than TCP over IPv4 and IPv6. TLVs
+    are skipped.
+- Headers are read off the accept loop: a slow proxy holds only its own
+  connection.
+- A peer not in `proxy_from` connects as itself; one that sends a header is
+  refused at its first read, as any peer can write one.
+- The connection then reports the client (an IPv4-mapped one as IPv4) to the
+  rules, SCRAM [throttling](#throttling), sessions and logs. Session metadata
+  keeps the proxy as `peer_addr`, and a refusal's WARN names it.
+- `acl_proxy_headers` counts the headers read.
+- The `http` sink's proxy mode is the L7 counterpart: `trusted_proxies` trusts
+  `X-Forwarded-For` from a proxy that ends TLS, `proxy_from` a PROXY header
+  from one that passes it through.
 
 ## Startup Warnings
 
@@ -370,7 +406,9 @@ when it is constructed, so startup and every reload repeat them:
   (once per path per process)
 - an `acl` entry with host bits set (`10.0.0.1/8`), naming the network it
   matches; an `acl.allow` entry of a whole family (`0.0.0.0/0`, `::/0`); a
-  wildcard listener whose `acl` has `deny` but no `allow`
+  wildcard listener whose `acl` has `deny` but no `allow`; an `acl.proxy_from`
+  entry reaching beyond private, loopback and link-local addresses;
+  `acl.proxy_protocol = "optional"`
 
 ## Certificates made at startup
 
@@ -584,9 +622,10 @@ exchange.
 
 ### Throttling
 
-Logins are throttled per remote socket address or, on an `http` sink in proxy
-mode, per forwarded client (an IPv6 client per /64); forwarded headers are read
-only from `trusted_proxies`. Each exchange takes a token from a bucket of 10
+Logins are throttled per client (an IPv6 client per /64): the socket peer, the
+client a [PROXY header](#proxy-protocol) names, or on an `http` sink in proxy
+mode the forwarded client; forwarded headers are read only from
+`trusted_proxies`. Each exchange takes a token from a bucket of 10
 that refills at one per second, and a successful login gives it back, so only
 failed or abandoned attempts drain it. At most 4 exchanges per address may be
 unfinished: an HTTP challenge never answered holds its slot for up to 30 s, a
@@ -595,8 +634,8 @@ TCP connection that ends mid-exchange frees it at once. A refused start answers
 65,536 addresses and refuses new ones when full. Separately, at most 4,096
 exchanges may be in flight per listener; beyond that, or while the plugin
 stops, a login gets `busy` (HTTP `503`) and counts `auth_busy`. Peers behind
-one NAT or one passthrough proxy share a bucket: there, one client can exhaust
-every other client's logins.
+one NAT, or one passthrough proxy that sends no PROXY header, share a bucket:
+there, one client can exhaust every other client's logins.
 
 ### Credentials file
 
@@ -646,9 +685,9 @@ different users.
 
 - TLS must terminate at LogWisp, except on an `http` sink in proxy mode. Behind
   any other terminating proxy or load balancer every login fails by design;
-  pass TLS through instead (TCP or SNI routing). All clients then share the
-  proxy's address, and so one throttling budget: see
-  [Behind nginx or another proxy](#behind-nginx-or-another-proxy).
+  pass TLS through instead (TCP or SNI routing), with a
+  [PROXY header](#proxy-protocol) so each client keeps its own throttling
+  budget.
 - One process per HTTP address. Handshake state and the token key live in one
   instance, so behind a balancer the proof or the token can reach an instance
   that never saw the login.
@@ -756,7 +795,8 @@ A proxy in front of LogWisp works at one of two layers:
     overwrite `X-Forwarded-For` with the real client: the rightmost hop that is
     not a proxy is the client either way.
 - **L4, passing TLS through to LogWisp's own TLS** (nginx `stream` with
-  `ssl_preread`, HAProxy `mode tcp`): whatever needs TLS to end at LogWisp.
+  `ssl_preread`, HAProxy `mode tcp`), with a [PROXY header](#proxy-protocol):
+  whatever needs TLS to end at LogWisp.
   - Chain links (`tcp_chain`, `http_chain`).
   - `lw auth stream` viewers of a `tcp` sink.
   - An `http` sink that keeps its own TLS, and with it SCRAM channel binding
@@ -767,7 +807,7 @@ A common shape serves both from port 443:
 ```
 :443              nginx stream: ssl_preread routes by SNI, proxy_protocol on
   logs.example.org    -> 127.0.0.1:8443   nginx http
-  relay.example.org   -> a LogWisp TLS listener, without PROXY (below)
+  relay.example.org   -> a LogWisp TLS listener, which reads the header (below)
 127.0.0.1:8443    nginx http: listens with proxy_protocol, ends TLS
   /logs/              -> 127.0.0.1:8081   LogWisp http sink, proxy mode
 ```
@@ -796,51 +836,39 @@ client or, when it is trusted (both on `127.0.0.1`), the hop to its left: one
 the client wrote, so the client picks its own throttling address. LogWisp
 ignores `X-Real-IP`.
 
-**LogWisp's own TLS listeners take no PROXY header.** LogWisp cannot read the
-PROXY protocol yet; it is planned first in the ACL work
-([To Do, 1.2](todo.md#12-proxy-protocol-deferred-gap-of-scram-see-scram-auth-planmd)).
-A stream route that sends `proxy_protocol` straight to a LogWisp TLS listener
-breaks every connection: the header lands in front of the TLS handshake. nginx
-sets `proxy_protocol` per stream `server`, so route LogWisp SNIs without it:
-
-- Route 1: LogWisp gets its own stream `server` and port, without
-  `proxy_protocol`.
-- Route 2: port 443 sends LogWisp SNIs to an internal stream `server` that
-  `listen`s with `proxy_protocol` and proxy_passes to LogWisp without it; that
-  hop consumes the header.
-- Either way dialers must send the name: a `host` that is one, or
-  `tls.server_name` (`--server-name` for `lw auth`); an IP literal sends no SNI.
-- With HAProxy, leave `send-proxy` off the LogWisp backends.
+**LogWisp's own TLS listeners read the header** when their `acl` sets
+`proxy_protocol` and lists the stream server in `proxy_from`; one stream
+`server` with `proxy_protocol on` then routes every name:
 
 ```nginx
 stream {
     map $ssl_preread_server_name $route {
-        relay.example.org  127.0.0.1:10443;   # route 2: the internal hop
-        tail.example.org   127.0.0.1:10443;
-        default            127.0.0.1:8443;    # the http block, logs.example.org
-    }
-    map $ssl_preread_server_name $logwisp {
         relay.example.org  127.0.0.1:9001;    # tcp_chain source
         tail.example.org   127.0.0.1:9002;    # tcp sink, for lw auth stream
+        default            127.0.0.1:8443;    # the http block, logs.example.org
     }
     server {
         listen 443;
         ssl_preread    on;
-        proxy_protocol on;                    # on every route of this server
+        proxy_protocol on;
         proxy_pass     $route;
-    }
-    server {                                  # route 1: its own port, no header
-        listen 9443;
-        ssl_preread on;
-        proxy_pass  $logwisp;
-    }
-    server {                                  # route 2: consumes the header
-        listen 127.0.0.1:10443 proxy_protocol;
-        ssl_preread on;
-        proxy_pass  $logwisp;
     }
 }
 ```
+
+```toml
+[pipelines.plugin_sources.config.acl] # tcp_chain source; tcp sink alike
+proxy_protocol = "required"
+proxy_from     = ["127.0.0.1"]          # the stream server
+```
+
+- HAProxy: `send-proxy` or `send-proxy-v2` on the LogWisp backends.
+- A listener without `proxy_protocol` behind such a route fails every
+  connection: the header lands in front of its TLS handshake.
+- Dialers must send the name: a `host` that is one, or `tls.server_name`
+  (`--server-name` for `lw auth`); an IP literal sends no SNI.
+- `test/acl-test.sh --auto` runs each listener kind behind a stub proxy
+  sending a v1 or v2 header, and the `tcp` sink behind nginx when installed.
 
 **Passthrough without PROXY** brings every peer from the proxy's address:
 
@@ -853,14 +881,8 @@ stream {
   (`too many attempts` or `busy`) keeps sending on its token to the server it
   pinned, retrying every few seconds, and holds its batches only once that
   token has expired; any other refusal ends the token at once.
-- Logs and sessions name the proxy, not the peer, and `acl` rules see only the
-  proxy: allow it, not the clients.
-- Proxy mode is unaffected: it throttles on the forwarded client.
-- Until LogWisp reads PROXY, mitigate:
-  - expose the chain ports directly, without the proxy, where you can;
-  - keep the proxy hop on a trusted network, so only trusted clients share the
-    budget;
-  - or accept the shared budget.
+- Logs and sessions name the proxy, and `acl` rules see only the proxy: allow
+  it, not the clients.
 
 ## What Each Layer Enforces
 

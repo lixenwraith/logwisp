@@ -371,6 +371,9 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		"type":        "tcp_client",
 		"remote_addr": remote,
 	}
+	if peer := netacl.PeerAddr(conn); peer != "" {
+		meta["peer_addr"] = peer
+	}
 	var tlsState *tls.ConnectionState
 	if tc, ok := conn.(*tls.Conn); ok {
 		hctx, cancel := context.WithTimeout(context.Background(), tlsx.HandshakeTimeout)

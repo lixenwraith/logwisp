@@ -7,98 +7,40 @@ they belong to.
 ## 1. Network access control (ACL)
 
 The seam exists: `internal/netacl` wraps each listener's socket before TLS,
-and the `acl` block's `allow` and `deny` refuse peers by address
+reads the PROXY header of the L4 proxies `proxy_from` lists, and the `acl`
+block's `allow` and `deny` refuse the client by address
 ([Security](security.md#the-acl-block)). Every limit except SCRAM throttling
-is still global, and behind an L4 proxy every peer is the proxy.
+is still global.
 
-### 1.1 The filtering listener
-
-- `Accept` is to read an optional PROXY header (1.2) before the address rules
-  and apply per-address connection caps (1.4) after them, returning a
-  `net.Conn` whose `RemoteAddr` is the real client.
-- Everything downstream then sees the real client with no further change:
-  `authz.remoteIP`, SCRAM throttling, sessions, logs and `http.Request.RemoteAddr`.
-- Keep the proxy's own address as `peer_addr` in session metadata for audit.
-
-### 1.2 PROXY protocol (deferred gap of SCRAM, see scram-auth-plan.md)
-
-- Why: behind an L4 proxy that passes TLS through (nginx `stream` with
-  `ssl_preread`, HAProxy `mode tcp`), every peer arrives from the proxy's
-  address.
-  - All peers share one SCRAM throttling budget, so one client can lock out
-    every login.
-  - Logs, sessions and the ACL itself see only the proxy.
-- What: accept PROXY v1 (text) and v2 (binary) headers, but only from
-  `proxy_from` addresses or CIDRs. Two config keys in the ACL block:
-  - `proxy_protocol = "off" | "optional" | "required"`, default off.
-  - `proxy_from = [...]`.
-- Rules:
-  - A listed peer must send the header when `required`.
-  - An unlisted peer that sends a header is refused, since the header is
-    spoofable.
-  - The header must arrive within a short deadline (reuse
-    `tlsx.HandshakeTimeout`), with a size cap: v1 at most 107 bytes, v2 with a
-    bounded TLV length.
-  - `LOCAL`/`UNKNOWN` commands (proxy health checks) keep the socket address.
-  - TLVs are ignored.
-- The header precedes the TLS ClientHello, so SCRAM channel binding is
-  unaffected: LogWisp still terminates TLS.
-- nginx side:
-  - In the `stream` server, `proxy_protocol on` on the route to LogWisp (it
-    sends v1).
-  - HAProxy: `send-proxy` or `send-proxy-v2`.
-- Relation to `auth.trusted_proxies` (HTTP proxy mode):
-  - That list trusts `X-Forwarded-For` from a TLS-terminating L7 proxy;
-    `proxy_from` trusts a PROXY header from an L4 proxy.
-  - Keep both, with distinct names and docs. They answer different layers, and
-    one deployment can use both: nginx `stream` with `proxy_protocol` into an
-    nginx `http` block that sets `X-Forwarded-For $proxy_protocol_addr`.
-
-### 1.3 Address rules for forwarded clients
-
-- Rules match the real client (after PROXY), never the proxy.
-- In HTTP proxy mode, `X-Forwarded-For` is applied by `authz.ClientAddr` after
-  the connection-level decision, so rules for forwarded HTTP clients belong in
-  a second, request-level check there, reusing the compiled `netacl` rules.
-  `authz.parseProxies` then takes netacl's address-or-CIDR parsing too.
-- Startup warning: `proxy_from` covering public ranges.
-
-### 1.4 Per-client limits
+### 1.1 Per-client limits
 
 - Generalize the SCRAM limiter in `internal/authz/scram.go` (token bucket per
   key, bounded table that fails closed, idle sweep, IPv6 per /64 via
   `throttleKey`) into the shared per-key limiter. One mechanism (AGENTS.md):
   SCRAM throttling then uses it too.
-- Keys:
+- Keys in the `acl` block:
   - `max_connections_per_client` on every listener (concurrent connections per
-    address).
+    client), applied by the netacl listener after the rules.
   - `requests_per_second_per_client` on HTTP listeners (ingest, stream and
     status requests).
+- A full table refuses new clients and counts them in `acl_limited`, beside
+  `acl_denied` and `acl_proxy_headers`.
 - Later: per-identity limits once a peer is authenticated (the mtls plan's
   deferred item 2), keyed by identity instead of address.
 
-### 1.5 Config, validation, docs
+### 1.2 Address rules for forwarded clients
 
-- `proxy_protocol`, `proxy_from` and the 1.4 keys join `allow` and `deny` in
-  the `acl` block.
-- Intent rule as in `authz`: `proxy_from` without `proxy_protocol` is an error.
-- Stats: `acl_proxy_headers` and `acl_limited` beside `acl_denied`.
-- Docs: the security.md section, plus networking.md troubleshooting lines for
-  each refusal.
+- In HTTP proxy mode, `X-Forwarded-For` is applied by `authz.ClientAddr` after
+  the connection-level decision, so rules for forwarded HTTP clients belong in
+  a second, request-level check there, reusing the compiled `netacl` rules.
+  `authz.parseProxies` then takes netacl's address-or-CIDR parsing too.
 
-### 1.6 Verification
+### 1.3 Verification
 
-- Go tests, one per rule:
-  - PROXY v1 and v2 parse, including malformed, oversized and slow headers.
-  - A header from an unlisted peer refused; `required` without a header
-    refused; `LOCAL` kept.
-  - Per-client connection cap; the limiter table failing closed.
-  - The real client reaching SCRAM throttling and session metadata.
-- `test/acl-test.sh`, which covers the address rules, adds:
-  - A Go stub proxy that sends v1 and v2 headers in front of each listener
-    type.
-  - nginx `stream` with `proxy_protocol on` when nginx is installed.
-  - Per-client SCRAM budgets behind one proxy address.
+- Go tests, one per rule: the per-client connection cap; the request rate; the
+  limiter table failing closed; a forwarded client refused by the rules.
+- `test/acl-test.sh` adds per-client connection caps, behind its stub proxy
+  too.
 
 ## 2. Packaging: AUR, FreeBSD ports, Debian
 

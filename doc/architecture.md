@@ -167,8 +167,9 @@ TLS is built in exactly one place, `internal/tlsx`, which exposes
 Each pipeline owns a `session.Manager`. Plugins receive a `session.Proxy`
 scoped to their instance id, so one plugin cannot see or remove another's
 sessions. A session records the remote address, creation and last-activity
-timestamps, and metadata — including `tls` and `tls_peer_cn` for TLS peers, and
-`auth_method` / `auth_identity` for authorized ones.
+timestamps, and metadata — including `tls` and `tls_peer_cn` for TLS peers,
+`auth_method` / `auth_identity` for authorized ones, and `peer_addr`, the proxy,
+for a client a PROXY header names.
 
 Idle sessions are reaped every 5 minutes against a 30-minute idle limit. The
 HTTP sink's broker treats a vanished session as an eviction signal and closes

@@ -280,6 +280,7 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	h.server = &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: HTTPReadHeaderTimeout,
+		ConnContext:       netacl.ConnContext,
 		// WriteTimeout unset by design: SSE responses are long-lived.
 		// net/http bounds the TLS handshake by min(ReadHeaderTimeout,
 		// ReadTimeout, WriteTimeout), so ReadHeaderTimeout covers it here.
@@ -433,6 +434,9 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	meta := map[string]any{
 		"type": "http_client",
+	}
+	if peer := netacl.ContextPeerAddr(r.Context()); peer != "" {
+		meta["peer_addr"] = peer
 	}
 	if r.TLS != nil {
 		meta["tls"] = true

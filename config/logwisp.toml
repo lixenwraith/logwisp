@@ -10,8 +10,9 @@
 ### available in this version. TLS is available on every network source and
 ### sink (the [...tls] blocks below), the [...auth] blocks authenticate peers by
 ### certificate (mtls) or password (scram; credentials via `lw auth`), and the
-### listeners' [...acl] blocks admit peers by address. Unknown keys anywhere in
-### this file or in any plugin config are rejected at startup.
+### listeners' [...acl] blocks admit peers by address, or by the client an L4
+### proxy's PROXY header names. Unknown keys anywhere in this file or in any
+### plugin config are rejected at startup.
 ###
 ### Environment overrides use the LOGWISP_ prefix
 ### (LOGWISP_QUIET, LOGWISP_LOGGING_LEVEL, ...). Bare names are ignored.
@@ -163,8 +164,15 @@ name = "default"
 ###
 ### Applied as a connection is accepted, before TLS: a refused peer is closed
 ### at once and counted in acl_denied, with a WARN at most once a minute.
-### allow = []   addresses or CIDRs of the listener's family; empty = all
+### allow = []   addresses or CIDRs of the listener's family (either behind
+###              proxy_from); empty = all
 ### deny = []    refused, listed in allow or not
+### proxy_protocol = "off"   off | optional | required: PROXY v1/v2 headers,
+###                          read before TLS; the rules then see the client.
+###                          optional lets a headerless stream pass as the
+###                          proxy: use it only while rolling headers out
+### proxy_from = []          the proxies that may send one; a header from any
+###                          other peer is refused
 ###============================================================================
 
 ###============================================================================
@@ -236,6 +244,8 @@ from = "end"                            # "end" or "start" of a newly discovered
 # [pipelines.plugin_sources.config.acl]   # refuse peers by address, before TLS
 # allow = []                            # empty = every address deny does not list
 # deny = []
+# proxy_protocol = "off"                # off | optional | required
+# proxy_from = []                       # proxies that may send a PROXY header
 
 ## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
 # [[pipelines.plugin_sources]]
@@ -266,6 +276,8 @@ from = "end"                            # "end" or "start" of a newly discovered
 # [pipelines.plugin_sources.config.acl]   # refuse peers by address, before TLS
 # allow = []                            # empty = every address deny does not list
 # deny = []
+# proxy_protocol = "off"                # off | optional | required
+# proxy_from = []                       # proxies that may send a PROXY header
 
 ###============================================================================
 ### Sinks (1+ required, fan-out)
@@ -334,6 +346,8 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # [pipelines.plugin_sinks.config.acl]   # refuse peers by address, before TLS
 # allow = []                            # empty = every address deny does not list
 # deny = []
+# proxy_protocol = "off"                # off | optional | required
+# proxy_from = []                       # proxies that may send a PROXY header
 
 ## TCP sink (streaming server)
 # [[pipelines.plugin_sinks]]
@@ -363,6 +377,8 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # [pipelines.plugin_sinks.config.acl]   # refuse peers by address, before TLS
 # allow = []                            # empty = every address deny does not list
 # deny = []
+# proxy_protocol = "off"                # off | optional | required
+# proxy_from = []                       # proxies that may send a PROXY header
 
 ## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
 ## Do NOT point a chain sink at a chain source in the SAME pipeline: entries

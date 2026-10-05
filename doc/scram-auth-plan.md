@@ -374,8 +374,8 @@ and plaintext-forwarded requests `403`. The existing scripts keep passing.
 
 ## Not Implemented
 
-1. **PROXY protocol behind TLS passthrough**: planned in
-   [To Do, 1.2](todo.md#12-proxy-protocol-deferred-gap-of-scram-see-scram-auth-planmd).
+None. The PROXY protocol behind TLS passthrough, deferred here, shipped with
+the ACL work: [Security](security.md#proxy-protocol).
 
 ## mTLS Hardening
 

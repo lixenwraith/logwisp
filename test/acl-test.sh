@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # logwisp acl test: each listener kind admits or refuses peers by address
-# before TLS, counts and warns of refusals, rejects rules it can never apply,
-# and still hands a finite input whole to the clients it admits. One-shot.
-# Ports: 15881-15889 on 127.0.0.1. Requires: bash 5+, curl, nc; Linux.
+# before TLS, or by the client a PROXY header names (stub proxy, nginx if
+# installed), counts and warns of refusals, and throttles logins per client.
+# One-shot. Ports: 15881-15889 on 127.0.0.1, the proxies' on 127.0.0.11-14.
+# Requires: bash 5+, curl, nc, go; Linux.
 
 set -u
 . "$(dirname -- "${BASH_SOURCE[0]}")/lib.sh"
@@ -12,11 +13,72 @@ AUTH=$RUN
 e2e_init "$@"
 
 section "Setup"
-need curl nc
-ports_free 15881 15882 15884 15885 15889
+need curl nc go
+ports_free 15881 15882 15883 15884 15885 15886 15887 15888 15889
 rm -rf "$RUN"
-mkdir -p "$RUN/out" "$LOG"
+mkdir -p "$RUN/out" "$RUN/proxy" "$LOG"
 cd "$RUN" || abort "no run directory"
+# Each ROUTE is LISTEN,BACKEND,VERSION,CLIENT: a connection to LISTEN reaches
+# BACKEND behind a PROXY header of VERSION naming CLIENT, with its own port
+cat >"$RUN/proxy/main.go" <<'EOF'
+package main
+
+import (
+	"encoding/binary"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/netip"
+	"os"
+	"strings"
+)
+
+func main() {
+	for _, route := range os.Args[1:] {
+		f := strings.Split(route, ",")
+		ln, err := net.Listen("tcp4", f[0])
+		if err != nil {
+			log.Fatal(err)
+		}
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					log.Fatal(err)
+				}
+				go relay(c, f[1], f[2], netip.MustParseAddr(f[3]))
+			}
+		}()
+	}
+	fmt.Println("ready")
+	select {}
+}
+
+func relay(c net.Conn, backend, version string, client netip.Addr) {
+	defer c.Close()
+	b, err := net.Dial("tcp4", backend)
+	if err != nil {
+		return
+	}
+	defer b.Close()
+	src := netip.AddrPortFrom(client, c.RemoteAddr().(*net.TCPAddr).AddrPort().Port())
+	dst := b.RemoteAddr().(*net.TCPAddr).AddrPort()
+	if version == "1" {
+		fmt.Fprintf(b, "PROXY TCP4 %s %s %d %d\r\n", src.Addr(), dst.Addr(), src.Port(), dst.Port())
+	} else {
+		h := append([]byte("\r\n\r\n\x00\r\nQUIT\n\x21\x11\x00\x0c"), src.Addr().AsSlice()...)
+		h = binary.BigEndian.AppendUint16(append(h, dst.Addr().AsSlice()...), src.Port())
+		b.Write(binary.BigEndian.AppendUint16(h, dst.Port()))
+	}
+	go func() { io.Copy(b, c); b.(*net.TCPConn).CloseWrite() }()
+	io.Copy(c, b)
+}
+EOF
+if ! (cd "$RUN/proxy" && go build -o proxy main.go) >"$LOG/proxy-build.out" 2>&1; then
+	tail -n 5 "$LOG/proxy-build.out" | sed 's/^/        /'
+	abort "the stub proxy did not build"
+fi
 for v in $(compgen -e LOGWISP_); do unset "$v"; done
 export HOME=$RUN
 lw() { "$BIN" "$@"; }
@@ -25,7 +87,8 @@ get() { curl -s --noproxy '*' --max-time 3 "$@"; } # curl ARGS...: never through
 get --interface 127.0.0.2 http://127.0.0.1:15889/
 (($? == 45)) && skip_all "this host cannot send from 127.0.0.2"
 seq 1 300 | sed 's/^/edge line /' >"$RUN/edge.log"
-add_users "$RUN/users.toml" edge-01
+add_users "$RUN/users.toml" edge-01 viewer-01
+echo wrong >"$RUN/wrong.pass"
 
 section "Rules"
 # rejects SINK PATTERN: lw --check fails on SINK with PATTERN in its error
@@ -37,6 +100,10 @@ check "an acl on a dialer is refused" "$(rejects 'tcp_chain,host=127.0.0.1,port=
 check "a CIDR with host bits warns, naming the network it matches" "$(warns 'tcp,host=127.0.0.1,port=15881,acl.allow=10.0.0.1/8' 'network 10.0.0.0/8')"
 check "a deny list alone on a wildcard listener warns" "$(warns 'tcp,port=15881,acl.deny=10.0.0.1' 'admits all that acl.deny does not list')"
 check "an allow entry of a whole family warns" "$(warns 'tcp,port=15881,acl.allow=0.0.0.0/0' 'admits every address of its family')"
+check "a proxy_from entry reaching public addresses warns" \
+	"$(warns 'tcp,host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=203.0.113.0/24' 'proxy_from reaches public addresses')"
+check "optional proxy_protocol warns that a headerless client passes as the proxy" \
+	"$(warns 'tcp,host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=127.0.0.1' 'passes as the proxy')"
 
 section "HTTP sink"
 spawn serve "$BIN" --preset "serve,path=$RUN/edge.log,listen=127.0.0.1:15881,allow=127.0.0.0/8,deny=127.0.0.2"
@@ -71,12 +138,12 @@ section "Chain sources"
 # pin DAEMON: the pin_sha256 a self-signed listener logged
 pin() { wait_until 5 logged "$1" pin_sha256 && grep -o 'pin_sha256 "sha256//[^"]*"' "$LOG/$1.out" | head -1 | cut -d'"' -f2; }
 received() { cat "$RUN/out/$1"/aggregate*.log 2>/dev/null | grep -c 'edge line'; }
-edge() { spawn "$1" "$BIN" --preset "edge,path=$RUN/edge.log,from=start,to=127.0.0.1:$2,transport=$3,pin=$4,user=edge-01,password_file=$RUN/edge-01.pass"; }
+edge() { spawn "$1" "$BIN" --preset "edge,path=$RUN/edge.log,from=start,to=$2,transport=$3,pin=$4,user=edge-01,password_file=$RUN/edge-01.pass"; }
 spawn agg-allow "$BIN" --preset "aggregator,listen=127.0.0.1:15884,allow=127.0.0.1,users=$RUN/users.toml,out=$RUN/out/allow"
 spawn agg-deny "$BIN" --preset "aggregator,listen=127.0.0.1:15885,transport=http,deny=127.0.0.0/8,users=$RUN/users.toml,out=$RUN/out/deny"
 wait_port 15884 && wait_port 15885 || abort "an aggregator did not listen" agg-allow
-edge edge-allow 15884 tcp "$(pin agg-allow)"
-edge edge-deny 15885 http "$(pin agg-deny)"
+edge edge-allow 127.0.0.1:15884 tcp "$(pin agg-allow)"
+edge edge-deny 127.0.0.1:15885 http "$(pin agg-deny)"
 timeout 3 nc -s 127.0.0.2 127.0.0.1 15884 </dev/null
 wait_until 10 eval '(( $(received allow) >= 300 ))'
 check "a tcp_chain source admits an edge its allow list names ($(received allow)), and refuses 127.0.0.2" \
@@ -84,5 +151,103 @@ check "a tcp_chain source admits an edge its allow list names ($(received allow)
 wait_until 10 logged agg-deny 'refused by acl'
 check "an http_chain source refuses a denied edge, which delivers nothing ($(received deny))" \
 	"$(logged agg-deny 'refused by acl' && (($(received deny) == 0)) && echo 1 || echo 0)"
+
+section "Behind a PROXY header"
+# Every listener here takes headers from 127.0.0.1 only, where the proxies
+# connect from; each is up before a proxy shares its port on another address
+behind=acl.proxy_protocol=required,acl.proxy_from=127.0.0.1
+scram="tls.enabled=true,tls.self_signed=true,auth.type=scram,auth.credentials_file=$RUN/users.toml"
+spawn sink-behind "$BIN" --logging.level=info --source null --sink "http,host=127.0.0.1,port=15886,$scram,$behind,acl.deny=198.51.100.2"
+for t in tcp http; do
+	spawn "agg-$t-behind" "$BIN" --logging.level=info \
+		--source "${t}_chain,host=127.0.0.1,port=$([[ $t == tcp ]] && echo 15888 || echo 15883),$scram,$behind" \
+		--sink "file,directory=$RUN/out/$t-behind,name=aggregate"
+done
+# the tcp sink sends its input once the clients connected
+{ wait_until 30 test -e "$RUN/feed"; seq 1 100 | sed 's/^/behind /'; } |
+	lw --sink "tcp,host=127.0.0.1,port=15887,$behind,acl.deny=198.51.100.2,acl.deny=127.0.0.6" 2>"$LOG/tcp-behind.out" &
+fpid=$!
+for p in 15883 15886 15887 15888; do wait_port $p || abort "a listener behind the proxy did not listen on $p" sink-behind; done
+spawn proxy "$RUN/proxy/proxy" 127.0.0.11:15886,127.0.0.1:15886,1,198.51.100.1 \
+	127.0.0.12:15886,127.0.0.1:15886,2,198.51.100.2 127.0.0.13:15886,127.0.0.1:15886,2,198.51.100.3 \
+	127.0.0.11:15887,127.0.0.1:15887,2,198.51.100.1 127.0.0.12:15887,127.0.0.1:15887,1,198.51.100.2 \
+	127.0.0.11:15888,127.0.0.1:15888,1,198.51.100.1 127.0.0.13:15883,127.0.0.1:15883,2,198.51.100.3
+wait_until 10 logged proxy ready || abort "the stub proxy did not start" proxy
+NGINX=0
+if command -v nginx >/dev/null; then
+	mkdir -p "$RUN/nginx/logs"
+	# a dynamic stream module loads by its absolute path; a built-in has none
+	so=$(nginx -V 2>&1 | grep -o -- '--modules-path=[^ ]*' | cut -d= -f2)/ngx_stream_module.so
+	modules=$([[ -f $so ]] && echo "load_module $so;")
+	cat >"$RUN/nginx/nginx.conf" <<EOF
+daemon off;
+pid $RUN/nginx/nginx.pid;
+error_log $RUN/nginx/logs/error.log;
+$modules
+events {}
+stream {
+    server {
+        listen 127.0.0.14:15887;
+        proxy_pass 127.0.0.1:15887;
+        proxy_protocol on;
+    }
+}
+EOF
+	spawn nginx nginx -p "$RUN/nginx" -c "$RUN/nginx/nginx.conf"
+	wait_until 5 test -s "$RUN/nginx/nginx.pid" && NGINX=1
+fi
+
+# tcp sink: one client per route, then the input
+listen_via() { timeout 10 nc "${@:2}" 15887 < <(sleep 12) >"$RUN/$1.out"; }
+listen_via admitted 127.0.0.11 &
+pids=($!)
+listen_via denied 127.0.0.12 &
+pids+=($!)
+if ((NGINX)); then
+	listen_via nginx -s 127.0.0.5 127.0.0.14 &
+	pids+=($!)
+	listen_via nginx-denied -s 127.0.0.6 127.0.0.14 &
+	pids+=($!)
+fi
+sleep 1
+touch "$RUN/feed"
+wait "$fpid" "${pids[@]}"
+lines() { grep -c '^behind ' "$RUN/$1.out"; }
+check "a tcp sink streams to the client a v2 header names ($(lines admitted) lines)" "$(($(lines admitted) == 100))"
+check "and refuses one a v1 header names, logging both addresses ($(lines denied) lines)" \
+	"$( (($(lines denied) == 0)) && grep -q 'refused by acl.* remote_addr 198.51.100.2:.*peer_addr 127.0.0.1:' "$LOG/tcp-behind.out" && echo 1 || echo 0)"
+if ((NGINX)); then
+	check "nginx stream with proxy_protocol on names its clients ($(lines nginx) lines, $(lines nginx-denied) to a denied one)" \
+		"$( (($(lines nginx) == 100 && $(lines nginx-denied) == 0)) && echo 1 || echo 0)"
+else
+	skip "nginx stream with proxy_protocol on (nginx with its stream module is not available)"
+fi
+
+# http sink: each client its own login budget behind the one proxy address
+PIN=$(pin sink-behind)
+token() { lw auth token --url "https://$1:15886" -u viewer-01 --password-file "$2" --pin-sha256 "$PIN" 2>&1; }
+token 127.0.0.12 "$RUN/viewer-01.pass" >/dev/null
+check "an http sink refuses the client a v2 header names, logging both addresses" \
+	"$(logged sink-behind 'refused by acl.* remote_addr 198.51.100.2:.*peer_addr 127.0.0.1:' && echo 1 || echo 0)"
+for ((i = 1; i <= 30; i++)); do
+	token 127.0.0.11 "$RUN/wrong.pass" >/dev/null
+	logged sink-behind ' throttled' && break
+done
+check "wrong passwords throttle a client by the address its v1 header names ($i attempts)" \
+	"$(logged sink-behind 'Login rejected.* remote_addr 198.51.100.1:.* 198.51.100.1 throttled' && echo 1 || echo 0)"
+check "while another behind the same proxy still logs in" \
+	"$(token 127.0.0.13 "$RUN/viewer-01.pass" >/dev/null && logged sink-behind 'Login accepted.* remote_addr 198.51.100.3:' && echo 1 || echo 0)"
+
+# chain sources: an edge through the proxy is the client its header names
+edge edge-tcp-behind 127.0.0.11:15888 tcp "$(pin agg-tcp-behind)"
+edge edge-http-behind 127.0.0.13:15883 http "$(pin agg-http-behind)"
+printf 'PROXY TCP4 198.51.100.9 127.0.0.1 40000 15888\r\n' | timeout 3 nc -s 127.0.0.2 127.0.0.1 15888
+wait_until 10 eval '(( $(received tcp-behind) >= 300 && $(received http-behind) >= 300 ))'
+check "a tcp_chain source takes an edge as the client a v1 header names ($(received tcp-behind))" \
+	"$( (($(received tcp-behind) == 300)) && logged agg-tcp-behind 'Chain connection established.* remote_addr 198.51.100.1:' && echo 1 || echo 0)"
+check "an http_chain source takes one as the client a v2 header names ($(received http-behind))" \
+	"$( (($(received http-behind) == 300)) && logged agg-http-behind 'Login accepted.* remote_addr 198.51.100.3:' && echo 1 || echo 0)"
+check "a header from a peer outside proxy_from is refused" \
+	"$(logged agg-tcp-behind 'refused by acl.* remote_addr 127.0.0.2:.* reason "PROXY header from a peer outside proxy_from"' && echo 1 || echo 0)"
 
 summary

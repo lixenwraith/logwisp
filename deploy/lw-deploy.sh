@@ -120,7 +120,7 @@ Not covered by this script; edit the generated configuration instead
 - filters, rate limits, heartbeat, formatter flags and timestamp layouts
 - more than one pipeline; both chain transports, or a further hop, on one node
 - proxy mode: browser logins through a TLS-terminating proxy (trusted_proxies)
-- acl address rules on the listeners
+- acl on the listeners: address rules, PROXY headers
 - mtls identities other than the certificate CN; node_binding other than force
 - creating certificates: openssl or your PKI (doc/security.md#enabling-mtls)
 - several native instances on one host: use one per host or jail

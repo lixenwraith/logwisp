@@ -200,6 +200,7 @@ func (s *HTTPChainSource) Start() error {
 		Handler:           mux,
 		ReadTimeout:       time.Duration(s.config.ReadTimeoutMS) * time.Millisecond,
 		ReadHeaderTimeout: HTTPChainReadHeaderTimeout,
+		ConnContext:       netacl.ConnContext,
 		// TLS handshake bounded by min(ReadTimeout, ReadHeaderTimeout)
 		ErrorLog: tlsx.HTTPErrorLog(s.logger, "http_chain_source"),
 	}
@@ -371,7 +372,7 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range entries {
 		s.publish(entry)
 	}
-	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode, r.TLS, ident))
+	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode, netacl.ContextPeerAddr(r.Context()), r.TLS, ident))
 
 	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(len(entries)))
 	w.WriteHeader(http.StatusNoContent)
@@ -399,7 +400,7 @@ func (s *HTTPChainSource) handleAuth(w http.ResponseWriter, r *http.Request) {
 // sessionFor returns the cached session for a remote+node+identity,
 // recreating after idle expiry. Identity is part of the key so two peers
 // sharing a remote address never share a session.
-func (s *HTTPChainSource) sessionFor(remoteHost, node string, cs *tls.ConnectionState, ident authz.Identity) string {
+func (s *HTTPChainSource) sessionFor(remoteHost, node, peer string, cs *tls.ConnectionState, ident authz.Identity) string {
 	key := remoteHost + "|" + node + "|" + ident.Name
 	s.sessionsMu.Lock()
 	defer s.sessionsMu.Unlock()
@@ -412,6 +413,9 @@ func (s *HTTPChainSource) sessionFor(remoteHost, node string, cs *tls.Connection
 	meta := map[string]any{
 		"type": "http_chain",
 		"node": node,
+	}
+	if peer != "" {
+		meta["peer_addr"] = peer
 	}
 	if cs != nil {
 		meta["tls"] = true
