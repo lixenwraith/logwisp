@@ -29,7 +29,21 @@ type Manager struct {
 type Args struct {
 	File      string   // -c: the configuration file, "" for the environment or discovery
 	Specs     []Spec   // pipeline flags, in order
-	Overrides []string // --path=value settings, for lixenwraith/config
+	Overrides []string // --path=value settings and bare switches, for lixenwraith/config
+}
+
+// Settings maps each --path setting Load takes to whether it is a switch, which
+// takes no separate value; the parser must not leave config to guess.
+func Settings() map[string]bool {
+	c := lconfig.New()
+	if err := c.RegisterStructWithTags("", defaults(), lconfig.FormatTOML); err != nil {
+		panic(err) // Config is static: every run fails or none does
+	}
+	settings := map[string]bool{}
+	for path, value := range c.GetRegisteredPathsWithDefaults() {
+		_, settings[path] = value.(bool)
+	}
+	return settings
 }
 
 // Load reads the startup sources and validates the initial configuration.
@@ -80,9 +94,6 @@ func Load(args Args) (*Manager, error) {
 		// A missing discovered default still permits valid CLI/env/default values.
 	}
 	m.read = err == nil
-	if unknown := cfg.UnknownCLIKeys(); len(unknown) > 0 && !initial.Quiet {
-		fmt.Fprintf(os.Stderr, "Warning: unrecognized flags ignored: %v\n", unknown)
-	}
 	m.config = cfg
 	return m, nil
 }

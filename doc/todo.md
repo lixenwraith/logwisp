@@ -65,19 +65,9 @@ identity, and both skeletons download the tagged source.
 
 Smaller items found along the way, each independent of the others.
 
-1. Command line:
-   - a positional word at the top level (`lw tail`, `lw -t FILE`) still reaches
-     config with an unclear message; name it ("unexpected argument X; the file
-     is -c FILE");
-   - Go's flag errors keep single dashes ("flag needs an argument: -u");
-   - an unknown `--key` only warns and then runs the stdin pipe; consider an
-     error when stdin is a terminal;
-   - `lw tls cert --host` could become `--hosts` (keeping `--host`), to match
-     `tls.hosts` and the preset key;
-   - top-level usage errors exit 1, subcommand ones 2.
-2. TLS: the generated-certificate key is one per process, so a pin taken from a
+1. TLS: the generated-certificate key is one per process, so a pin taken from a
    `self_signed` listener also matches an `issuer` listener of the same
    process; document it or key per listener. Pins are checked in
    `VerifyPeerCertificate`, which Go skips on resumption: guard it if a dialer
    ever keeps a `ClientSessionCache`.
-3. `core.ShutdownTimeout` is unused.
+2. `core.ShutdownTimeout` is unused.

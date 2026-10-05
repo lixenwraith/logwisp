@@ -46,10 +46,13 @@ check "lw --check builds the dumped preset" "$(lw --check -c "$RUN/dump.toml" 2>
 lw preset edge -to 127.0.0.1:1 >/dev/null 2>"$LOG/edge-noauth.err"
 rc=$?
 check "an edge without credentials is a usage error ($rc)" "$( ((rc == 2)) && grep -q 'never sends unauthenticated' "$LOG/edge-noauth.err" && echo 1 || echo 0)"
+lw tail </dev/null 2>"$LOG/stray.err"
+rc=$?
+check "a word no option takes is a usage error ($rc)" "$( ((rc == 2)) && grep -q 'unexpected argument "tail"' "$LOG/stray.err" && echo 1 || echo 0)"
 
 section "Certificates"
 lw tls ca -dir "$RUN/pki" 2>"$LOG/tls.out" &&
-	lw tls cert -ca-dir "$RUN/pki" -name logs.example -server -host 127.0.0.1,logs.example 2>>"$LOG/tls.out"
+	lw tls cert -ca-dir "$RUN/pki" -name logs.example -server -hosts 127.0.0.1,logs.example 2>>"$LOG/tls.out"
 check "lw tls ca and cert issue a chain openssl verifies" \
 	"$(openssl verify -CAfile "$RUN/pki/ca.crt" "$RUN/pki/logs.example.crt" 2>/dev/null | grep -q ': OK$' && echo 1 || echo 0)"
 check "keys are private" "$(is "$(stat -c %a "$RUN/pki/ca.key" "$RUN/pki/logs.example.key" | tr '\n' ' ')" "600 600 ")"
