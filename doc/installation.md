@@ -289,6 +289,7 @@ or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
 15831-15832  scram-proxy-test.sh                     test/run-proxy/
 15851-15855  ipv6-test.sh                            test/run-ipv6/
 15871-15879  deploy-test.sh                          test/run-deploy/
+15881-15889  acl-test.sh                             test/run/acl/
 ```
 
 - `chain-test.sh`: two edges into a relay, one pipeline per chain transport;
@@ -310,3 +311,5 @@ or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
   loopback
 - `deploy-test.sh`: the configurations `deploy/lw-deploy.sh` writes, deployed
   and checked; ports 15871-15879
+- `acl-test.sh`: each listener admitting or refusing peers by address before
+  TLS, with clients from 127.0.0.1 and 127.0.0.2; ports 15881-15889

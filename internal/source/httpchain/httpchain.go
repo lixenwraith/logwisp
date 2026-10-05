@@ -19,6 +19,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/source"
@@ -59,6 +60,7 @@ type HTTPChainSource struct {
 
 	// Authorization
 	auth *authz.Policy
+	acl  *netacl.Policy
 
 	// Session cache: one session per remote host + node + authenticated identity
 	sessions   map[string]string // key -> sessionID
@@ -120,6 +122,10 @@ func NewHTTPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, logger, "http_chain_source", id)
+	if err != nil {
+		return nil, err
+	}
 
 	s := &HTTPChainSource{
 		id:          id,
@@ -131,6 +137,7 @@ func NewHTTPChainSourcePlugin(
 		logger:      logger,
 		tlsConfig:   tlsCfg,
 		auth:        authPolicy,
+		acl:         aclPolicy,
 	}
 	s.lastEntryTime.Store(time.Time{})
 
@@ -142,7 +149,8 @@ func NewHTTPChainSourcePlugin(
 		"ingest_path", opts.IngestPath,
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
-		"auth", authPolicy.Describe())
+		"auth", authPolicy.Describe(),
+		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "http_chain_source", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_chain_source", id, opts.TrustNode)
 	return s, nil
@@ -180,6 +188,7 @@ func (s *HTTPChainSource) Start() error {
 		s.auth.Close()
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
+	ln = s.acl.Listener(ln)
 
 	mux := http.NewServeMux()
 	// Method-scoped pattern: mux answers 405 with Allow header on non-POST
@@ -265,6 +274,7 @@ func (s *HTTPChainSource) GetStats() source.SourceStats {
 		"trust_node":        s.config.TrustNode,
 	}
 	maps.Copy(details, s.auth.Stats())
+	maps.Copy(details, s.acl.Stats())
 
 	return source.SourceStats{
 		ID:             s.id,

@@ -123,9 +123,9 @@ func TestEveryPresetBuilds(t *testing.T) {
 	samples := map[string]string{
 		"pipe":       "pipe,format=txt",
 		"tail":       "tail,path=" + dir,
-		"serve":      "serve,path=" + filepath.Join(dir, "*.log") + ",listen=127.0.0.1:15841,tls=self,users=" + users,
+		"serve":      "serve,path=" + filepath.Join(dir, "*.log") + ",listen=127.0.0.1:15841,tls=self,users=" + users + ",allow=127.0.0.0/8,deny=127.0.0.2",
 		"edge":       "edge,to=127.0.0.1:15842,transport=http,pin=" + pin + ",user=edge-01,password_file=" + pass,
-		"aggregator": "aggregator,listen=127.0.0.1:15843,users=" + users + ",out=" + filepath.Join(dir, "out"),
+		"aggregator": "aggregator,listen=127.0.0.1:15843,users=" + users + ",out=" + filepath.Join(dir, "out") + ",allow=10.0.0.0/8,allow=127.0.0.1",
 	}
 	for _, p := range config.Presets() {
 		sample, ok := samples[p.Name]

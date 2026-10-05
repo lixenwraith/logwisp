@@ -80,11 +80,13 @@ change touches.
   table whose groups (`auth`, `tls`, `preset`) share one flag mechanism;
   `config.Load` takes the parsed `config.Args`. Presets are rows of one table
   in `internal/config/preset.go`.
-- Network security has two seams: `tlsx` (TLS configs, certificates made at
-  startup or by `lw tls`, pins, startup warnings) and
-  `authz`. Listeners admit only through `Admit`/`AuthorizeRequest`, dialers
-  through `Greet`/`Prepare`; `Authorize` refuses under scram, so a plugin gated
-  on it alone fails closed. Nil policies are valid: keep call sites branch-free.
+- Network security has three seams: `tlsx` (TLS configs, certificates made at
+  startup or by `lw tls`, pins, startup warnings), `authz`, and `netacl`
+  (address rules: a listener wraps the socket `core.Listen` returns in
+  `Policy.Listener`, before TLS). Listeners admit only through
+  `Admit`/`AuthorizeRequest`, dialers through `Greet`/`Prepare`; `Authorize`
+  refuses under scram, so a plugin gated on it alone fails closed. Nil policies
+  are valid: keep call sites branch-free.
 - A plugin starts goroutines in `Start`, never in its constructor (the SCRAM
   server too: `Policy.Start`/`Close`): a rejected reload discards constructed
   plugins without calling `Stop`. Reload is the only rotation path for

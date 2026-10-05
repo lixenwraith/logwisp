@@ -178,6 +178,8 @@ Options, each as type and default:
 - `tls` (table): listener TLS; see [Security](security.md).
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
+- `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
+  before TLS; see [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -241,15 +243,16 @@ Options, each as type and default:
 - HTTP/2 is negotiated via ALPN when TLS is enabled; plaintext is HTTP/1.1.
 
 **Status endpoint** returns service and version identity, host, port, TLS flag,
-the compiled auth policy, active client count, sink and per-client buffer sizes,
-connection limit, write timeout, uptime, endpoint paths, and the
-`total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected`
-counters.
+the compiled auth policy and acl, active client count, sink and per-client
+buffer sizes, connection limit, write timeout, uptime, endpoint paths, and the
+`total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected` /
+`acl_denied` counters.
 
 **Statistics**: `dropped_writes`, `rejected_clients`, `auth`, `auth_allowed`,
 `auth_rejected`; under `scram` also `auth_users`, `auth_throttled`,
 `auth_busy`, `auth_binding_mismatch` and `auth_token_lifetime_ms`, and in
-proxy mode `auth_trusted_proxies`.
+proxy mode `auth_trusted_proxies`; with `acl` rules also `acl` and
+`acl_denied`.
 
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read
@@ -302,6 +305,8 @@ Options, each as type and default:
 - `tls` (table): listener TLS.
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
+- `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
+  before TLS; see [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -327,7 +332,8 @@ Options, each as type and default:
 
 **Statistics**: `write_errors`, `dropped_writes`, `rejected_conns`,
 `tls_handshake_errors`, `auth`, `auth_allowed`, `auth_rejected`; under `scram`
-also `auth_users`, `auth_throttled`, `auth_busy` and `auth_binding_mismatch`.
+also `auth_users`, `auth_throttled`, `auth_busy` and `auth_binding_mismatch`;
+with `acl` rules also `acl` and `acl_denied`.
 
 ---
 
@@ -391,6 +397,9 @@ Options, each as type and default:
   exponential backoff plus ±20 % jitter between attempts. The delay keeps
   growing until a link outlives `backoff_min_ms`, so a source that drops every
   link right after accepting it is not retried in a tight loop.
+- On shutdown (a reload too) the sink delivers what is queued, connecting
+  first if it must, within `write_timeout_ms`, at most 2 s; then the link
+  closes and what is left is lost.
 - A source never writes once a link is up, so the sink watches each link: a
   line from the source is a refusal (a sink without `scram` facing a `scram`
   source), logged at WARN as `Chain link refused`; EOF ends the link at once
@@ -477,7 +486,9 @@ Options, each as type and default:
 - Redirects are never followed; a `3xx` is permanent too. Following one would
   resend the batch wherever the response points, plaintext `http` included.
 - HTTP/2 is off by design; batched NDJSON POSTs gain nothing from it.
-- On shutdown a single best-effort flush of the pending batch is attempted.
+- On shutdown (a reload too) the sink delivers what is queued and batched
+  within `request_timeout_ms`, at most 2 s; each batch still undelivered then
+  is dropped and logged at WARN.
 
 **Statistics**: `target`, `node`, `tls`, `auth`, `batches_sent`,
 `request_errors`, `dropped_batches`, `synthesized`; under `scram` also

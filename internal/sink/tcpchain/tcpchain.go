@@ -219,8 +219,7 @@ func (t *TCPChainSink) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop terminates the forwarding loop. Worst-case latency: one write timeout
-// plus one backoff wait (both interruptible or bounded).
+// Stop delivers what is queued within sink.FlushBound, then ends the loop
 func (t *TCPChainSink) Stop() {
 	t.logger.Info("msg", "Stopping TCP chain sink",
 		"component", "tcp_chain_sink",
@@ -273,47 +272,51 @@ func (t *TCPChainSink) runLoop(ctx context.Context) {
 	defer t.wg.Done()
 	defer t.closeConn()
 
-	// Fold done into the context, so a connect or exchange in flight ends on Stop
-	ctx, cancel := context.WithCancel(ctx)
+	// Stop leaves sink.FlushBound to deliver the queue, so a finite input
+	// arrives whole; a connect, exchange or link still open then ends
+	ctx, cancel := sink.FlushContext(ctx, t.done, t.writeTimeout)
 	defer cancel()
-	go func() {
-		select {
-		case <-t.done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.done:
+			for len(t.input) > 0 {
+				if !t.forward(ctx, <-t.input) {
+					return
+				}
+			}
 			return
-		case event, ok := <-t.input:
-			if !ok {
+		case event := <-t.input:
+			if !t.forward(ctx, event) {
 				return
 			}
-			entry, synthesized := chain.EntryFromEvent(event, t.node, t.id)
-			if synthesized {
-				t.synthesized.Add(1)
-			}
-			line, err := json.Marshal(entry)
-			if err != nil {
-				// Non-transient: drop
-				t.logger.Error("msg", "Failed to marshal chain entry",
-					"component", "tcp_chain_sink",
-					"error", err)
-				continue
-			}
-			if !t.deliver(ctx, append(line, '\n')) {
-				return // shutdown during retry
-			}
-			t.totalProcessed.Add(1)
-			t.lastProcessed.Store(time.Now())
-			t.proxy.UpdateActivity(t.session.ID)
 		}
 	}
+}
+
+// forward delivers one event; false once shutdown ends the delivery
+func (t *TCPChainSink) forward(ctx context.Context, event core.TransportEvent) bool {
+	entry, synthesized := chain.EntryFromEvent(event, t.node, t.id)
+	if synthesized {
+		t.synthesized.Add(1)
+	}
+	line, err := json.Marshal(entry)
+	if err != nil {
+		// Non-transient: drop
+		t.logger.Error("msg", "Failed to marshal chain entry",
+			"component", "tcp_chain_sink",
+			"error", err)
+		return true
+	}
+	if !t.deliver(ctx, append(line, '\n')) {
+		return false
+	}
+	t.totalProcessed.Add(1)
+	t.lastProcessed.Store(time.Now())
+	t.proxy.UpdateActivity(t.session.ID)
+	return true
 }
 
 // deliver writes one line, holding it across reconnects until sent or shutdown.
@@ -399,11 +402,14 @@ func (t *TCPChainSink) connect(ctx context.Context) error {
 		return err
 	}
 	// A source never writes once a link is up: a line is a refusal this sink
-	// could not otherwise see, EOF a close. Stop writing into either.
+	// could not otherwise see, EOF a close. Stop writing into either. The end
+	// of ctx closes the link too, cutting short a write in flight.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
 		err := authz.AwaitClose(r)
+		stop()
 		conn.Close()
 		if errors.Is(err, authz.ErrRefused) {
 			t.logger.Warn("msg", "Chain link refused",
@@ -449,8 +455,6 @@ func (t *TCPChainSink) waitBackoff(ctx context.Context, failures int) bool {
 	case <-timer.C:
 		return true
 	case <-ctx.Done():
-		return false
-	case <-t.done:
 		return false
 	}
 }

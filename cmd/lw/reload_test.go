@@ -87,27 +87,33 @@ func TestInvalidReloadLeavesStatusReporterRunning(t *testing.T) {
 }
 
 // Every registered plugin decodes through the checked decoder, so a typo in
-// any plugin's config, security tables included, refuses to start.
+// any plugin's config, security tables included, refuses to start: a typo in
+// a listener's acl table, and an acl table on a plugin that listens on nothing.
 func TestEveryPluginRejectsUnknownKeys(t *testing.T) {
 	testLogger(t)
 	manager := session.NewManager(time.Hour)
 	t.Cleanup(manager.Stop)
 	proxy := session.NewProxy(manager, "typo")
-	bad := map[string]any{"no_such_key": true}
-	check := func(kind, name string, err error) {
-		if err == nil || !strings.Contains(err.Error(), "no_such_key") {
-			t.Errorf("%s %q accepted an unknown key: %v", kind, name, err)
+	// the error names the key: acl.no_such_key on a listener, acl elsewhere
+	for key, bad := range map[string]map[string]any{
+		`"no_such_key"`: {"no_such_key": true},
+		`"acl`:          {"acl": map[string]any{"no_such_key": true}},
+	} {
+		check := func(kind, name string, err error) {
+			if err == nil || !strings.Contains(err.Error(), "unknown key "+key) {
+				t.Errorf("%s %q accepted %v: %v", kind, name, bad, err)
+			}
 		}
-	}
-	for _, name := range plugin.ListSources() {
-		factory, _ := plugin.GetSource(name)
-		_, err := factory("typo", bad, logger, proxy)
-		check("source", name, err)
-	}
-	for _, name := range plugin.ListSinks() {
-		factory, _ := plugin.GetSink(name)
-		_, err := factory("typo", bad, logger, proxy)
-		check("sink", name, err)
+		for _, name := range plugin.ListSources() {
+			factory, _ := plugin.GetSource(name)
+			_, err := factory("typo", bad, logger, proxy)
+			check("source", name, err)
+		}
+		for _, name := range plugin.ListSinks() {
+			factory, _ := plugin.GetSink(name)
+			_, err := factory("typo", bad, logger, proxy)
+			check("sink", name, err)
+		}
 	}
 }
 

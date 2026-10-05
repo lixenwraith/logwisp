@@ -16,6 +16,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/authz"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/sink"
@@ -74,6 +75,7 @@ type TCPSink struct {
 
 	// Authorization
 	auth *authz.Policy
+	acl  *netacl.Policy
 
 	// Runtime. Stop closes flush; the broadcast loop then moves what remains
 	// of its input to tail and closes flushed; each writer writes its queue
@@ -149,6 +151,10 @@ func NewTCPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, logger, "tcp_sink", id)
+	if err != nil {
+		return nil, err
+	}
 
 	t := &TCPSink{
 		id:           id,
@@ -166,6 +172,7 @@ func NewTCPSinkPlugin(
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
 		tlsConfig:    tlsCfg,
 		auth:         authPolicy,
+		acl:          aclPolicy,
 	}
 	t.lastProcessed.Store(time.Time{})
 
@@ -176,7 +183,8 @@ func NewTCPSinkPlugin(
 		"port", opts.Port,
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
-		"auth", authPolicy.Describe())
+		"auth", authPolicy.Describe(),
+		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "tcp_sink", id, false)
 	return t, nil
@@ -214,6 +222,7 @@ func (t *TCPSink) listen() (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
+	ln = t.acl.Listener(ln)
 	if t.tlsConfig != nil {
 		ln = tls.NewListener(ln, t.tlsConfig)
 	}
@@ -556,6 +565,7 @@ func (t *TCPSink) GetStats() sink.SinkStats {
 		"tls_handshake_errors": t.tlsHandshakeErrors.Load(),
 	}
 	maps.Copy(details, t.auth.Stats())
+	maps.Copy(details, t.acl.Stats())
 
 	return sink.SinkStats{
 		ID:                t.id,

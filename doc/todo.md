@@ -6,29 +6,19 @@ they belong to.
 
 ## 1. Network access control (ACL)
 
-The next feature push. Today a listener decides *who* a peer is (`tls`, `auth`);
-nothing decides *where* a peer may connect from, and every limit except SCRAM
-throttling is global. The ACL adds address rules and per-client limits at the
-connection level, below TLS, so a refused peer costs no handshake.
+The seam exists: `internal/netacl` wraps each listener's socket before TLS,
+and the `acl` block's `allow` and `deny` refuse peers by address
+([Security](security.md#the-acl-block)). Every limit except SCRAM throttling
+is still global, and behind an L4 proxy every peer is the proxy.
 
-### 1.1 One seam: a filtering listener
+### 1.1 The filtering listener
 
-- New package `internal/netacl`, the third network seam beside `tlsx` and
-  `authz` (AGENTS.md lists the seams; add it there).
-- `netacl.New(opts *config.ACLOptions, role) (*Policy, error)` compiles the
-  block; a nil policy is valid and transparent, like `authz`.
-- `(*Policy).Listener(ln net.Listener) net.Listener` wraps the raw listener
-  before TLS:
-  - TCP plugins wrap it before `tls.NewListener`.
-  - HTTP plugins wrap it before `Serve`/`ServeTLS`.
-- `Accept` reads an optional PROXY header (1.2), decides allow or deny (1.3),
-  applies per-address connection caps (1.4), and returns a `net.Conn` whose
-  `RemoteAddr` is the real client.
+- `Accept` is to read an optional PROXY header (1.2) before the address rules
+  and apply per-address connection caps (1.4) after them, returning a
+  `net.Conn` whose `RemoteAddr` is the real client.
 - Everything downstream then sees the real client with no further change:
   `authz.remoteIP`, SCRAM throttling, sessions, logs and `http.Request.RemoteAddr`.
 - Keep the proxy's own address as `peer_addr` in session metadata for audit.
-- A denied connection is closed before any byte is read or written, with a
-  counter (`acl_denied`) and a rate-limited WARN.
 
 ### 1.2 PROXY protocol (deferred gap of SCRAM, see scram-auth-plan.md)
 
@@ -64,20 +54,14 @@ connection level, below TLS, so a refused peer costs no handshake.
     one deployment can use both: nginx `stream` with `proxy_protocol` into an
     nginx `http` block that sets `X-Forwarded-For $proxy_protocol_addr`.
 
-### 1.3 Address rules
+### 1.3 Address rules for forwarded clients
 
-- `allow = [CIDR...]`, `deny = [CIDR...]`, IPv4 and IPv6 (strict per family,
-  as the listeners are).
-- Order: deny wins, then allow; an empty allow list admits everyone not denied.
 - Rules match the real client (after PROXY), never the proxy.
-  - In HTTP proxy mode, `X-Forwarded-For` is applied by `authz.ClientAddr` after
-    the connection-level decision.
-  - Address rules for forwarded HTTP clients therefore belong in a second,
-    request-level check inside `authz.ClientAddr`: reuse the compiled `netacl`
-    rules there rather than duplicating them.
-- Startup warnings (in `LogStartup` style): an allow list containing
-  `0.0.0.0/0` or `::/0`, `proxy_from` covering public ranges, a listener on a
-  wildcard host with no `allow`.
+- In HTTP proxy mode, `X-Forwarded-For` is applied by `authz.ClientAddr` after
+  the connection-level decision, so rules for forwarded HTTP clients belong in
+  a second, request-level check there, reusing the compiled `netacl` rules.
+  `authz.parseProxies` then takes netacl's address-or-CIDR parsing too.
+- Startup warning: `proxy_from` covering public ranges.
 
 ### 1.4 Per-client limits
 
@@ -95,15 +79,11 @@ connection level, below TLS, so a refused peer costs no handshake.
 
 ### 1.5 Config, validation, docs
 
-- Config shape: `[...config.acl]` beside `tls` and `auth` on the four listener
-  plugins.
-  - Decode through `config.Scan`, so unknown keys fail.
-  - Dialers have no ACL block.
-- Intent rule as in `authz`: an ACL key on a dialer, or `proxy_from` without
-  `proxy_protocol`, is an error.
-- Stats: `acl_denied`, `acl_proxy_headers`, `acl_limited`, merged into the
-  plugin stats like `authz.Stats`.
-- Docs: a security.md section, plus networking.md troubleshooting lines for
+- `proxy_protocol`, `proxy_from` and the 1.4 keys join `allow` and `deny` in
+  the `acl` block.
+- Intent rule as in `authz`: `proxy_from` without `proxy_protocol` is an error.
+- Stats: `acl_proxy_headers` and `acl_limited` beside `acl_denied`.
+- Docs: the security.md section, plus networking.md troubleshooting lines for
   each refusal.
 
 ### 1.6 Verification
@@ -112,15 +92,13 @@ connection level, below TLS, so a refused peer costs no handshake.
   - PROXY v1 and v2 parse, including malformed, oversized and slow headers.
   - A header from an unlisted peer refused; `required` without a header
     refused; `LOCAL` kept.
-  - Deny over allow; IPv6 rules.
   - Per-client connection cap; the limiter table failing closed.
   - The real client reaching SCRAM throttling and session metadata.
-- `test/acl-test.sh`:
+- `test/acl-test.sh`, which covers the address rules, adds:
   - A Go stub proxy that sends v1 and v2 headers in front of each listener
     type.
   - nginx `stream` with `proxy_protocol on` when nginx is installed.
-  - Denied and allowed clients; per-client SCRAM budgets behind one proxy
-    address.
+  - Per-client SCRAM budgets behind one proxy address.
 
 ## 2. Packaging: AUR, FreeBSD ports, Debian
 
@@ -183,21 +161,16 @@ identity, and both skeletons download the tagged source.
 
 Smaller items found along the way; each is independent of the ACL.
 
-1. Chain sinks at the end of a finite input. The `tcp_chain` sink's `Stop`
-   closes its loop without draining its queue, and the `http_chain` sink makes
-   one best-effort flush, so `seq 1 N | lw --preset edge,...` may lose the
-   tail. Verify with a finite stdin into each and an aggregator counting lines;
-   give both a bounded drain like `sink.FlushBound`.
-2. A late browser sees no backlog: the `http` sink keeps none, so the viewer
+1. A late browser sees no backlog: the `http` sink keeps none, so the viewer
    shows entries from when it connects. A bounded replay (a `replay_lines`
    option, sent after `event: connected`) would fill it. The viewer also hides
    a `503` from `max_connections` behind "retrying"; the status JSON it already
    fetches could name it.
-3. Level detection. `source.ExtractLogLevel` needs a delimiter after the name
+2. Level detection. `source.ExtractLogLevel` needs a delimiter after the name
    (`ERROR:`, `[WARN]`, ` INFO `), so `warning disk full` or `DBG x` get no
    level, hence no color. Match the names as words, as the console sink's
    painter does, with one table for both.
-4. Command line:
+3. Command line:
    - a positional word at the top level (`lw tail`, `lw -t FILE`) still reaches
      config with an unclear message; name it ("unexpected argument X; the file
      is -c FILE");
@@ -207,11 +180,11 @@ Smaller items found along the way; each is independent of the ACL.
    - `lw tls cert --host` could become `--hosts` (keeping `--host`), to match
      `tls.hosts` and the preset key;
    - top-level usage errors exit 1, subcommand ones 2.
-5. `GET /favicon.ico` answers 404; the logo could serve as the icon once the
+4. `GET /favicon.ico` answers 404; the logo could serve as the icon once the
    pages' CSP allows `img-src 'self'`.
-6. TLS: the generated-certificate key is one per process, so a pin taken from a
+5. TLS: the generated-certificate key is one per process, so a pin taken from a
    `self_signed` listener also matches an `issuer` listener of the same
    process; document it or key per listener. Pins are checked in
    `VerifyPeerCertificate`, which Go skips on resumption: guard it if a dialer
    ever keeps a `ClientSessionCache`.
-7. `core.ShutdownTimeout` is unused.
+6. `core.ShutdownTimeout` is unused.

@@ -6,12 +6,12 @@
 ### Commented values are the built-in defaults unless marked "example".
 ### Uncommenting a default is a no-op.
 ###
-### NOTE: network access control (ACL), http/tcp ingest sources, and
-### http_client/tcp_client sinks are not available in this version. TLS is
-### available on every network source and sink (the [...tls] blocks below), and
-### the [...auth] blocks authenticate peers by certificate (mtls) or password
-### (scram; credentials via `lw auth`). Unknown keys anywhere in this file
-### or in any plugin config are rejected at startup.
+### NOTE: http/tcp ingest sources and http_client/tcp_client sinks are not
+### available in this version. TLS is available on every network source and
+### sink (the [...tls] blocks below), the [...auth] blocks authenticate peers by
+### certificate (mtls) or password (scram; credentials via `lw auth`), and the
+### listeners' [...acl] blocks admit peers by address. Unknown keys anywhere in
+### this file or in any plugin config are rejected at startup.
 ###
 ### Environment overrides use the LOGWISP_ prefix
 ### (LOGWISP_QUIET, LOGWISP_LOGGING_LEVEL, ...). Bare names are ignored.
@@ -159,6 +159,15 @@ name = "default"
 ###============================================================================
 
 ###============================================================================
+### ACL (beside [...tls] and [...auth] on the listeners; dialers have none)
+###
+### Applied as a connection is accepted, before TLS: a refused peer is closed
+### at once and counted in acl_denied, with a WARN at most once a minute.
+### allow = []   addresses or CIDRs of the listener's family; empty = all
+### deny = []    refused, listed in allow or not
+###============================================================================
+
+###============================================================================
 ### Sources (1+ required)
 ###============================================================================
 
@@ -224,6 +233,9 @@ from = "end"                            # "end" or "start" of a newly discovered
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # node_binding = "force"                # none | assert | force; overrides trust_node
 # credentials_file = ""                 # scram: written by `lw auth add-user`
+# [pipelines.plugin_sources.config.acl]   # refuse peers by address, before TLS
+# allow = []                            # empty = every address deny does not list
+# deny = []
 
 ## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
 # [[pipelines.plugin_sources]]
@@ -251,6 +263,9 @@ from = "end"                            # "end" or "start" of a newly discovered
 # node_binding = "force"                # none | assert | force; overrides trust_node
 # credentials_file = ""                 # scram: written by `lw auth add-user`
 # token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
+# [pipelines.plugin_sources.config.acl]   # refuse peers by address, before TLS
+# allow = []                            # empty = every address deny does not list
+# deny = []
 
 ###============================================================================
 ### Sinks (1+ required, fan-out)
@@ -316,6 +331,9 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # credentials_file = ""                 # scram: log in with `lw auth token`
 # token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
 # trusted_proxies = []                  # scram: proxies ending the browsers' TLS; tls may then be off
+# [pipelines.plugin_sinks.config.acl]   # refuse peers by address, before TLS
+# allow = []                            # empty = every address deny does not list
+# deny = []
 
 ## TCP sink (streaming server)
 # [[pipelines.plugin_sinks]]
@@ -342,6 +360,9 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # allow = []                            # mtls: exact identities; empty = any the CA issued
 # allow_patterns = []                   # mtls: RE2, anchor them yourself
 # credentials_file = ""                 # scram: readers use `lw auth stream`
+# [pipelines.plugin_sinks.config.acl]   # refuse peers by address, before TLS
+# allow = []                            # empty = every address deny does not list
+# deny = []
 
 ## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
 ## Do NOT point a chain sink at a chain source in the SAME pipeline: entries

@@ -216,6 +216,7 @@ type TCPChainSourceOptions struct {
 	HelloTimeoutMS int64        `toml:"hello_timeout_ms"` // preamble deadline
 	TrustNode      bool         `toml:"trust_node"`       // false: force node label from remote address
 	Auth           *AuthOptions `toml:"auth"`
+	ACL            *ACLOptions  `toml:"acl"`
 }
 
 // HTTPChainSourceOptions defines settings for a stdlib HTTP listener ingesting
@@ -230,6 +231,7 @@ type HTTPChainSourceOptions struct {
 	ReadTimeoutMS int64        `toml:"read_timeout_ms"` // full request read deadline
 	TrustNode     bool         `toml:"trust_node"`      // false: force node label from remote address
 	Auth          *AuthOptions `toml:"auth"`
+	ACL           *ACLOptions  `toml:"acl"`
 }
 
 // --- Sink Options ---
@@ -277,6 +279,7 @@ type TCPSinkOptions struct {
 	KeepAlivePeriodMS int64        `toml:"keep_alive_period_ms"`
 	MaxConnections    int64        `toml:"max_connections"` // 0 = unlimited
 	Auth              *AuthOptions `toml:"auth"`
+	ACL               *ACLOptions  `toml:"acl"`
 }
 
 // HTTPSinkOptions defines settings for an HTTP SSE server sink
@@ -293,6 +296,7 @@ type HTTPSinkOptions struct {
 	LoginPage        bool         `toml:"login_page"`         // GET /auth/login, needs auth.trusted_proxies
 	ViewerPage       bool         `toml:"viewer_page"`        // GET /auth/view, needs login_page
 	Auth             *AuthOptions `toml:"auth"`
+	ACL              *ACLOptions  `toml:"acl"`
 }
 
 // TCPChainSinkOptions defines settings for a stdlib TCP client forwarding
@@ -367,6 +371,14 @@ type AuthOptions struct {
 	// scram dialers: the identity presented and the file holding its password
 	Username     string `toml:"username"`
 	PasswordFile string `toml:"password_file"`
+}
+
+// ACLOptions is a listener's address rules, entries being addresses or CIDRs:
+// deny wins, then a set allow list admits only its entries. Validation is in
+// internal/netacl.
+type ACLOptions struct {
+	Allow []string `toml:"allow"`
+	Deny  []string `toml:"deny"`
 }
 
 // --- TLS Options ---

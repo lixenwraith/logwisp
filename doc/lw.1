@@ -301,7 +301,7 @@ runs without a configuration.
 .It Cm tail path Op Cm from , format
 Follow files to standard output, like
 .Ql tail \-F .
-.It Cm serve Oo Cm path , listen , format , tls , users , proxy , viewer Oc
+.It Cm serve Oo Cm path , listen , format , tls , users , proxy , viewer , allow , deny Oc
 Serve a live HTTP stream on
 .Cm listen
 .Pq default Li 127.0.0.1:8080 .
@@ -324,6 +324,10 @@ only behind a TLS-terminating proxy named by
 with
 .Cm viewer=true ,
 since a browser cannot bind its login to the TLS channel.
+.Cm allow
+and
+.Cm deny
+list the addresses or CIDRs the listener admits and refuses.
 .It Cm edge to Oo Cm path , transport , ca | pin , user , password_file , cert , key , node Oc
 Forward to an aggregator at
 .Cm to
@@ -340,7 +344,7 @@ or a client
 .Cm cert
 and
 .Cm key .
-.It Cm aggregator Oo Cm listen , transport , tls , users , client_ca , out , format Oc
+.It Cm aggregator Oo Cm listen , transport , tls , users , client_ca , out , format , allow , deny Oc
 Receive from edges on
 .Cm listen
 .Pq default Li 0.0.0.0:9000
@@ -351,7 +355,12 @@ authenticated by the
 credentials file or the client certificates
 .Cm client_ca
 vouches for, and write to standard output or to files in
-.Cm out .
+.Cm out ;
+.Cm allow
+and
+.Cm deny
+as for
+.Cm serve .
 .El
 .Ss Certificate commands
 .Nm

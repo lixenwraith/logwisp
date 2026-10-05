@@ -256,8 +256,8 @@ func (t *HTTPChainSink) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop terminates the loop. Worst case: one in-flight request timeout plus
-// one final-flush request timeout.
+// Stop delivers what is queued and batched within sink.FlushBound, then ends
+// the loop
 func (t *HTTPChainSink) Stop() {
 	t.logger.Info("msg", "Stopping HTTP chain sink",
 		"component", "http_chain_sink",
@@ -305,49 +305,41 @@ func (t *HTTPChainSink) GetStats() sink.SinkStats {
 func (t *HTTPChainSink) runLoop(ctx context.Context) {
 	defer t.wg.Done()
 
-	// Fold done channel into a context for request/backoff interruption
-	runCtx, cancel := context.WithCancel(ctx)
+	// Stop leaves sink.FlushBound to deliver the queue and the batch, so a
+	// finite input arrives whole; a request or backoff in flight then ends,
+	// and every later flush drops its batch at once
+	ctx, cancel := sink.FlushContext(ctx, t.done, t.reqTimeout)
 	defer cancel()
-	go func() {
-		select {
-		case <-t.done:
-			cancel()
-		case <-runCtx.Done():
-		}
-	}()
 
 	ticker := time.NewTicker(time.Duration(t.config.FlushIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-runCtx.Done():
-			t.finalFlush()
-			return
 		case <-ticker.C:
-			if t.batchCount > 0 && !t.flush(runCtx) {
-				t.finalFlush()
-				return
+			if t.batchCount > 0 {
+				t.flush(ctx)
 			}
-		case event, ok := <-t.input:
-			if !ok {
-				t.finalFlush()
-				return
+		case event := <-t.input:
+			if t.append(event) {
+				t.flush(ctx)
 			}
-			t.append(event)
-			if t.batchCount >= t.config.MaxBatchCount ||
-				int64(t.batch.Len()) >= t.config.MaxBatchBytes {
-				if !t.flush(runCtx) {
-					t.finalFlush()
-					return
+		case <-t.done:
+			for len(t.input) > 0 {
+				if t.append(<-t.input) {
+					t.flush(ctx)
 				}
 			}
+			if t.batchCount > 0 {
+				t.flush(ctx)
+			}
+			return
 		}
 	}
 }
 
-// append serializes one event into the pending batch
-func (t *HTTPChainSink) append(event core.TransportEvent) {
+// append serializes one event into the pending batch; true once it is full
+func (t *HTTPChainSink) append(event core.TransportEvent) bool {
 	entry, synthesized := chain.EntryFromEvent(event, t.node, t.id)
 	if synthesized {
 		t.synthesized.Add(1)
@@ -358,17 +350,17 @@ func (t *HTTPChainSink) append(event core.TransportEvent) {
 		t.logger.Error("msg", "Failed to marshal chain entry",
 			"component", "http_chain_sink",
 			"error", err)
-		return
+		return false
 	}
 	t.batch.Write(line)
 	t.batch.WriteByte('\n')
 	t.batchCount++
+	return t.batchCount >= t.config.MaxBatchCount || int64(t.batch.Len()) >= t.config.MaxBatchBytes
 }
 
-// flush delivers the pending batch, retrying transient failures with backoff.
-// Returns false when shutdown interrupts delivery; undelivered batch is dropped
-// by finalFlush semantics (batch already consumed here).
-func (t *HTTPChainSink) flush(ctx context.Context) bool {
+// flush delivers the pending batch, retrying transient failures with backoff
+// until shutdown drops it
+func (t *HTTPChainSink) flush(ctx context.Context) {
 	body := bytes.Clone(t.batch.Bytes())
 	count := t.batchCount
 	t.batch.Reset()
@@ -377,8 +369,7 @@ func (t *HTTPChainSink) flush(ctx context.Context) bool {
 	failures := 0
 	for {
 		if failures > 0 && !t.waitBackoff(ctx, failures) {
-			t.droppedBatches.Add(1)
-			return false
+			break
 		}
 		transient, err := t.post(ctx, body)
 		if err == nil {
@@ -386,7 +377,7 @@ func (t *HTTPChainSink) flush(ctx context.Context) bool {
 			t.totalProcessed.Add(uint64(count))
 			t.lastProcessed.Store(time.Now())
 			t.proxy.UpdateActivity(t.session.ID)
-			return true
+			return
 		}
 		t.requestErrors.Add(1)
 		if !transient {
@@ -396,11 +387,10 @@ func (t *HTTPChainSink) flush(ctx context.Context) bool {
 				"target", t.url,
 				"entries", count,
 				"error", err)
-			return true
+			return
 		}
 		if ctx.Err() != nil {
-			t.droppedBatches.Add(1)
-			return false
+			break
 		}
 		failures++
 		t.logger.Warn("msg", "Chain batch delivery failed",
@@ -409,27 +399,11 @@ func (t *HTTPChainSink) flush(ctx context.Context) bool {
 			"attempt", failures,
 			"error", err)
 	}
-}
-
-// finalFlush best-effort delivers the pending batch during shutdown (single attempt)
-func (t *HTTPChainSink) finalFlush() {
-	if t.batchCount == 0 {
-		return
-	}
-	fctx, cancel := context.WithTimeout(context.Background(), t.reqTimeout)
-	defer cancel()
-
-	count := t.batchCount
-	if _, err := t.post(fctx, t.batch.Bytes()); err != nil {
-		t.droppedBatches.Add(1)
-		t.logger.Warn("msg", "Final chain batch dropped on shutdown",
-			"component", "http_chain_sink",
-			"entries", count,
-			"error", err)
-		return
-	}
-	t.batchesSent.Add(1)
-	t.totalProcessed.Add(uint64(count))
+	t.droppedBatches.Add(1)
+	t.logger.Warn("msg", "Chain batch dropped on shutdown",
+		"component", "http_chain_sink",
+		"target", t.url,
+		"entries", count)
 }
 
 // post sends one NDJSON batch; transient=true marks retryable failures

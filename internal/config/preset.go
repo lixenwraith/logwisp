@@ -40,6 +40,10 @@ var (
 		{Name: "issuer_key", Help: "CA key file, for tls=issuer"},
 		{Name: "hosts", List: true, Help: "names and addresses, beyond this host's, of a self or issuer certificate; ',' between them"},
 	}
+	aclParams = []PresetParam{
+		{Name: "allow", List: true, Help: "addresses or CIDRs that may connect, of listen's family; default: all; ',' between them"},
+		{Name: "deny", List: true, Help: "addresses or CIDRs refused, allow or not; ',' between them"},
+	}
 	transportParam = PresetParam{Name: "transport", Default: "tcp", Help: "tcp|http: tcp_chain or http_chain"}
 )
 
@@ -60,13 +64,13 @@ var presets = []Preset{
 			return nil
 		}},
 	{"serve", "Serve files or standard input live: a browser viewer at /, SSE at /stream",
-		append([]PresetParam{pathParam, fromParam, formatParam("json"),
+		slices.Concat([]PresetParam{pathParam, fromParam, formatParam("json"),
 			{Name: "listen", Default: "127.0.0.1:8080", Help: "HOST:PORT; [IPV6]:PORT"},
 			{Name: "tls", Default: "off", Help: "off|self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files"},
 			{Name: "users", Help: "credentials file (lw auth add-user): readers log in with SCRAM"},
 			{Name: "proxy", List: true, Help: "addresses or CIDRs of the TLS-terminating proxies browsers come through; ',' between them"},
 			{Name: "viewer", Default: "false", Help: "true: the login page and viewer for users, behind proxy; without users the viewer is always on"},
-		}, tlsParams...),
+		}, aclParams, tlsParams),
 		func(p *PipelineConfig, v map[string]string) error {
 			p.PluginSources = pathOrStdin(v)
 			sink, err := listener(v, "off")
@@ -145,7 +149,7 @@ var presets = []Preset{
 			return nil
 		}},
 	{"aggregator", "Receive from edges over TLS, authenticated, to files or standard output",
-		append([]PresetParam{
+		slices.Concat([]PresetParam{
 			{Name: "listen", Default: "0.0.0.0:9000", Help: "HOST:PORT; [IPV6]:PORT; [::] for IPv6 only"},
 			transportParam,
 			{Name: "tls", Default: "self", Help: "self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files"},
@@ -153,7 +157,7 @@ var presets = []Preset{
 			{Name: "client_ca", Help: "CA file that verifies edge certificates (mTLS)"},
 			{Name: "out", Help: "directory for the received entries; default: standard output"},
 			formatParam("json"),
-		}, tlsParams...),
+		}, aclParams, tlsParams),
 		func(p *PipelineConfig, v map[string]string) error {
 			typ, err := chainType(v["transport"])
 			if err != nil {
@@ -268,14 +272,22 @@ var tlsModes = map[string]struct {
 	"files":  {needs: map[string]string{"cert": "cert_file", "key": "key_file"}},
 }
 
-// listener starts a listening plugin's options: host, port and tls, whose
-// mode decides which certificate keys apply.
+// listener starts a listening plugin's options: host, port, acl and tls,
+// whose mode decides which certificate keys apply.
 func listener(v map[string]string, def string) (map[string]any, error) {
 	host, port, err := splitAddr("listen", v["listen"])
 	if err != nil {
 		return nil, err
 	}
-	opts := map[string]any{"host": host, "port": port}
+	opts, acl := map[string]any{"host": host, "port": port}, map[string]any{}
+	for _, k := range []string{"allow", "deny"} {
+		if v[k] != "" {
+			acl[k] = list(v[k])
+		}
+	}
+	if len(acl) > 0 {
+		opts["acl"] = acl
+	}
 	mode := cmp.Or(v["tls"], def)
 	m, ok := tlsModes[mode]
 	if !ok {
