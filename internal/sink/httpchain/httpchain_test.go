@@ -1,8 +1,10 @@
 package httpchain
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -121,7 +123,8 @@ func TestRefusedTokenLogsInAgainAndDeliversOnce(t *testing.T) {
 	}
 	sink := created.(*HTTPChainSink)
 	sink.append(core.TransportEvent{Time: time.Now(), Payload: []byte("entry")})
-	if !sink.flush(t.Context()) || delivered.Load() != 1 || sink.droppedBatches.Load() != 0 {
+	sink.flush(t.Context())
+	if delivered.Load() != 1 || sink.droppedBatches.Load() != 0 {
 		t.Fatalf("delivered %d, dropped %d", delivered.Load(), sink.droppedBatches.Load())
 	}
 	if logins := listener.Stats()["auth_allowed"]; logins != uint64(2) {
@@ -188,7 +191,8 @@ func TestLinkOverIPv6LoopbackWithTLS(t *testing.T) {
 	sink.append(core.TransportEvent{Time: time.Now(), Payload: []byte("over IPv6")})
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	if !sink.flush(ctx) || sink.droppedBatches.Load() != 0 {
+	sink.flush(ctx)
+	if sink.droppedBatches.Load() != 0 {
 		t.Fatalf("batch not delivered: %d request errors", sink.requestErrors.Load())
 	}
 	select {
@@ -198,5 +202,52 @@ func TestLinkOverIPv6LoopbackWithTLS(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the source published nothing")
+	}
+}
+
+// Stop delivers what is queued and batched, so the end of a finite input
+// reaches the source whole, and returns at the flush bound when the source
+// stops answering.
+func TestStopDeliversTheQueueWithinTheBound(t *testing.T) {
+	const n = 250 // three batches of the default 100
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	// stop queues n entries, starts and stops a sink, and returns how long
+	// Stop took and how many entries an answering source received
+	stop := func(answering bool) (time.Duration, int64) {
+		var received atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			if !answering {
+				<-r.Context().Done() // the sink gave up
+				return
+			}
+			received.Add(int64(bytes.Count(body, []byte("\n"))))
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		t.Cleanup(srv.Close)
+		_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+		p, _ := strconv.ParseInt(port, 10, 64)
+		created, err := NewHTTPChainSinkPlugin("fwd", map[string]any{"host": "127.0.0.1", "port": p},
+			log.NewLogger(), session.NewProxy(manager, "fwd"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink := created.(*HTTPChainSink)
+		for range n {
+			sink.Input() <- core.TransportEvent{Time: time.Now(), Payload: []byte("entry")}
+		}
+		if err := sink.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		sink.Stop()
+		return time.Since(start), received.Load()
+	}
+	if _, got := stop(true); got != n {
+		t.Fatalf("the source received %d of %d entries", got, n)
+	}
+	if d, _ := stop(false); d > 3500*time.Millisecond {
+		t.Fatalf("Stop took %v past a 2 s flush bound", d)
 	}
 }

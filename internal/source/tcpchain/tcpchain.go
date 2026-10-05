@@ -17,6 +17,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/source"
@@ -55,6 +56,7 @@ type TCPChainSource struct {
 
 	// Authorization
 	auth *authz.Policy
+	acl  *netacl.Policy
 
 	mu     sync.RWMutex
 	ctx    context.Context
@@ -105,6 +107,10 @@ func NewTCPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, logger, "tcp_chain_source", id)
+	if err != nil {
+		return nil, err
+	}
 
 	s := &TCPChainSource{
 		id:          id,
@@ -116,6 +122,7 @@ func NewTCPChainSourcePlugin(
 		logger:      logger,
 		tlsConfig:   tlsCfg,
 		auth:        authPolicy,
+		acl:         aclPolicy,
 	}
 	s.lastEntryTime.Store(time.Time{})
 
@@ -126,7 +133,8 @@ func NewTCPChainSourcePlugin(
 		"port", opts.Port,
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
-		"auth", authPolicy.Describe())
+		"auth", authPolicy.Describe(),
+		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_chain_source", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "tcp_chain_source", id, opts.TrustNode)
 	return s, nil
@@ -166,6 +174,7 @@ func (s *TCPChainSource) Start() error {
 		s.auth.Close()
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
+	ln = s.acl.Listener(ln)
 	if s.tlsConfig != nil {
 		ln = tls.NewListener(ln, s.tlsConfig)
 	}
@@ -226,6 +235,7 @@ func (s *TCPChainSource) GetStats() source.SourceStats {
 		"trust_node":           s.config.TrustNode,
 	}
 	maps.Copy(details, s.auth.Stats())
+	maps.Copy(details, s.acl.Stats())
 
 	return source.SourceStats{
 		ID:             s.id,
