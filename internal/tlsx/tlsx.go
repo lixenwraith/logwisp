@@ -112,7 +112,9 @@ func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 		if cfg.VerifyPeerCertificate, err = verifyPins(o.PinSHA256); err != nil {
 			return nil, err
 		}
-		cfg.InsecureSkipVerify = true // the pin check above replaces it
+		// The pin check replaces Go's; Go skips it on a resumed session, so a
+		// pinned dialer never resumes, and a pin dropped by a reload holds
+		cfg.InsecureSkipVerify, cfg.SessionTicketsDisabled = true, true
 	}
 	if o.CAFile != "" {
 		pool, err := loadPool(o.CAFile)

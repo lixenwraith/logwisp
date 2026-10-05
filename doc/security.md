@@ -446,7 +446,10 @@ A listener needs no certificate files. With `self_signed = true`, or with
 `issuer_cert_file` and `issuer_key_file`, it makes an ECDSA P-256 key once per
 process and, at startup and every reload, a certificate for it valid 397 days
 (never past the issuer), for `hosts`, its `host` (unless a wildcard),
-`os.Hostname()`, `localhost`, `127.0.0.1` and `::1`.
+`os.Hostname()`, `localhost`, `127.0.0.1` and `::1`. Every such listener of
+one process shares that key, self-signed or issued, so one pin matches them
+all; a dialer that must tell two apart verifies by name with `ca_file`, or
+the listeners use `cert_file`.
 
 - **Self-signed.** No CA can vouch for it, so dialers pin its key:
   `pin_sha256`, which the listener logs at WARN on every start. A reload
@@ -461,8 +464,9 @@ process and, at startup and every reload, a certificate for it valid 397 days
 - **Pins.** A pin is the SHA-256 of the server's public key, not of its
   certificate, so it survives reissue. `pin_sha256` accepts several, `;`
   between them, for a rotation. It replaces chain, name and validity checks:
-  whoever holds the key is the server. `scram` dialers still bind every login
-  to that certificate.
+  whoever holds the key is the server. A pinned dialer never resumes a TLS
+  session, so every connection checks the pins, and a pin a reload drops
+  holds at once. `scram` dialers still bind every login to that certificate.
 
 ```bash
 lw tls ca --dir /etc/logwisp/pki                       # ca.crt, ca.key (0600)

@@ -1,6 +1,7 @@
 package tlsx
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"net"
@@ -80,6 +81,50 @@ func TestSelfSignedListenerIsVerifiedByItsPin(t *testing.T) {
 		err = testutil.Handshake(t, reloaded, client)
 		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
 			t.Errorf("pins %q: %v, want %q", pins, err, want)
+		}
+	}
+}
+
+// Go skips the pin check on a resumed session, so a pinned dialer never
+// resumes one, even given a session cache
+func TestPinnedDialerNeverResumes(t *testing.T) {
+	server, err := Server(&config.TLSOptions{Enabled: true, SelfSigned: true}, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := Client(&config.TLSOptions{Enabled: true, PinSHA256: PinSHA256(server.Certificates[0].Leaf)}, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.ClientSessionCache = tls.NewLRUClientSessionCache(1)
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.SetDeadline(time.Now().Add(5 * time.Second))
+			tconn := tls.Server(conn, server)
+			tconn.Write([]byte{1}) // after the handshake and its session ticket
+			tconn.Close()
+		}
+	}()
+	for i := range 2 {
+		conn, err := tls.Dial("tcp4", ln.Addr().String(), client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_, err = conn.Read(make([]byte, 1)) // stores a ticket, if one came
+		resumed := conn.ConnectionState().DidResume
+		conn.Close()
+		if err != nil || resumed {
+			t.Fatalf("connection %d: resumed %v, %v", i+1, resumed, err)
 		}
 	}
 }

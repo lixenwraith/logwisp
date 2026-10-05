@@ -115,8 +115,7 @@ authentication designs for the rationale and what is deliberately left out.
   exit codes, `lw auth`; also the `lw(1)` manual, [`doc/lw.1`](doc/lw.1)
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
-- [To Do](doc/todo.md): planned work in priority order: packaging, smaller
-  follow-ups
+- [To Do](doc/todo.md): planned work: packaging
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](config/logwisp.toml).
