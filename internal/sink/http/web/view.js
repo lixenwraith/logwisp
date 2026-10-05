@@ -14,6 +14,7 @@ const form = document.getElementById("login");
 const progress = document.getElementById("progress");
 const status = document.getElementById("status");
 const search = document.getElementById("search");
+const matchCase = document.getElementById("case");
 const lowest = document.getElementById("level");
 // The server's levels by rising severity, each with the words naming it
 const levels = JSON.parse(meta("levels"));
@@ -43,13 +44,15 @@ function levelOf(text) {
   return "";
 }
 
-// A line shows when it contains the search, in any case, and its entry's level
-// reaches the lowest chosen; with none chosen, lines without a level show too
+// A line shows when it contains the search, in any case unless matchCase is
+// pressed, and its entry's level reaches the lowest chosen; with none chosen,
+// lines without a level show too
 function shown(row) {
   const floor = rank.get(lowest.value);
   if (floor !== undefined && !(rank.get(row.dataset.level) >= floor)) return false;
-  const text = search.value.trim().toLowerCase();
-  return !text || row.textContent.toLowerCase().includes(text);
+  const fold = matchCase.getAttribute("aria-pressed") === "true" ? (s) => s : (s) => s.toLowerCase();
+  const text = fold(search.value.trim());
+  return !text || fold(row.textContent).includes(text);
 }
 
 function refilter() {
@@ -165,6 +168,10 @@ function retry(reason) {
 }
 
 search.addEventListener("input", refilter);
+matchCase.addEventListener("click", () => {
+  matchCase.setAttribute("aria-pressed", String(matchCase.getAttribute("aria-pressed") !== "true"));
+  refilter();
+});
 lowest.addEventListener("change", refilter);
 
 form.addEventListener("submit", async (event) => {

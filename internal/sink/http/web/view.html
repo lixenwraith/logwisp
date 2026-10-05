@@ -14,7 +14,10 @@
 <body class="viewer">
 <header>
   <h1>LogWisp</h1>
-  <input id="search" type="search" placeholder="Search" aria-label="Show lines containing">
+  <span class="search">
+    <input id="search" type="search" placeholder="Search" aria-label="Show lines containing">
+    <button id="case" type="button" aria-pressed="false" aria-label="Match case" title="Match case">Aa</button>
+  </span>
   <select id="level" aria-label="Lowest level shown"><option value="">All lines</option></select>
   <span id="state" role="status">connecting…</span>
   <button id="logout" type="button">Sign out</button>

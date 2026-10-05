@@ -75,7 +75,8 @@ pipelines have [their own flags](#pipelines):
 - `--auto_reload=BOOL`: reload when the configuration file changes, default
   `false`
 - `-V`, `--version`: print the version and exit
-- `-h`, `--help`, `help`: print usage and exit
+- `-h`, `--help`, `help`: print every option, pointing to `man lw` for the
+  full reference, and exit
 
 The last `-c` wins; a missing or empty path is an error.
 
@@ -255,7 +256,8 @@ The path resolver reads these variables directly:
 One pipeline can come from the environment, with the [SPEC](#pipelines) syntax.
 Any pipeline flag on the command line makes LogWisp ignore all of them.
 
-- `LOGWISP_PIPELINE`: the pipeline's name, default `cli`
+- `LOGWISP_PIPELINE`: the pipeline's name, default the `LOGWISP_PRESET` name,
+  else `cli`
 - `LOGWISP_PRESET`: the [preset](#presets) that starts it
 - `LOGWISP_SOURCE`, `LOGWISP_SINK`, `LOGWISP_FILTER`: one stage each
   - `LOGWISP_SOURCE_1` .. `LOGWISP_SOURCE_N` add more, after the unnumbered

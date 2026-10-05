@@ -41,7 +41,9 @@ func Settings() map[string]bool {
 	}
 	settings := map[string]bool{}
 	for path, value := range c.GetRegisteredPathsWithDefaults() {
-		_, settings[path] = value.(bool)
+		if _, tables := value.([]PipelineConfig); !tables { // the pipeline flags set those
+			_, settings[path] = value.(bool)
+		}
 	}
 	return settings
 }

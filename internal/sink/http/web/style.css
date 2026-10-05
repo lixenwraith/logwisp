@@ -104,6 +104,59 @@ progress {
   border-bottom: 1px solid var(--line);
 }
 
+/* The search field and its match-case toggle read as one input */
+.search {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* The field's ring is the input's own focus; the toggle draws its own */
+.search:has(#search:focus) {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.search input {
+  width: 11rem;
+  border: 0;
+  outline: none;
+}
+
+.search button {
+  padding: 0 0.6rem;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.search button:hover {
+  color: var(--fg);
+}
+
+.search button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--panel);
+}
+
+@media (forced-colors: active) {
+  .search button[aria-pressed="true"] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+
+.search button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+}
+
 #state {
   flex: 1;
   color: var(--muted);

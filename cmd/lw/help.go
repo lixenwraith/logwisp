@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/lixenwraith/logwisp/internal/version"
 )
 
-// helpText is the CLI usage reference. Scalar flags map 1:1 to TOML config paths.
+// helpText lists every option lw takes; man lw is the full reference.
 const helpText = `LogWisp %s - log collection, processing, and distribution
 
 Usage:
@@ -32,30 +33,55 @@ after '='; short options do not combine. lw takes options only.
       --dump                    Print the effective configuration, exit
   -q, --quiet                   Silence lw's own log and notices; pipeline
                                 output still flows
-      --color [WHEN]            Level names in color on console sinks:
-                                auto (a terminal, NO_COLOR unset; default),
-                                always (bare --color) or never
+      --color [WHEN]            Level names in color on console sinks: auto
+                                (on a terminal; default), always (a bare
+                                --color) or never
   -V, --version                 Print the version and exit
   -h, --help                    Print this help and exit
       --                        End the options
 
-Configuration keys are flags by their TOML path, '_' and '.' kept:
-      --KEY=VALUE               e.g. --logging.level=debug
-      --status_reporter=BOOL    Periodic status logging (default: true with
-                                a configuration file)
+Configuration keys are options by their TOML path, '_' and '.' kept; a BOOL
+key alone means true:
+      --status_reporter=BOOL    Log pipeline statistics every 30 s at debug
+                                (default: true with a configuration file)
       --auto_reload=BOOL        Reload when the file changes (default: false)
-  Logging (lw's own log goes to stderr, at info with a configuration file and
-  at warn without one):
-      --logging.output=MODE     file|stdout|stderr|split|all|none
-      --logging.level=LEVEL     debug|info|warn|error
+  lw's own log:
+      --logging.output=MODE     stderr (default), stdout, split (warn and
+                                error to stderr, the rest to stdout), file,
+                                all (split and file) or none
+      --logging.level=LEVEL     debug|info|warn|error (default: info with a
+                                configuration file, warn without)
+      --logging.format=FORMAT   txt|json|raw (default: txt)
+      --logging.sanitization=POLICY
+                                raw (default: unchanged), txt (hex for '<'
+                                and non-printables), json (escapes control
+                                characters) or shell (strips; lossy)
       --logging.file.directory=DIR
+                                Where file and all write (default: ./log);
+                                lw's alone: the limits below delete any old
+                                .log file in it
+      --logging.file.name=NAME  File name base (default: logwisp)
+      --logging.file.max_size_mb=N
+                                Start a new file past N MB (default: 100)
+      --logging.file.max_total_size_mb=N
+                                Delete the oldest .log files there past N MB
+                                in all (default: 1000)
+      --logging.file.retention_hours=H
+                                Delete .log files there older than H hours
+                                (default: 168; 0 keeps them)
+      --logging.console.target=TARGET
+                                Accepted without effect: --logging.output
+                                chooses the console
 
-Pipelines (replace the file's pipelines; see doc/cli.md):
+Pipelines (they replace the configuration file's pipelines):
   -p, --preset NAME[,KEY=VALUE...]
                                 Start a pipeline with a preset: pipe, tail,
                                 serve, edge, aggregator; lw preset NAME -h
                                 lists its keys, lw preset NAME prints it
-      --pipeline NAME           Start a pipeline; earlier specs go to "cli"
+      --pipeline NAME           Start a pipeline named NAME, which the
+                                pipeline options after it configure; those
+                                before any --pipeline make one named after
+                                its --preset, or "cli" without one
       --source SPEC             TYPE[,KEY=VALUE...], repeatable
       --sink SPEC               e.g. http,host=0.0.0.0,port=8080, repeatable
       --filter SPEC             include|exclude,patterns=RE, repeatable
@@ -79,29 +105,32 @@ Examples:
 password_file=edge-01.pass                        Forward to an aggregator
 
 Environment:
-  LOGWISP_<PATH>                Config path, '.' -> '_', uppercase
-                                e.g. LOGWISP_LOGGING_LEVEL=debug
+  LOGWISP_<KEY>                 A configuration key, '.' as '_', uppercase:
+                                LOGWISP_LOGGING_LEVEL=debug
   LOGWISP_CONFIG_FILE           Configuration file path
   LOGWISP_CONFIG_DIR            Configuration directory
   LOGWISP_PIPELINE, LOGWISP_PRESET, LOGWISP_SOURCE[_N], LOGWISP_SINK[_N],
   LOGWISP_FILTER[_N], LOGWISP_FORMAT, LOGWISP_RATE_LIMIT, LOGWISP_HEARTBEAT
                                 One pipeline, specs as the flags (_N adds
                                 more); ignored when a pipeline flag is given
+  NO_COLOR, TERM=dumb           Turn --color auto off
 
 Signals:
   SIGINT, SIGTERM               Graceful shutdown
   SIGHUP, SIGUSR1               Reload configuration
 
 Exit codes:
-  0  success, including the end of input
-  1  general error, including a configuration that does not load
-  2  usage error, or a named configuration file not found
+  0  Success, including the end of input
+  1  Failure, including a configuration that does not load
+  2  Usage error, or a named configuration file not found
+
+The full reference, with every key, preset and command: man lw
 `
 
-func printHelp() {
+func printHelp(w io.Writer) {
 	var list strings.Builder
 	for _, c := range commands {
 		fmt.Fprintf(&list, "  lw %-26s %s\n", c.name+" COMMAND", c.summary)
 	}
-	fmt.Printf(helpText, version.Short(), list.String())
+	fmt.Fprintf(w, helpText, version.Short(), list.String())
 }
