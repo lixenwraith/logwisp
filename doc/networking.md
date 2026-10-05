@@ -117,9 +117,10 @@ The `http_chain` source has no connection cap; it bounds work with
 `max_body_bytes` and `read_timeout_ms` instead.
 
 Apart from SCRAM logins, which are throttled per address (see
-[Security](security.md#throttling)), there is **no** per-IP limiting and no IP
-allow/deny list. `flow.rate_limit` is a pipeline-wide entry rate limit, not a
-network-level one — it cannot distinguish or throttle an individual peer.
+[Security](security.md#throttling)), there is **no** per-IP limiting; `acl`
+admits or refuses peers by address ([Security](security.md#the-acl-block)).
+`flow.rate_limit` is a pipeline-wide entry rate limit, not a network-level
+one — it cannot distinguish or throttle an individual peer.
 
 ## Keep-Alive
 
@@ -205,6 +206,15 @@ headers, and entry encoding.
   `127.0.0.1` or `0.0.0.0` listener, nor `127.0.0.1` a `::` one. `localhost`
   may resolve to either.
 - Check the port is not already bound by another pipeline in the same process.
+
+**Closed as soon as it connects, before TLS**
+- The listener's `acl` refused the address: `acl_denied` rises, and its log has
+  `Connection refused by acl` at WARN, once a minute at most. The dialer sees
+  `EOF` or `connection reset by peer` (curl: exit 52 or 56).
+- Behind a proxy (an L4 passthrough, or the `http` sink's
+  `auth.trusted_proxies`) every peer has the proxy's address: allow the proxy.
+- `acl: allow entry "...": not of the listener's family` at startup — an IPv4
+  entry on an IPv6 `host`, or the reverse: each family's listener takes its own.
 
 **TLS handshake failure**
 - `client didn't provide a certificate` — the listener has `client_auth = true`

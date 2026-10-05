@@ -178,6 +178,8 @@ Options, each as type and default:
 - `tls` (table): listener TLS; see [Security](security.md).
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
+- `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
+  before TLS; see [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -241,15 +243,16 @@ Options, each as type and default:
 - HTTP/2 is negotiated via ALPN when TLS is enabled; plaintext is HTTP/1.1.
 
 **Status endpoint** returns service and version identity, host, port, TLS flag,
-the compiled auth policy, active client count, sink and per-client buffer sizes,
-connection limit, write timeout, uptime, endpoint paths, and the
-`total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected`
-counters.
+the compiled auth policy and acl, active client count, sink and per-client
+buffer sizes, connection limit, write timeout, uptime, endpoint paths, and the
+`total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected` /
+`acl_denied` counters.
 
 **Statistics**: `dropped_writes`, `rejected_clients`, `auth`, `auth_allowed`,
 `auth_rejected`; under `scram` also `auth_users`, `auth_throttled`,
 `auth_busy`, `auth_binding_mismatch` and `auth_token_lifetime_ms`, and in
-proxy mode `auth_trusted_proxies`.
+proxy mode `auth_trusted_proxies`; with `acl` rules also `acl` and
+`acl_denied`.
 
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read
@@ -302,6 +305,8 @@ Options, each as type and default:
 - `tls` (table): listener TLS.
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
+- `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
+  before TLS; see [Security](security.md#the-acl-block).
 
 **Behaviour**
 
@@ -327,7 +332,8 @@ Options, each as type and default:
 
 **Statistics**: `write_errors`, `dropped_writes`, `rejected_conns`,
 `tls_handshake_errors`, `auth`, `auth_allowed`, `auth_rejected`; under `scram`
-also `auth_users`, `auth_throttled`, `auth_busy` and `auth_binding_mismatch`.
+also `auth_users`, `auth_throttled`, `auth_busy` and `auth_binding_mismatch`;
+with `acl` rules also `acl` and `acl_denied`.
 
 ---
 

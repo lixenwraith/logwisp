@@ -162,11 +162,11 @@ Pipelines over stdin and stdout are under [Usage Patterns](#usage-patterns).
 ## Presets
 
 `--preset NAME,key=value,...` takes the [SPEC](#pipelines) syntax. A list
-key (`hosts`, `proxy`) takes several values, repeated (`hosts=a,hosts=b`) or
-`,`-separated; any other key takes one. `lw preset NAME [--key value ...]`
-prints the pipeline a preset expands to, ready for a configuration file; its
-flags are the keys, spelled as in the SPEC (`--password_file`), and `-u` is
-`--user`;
+key (`hosts`, `proxy`, `allow`, `deny`) takes several values, repeated
+(`hosts=a,hosts=b`) or `,`-separated; any other key takes one.
+`lw preset NAME [--key value ...]` prints the pipeline a preset expands to,
+ready for a configuration file; its flags are the keys, spelled as in the SPEC
+(`--password_file`), and `-u` is `--user`;
 `lw preset NAME -h` lists its keys and defaults, `lw preset` the presets. An
 unknown key fails and lists the valid ones. A `path` is a file, a directory
 (its files) or a glob; a preset that takes one reads stdin without it, and
@@ -183,6 +183,8 @@ unknown key fails and lists the valid ones. A `path` is a file, a directory
     startup), `issuer` (one signed by `issuer_cert` and `issuer_key`), or
     `files` (`cert` and `key`); `hosts` adds names to a made certificate
   - without `users` the viewer needs no login, over plain http too
+  - `allow` and `deny`: addresses or CIDRs, the sink's
+    [acl](security.md#the-acl-block)
   - `users`: a credentials file; readers then log in with SCRAM, and browsers
     need `proxy` and `viewer=true`: the login page and viewer behind the
     TLS-terminating proxies `proxy` names, since a browser cannot bind its
@@ -198,6 +200,7 @@ unknown key fails and lists the valid ones. A `path` is a file, a directory
   - `listen` (`0.0.0.0:9000`), `transport` (`tcp`), `format` (`json`)
   - `tls`: `self` (default), `issuer` or `files`, as for `serve`; never `off`
   - authenticate by `users` (SCRAM) or `client_ca` (mTLS): one is required
+  - `allow` and `deny`, as for `serve`
   - `out`: a directory for `aggregate*.log` files; default stdout
 
 ```bash

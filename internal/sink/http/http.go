@@ -21,6 +21,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/sink"
@@ -78,6 +79,7 @@ type HTTPSink struct {
 
 	// Authorization
 	auth *authz.Policy
+	acl  *netacl.Policy
 	web  map[string]http.Handler // GET paths of the browser files and the root
 
 	// Runtime. Stop closes flush; the broker then moves what remains of its
@@ -158,6 +160,10 @@ func NewHTTPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, logger, "http_sink", id)
+	if err != nil {
+		return nil, err
+	}
 	switch {
 	case (opts.LoginPage || opts.ViewerPage) && !authPolicy.BehindProxy():
 		return nil, errors.New("login_page and viewer_page apply to scram behind auth.trusted_proxies, where browsers log in; without auth or under mtls the viewer is always served")
@@ -185,6 +191,7 @@ func NewHTTPSinkPlugin(
 		keepalive:    core.StreamKeepaliveInterval,
 		tlsConfig:    tlsCfg,
 		auth:         authPolicy,
+		acl:          aclPolicy,
 		web:          web,
 	}
 	h.lastProcessed.Store(time.Time{})
@@ -199,6 +206,7 @@ func NewHTTPSinkPlugin(
 		"tls", tlsCfg != nil,
 		"mtls", tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert,
 		"auth", authPolicy.Describe(),
+		"acl", aclPolicy.Describe(),
 		"login_page", opts.LoginPage,
 		"viewer_page", web[chain.AuthPath+"/view"] != nil)
 	tlsx.LogWarnings(logger, "http_sink", id, opts.TLS, true)
@@ -244,6 +252,7 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 		ln.Close()
 		return err
 	}
+	ln = h.acl.Listener(ln)
 	mux := http.NewServeMux()
 	// Method-scoped patterns: mux answers 405 with Allow header on non-GET
 	mux.HandleFunc(http.MethodGet+" "+exact(h.config.StreamPath), h.handleStream)
@@ -569,6 +578,7 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"port":               h.config.Port,
 			"tls":                h.tlsConfig != nil,
 			"auth":               h.auth.Describe(),
+			"acl":                h.acl.Describe(),
 			"active_clients":     h.activeClients.Load(),
 			"buffer_size":        h.config.BufferSize,
 			"client_buffer_size": h.config.ClientBufferSize,
@@ -585,6 +595,7 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"dropped_writes":   h.droppedWrites.Load(),
 			"rejected_clients": h.rejectedClients.Load(),
 			"auth_rejected":    h.auth.Rejected(),
+			"acl_denied":       h.acl.Denied(),
 		},
 	}
 
@@ -611,6 +622,7 @@ func (h *HTTPSink) GetStats() sink.SinkStats {
 		},
 	}
 	maps.Copy(details, h.auth.Stats())
+	maps.Copy(details, h.acl.Stats())
 
 	return sink.SinkStats{
 		ID:                h.id,

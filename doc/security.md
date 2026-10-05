@@ -26,10 +26,12 @@ configure it, and — equally important — what it does not yet do.
   [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy).
 - Server pinning by dialers: certificate identity (`mtls`), bound certificate
   (`scram`).
+- Address rules on every listener, applied before TLS: see
+  [The ACL Block](#the-acl-block).
 - Startup warnings for expiring certificates and risky settings: see
   [Startup Warnings](#startup-warnings).
-- Unknown configuration keys rejected: a typo in `tls`, `auth` or a table path
-  fails startup.
+- Unknown configuration keys rejected: a typo in `tls`, `auth`, `acl` or a
+  table path fails startup.
 - Configuration input hardened (lixenwraith/config v0.2.2 and
   lixenwraith/toml v0.1.3, reviewed with adversarial tests and fuzzing like
   `auth`):
@@ -49,8 +51,10 @@ configure it, and — equally important — what it does not yet do.
 
 - Certificate revocation lists (CRL) or OCSP: revoke by editing the allow-list
   or credentials file.
-- IP allow/deny lists, per-IP connection or request limits: only SCRAM logins
-  are throttled per address.
+- Per-address connection or request limits: only SCRAM logins are throttled
+  per address.
+- Address rules for clients behind a proxy: `acl` sees the proxy, never the
+  client a PROXY header or `X-Forwarded-For` names.
 - PROXY protocol: behind a proxy that passes TLS through, every peer shares the
   proxy's address; see
   [Behind nginx or another proxy](#behind-nginx-or-another-proxy).
@@ -319,6 +323,36 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
 
 Errors read like `auth: type "mtls" requires tls.client_auth`.
 
+## The ACL Block
+
+`acl`, beside `tls` and `auth` on the four listeners (`tcp` and `http` sinks,
+`tcp_chain` and `http_chain` sources), refuses peers by address as the socket
+is accepted: before the TLS handshake or a byte of the protocol, so a refused
+peer costs no handshake and never reaches `auth`.
+
+```toml
+[pipelines.plugin_sources.config.acl]
+allow = ["192.0.2.0/24", "198.51.100.7"] # addresses or CIDRs; empty: all
+deny  = ["192.0.2.66"]                   # refused, listed in allow or not
+```
+
+- `deny` wins; then a non-empty `allow` admits only its entries, an empty one
+  every address `deny` does not list.
+- Entries are of the listener's [family](networking.md#address-family): IPv4
+  on an IPv4 listener, IPv6 on an IPv6 one, either behind a hostname (only the
+  family it binds ever matches). An entry of the other family, an IPv4-mapped
+  address, one with a zone, or anything but an address or CIDR fails
+  construction. A link-local peer matches without its zone.
+- A refused connection is closed at once and counted in `acl_denied` (plugin
+  stats, the `http` sink's status). A WARN names the peer and the count, at
+  most once a minute per listener; the refusals in between are only counted.
+- The rules see the socket peer: behind a proxy (an L4 passthrough, or the
+  `http` sink's `trusted_proxies`), the proxy (see
+  [Behind nginx or another proxy](#behind-nginx-or-another-proxy)).
+- The `serve` and `aggregator` presets take `allow` and `deny` list keys.
+- Dialers have no `acl`: on a `tcp_chain` or `http_chain` sink it is an
+  unknown key.
+
 ## Startup Warnings
 
 Some settings work but are usually mistakes. Each plugin reports them at WARN
@@ -334,6 +368,9 @@ when it is constructed, so startup and every reload repeat them:
 - a `key_file`, `issuer_key_file`, `credentials_file` or `password_file` every
   local user can read
   (once per path per process)
+- an `acl` entry with host bits set (`10.0.0.1/8`), naming the network it
+  matches; an `acl.allow` entry of a whole family (`0.0.0.0/0`, `::/0`); a
+  wildcard listener whose `acl` has `deny` but no `allow`
 
 ## Certificates made at startup
 
@@ -816,7 +853,8 @@ stream {
   (`too many attempts` or `busy`) keeps sending on its token to the server it
   pinned, retrying every few seconds, and holds its batches only once that
   token has expired; any other refusal ends the token at once.
-- Logs and sessions name the proxy, not the peer.
+- Logs and sessions name the proxy, not the peer, and `acl` rules see only the
+  proxy: allow it, not the clients.
 - Proxy mode is unaffected: it throttles on the forwarded client.
 - Until LogWisp reads PROXY, mitigate:
   - expose the chain ports directly, without the proxy, where you can;
@@ -845,6 +883,9 @@ compromised edge cannot attribute its entries to another host, and the `http`
 sink's stream and status endpoints stop being open to anyone who can reach the
 port.
 
+**`acl`** — an address check, per listener, before TLS: it narrows who can
+reach the other layers, never proves who a peer is.
+
 **Revocation** is the allow-list or the credentials file, not a CRL. Remove the
 identity or user and send `SIGHUP`: the reload rebuilds every pipeline, so the
 change takes effect on the next connection and existing ones are dropped by the
@@ -856,7 +897,8 @@ would add.
 ## Surfaces Without Access Control
 
 An `auth` block (`mtls` or `scram`) closes each of these. Without one, bind them
-to a trusted interface or front them with an authenticating proxy.
+to a trusted interface, front them with an authenticating proxy, or narrow them
+to known networks with `acl.allow`.
 
 What each exposes when `auth.type = "none"`:
 
