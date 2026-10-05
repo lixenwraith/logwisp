@@ -33,8 +33,12 @@ manages SCRAM credentials and logs in to `scram` listeners
 - A value follows as the next argument or after `=` (`-c FILE`, `-c=FILE`,
   `--config FILE`, `--config=FILE`); a value that starts with `-` follows `=`,
   and `--` ends the options.
+- A switch (`--check`, `--quiet`, any boolean key) takes no separate value:
+  `--quiet=false`, not `--quiet false`.
 - Short options do not combine (`-q -t`, not `-qt`) or take an attached value
-  (`-cFILE`); an unknown single-dash option is an error.
+  (`-cFILE`).
+- lw takes options only. An unknown option and a word no option takes (`lw
+  tail`, `lw -t FILE`) are usage errors, named on stderr.
 - lw's multiword options join words with `-` (`--rate-limit`,
   `--password-file`); configuration keys, spec keys and preset keys keep
   TOML's `_` and `.` (`--status_reporter`, `--sink http,tls.cert_file=F`,
@@ -48,7 +52,7 @@ pipelines have [their own flags](#pipelines):
 ```
 --<path>=<value>        e.g. --logging.level=debug
 --<path> <value>        e.g. --logging.level debug
---<path>                bare flag: true, for a boolean path only
+--<path>                a switch: true, for a boolean path only
 ```
 
 ### Common
@@ -309,14 +313,16 @@ service untouched; see [Configuration](configuration.md#hot-reload).
 
 - `0`: the end of input, a clean shutdown (`SIGINT`, `SIGTERM`), `--version` /
   `--help`, `--dump`, or a valid `--check`
-- `1`: general error: a command-line error (an unknown option, a missing
-  `-c` path), a configuration load or validation failure (`--check`
-  included), a logger init failure, a service bootstrap failure
-- `2`: an explicitly requested configuration file is not found
+- `1`: general error: a configuration load or validation failure (`--check`
+  included, and a bad value on the command line), a logger init failure, a
+  service bootstrap failure
+- `2`: a usage error (an unknown option, a word no option takes, a missing
+  value or `-c` path), or an explicitly requested configuration file that is
+  not found
 - killed by `SIGPIPE` (shell status `141`): the reader of stdout went away, as
   in `lw | head`; `cat` ends the same way
 
-Exit code 2 applies only when the file was named explicitly (`-c`,
+A missing file is exit code 2 only when it was named explicitly (`-c`,
 `--config=`, or the `LOGWISP_CONFIG_*` variables). A missing discovered default
 is not an error, and LogWisp starts on built-in defaults.
 
@@ -511,7 +517,7 @@ Makes ECDSA P-256 certificates for `tls` blocks. It never replaces a file
 
 ```
 lw tls ca   --dir DIR [--name NAME] [--days 3650]
-lw tls cert --ca-dir DIR --name NAME [--host NAME,...] [--server] [--client]
+lw tls cert --ca-dir DIR --name NAME [--hosts NAME,...] [--server] [--client]
             [--days 397] [--out DIR]
 ```
 
@@ -520,9 +526,9 @@ lw tls cert --ca-dir DIR --name NAME [--host NAME,...] [--server] [--client]
   `tls.client_ca_file`; with `ca.key` it is a listener's
   `tls.issuer_cert_file` and `tls.issuer_key_file`.
 - `cert`: `NAME.crt` and `NAME.key`, in `--out` (default: `--ca-dir`).
-  - `--server` for a listener: `--host` lists the DNS names and IP addresses it
-    carries, default `NAME`; `--client` for a dialer presenting a certificate;
-    both may be given.
+  - `--server` for a listener: `--hosts` lists the DNS names and IP addresses
+    it carries, default `NAME` (`--host`, its earlier name, still works);
+    `--client` for a dialer presenting a certificate; both may be given.
   - `NAME` is the subject CN, the identity `auth.type = "mtls"` matches.
   - Valid 397 days (the longest browsers accept), never past the CA. It prints
     the certificate's `pin_sha256`.

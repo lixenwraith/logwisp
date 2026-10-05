@@ -24,7 +24,7 @@ func main() {
 	switch {
 	case err != nil:
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(2) // every command-line error is a usage error
 	case inv.command != nil:
 		os.Exit(inv.command.run(inv.args, os.Stdout, os.Stderr))
 	case inv.help:

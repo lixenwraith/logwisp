@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -72,8 +73,10 @@ func (c *command) run(args []string, stdout, stderr io.Writer) int {
 	}
 	s := c.subcommands[i]
 	fs := flag.NewFlagSet("lw "+c.name+" "+s.name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
+	// flag names a long flag with one dash: its errors, and the usage, print below
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	usage := func() {
 		fmt.Fprintf(stderr, "Usage: %s %s\n\n%s.\n\n", fs.Name(), s.synopsis, s.summary)
 		printFlags(stderr, fs)
 	}
@@ -83,13 +86,16 @@ func (c *command) run(args []string, stdout, stderr io.Writer) int {
 			fs.Var(f.Value, letter, "") // no usage: printFlags shows it with its long flag
 		}
 	}
-	if err := fs.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2 // already reported by flag, with the usage
+	err := fs.Parse(args[1:])
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		usage()
+		return 0
+	case err != nil:
+		err = usageError(longFlag.ReplaceAllString(err.Error(), "$1--$2"))
+	default:
+		err = checkArgs(fs, s.required)
 	}
-	err := checkArgs(fs, s.required)
 	if err == nil {
 		err = work(stdout, stderr)
 	}
@@ -98,11 +104,14 @@ func (c *command) run(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "%s: %v\n", fs.Name(), err)
 	if _, ok := errors.AsType[usageError](err); ok {
-		fs.Usage()
+		usage()
 		return 2
 	}
 	return 1
 }
+
+// longFlag is a flag name of two or more letters in flag's errors
+var longFlag = regexp.MustCompile(`(^|\s)-(\w[\w-]+)`)
 
 func (c *command) usage(w io.Writer) {
 	fmt.Fprintf(w, "Usage: lw %s COMMAND [flags]\n\n", c.name)
@@ -162,9 +171,9 @@ type invocation struct {
 }
 
 // parseCommandLine reads lw's own flags, a short one as its long one; any
-// other --flag is a --path=value setting for lixenwraith/config, which reports
-// what it does not know. A pipeline flag takes the next argument unless it
-// starts with '-'. A help request wins over a malformed flag.
+// other --flag is a setting, passed to lixenwraith/config as --path=value or a
+// bare switch so it never guesses. A flag's value is the next argument unless
+// that starts with '-'. Every error is a usage error; a help request wins.
 func parseCommandLine(argv []string) (inv invocation, err error) {
 	defer func() {
 		if inv.help {
@@ -175,9 +184,11 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 		if i := slices.IndexFunc(commands, func(c command) bool { return c.name == argv[0] }); i >= 0 {
 			return invocation{command: &commands[i], args: argv[1:]}, nil
 		}
-		inv.help = argv[0] == "help"
 	}
-	specFlags := config.SpecFlags()
+	specFlags, settings := config.SpecFlags(), config.Settings()
+	unexpected := func(word string) error {
+		return fmt.Errorf("unexpected argument %q: lw takes options only (a configuration file is -c FILE, a switch's value follows '=')", word)
+	}
 	next := func(i *int) string {
 		if *i+1 < len(argv) && !strings.HasPrefix(argv[*i+1], "-") {
 			*i++
@@ -194,9 +205,11 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 		}
 		switch {
 		case arg == "--":
-			inv.load.Overrides = append(inv.load.Overrides, argv[i:]...)
+			if i+1 < len(argv) {
+				err = cmp.Or(err, unexpected(argv[i+1]))
+			}
 			return inv, err
-		case arg == "--help":
+		case arg == "--help" || i == 0 && arg == "help":
 			inv.help = true
 		case name == "--config":
 			if !inline {
@@ -215,9 +228,21 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 			}
 			inv.load.Specs = append(inv.load.Specs, config.Spec{Flag: name[2:], Value: value})
 		case len(name) > 1 && name[0] == '-' && unicode.IsLetter(rune(name[1])):
-			// config reads only --flags; a negative number stays a value
+			// lw's only single-dash options are the shorts
 			err = cmp.Or(err, fmt.Errorf("unknown option %s: long options take two dashes, and a value that starts with '-' follows '=' (lw --help lists them)", typed))
+		case !strings.HasPrefix(name, "--"):
+			err = cmp.Or(err, unexpected(arg))
 		default:
+			isSwitch, known := settings[name[2:]]
+			if !known {
+				err = cmp.Or(err, fmt.Errorf("unknown option %s (lw --help lists them)", typed))
+			}
+			if !inline && !isSwitch {
+				if value = next(&i); value == "" && known {
+					err = cmp.Or(err, fmt.Errorf("%s needs a value; one that starts with '-' follows '='", typed))
+				}
+				arg += "=" + value
+			}
 			inv.load.Overrides = append(inv.load.Overrides, arg)
 		}
 	}
