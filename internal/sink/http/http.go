@@ -156,11 +156,15 @@ func NewHTTPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleListener, authz.HTTP)
+	kind := netacl.HTTP
+	if opts.Auth != nil && len(opts.Auth.TrustedProxies) > 0 {
+		kind = netacl.HTTPProxied
+	}
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, kind, logger, "http_sink", id)
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, logger, "http_sink", id)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, authz.RoleListener, authz.HTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -264,14 +268,16 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 
 	// One wrapper covers stream and status, and keeps the handlers themselves
 	// unaware of authorization; a nil policy admits every request. Login, the
-	// browser files and the root sit outside it; in proxy mode everything sits
-	// behind the proxy gate.
+	// browser files and the root sit outside it; all but login, which SCRAM
+	// throttling limits, count in the per-client request rate. In proxy mode
+	// everything sits behind the proxy gate.
+	limit := func(next http.Handler) http.Handler { return h.acl.Requests(next, clientAddr) }
 	outer := http.NewServeMux()
 	outer.HandleFunc(http.MethodPost+" "+chain.AuthPath, h.handleAuth)
 	for p, file := range h.web {
-		outer.Handle(http.MethodGet+" "+p, file)
+		outer.Handle(http.MethodGet+" "+p, limit(file))
 	}
-	outer.Handle("/", h.authMiddleware(mux))
+	outer.Handle("/", limit(h.authMiddleware(mux)))
 	var handler http.Handler = outer
 	if h.auth.BehindProxy() {
 		handler = h.proxyGate(outer)
@@ -572,6 +578,7 @@ func (h *HTTPSink) armWrite(rc *http.ResponseController) {
 
 // handleStatus provides a JSON status report
 func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
+	denied, limited := h.acl.Refused()
 	status := map[string]any{
 		"service":     "LogWisp",
 		"version":     version.Short(),
@@ -599,7 +606,8 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"dropped_writes":   h.droppedWrites.Load(),
 			"rejected_clients": h.rejectedClients.Load(),
 			"auth_rejected":    h.auth.Rejected(),
-			"acl_denied":       h.acl.Denied(),
+			"acl_denied":       denied,
+			"acl_limited":      limited,
 		},
 	}
 

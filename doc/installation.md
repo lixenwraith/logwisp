@@ -314,5 +314,6 @@ or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
 - `acl-test.sh`: each listener admitting or refusing peers by address before
   TLS, with clients from 127.0.0.1 and 127.0.0.2, then by the client a PROXY
   header names behind a stub proxy on 127.0.0.11-13 (and nginx `stream` on
-  127.0.0.14 when installed), per-client login throttling included; ports
+  127.0.0.14 when installed) or an L7 proxy's `X-Forwarded-For`, with
+  per-client connection caps, request rates and login throttling; ports
   15881-15889; skips (exit 77) where 127.0.0.2 cannot be bound

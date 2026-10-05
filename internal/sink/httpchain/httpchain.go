@@ -150,7 +150,7 @@ func NewHTTPChainSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleDialer, authz.HTTP)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, nil, authz.RoleDialer, authz.HTTP)
 	if err != nil {
 		return nil, err
 	}

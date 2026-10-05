@@ -42,6 +42,8 @@ Package map:
 - `internal/tlsx`: the single seam between `TLSOptions` and `crypto/tls`.
 - `internal/authz`: the single seam between `AuthOptions` and the network
   plugins: `Admit`, `AuthorizeRequest`, `Greet`, `Prepare`.
+- `internal/netacl`: a listener's `acl` block: address rules, PROXY headers
+  and per-client limits; its `Table` is SCRAM throttling's limiter too.
 - `internal/session`: session manager and per-instance proxy.
 - `internal/core`: shared types (`LogEntry`, `TransportEvent`), capabilities,
   constants.

@@ -15,17 +15,15 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
-	"github.com/lixenwraith/logwisp/internal/tokenbucket"
 
 	"github.com/lixenwraith/auth"
 	"github.com/lixenwraith/toml"
@@ -47,8 +45,6 @@ const (
 	limitBurst   = 10 // failed or abandoned exchanges per address before throttling
 	limitRate    = 1  // per second
 	limitPending = 4  // unfinished exchanges per address
-	limitPeers   = 65536
-	limitIdle    = time.Minute
 )
 
 // The dialer's floor on the Argon2 cost a server may ask for. A hostile server
@@ -194,7 +190,9 @@ type scramListener struct {
 	lifetime time.Duration
 	proxy    *proxyMode
 	server   atomic.Pointer[auth.ScramServer]
-	limit    limiter
+	// limit bounds attempts per client: failed or abandoned exchanges drain
+	// its bucket (successes are refunded), and limitPending may be unfinished
+	limit *netacl.Table
 
 	throttled       atomic.Uint64
 	busy            atomic.Uint64
@@ -233,7 +231,7 @@ func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
 			return err
 		}
 	}
-	l := &scramListener{}
+	l := &scramListener{limit: netacl.NewTable(limitBurst, limitRate, limitPending)}
 	var err error
 	if len(o.TrustedProxies) > 0 {
 		if l.proxy, err = parseProxies(o.TrustedProxies); err != nil {
@@ -307,19 +305,19 @@ func (p *Policy) begin(ip string, first json.RawMessage) (challenge auth.ServerF
 		p.rejected.Add(1)
 		return challenge, http.StatusBadRequest, "malformed request", fmt.Errorf("%w: malformed client-first message", ErrRefused)
 	}
-	if !l.limit.start(ip) {
+	if !l.limit.Take(ip) {
 		l.throttled.Add(1)
 		return challenge, http.StatusTooManyRequests, "too many attempts", fmt.Errorf("%w: %s throttled", ErrRefused, ip)
 	}
 	s := l.server.Load()
 	if s == nil {
-		l.limit.release(ip)
+		l.limit.Release(ip)
 		l.busy.Add(1)
 		return challenge, http.StatusServiceUnavailable, "busy", errors.New("auth: scram server is not running")
 	}
 	challenge, err = s.ProcessClientFirstMessage(req.Username, req.ClientNonce)
 	if err != nil {
-		l.limit.release(ip)
+		l.limit.Release(ip)
 	}
 	switch {
 	case errors.Is(err, auth.ErrSCRAMTooManyHandshakes), errors.Is(err, auth.ErrSCRAMStopped):
@@ -329,7 +327,7 @@ func (p *Policy) begin(ip string, first json.RawMessage) (challenge auth.ServerF
 		p.rejected.Add(1)
 		return challenge, http.StatusBadRequest, "malformed request", fmt.Errorf("%w: %w", ErrRefused, err)
 	}
-	l.limit.track(ip, challenge.FullNonce)
+	l.limit.Hold(ip, challenge.FullNonce, time.Now().Add(auth.ScramHandshakeTimeout))
 	return challenge, 0, "", nil
 }
 
@@ -337,7 +335,7 @@ func (p *Policy) begin(ip string, first json.RawMessage) (challenge auth.ServerF
 // the client certificate to the user when configured.
 func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState) (auth.ServerFinalMessage, error) {
 	l := p.listener
-	l.limit.done(ip, nonce)
+	l.limit.Done(ip, nonce)
 	s := l.server.Load()
 	if s == nil {
 		l.busy.Add(1)
@@ -365,7 +363,7 @@ func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState
 		return auth.ServerFinalMessage{}, fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	p.allowed.Add(1)
-	l.limit.succeeded(ip)
+	l.limit.Refund(ip)
 	return final, nil
 }
 
@@ -386,7 +384,8 @@ func (p *Policy) bindCertificate(cs *tls.ConnectionState, username string) error
 // line for Accept. An exchange abandoned after its challenge is released from
 // the auth table at once rather than holding a slot for its timeout.
 func (p *Policy) exchangeTCP(a *Admission, cs *tls.ConnectionState) (Identity, []byte, error) {
-	ip := throttleKey(remoteIP(a.conn.RemoteAddr().String()))
+	addr, _ := netacl.ParseHost(a.conn.RemoteAddr().String())
+	ip := netacl.Key(addr)
 	challenge, _, public, err := p.begin(ip, a.Hello.Scram)
 	if err != nil {
 		writeStep(a.conn, authStep{Error: public})
@@ -395,7 +394,7 @@ func (p *Policy) exchangeTCP(a *Admission, cs *tls.ConnectionState) (Identity, [
 	settled := false
 	defer func() {
 		if !settled {
-			p.listener.limit.done(ip, challenge.FullNonce)
+			p.listener.limit.Done(ip, challenge.FullNonce)
 			if s := p.listener.server.Load(); s != nil {
 				s.ProcessClientFinalMessage(challenge.FullNonce, "")
 			}
@@ -443,7 +442,8 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 		writeJSON(w, http.StatusForbidden, authStep{Error: "forbidden"})
 		return Identity{}, err
 	}
-	ip := throttleKey(client)
+	addr, _ := netacl.ParseHost(client)
+	ip := netacl.Key(addr)
 	// A cross-origin page cannot send JSON without a preflight nobody answers
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
 		p.rejected.Add(1)
@@ -899,119 +899,4 @@ func remoteIP(addr string) string {
 		return host
 	}
 	return addr
-}
-
-// --- Throttling ---
-
-// throttleKey is what the limiter counts: an address, or for IPv6 its /64,
-// which one host usually holds whole. Link-local too, per zone: a peer picks
-// any fe80::/64 address, so per address it would escape its budget.
-func throttleKey(ip string) string {
-	addr, err := netip.ParseAddr(ip)
-	if err != nil || addr.Is4() {
-		return ip
-	}
-	key := netip.PrefixFrom(addr, 64).Masked().String()
-	if zone := addr.Zone(); zone != "" {
-		key += "%" + zone
-	}
-	return key
-}
-
-// limiter bounds SCRAM attempts per remote address: failed or abandoned
-// exchanges drain a token bucket (successes are refunded) and at most
-// limitPending may be unfinished. A full table fails closed.
-type limiter struct {
-	mu        sync.Mutex
-	peers     map[string]*peerLimit
-	lastSweep time.Time
-}
-
-type peerLimit struct {
-	bucket   *tokenbucket.TokenBucket
-	pending  map[string]time.Time // full nonce -> expiry
-	reserved int                  // started, challenge not yet issued
-	seen     time.Time
-}
-
-func (l *limiter) start(ip string) bool {
-	now := time.Now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.peers == nil {
-		l.peers = make(map[string]*peerLimit)
-	}
-	if now.Sub(l.lastSweep) > limitIdle/6 {
-		l.sweep(now)
-	}
-	pl := l.peers[ip]
-	if pl == nil {
-		if len(l.peers) >= limitPeers {
-			return false
-		}
-		pl = &peerLimit{bucket: tokenbucket.New(limitBurst, limitRate), pending: make(map[string]time.Time)}
-		l.peers[ip] = pl
-	}
-	pl.seen = now
-	pl.expire(now)
-	// Reserved under this lock: concurrent hellos cannot all pass the check
-	if len(pl.pending)+pl.reserved >= limitPending || !pl.bucket.Allow() {
-		return false
-	}
-	pl.reserved++
-	return true
-}
-
-// track turns start's reservation into the exchange's nonce
-func (l *limiter) track(ip, nonce string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if pl := l.peers[ip]; pl != nil {
-		pl.reserved--
-		pl.pending[nonce] = time.Now().Add(auth.ScramHandshakeTimeout)
-	}
-}
-
-// release frees start's reservation when no challenge was issued
-func (l *limiter) release(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if pl := l.peers[ip]; pl != nil {
-		pl.reserved--
-	}
-}
-
-func (l *limiter) done(ip, nonce string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if pl := l.peers[ip]; pl != nil {
-		delete(pl.pending, nonce)
-	}
-}
-
-func (l *limiter) succeeded(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if pl := l.peers[ip]; pl != nil {
-		pl.bucket.Refund(1)
-	}
-}
-
-func (pl *peerLimit) expire(now time.Time) {
-	for nonce, expiry := range pl.pending {
-		if now.After(expiry) {
-			delete(pl.pending, nonce)
-		}
-	}
-}
-
-// sweep drops addresses idle long enough for their bucket to be full again
-func (l *limiter) sweep(now time.Time) {
-	l.lastSweep = now
-	for ip, pl := range l.peers {
-		pl.expire(now) // an abandoned HTTP challenge has no done
-		if now.Sub(pl.seen) > limitIdle && len(pl.pending) == 0 && pl.reserved == 0 {
-			delete(l.peers, ip)
-		}
-	}
 }

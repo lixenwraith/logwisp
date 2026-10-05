@@ -147,11 +147,11 @@ func NewTCPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, authz.RoleListener, authz.TCP)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, logger, "tcp_sink", id)
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, logger, "tcp_sink", id)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, authz.RoleListener, authz.TCP)
 	if err != nil {
 		return nil, err
 	}
