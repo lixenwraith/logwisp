@@ -1,3 +1,6 @@
 bin/lw
 @sample %%ETCDIR%%/logwisp.toml.sample
+share/bash-completion/completions/lw
+share/fish/vendor_completions.d/lw.fish
 share/man/man1/lw.1.gz
+share/zsh/site-functions/_lw

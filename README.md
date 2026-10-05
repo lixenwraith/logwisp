@@ -115,7 +115,7 @@ authentication designs for the rationale and what is deliberately left out.
   exit codes, `lw auth`; also the `lw(1)` manual, [`doc/lw.1`](doc/lw.1)
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
-- [To Do](doc/todo.md): planned work: packaging
+- [To Do](doc/todo.md): planned work: packaging, `lw --tui` and its shared configuration engine
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](config/logwisp.toml).
@@ -185,9 +185,9 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     -v /etc/logwisp:/etc/logwisp:ro logwisp:dev -c /etc/logwisp/logwisp.toml
 ```
 
-`sudo make install` installs the binary, the manual, a sample configuration
-and a systemd unit or FreeBSD rc.d script; see
-[Installation](doc/installation.md).
+`sudo make install` installs the binary, the manual, shell completion, a
+sample configuration and a systemd unit or FreeBSD rc.d script; `make deb`
+packages them for Debian and Ubuntu. See [Installation](doc/installation.md).
 
 ## System Requirements
 

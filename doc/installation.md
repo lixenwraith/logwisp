@@ -27,6 +27,9 @@ The Makefile works with GNU make and BSD make alike. Targets:
   - `make release`: the same, static (`CGO_ENABLED=0`), `-trimpath`, stripped
   - `make dev`: built with the race detector
   - `make version`: the metadata a build would embed
+  - `make completion`: regenerate the bash, zsh and fish completion in
+    `deploy/package/completion/` from `cmd/lw`'s `shorts` and `commands`
+    tables; `go test ./cmd/lw` fails while they differ
   - `make clean`: remove `bin/`
 - Check
   - `make test`: the Go tests
@@ -39,7 +42,7 @@ The Makefile works with GNU make and BSD make alike. Targets:
 - Container
   - `make image`, `make image-check`: see [Container Image](#container-image)
 - Install
-  - `make install`, `make uninstall`: see [Installing](#installing)
+  - `make install`, `make uninstall`, `make deb`: see [Installing](#installing)
 
 Variables:
 
@@ -70,6 +73,11 @@ first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `BINDIR` (default
 - FreeBSD defaults: `PREFIX=/usr/local`, `SYSCONFDIR=/usr/local/etc`.
 - `INSTALL_OS` (default: `uname -s`) picks the layout, so
   `INSTALL_OS=FreeBSD DESTDIR=...` stages the FreeBSD one on another system.
+- `BASHCOMPDIR`, `ZSHCOMPDIR`, `FISHCOMPDIR`: where the shell completion
+  goes, by default `$PREFIX/share/bash-completion/completions`,
+  `$PREFIX/share/zsh/site-functions` (`/usr/share/zsh/vendor-completions`
+  for `PREFIX=/usr` on Debian and Ubuntu, whose zsh reads only that) and
+  `$PREFIX/share/fish/vendor_completions.d`.
 
 ```bash
 make release
@@ -79,6 +87,8 @@ sudo make install PREFIX=/usr/local
 Every system gets:
 
 - `$BINDIR/lw` and the manual `$PREFIX/share/man/man1/lw.1`
+- completion for `lw`, its commands, flags, files and preset names:
+  `lw`, `_lw` and `lw.fish` in the three directories above
 - `$PREFIX/share/doc/logwisp/` (this documentation) and
   `$PREFIX/share/licenses/logwisp/LICENSE`
 
@@ -145,6 +155,28 @@ rc.conf variables:
   for `logwisp_user` when missing)
 - `logwisp_args`: extra `lw` options, e.g. `--logging.level=debug` (default
   empty); `logwisp_flags` goes to `daemon(8)`, not to `lw`
+
+### Debian and Ubuntu (.deb)
+
+`make deb` builds a release and packages what `make install` stages, in
+Debian's layout, as `bin/logwisp_VERSION_ARCH.deb`, the architecture taken
+from the binary. A release tag gives the version; an untagged or modified
+tree's sorts below every release and by build time, so each build upgrades
+the last. `DEB_MAINTAINER` names the maintainer.
+
+```bash
+make deb
+sudo apt install ./bin/logwisp_*.deb
+sudo systemctl enable --now logwisp
+```
+
+- Installing creates the `logwisp` account and its directories where
+  `systemd-sysusers` and `systemd-tmpfiles` exist; the service waits to be
+  enabled, and an upgrade restarts it if it runs.
+- `/etc/logwisp/logwisp.toml` is a conffile: an upgrade keeps your edits,
+  and only a purge removes it.
+- Removing stops and disables the service. The account, its directories
+  and any credentials in `/etc/logwisp` stay, as with `make uninstall`.
 
 ### Uninstall
 
@@ -235,18 +267,20 @@ docker run -d --name logwisp \
 
 ## Packaging Status
 
-The foundation for distribution packages is in place:
+In place:
 
-- the `lw` binary name, and `make install` with `DESTDIR`, `PREFIX` and
-  `SYSCONFDIR`
-- the `doc/lw.1` manual
-- service files in `deploy/package/`: `logwisp.service`, `logwisp.sysusers`,
-  `logwisp.tmpfiles` and the FreeBSD `logwisp.rc`
+- `make install` with `DESTDIR`, `PREFIX` and `SYSCONFDIR`, the manual,
+  shell completion and the service files in `deploy/package/`
+- `make deb`
 - skeletons: `deploy/package/arch/PKGBUILD` and a `sysutils/logwisp` port in
   `deploy/package/freebsd/`
+- `.github/workflows/package.yml`, on changes to them: `makepkg` on the
+  PKGBUILD in an Arch container, the `.deb` installed, started, removed and
+  purged on Ubuntu, BSD make building, installing and running the rc.d
+  service on FreeBSD, and `make image image-check`
 
-Still missing: release tags, which both skeletons download; finishing and
-submitting the AUR package and the port; Debian packaging.
+Still missing: release tags, which both skeletons download; submitting the
+AUR package and the port; a Debian source package for a PPA or the archive.
 [To Do](todo.md) has the steps.
 
 ## Verification
