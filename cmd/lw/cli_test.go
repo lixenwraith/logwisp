@@ -127,6 +127,47 @@ func TestUsageListsEachFlagOnce(t *testing.T) {
 	}
 }
 
+// lw --help and its manual list every option lw takes, and only those, a short
+// beside its long: lw's own, each configuration key, and the pipeline flags
+func TestHelpAndManualListEveryOption(t *testing.T) {
+	manual, err := os.ReadFile("../../doc/lw.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var help bytes.Buffer
+	printHelp(&help)
+	options := map[string]string{} // long -> its short, if lw takes one
+	for _, long := range config.SpecFlags() {
+		options[long] = ""
+	}
+	for long := range config.Settings() {
+		options[long] = ""
+	}
+	for letter, short := range shorts {
+		if short.top {
+			options[short.long] = letter
+		}
+	}
+	// mdoc's Fl writes the first dash, and the others as \-
+	fl := func(flag string) string { return regexp.QuoteMeta("Fl " + strings.ReplaceAll(flag[1:], "-", `\-`)) }
+	for long, letter := range options {
+		short, item := "    ", `^\.It (Fl \\-.*)?` // only long options before it
+		if letter != "" {
+			short, item = "-"+letter+", ", `^\.It `+fl("-"+letter)+` .*`
+		}
+		option := short + "--" + long
+		if !regexp.MustCompile(`(?m)^  ` + regexp.QuoteMeta(option) + `([^\w.-]|$)`).Match(help.Bytes()) {
+			t.Errorf("lw --help does not list %s", strings.TrimSpace(option))
+		}
+		if !regexp.MustCompile(`(?m)` + item + fl("--"+long) + `([^\w.\\]|$)`).Match(manual) {
+			t.Errorf("doc/lw.1 does not list %s", strings.TrimSpace(option))
+		}
+	}
+	if heads := regexp.MustCompile(`(?m)^  (-., |    )--\w`).FindAll(help.Bytes(), -1); len(heads) != len(options) {
+		t.Errorf("lw --help lists %d options, want %d", len(heads), len(options))
+	}
+}
+
 // --dump prints a file that lw -c reads back to the same configuration, its
 // console sinks still taking the top-level color
 func TestDumpReadsBack(t *testing.T) {

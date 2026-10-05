@@ -1,4 +1,4 @@
-.Dd October 4, 2026
+.Dd October 5, 2026
 .Dt LW 1
 .Os
 .Sh NAME
@@ -138,12 +138,23 @@ Read the configuration from
 .Ar file ,
 which must exist.
 The last one given wins.
-.It Fl \- Ns Ar key Ns = Ns Ar value , Fl \- Ns Ar key Ar value
-Set any scalar configuration key by its TOML path, such as
-.Fl \-logging.level=debug .
-A bare
-.Fl \- Ns Ar key
-sets a boolean to true.
+.It Fl t , Fl \-check
+Build every pipeline and plugin as a start would, loading options, TLS files
+and credentials files and printing startup warnings, without binding a port
+or opening, reading or creating a log file; print
+.Dq configuration ok
+and exit 0, or the error and exit 1, or 2 when a named configuration file is
+missing
+.Pq see Sx EXIT STATUS .
+.It Fl \-dump
+Print the effective configuration, with the options, environment and
+presets resolved into it, as a file
+.Fl c
+reads back, and exit.
+.It Fl q , Fl \-quiet
+Turn off the log of
+.Nm
+and the terminal reminder; console sinks still write.
 .It Fl \-color Op Ar when
 Color the level names console sinks write:
 .Cm auto
@@ -160,10 +171,25 @@ program parses keeps
 .Cm auto
 or
 .Cm never .
-.It Fl q , Fl \-quiet
-Turn off the log of
-.Nm
-and the terminal reminder; console sinks still write.
+.It Fl V , Fl \-version
+Print the version, commit and build time, and exit.
+.It Fl h , Fl \-help , Cm help
+Print a summary of every option and exit.
+.It Fl \-
+End option processing.
+.El
+.Ss Configuration keys
+Every scalar configuration key is an option by its TOML path,
+.Fl \- Ns Ar key Ns = Ns Ar value
+or
+.Fl \- Ns Ar key Ar value ,
+such as
+.Fl \-logging.level=debug ;
+a bare
+.Fl \- Ns Ar key
+sets a boolean to true.
+Besides the options above, the keys are:
+.Bl -tag -width Ds
 .It Fl \-status_reporter= Ns Ar bool
 Log pipeline statistics every 30 seconds at the debug level
 .Pq default true with a configuration file, false without .
@@ -171,7 +197,9 @@ Log pipeline statistics every 30 seconds at the debug level
 Reload when the configuration file changes
 .Pq default false .
 .It Fl \-logging.output= Ns Ar mode
-One of
+Where the log of
+.Nm
+itself goes:
 .Cm stderr
 .Pq the default ,
 .Cm stdout ,
@@ -194,25 +222,70 @@ the default is
 with a configuration file and
 .Cm warn
 without.
-.It Fl t , Fl \-check
-Build every pipeline and plugin as a start would, loading options, TLS files
-and credentials files and printing startup warnings, without binding a port
-or opening, reading or creating a log file; print
-.Dq configuration ok
-and exit 0, or the error and exit 1, or 2 when a named configuration file is
-missing
-.Pq see Sx EXIT STATUS .
-.It Fl \-dump
-Print the effective configuration, with the options, environment and
-presets resolved into it, as a file
-.Fl c
-reads back, and exit.
-.It Fl V , Fl \-version
-Print the version, commit and build time, and exit.
-.It Fl h , Fl \-help , Cm help
-Print usage and exit.
-.It Fl \-
-End option processing.
+.It Fl \-logging.format= Ns Ar format
+One of
+.Cm txt
+.Pq the default ,
+.Cm json
+or
+.Cm raw .
+.It Fl \-logging.sanitization= Ns Ar policy
+How the log's text is cleaned:
+.Cm raw
+.Pq the default: unchanged ,
+.Cm txt
+.Pq Ql < No and non-printable characters as hex ,
+.Cm json
+.Pq control characters escaped
+or
+.Cm shell
+.Pq shell metacharacters, whitespace and control characters removed; lossy .
+.It Fl \-logging.file.directory= Ns Ar dir
+The directory the
+.Cm file
+and
+.Cm all
+modes write in
+.Pq default Pa ./log .
+It must be
+.Nm Ns 's
+alone: the limits below count and delete every
+.Pa .log
+file in it but the one being written, and old ones are also deleted when the
+disk has less than 10 MB free.
+.It Fl \-logging.file.name= Ns Ar name
+The log file's name before
+.Pa .log
+.Pq default Cm logwisp ;
+see
+.Sx FILES .
+.It Fl \-logging.file.max_size_mb= Ns Ar n
+Start a new file when the current one would pass
+.Ar n
+megabytes
+.Pq default 100, 0 for no limit .
+.It Fl \-logging.file.max_total_size_mb= Ns Ar n
+Delete the oldest
+.Pa .log
+files in the directory when all of them pass
+.Ar n
+megabytes
+.Pq default 1000, 0 for no limit .
+.It Fl \-logging.file.retention_hours= Ns Ar hours
+Delete the
+.Pa .log
+files in the directory older than
+.Ar hours
+.Pq default 168, 0 to keep them .
+.It Fl \-logging.console.target= Ns Ar target
+Accepted, as
+.Cm stdout ,
+.Cm stderr
+or
+.Cm split ,
+and ignored:
+.Fl \-logging.output
+chooses the stream.
 .El
 .Ss Pipeline specifications
 Pipelines can be given on the command line or in the environment instead of
@@ -228,12 +301,16 @@ Standard input has one reader: a second console source anywhere in the
 configuration fails validation.
 .Bl -tag -width Ds
 .It Fl \-pipeline Ar name
-Start a new pipeline.
-Specifications before the first
-.Fl \-pipeline
-belong to a pipeline named
-.Dq cli ,
-or after the preset that starts them.
+Start a pipeline named
+.Ar name ,
+which the pipeline options after it configure.
+Those before any
+.Fl \-pipeline ,
+and the variables without
+.Ev LOGWISP_PIPELINE ,
+make a pipeline named after its preset, or
+.Dq cli
+without one.
 .It Fl p Ar spec , Fl \-preset Ar spec
 Start the pipeline with a preset, described in
 .Sx Presets ;
@@ -510,6 +587,10 @@ turns
 .Cm auto
 color off, as does
 .Ev TERM=dumb .
+.It Ev HOME
+Where
+.Pa ~/.config/logwisp/logwisp.toml
+is looked for.
 .El
 .Pp
 Secrets never go in the environment: TLS keys, credentials files and
@@ -546,13 +627,31 @@ and used by
 .It Pa /var/lib/logwisp , /var/db/logwisp
 The service's working directory on Linux and on
 .Fx .
+.It Pa ./log/logwisp.log
+The log of
+.Nm
+itself with
+.Fl \-logging.output=file
+or
+.Cm all ,
+in
+.Fl \-logging.file.directory
+and named by
+.Fl \-logging.file.name ;
+a full one is renamed with its time, as
+.Pa logwisp_YYMMDD_HHMMSS.log .
 .El
 .Sh EXIT STATUS
 .Nm
-exits 0 at the end of input, after a clean shutdown,
-.Fl \-version
-or help; 1 on a configuration, logger or startup error; and 2 on a usage
-error or when a configuration file named by
+exits 0 at the end of input, after a clean shutdown, and for
+.Fl \-version ,
+help,
+.Fl \-dump
+and a configuration
+.Fl \-check
+accepts; 1 on a failure, such as a configuration that does not load, or a
+logger or startup error; and 2 on a usage error or when a configuration file
+named by
 .Fl c
 or
 .Ev LOGWISP_CONFIG_*
@@ -581,6 +680,10 @@ Shut down gracefully.
 Reread the configuration file, certificates and credentials, and rebuild
 every pipeline.
 An invalid configuration leaves the running service untouched.
+Before the service runs,
+.Dv SIGHUP
+is ignored, as under
+.Xr nohup 1 .
 .El
 .Sh EXAMPLES
 Copy a file line by line:
@@ -674,10 +777,10 @@ generate the password into a file, then reload the server:
 .Xr tmpfiles.d 5 ,
 .Xr daemon 8
 .Pp
-The documentation installed in
+The guides to configuration, plugins, security and deployment, installed in
 .Pa share/doc/logwisp
-under the installation prefix, and
-.Lk https://github.com/lixenwraith/logwisp
+under the installation prefix and kept at
+.Lk https://github.com/lixenwraith/logwisp/tree/main/doc
 .Sh SECURITY CONSIDERATIONS
 A listener without an
 .Cm auth
