@@ -67,7 +67,8 @@ label {
   color: var(--muted);
 }
 
-input {
+input,
+select {
   font: inherit;
   padding: 0.45rem 0.6rem;
   border: 1px solid var(--line);
@@ -95,6 +96,7 @@ progress {
 
 .viewer header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 1rem;
   padding: 0.6rem 1rem;
