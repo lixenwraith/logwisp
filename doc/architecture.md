@@ -83,7 +83,8 @@ registry rejects a second instance of any such type.
 - `Node`: origin node label for chained topologies; stamped at the first hop,
   preserved by relays.
 - `Source`: origin identifier within the node (filename, plugin id, …).
-- `Level`: `DEBUG`, `INFO`, `WARN`, `ERROR` or `TRACE`, when detected.
+- `Level`: `TRACE`, `DEBUG`, `INFO`, `WARN` or `ERROR`, when detected; the
+  words naming each are one table, `core.Levels`.
 - `Message`: log content.
 - `Fields`: optional structured metadata as raw JSON.
 - `RawSize`: original byte size, used by the entry-size cap.

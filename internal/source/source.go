@@ -1,7 +1,6 @@
 package source
 
 import (
-	"strings"
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/core"
@@ -36,27 +35,8 @@ type SourceStats struct {
 	Details        map[string]any
 }
 
-// ExtractLogLevel heuristically determines the log level from a line of text
+// ExtractLogLevel returns the level the first word naming one marks, or ""
 func ExtractLogLevel(line string) string {
-	patterns := []struct {
-		patterns []string
-		level    string
-	}{
-		{[]string{"[ERROR]", "ERROR:", " ERROR ", "ERR:", "[ERR]", "FATAL:", "[FATAL]"}, "ERROR"},
-		{[]string{"[WARN]", "WARN:", " WARN ", "WARNING:", "[WARNING]"}, "WARN"},
-		{[]string{"[INFO]", "INFO:", " INFO ", "[INF]", "INF:"}, "INFO"},
-		{[]string{"[DEBUG]", "DEBUG:", " DEBUG ", "[DBG]", "DBG:"}, "DEBUG"},
-		{[]string{"[TRACE]", "TRACE:", " TRACE "}, "TRACE"},
-	}
-
-	upperLine := strings.ToUpper(line)
-	for _, group := range patterns {
-		for _, pattern := range group.patterns {
-			if strings.Contains(upperLine, pattern) {
-				return group.level
-			}
-		}
-	}
-
-	return ""
+	level, _, _ := core.LevelWord(line, "")
+	return level
 }

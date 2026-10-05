@@ -68,8 +68,11 @@ Options, each as type and default:
 - A line is parsed as JSON only when it is an object whose top-level keys are
   all drawn from `time`, `level`, `msg` and `fields` — the four an entry can
   carry. `time` is read as RFC3339Nano. Any other key, and any non-object line,
-  is kept whole as text with the level inferred from common markers
-  (`[ERROR]`, `WARN:`, and so on), because parsing it would drop the rest.
+  is kept whole as text, because parsing it would drop the rest.
+- A text line's level is its first whole word, in any case, naming one:
+  `TRACE`; `DEBUG`, `DBG`; `INFO`, `INF`; `WARN`, `WARNING`; `ERROR`, `ERR`,
+  `FATAL`. `warning: disk full` is WARN, `INFO retry after error` INFO. The
+  console sink paints that word and the http sink's viewer filters on it.
 - `raw = true` skips the JSON branch entirely. The line, plus its newline,
   becomes the message; `fields` stays empty, the time is the read time, and the
   level is inferred from the text as for any unparsed line. Paired with

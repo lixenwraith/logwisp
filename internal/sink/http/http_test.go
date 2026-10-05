@@ -220,7 +220,7 @@ func proxySink(t *testing.T, proxies []any, overrides map[string]any) *HTTPSink 
 
 // Behind a proxy the sink serves the client library and the enabled pages
 // under /auth/, each with its type and the pages' CSP; the viewer learns a
-// custom status path from its meta tag.
+// custom status path and the level table from its meta tags.
 func TestProxyModeServesBrowserFiles(t *testing.T) {
 	h := proxySink(t, []any{"127.0.0.1"}, map[string]any{"login_page": true, "viewer_page": true, "status_path": "/api/status"})
 	if !slices.Contains(h.Capabilities(), core.CapProxyTLS) {
@@ -244,6 +244,9 @@ func TestProxyModeServesBrowserFiles(t *testing.T) {
 		}
 		if file == "view" && !bytes.Contains(body, []byte(`content="api/status"`)) {
 			t.Error("the viewer page does not carry the custom status path")
+		}
+		if file == "view" && !bytes.Contains(body, []byte(`&#34;WARNING&#34;`)) {
+			t.Error("the viewer page does not carry the level table")
 		}
 	}
 }

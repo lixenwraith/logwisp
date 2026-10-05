@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"html"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/authz"
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
 	"github.com/lixenwraith/logwisp/internal/netacl"
 )
 
@@ -49,7 +51,8 @@ var webRoutes = []struct {
 // webHandlers maps each GET path a browser uses to its handler. Without a
 // login (no auth, or mtls: the certificate is the login) the viewer is always
 // served; under scram the pages need proxy mode. The viewer learns the status
-// path and whether it logs in from meta tags, as the CSP allows no inline script.
+// path, whether it logs in and the level table from meta tags, as the CSP
+// allows no inline script.
 func webHandlers(o *config.HTTPSinkOptions, p *authz.Policy) (map[string]http.Handler, error) {
 	open := !p.NeedsLogin()
 	on := map[string]bool{"": open || p.BehindProxy(), "login": o.LoginPage, "view": open || o.ViewerPage}
@@ -68,6 +71,8 @@ func webHandlers(o *config.HTTPSinkOptions, p *authz.Policy) (map[string]http.Ha
 			if open {
 				data = bytes.Replace(data, []byte(`name="logwisp-login" content="scram"`), []byte(`name="logwisp-login" content="none"`), 1)
 			}
+			levels, _ := json.Marshal(core.Levels)
+			data = bytes.Replace(data, []byte(`name="logwisp-levels" content=""`), []byte(`name="logwisp-levels" content="`+html.EscapeString(string(levels))+`"`), 1)
 		}
 		handlers[chain.AuthPath+"/"+r.name] = serveWebFile(data, webTypes[path.Ext(r.file)])
 	}

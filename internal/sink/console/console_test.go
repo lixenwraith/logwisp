@@ -29,8 +29,8 @@ func TestEscapeControlsKeepsOnlyLayout(t *testing.T) {
 	}
 }
 
-// The entry's level is painted where its line first names it as a whole
-// word, in any case, longest name first; other words and levels stay plain.
+// The entry's level, under any of its names, is painted where its line first
+// names it as a whole word, in any case; other words and levels stay plain.
 func TestPaintLevelColorsTheFirstWholeName(t *testing.T) {
 	p := inline.New(io.Discard)
 	p.SetColor(true)
@@ -38,6 +38,7 @@ func TestPaintLevelColorsTheFirstWholeName(t *testing.T) {
 	for _, c := range []struct{ in, level, want string }{
 		{"2026 ERROR boom ERROR\n", "ERROR", "2026 " + red + "ERROR\x1b[0m boom ERROR\n"},
 		{"[warning] disk\n", "WARN", "[" + yellow + "warning\x1b[0m] disk\n"},
+		{"INFO: WARN disk\n", "warning", "INFO: " + yellow + "WARN\x1b[0m disk\n"},
 		{"terror_x ERR:1\n", "ERROR", "terror_x " + red + "ERR\x1b[0m:1\n"},
 		{"INFOS informal\n", "INFO", "INFOS informal\n"},
 		{"ERROR without level\n", "", "ERROR without level\n"},

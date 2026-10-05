@@ -13,6 +13,13 @@ const signOut = document.getElementById("logout");
 const form = document.getElementById("login");
 const progress = document.getElementById("progress");
 const status = document.getElementById("status");
+const search = document.getElementById("search");
+const lowest = document.getElementById("level");
+// The server's levels by rising severity, each with the words naming it
+const levels = JSON.parse(meta("levels"));
+const named = new Map(levels.flatMap(({ level, names }) => names.map((name) => [name, level])));
+const rank = new Map(levels.map(({ level }, i) => [level, i]));
+for (const { level } of levels) lowest.add(new Option(`${level} and above`, level));
 
 // A page without a login needs no WebCrypto, so plain http works too
 const unavailable = open ? "" : loginUnavailable();
@@ -27,10 +34,35 @@ if (fresh) history.replaceState(null, "", location.pathname + location.search);
 let stopStream = null;
 let timer = null;
 
-function append(line) {
+// An entry's level is its first word naming one, as the server reads a line
+function levelOf(text) {
+  for (const [word] of text.matchAll(/\w+/g)) {
+    const level = named.get(word.toUpperCase());
+    if (level) return level;
+  }
+  return "";
+}
+
+// A line shows when it contains the search, in any case, and its entry's level
+// reaches the lowest chosen; with none chosen, lines without a level show too
+function shown(row) {
+  const floor = rank.get(lowest.value);
+  if (floor !== undefined && !(rank.get(row.dataset.level) >= floor)) return false;
+  const text = search.value.trim().toLowerCase();
+  return !text || row.textContent.toLowerCase().includes(text);
+}
+
+function refilter() {
+  for (const row of log.children) row.hidden = !shown(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function append(line, level) {
   const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
   const row = document.createElement("div");
   row.textContent = line;
+  row.dataset.level = level;
+  row.hidden = !shown(row);
   log.append(row);
   while (log.childElementCount > MAX_LINES) log.firstElementChild.remove();
   if (atBottom) log.scrollTop = log.scrollHeight;
@@ -73,7 +105,10 @@ function onEvent(type, data) {
     stopStream();
     retry("server shut down");
   }
-  if (type === "message") data.split("\n").forEach(append);
+  if (type === "message") {
+    const level = levelOf(data);
+    for (const line of data.split("\n")) append(line, level);
+  }
 }
 
 function streamWithCookie(url) {
@@ -128,6 +163,9 @@ function retry(reason) {
   clearTimeout(timer);
   timer = setTimeout(connect, 5000);
 }
+
+search.addEventListener("input", refilter);
+lowest.addEventListener("change", refilter);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();

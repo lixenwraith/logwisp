@@ -6,6 +6,7 @@
 <title>LogWisp stream</title>
 <meta name="logwisp-status" content="status">
 <meta name="logwisp-login" content="scram">
+<meta name="logwisp-levels" content="">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <script type="module" src="view.js"></script>
@@ -13,6 +14,8 @@
 <body class="viewer">
 <header>
   <h1>LogWisp</h1>
+  <input id="search" type="search" placeholder="Search" aria-label="Show lines containing">
+  <select id="level" aria-label="Lowest level shown"><option value="">All lines</option></select>
   <span id="state" role="status">connecting…</span>
   <button id="logout" type="button">Sign out</button>
 </header>

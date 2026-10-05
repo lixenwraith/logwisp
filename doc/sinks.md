@@ -54,10 +54,10 @@ Payloads are written as the formatter made them, one record per line.
   characters, such as the joiners emoji and Indic scripts need, are kept.
   `never` keeps an application's own ANSI colours; under `auto`, pipes and
   files get the bytes unchanged.
-- Color: the first whole word in a line, in any case, that names the entry's
-  level is painted: `DEBUG`/`DBG` cyan (blue is hard to read on black),
-  `INFO`/`INF` green, `WARNING`/`WARN` yellow, `ERROR`/`ERR`/`FATAL` bold red,
-  `TRACE` grey. The colors are ANSI 16, so the terminal's theme picks the
+- Color: the first word in a line naming the entry's level, by the names the
+  [sources](sources.md#file) read, is painted: `DEBUG` cyan (blue is hard to
+  read on black), `INFO` green, `WARN` yellow, `ERROR` bold red, `TRACE`
+  grey. The colors are ANSI 16, so the terminal's theme picks the
   shades and a Linux or BSD text console renders them; the codes are the
   sink's own, written after escaping. A line whose source found no level
   stays plain. The codes go into whatever the format makes, JSON included:
@@ -216,7 +216,9 @@ Options, each as type and default:
     to: `/` is refused like any other path;
   - an endpoint at `/` keeps the root, and the viewer stays at `/auth/view`.
   The viewer starts with the `replay_lines` backlog, holds one stream against
-  `max_connections`, and says so when all are taken (`server full`).
+  `max_connections`, and says so when all are taken (`server full`). Its
+  search keeps the lines containing a text, in any case, and its level list
+  the entries at or above a level, read as the sources read it.
 - Refusals are logged at WARN and counted in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
   `auth_identity`.
