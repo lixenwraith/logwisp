@@ -35,7 +35,8 @@ const (
 )
 
 // processKey is the key of every generated listener certificate: reloads
-// reissue certificates and keep it, so a pin holds until lw restarts.
+// reissue certificates and keep it, so a pin holds until lw restarts, and
+// matches every such listener of the process, self-signed or issued.
 var processKey = sync.OnceValues(NewKey)
 
 func NewKey() (*ecdsa.PrivateKey, error) { return ecdsa.GenerateKey(elliptic.P256(), rand.Reader) }
@@ -188,7 +189,7 @@ func pin(spki []byte) string {
 
 // verifyPins replaces chain verification: the server's key must hash to one
 // of the ';'-separated pins. Its name and validity are not checked. Go skips
-// it on a resumed session, and no dialer keeps a ClientSessionCache.
+// it on a resumed session, which Client therefore disables.
 func verifyPins(s string) (func([][]byte, [][]*x509.Certificate) error, error) {
 	var pins [][]byte
 	for p := range strings.SplitSeq(s, ";") {

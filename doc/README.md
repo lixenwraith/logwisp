@@ -30,8 +30,7 @@ streams, or downstream LogWisp nodes.
 - [CLI](cli.md): flags, signals, exit codes, `lw auth`; also the `lw(1)`
   manual, [`lw.1`](lw.1)
 - [Operations](operations.md): running, monitoring, tuning, troubleshooting
-- [To Do](todo.md): planned work in priority order: packaging, smaller
-  follow-ups
+- [To Do](todo.md): planned work: packaging
 
 A fully annotated configuration covering every option lives at
 [`config/logwisp.toml`](../config/logwisp.toml).
