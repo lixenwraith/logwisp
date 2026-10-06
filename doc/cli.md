@@ -9,6 +9,7 @@ lw --dump [options]
 lw auth COMMAND [flags]
 lw tls COMMAND [flags]
 lw preset NAME [flags]
+lw config init [--out FILE]
 lw help | -h | --help
 lw -V | --version
 ```
@@ -21,7 +22,9 @@ service.
 A [preset](#presets) builds a common pipeline from a few keys. `lw auth`
 manages SCRAM credentials and logs in to `scram` listeners
 ([below](#lw-auth)); `lw tls` makes a certificate authority and certificates
-([below](#lw-tls)). A command is recognized only as the first argument.
+([below](#lw-tls)); `lw config init` writes the annotated default
+configuration ([below](#lw-config)). A command is recognized only as the
+first argument.
 
 ## Options
 
@@ -43,8 +46,7 @@ manages SCRAM credentials and logs in to `scram` listeners
   `--password-file`); configuration keys, spec keys and preset keys keep
   TOML's `_` and `.` (`--status_reporter`, `--sink http,tls.cert_file=F`,
   `lw preset edge --password_file F`).
-- `lw auth`, `lw tls` and `lw preset` also take a long option after one dash
-  (`-user NAME`), as earlier releases documented.
+- The commands also take a long option after one dash (`-user NAME`).
 
 Any scalar configuration key is settable as a flag using its TOML path;
 pipelines have [their own flags](#pipelines):
@@ -539,4 +541,24 @@ lw tls cert --ca-dir DIR --name NAME [--hosts NAME,...] [--server] [--client]
 lw tls ca --dir /etc/logwisp/pki
 lw tls cert --ca-dir /etc/logwisp/pki --name agg.example.org --server
 lw tls cert --ca-dir /etc/logwisp/pki --name edge-01 --client
+```
+
+## `lw config`
+
+```
+lw config init [--out FILE]
+```
+
+`init` writes the annotated configuration that ships as
+`config/logwisp.toml`, every option with its default, to edit and run. It
+never replaces a file (remove one to replace it). Without `--out` it writes
+`~/.config/logwisp/logwisp.toml`, the file lw reads without `-c` unless a
+`LOGWISP_CONFIG_*` variable names another; with that file in place, lw
+without pipeline options runs its pipelines rather than filtering stdin.
+Any other path is run with `-c FILE`; lw prints which applies. `lw --dump` prints the
+effective configuration instead, flags and environment included.
+
+```bash
+lw config init
+sudo lw config init --out /usr/local/etc/logwisp/logwisp.toml
 ```

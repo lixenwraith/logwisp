@@ -6,11 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"unicode"
 
+	shipped "github.com/lixenwraith/logwisp/config"
 	"github.com/lixenwraith/logwisp/internal/config"
 
 	"github.com/lixenwraith/toml"
@@ -37,6 +41,8 @@ var commands = []command{
 		"Files are never overwritten; keys are written mode 0600.", tlsCommands},
 	{"preset", "Show the pipeline a preset makes, as TOML",
 		"lw --preset NAME,key=value runs one; flags here are its keys.", presetCommands()},
+	{"config", "Place the annotated default configuration",
+		"Files are never overwritten; lw --dump prints the effective configuration.", configCommands},
 }
 
 // shorts are lw's one-letter flags, each its long flag in every command that
@@ -286,4 +292,42 @@ func presetCommands() []subcommand {
 		subs = append(subs, s)
 	}
 	return subs
+}
+
+var configCommands = []subcommand{
+	{"init", "[--out FILE]",
+		"Write the annotated default configuration, to edit and run",
+		nil, defineConfigInit},
+}
+
+func defineConfigInit(flags *flag.FlagSet) func(stdout, stderr io.Writer) error {
+	out := flags.String("out", "", "`file` to write (default: ~/.config/logwisp/logwisp.toml)")
+	return func(_, stderr io.Writer) error {
+		user, err := config.UserFile()
+		path := cmp.Or(*out, user)
+		if path == "" {
+			return fmt.Errorf("no home directory for the default file (%v): name one with --out", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := writeNew(path, shipped.Sample, 0o644); errors.Is(err, fs.ErrExist) {
+			if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+				return fmt.Errorf("%s is a directory: name the file, as in %s", path, filepath.Join(path, "logwisp.toml"))
+			}
+			return fmt.Errorf("%s exists; remove it to replace it", path)
+		} else if err != nil {
+			return err
+		}
+		// -c refuses a path that climbs out with ..; an absolute one loads anywhere
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+		if found, err := filepath.Abs(config.DefaultPath()); err == nil && found == path {
+			fmt.Fprintf(stderr, "wrote %s; lw reads it without -c\n", path)
+		} else {
+			fmt.Fprintf(stderr, "wrote %s; run it with lw -c %s\n", path, path)
+		}
+		return nil
+	}
 }

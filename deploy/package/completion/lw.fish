@@ -12,34 +12,35 @@ set -l __lw_first 'test (count (commandline -opc)) -eq 1'
 complete -c lw -n $__lw_first -a auth -d 'SCRAM users, bearer tokens, tcp sink viewing'
 complete -c lw -n $__lw_first -a tls -d 'A CA and certificates for TLS and mTLS'
 complete -c lw -n $__lw_first -a preset -d 'Show the pipeline a preset makes, as TOML'
+complete -c lw -n $__lw_first -a config -d 'Place the annotated default configuration'
 complete -c lw -n $__lw_first -a help -d 'Print the help and exit'
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l auto_reload
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l check -o t
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l color
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l config -o c -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l dump
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l filter -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l format -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l heartbeat -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l help -o h
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.console.target -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.file.directory -x -a '(__fish_complete_directories)'
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.file.max_size_mb -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.file.max_total_size_mb -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.file.name -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.file.retention_hours -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.format -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.level -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.output -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l logging.sanitization -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l pipeline -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l preset -o p -x -a 'pipe tail serve edge aggregator'
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l quiet -o q
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l rate-limit -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l sink -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l source -r -F
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l status_reporter
-complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset' -l version -o V
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l auto_reload
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l check -o t
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l color
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l config -o c -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l dump
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l filter -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l format -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l heartbeat -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l help -o h
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.console.target -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.file.directory -x -a '(__fish_complete_directories)'
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.file.max_size_mb -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.file.max_total_size_mb -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.file.name -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.file.retention_hours -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.format -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.level -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.output -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l logging.sanitization -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l pipeline -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l preset -o p -x -a 'pipe tail serve edge aggregator'
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l quiet -o q
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l rate-limit -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l sink -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l source -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l status_reporter
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l version -o V
 
 complete -c lw -n '__lw_in auth; and test (count (commandline -opc)) -eq 2' -a add-user -d 'Add a user to a credentials file, or replace its password'
 complete -c lw -n '__lw_in auth; and test (count (commandline -opc)) -eq 2' -a remove-user -d 'Remove a user from a credentials file'
@@ -143,3 +144,7 @@ complete -c lw -n '__lw_in preset aggregator' -l tls -r -F -d 'self|issuer|files
 complete -c lw -n '__lw_in preset aggregator' -l transport -r -F -d 'tcp|http: tcp_chain or http_chain'
 complete -c lw -n '__lw_in preset aggregator' -l users -r -F -d 'credentials file (lw auth add-user): edges log in with SCRAM'
 complete -c lw -n '__lw_in preset aggregator' -l help -o h -d 'print the flags'
+
+complete -c lw -n '__lw_in config; and test (count (commandline -opc)) -eq 2' -a init -d 'Write the annotated default configuration, to edit and run'
+complete -c lw -n '__lw_in config init' -l out -r -F -d 'file to write (default: ~/.config/logwisp/logwisp.toml)'
+complete -c lw -n '__lw_in config init' -l help -o h -d 'print the flags'

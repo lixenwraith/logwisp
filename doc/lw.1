@@ -20,7 +20,7 @@
 .Op Fl \-rate\-limit Ar spec
 .Op Fl \-heartbeat Ar spec
 .Nm
-.Cm auth | tls | preset
+.Cm auth | tls | preset | config
 .Ar command
 .Op Ar flags
 .Nm
@@ -124,12 +124,7 @@ The options of
 join words with
 .Ql - ;
 a configuration or preset key keeps its TOML spelling.
-The
-.Cm auth ,
-.Cm tls
-and
-.Cm preset
-commands also take a long option after a single dash.
+The commands also take a long option after a single dash.
 .Pp
 The options are as follows:
 .Bl -tag -width Ds
@@ -549,6 +544,19 @@ An IPv6
 .Ar host
 is written in brackets, as in
 .Li [2001:db8::1]:8443 .
+.Ss Configuration command
+.Bl -tag -width Ds
+.It Cm config init Op Fl \-out Ar file
+Write the annotated configuration
+.Nm
+ships, every option with its default, to
+.Ar file ,
+by default
+.Pa ~/.config/logwisp/logwisp.toml ,
+the first file in
+.Sx FILES .
+An existing file is never replaced.
+.El
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
 .It Ev LOGWISP_ Ns Ar KEY
@@ -611,7 +619,11 @@ reads the first of these that exists:
 .Pa ./logwisp.toml
 .El
 .Pp
-Packages install a sample configuration and service files that pass it with
+.Nm
+.Cm config init
+writes the first.
+A service installation places the annotated configuration, keeping one
+already there, and service files that pass it with
 .Fl c :
 .Bl -tag -width Ds
 .It Pa /etc/logwisp/logwisp.toml
@@ -620,9 +632,7 @@ The configuration on Linux, used by
 .It Pa /usr/local/etc/logwisp/logwisp.toml
 The configuration on
 .Fx ,
-installed as
-.Pa logwisp.toml.sample
-and used by
+used by
 .Pa /usr/local/etc/rc.d/logwisp .
 .It Pa /var/lib/logwisp , /var/db/logwisp
 The service's working directory on Linux and on
@@ -668,9 +678,10 @@ the shell reports status 141.
 .Pp
 .Nm
 .Cm auth ,
-.Cm tls
-and
+.Cm tls ,
 .Cm preset
+and
+.Cm config
 do the same: 0 on success or help, 1 on failure, and 2 on a usage error.
 .Sh SIGNALS
 .Bl -tag -width "SIGINT, SIGTERM"
@@ -747,6 +758,16 @@ cert=/etc/logwisp/pki/agg.example.org.crt,\e
 key=/etc/logwisp/pki/agg.example.org.key,out=/var/log/edges
 edge# lw \-\-preset edge,path=/var/log/app,to=agg.example.org:9000,\e
 ca=/etc/logwisp/pki/ca.crt,user=edge-01,password_file=/root/edge-01.pass
+.Ed
+.Pp
+Write the annotated configuration to the file
+.Nm
+reads without
+.Fl c ,
+edit it, then check it:
+.Bd -literal -offset indent
+$ lw config init
+$ lw \-\-check
 .Ed
 .Pp
 Check a configuration without binding a port or touching a log file:

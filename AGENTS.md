@@ -77,9 +77,9 @@ change touches.
   keys must fail at any depth. Set defaults on the options struct before the
   call; `TestEveryPluginRejectsUnknownKeys` covers every registered plugin.
 - `cmd/lw/cli.go` owns the command line: lw's own flags, and the commands
-  table whose groups (`auth`, `tls`, `preset`) share one flag mechanism;
-  `config.Load` takes the parsed `config.Args`. Presets are rows of one table
-  in `internal/config/preset.go`.
+  table whose groups (`auth`, `tls`, `preset`, `config`) share one flag
+  mechanism; `config.Load` takes the parsed `config.Args`. Presets are rows of
+  one table in `internal/config/preset.go`.
 - Network security has three seams: `tlsx` (TLS configs, certificates made at
   startup or by `lw tls`, pins, startup warnings), `authz`, and `netacl`
   (address rules and per-client limits: a listener wraps the socket

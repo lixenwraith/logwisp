@@ -10,7 +10,7 @@ _lw() {
 	elif [[ $prev == = ]]; then prev=${COMP_WORDS[i-2]}
 	fi
 	case ${COMP_WORDS[1]}:$i in
-	*:1) words='--auto_reload --check -t --color --config -c --dump --filter --format --heartbeat --help -h --logging.console.target --logging.file.directory --logging.file.max_size_mb --logging.file.max_total_size_mb --logging.file.name --logging.file.retention_hours --logging.format --logging.level --logging.output --logging.sanitization --pipeline --preset -p --quiet -q --rate-limit --sink --source --status_reporter --version -V auth tls preset help' ;;
+	*:1) words='--auto_reload --check -t --color --config -c --dump --filter --format --heartbeat --help -h --logging.console.target --logging.file.directory --logging.file.max_size_mb --logging.file.max_total_size_mb --logging.file.name --logging.file.retention_hours --logging.format --logging.level --logging.output --logging.sanitization --pipeline --preset -p --quiet -q --rate-limit --sink --source --status_reporter --version -V auth tls preset config help' ;;
 	auth:2) words='add-user remove-user token stream' ;;
 	auth:*)
 		case ${COMP_WORDS[2]} in
@@ -79,6 +79,15 @@ _lw() {
 			--allow|-allow|--cert|-cert|--client_ca|-client_ca|--deny|-deny|--format|-format|--hosts|-hosts|--issuer_cert|-issuer_cert|--issuer_key|-issuer_key|--key|-key|--listen|-listen|--out|-out|--tls|-tls|--transport|-transport|--users|-users) COMPREPLY=(); return ;;
 			esac
 			words='--allow --cert --client_ca --deny --format --hosts --issuer_cert --issuer_key --key --listen --out --tls --transport --users --help -h' ;;
+		esac ;;
+	config:2) words='init' ;;
+	config:*)
+		case ${COMP_WORDS[2]} in
+		init)
+			case $prev in
+			--out|-out) COMPREPLY=(); return ;;
+			esac
+			words='--out --help -h' ;;
 		esac ;;
 	*)
 		case $prev in

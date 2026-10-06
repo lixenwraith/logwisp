@@ -219,11 +219,25 @@ func resolveConfigPath(file string) (path string, isExplicit bool) {
 	if configDir := os.Getenv("LOGWISP_CONFIG_DIR"); configDir != "" {
 		return filepath.Join(configDir, "logwisp.toml"), true
 	}
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		path = filepath.Join(homeDir, ".config", "logwisp", "logwisp.toml")
+	if path, err := UserFile(); err == nil {
 		if _, err := os.Stat(path); err == nil {
 			return path, false
 		}
 	}
 	return "logwisp.toml", false
+}
+
+// DefaultPath is the file lw reads without -c
+func DefaultPath() string {
+	path, _ := resolveConfigPath("")
+	return path
+}
+
+// UserFile is ~/.config/logwisp/logwisp.toml, the file lw reads first without -c
+func UserFile() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "logwisp", "logwisp.toml"), nil
 }

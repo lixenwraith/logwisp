@@ -45,6 +45,9 @@ IMAGE_RUN = $(CONTAINER_ENGINE) run --read-only --user 65532:65532 \
 	--network none --cap-drop ALL --security-opt no-new-privileges
 
 DESTDIR ?=
+# SERVICE=no installs lw alone: no service files and no system configuration,
+# which lw config init then places where the user wants it.
+SERVICE ?= yes
 INSTALL_OS_DEFAULT != uname -s
 INSTALL_OS ?= $(INSTALL_OS_DEFAULT)
 # FreeBSD keeps everything outside the base system under /usr/local.
@@ -66,7 +69,7 @@ DEB_MAINTAINER ?= Maintainer <maintainer@example.org>
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-go build release dev test verify e2e image image-check install uninstall deb completion clean version
+.PHONY: help check-go build release dev test verify e2e image image-check install uninstall deb arch completion clean version
 
 help:
 	@echo "Usage: make <target> [VARIABLE=value ...]"
@@ -87,12 +90,13 @@ help:
 	@echo "  image-check  Run it read-only, offline, without capabilities: --version, then"
 	@echo "               --check on $(IMAGE_CHECK_CONFIG)"
 	@echo "Install (build or release first):"
-	@echo "  install      Binary, manual, sample config, service files, shell completion,"
-	@echo "               licence and docs"
+	@echo "  install      Binary, manual, shell completion, licence and docs; unless SERVICE=no,"
+	@echo "               the service files and $(SYSCONFDIR)/logwisp/logwisp.toml (kept if present)"
 	@echo "  uninstall    Remove them, keeping $(SYSCONFDIR)/logwisp"
 	@echo "  deb          Package a release build as $(BIN_DIR)/logwisp_VERSION_ARCH.deb (dpkg-deb)"
+	@echo "  arch         Build the Arch package from this working tree in $(BIN_DIR)/arch (makepkg)"
 	@echo ""
-	@echo "Variables: GO=$(GO) PREFIX=$(PREFIX) SYSCONFDIR=$(SYSCONFDIR) DESTDIR=$(DESTDIR)"
+	@echo "Variables: GO=$(GO) PREFIX=$(PREFIX) SYSCONFDIR=$(SYSCONFDIR) DESTDIR=$(DESTDIR) SERVICE=$(SERVICE)"
 	@echo "  INSTALL_OS=$(INSTALL_OS) (the layout install uses: FreeBSD or any other)"
 	@echo "  GO_BUILDFLAGS, GO_LDFLAGS (extra go build and linker flags), E2E (scripts),"
 	@echo "  CONTAINER_ENGINE, IMAGE, IMAGE_TAG, BUILD_CA, IMAGE_BUILD_FLAGS, IMAGE_CHECK_CONFIG,"
@@ -131,10 +135,10 @@ verify: test
 	$(GO) vet ./...
 	@base='$(GOFMT_BASE)'; \
 	if [ -n "$$base" ] && fork=$$(git merge-base "$$base" HEAD 2>/dev/null); then \
-		files=$$( { git diff --name-only --find-renames=100% --diff-filter=dr "$$fork" -- cmd internal; \
-			git ls-files --others --exclude-standard -- cmd internal; } | grep '\.go$$' || true); \
+		files=$$( { git diff --name-only --find-renames=100% --diff-filter=dr "$$fork" -- cmd config internal; \
+			git ls-files --others --exclude-standard -- cmd config internal; } | grep '\.go$$' || true); \
 	else \
-		files=$$(find cmd internal -name '*.go'); \
+		files=$$(find cmd config internal -name '*.go'); \
 	fi; \
 	bad=$$( [ -z "$$files" ] || "$$($(GO) env GOROOT)/bin/gofmt" -l $$files ); \
 	if [ -n "$$bad" ]; then echo "gofmt -l reports:"; echo "$$bad"; exit 1; fi
@@ -192,10 +196,11 @@ image-check:
 
 # install stages what a package ships and compiles nothing, so a packager owns
 # the build flags. The service files get the installed paths substituted; a
-# configuration already in place is kept.
+# configuration already in place is kept, on every system alike.
 install:
 	@set -eu; \
 	[ -x $(BIN_DIR)/$(BINARY) ] || { echo "no $(BIN_DIR)/$(BINARY): run make build or make release first" >&2; exit 1; }; \
+	case '$(SERVICE)' in yes|no) ;; *) echo "SERVICE is yes or no, not '$(SERVICE)'" >&2; exit 2 ;; esac; \
 	put() { install -d -m 0755 "$${3%/*}"; install -m "$$1" "$$2" "$$3"; echo "install $$3"; }; \
 	sub() { install -d -m 0755 "$${3%/*}"; \
 		sed -e 's|@BINDIR@|$(BINDIR)|g' -e 's|@SYSCONFDIR@|$(SYSCONFDIR)|g' -e 's|%%BINDIR%%|$(BINDIR)|g' \
@@ -209,14 +214,13 @@ install:
 	put 0644 $(PKG_DIR)/completion/lw.fish "$$root$(FISHCOMPDIR)/lw.fish"; \
 	put 0644 LICENSE "$$root$(LICENSEDIR)/LICENSE"; \
 	for src in README.md doc/*.md; do put 0644 "$$src" "$$root$(DOCDIR)/$$src"; done; \
+	if [ '$(SERVICE)' = no ]; then echo "skip    the service and $$etc (SERVICE=no): lw config init writes a configuration"; exit 0; fi; \
+	if [ -e "$$etc/logwisp.toml" ]; then echo "keep    $$etc/logwisp.toml"; \
+	else put 0644 config/logwisp.toml "$$etc/logwisp.toml"; fi; \
 	case '$(INSTALL_OS)' in \
 	FreeBSD) \
-		put 0644 config/logwisp.toml "$$etc/logwisp.toml.sample"; \
-		if [ -z "$$root" ] && [ ! -e "$$etc/logwisp.toml" ]; then put 0644 config/logwisp.toml "$$etc/logwisp.toml"; fi; \
 		sub 0755 $(PKG_DIR)/logwisp.rc "$$root$(PREFIX)/etc/rc.d/logwisp" ;; \
 	*) \
-		if [ -e "$$etc/logwisp.toml" ]; then echo "keep    $$etc/logwisp.toml"; \
-		else put 0644 config/logwisp.toml "$$etc/logwisp.toml"; fi; \
 		sub 0644 $(PKG_DIR)/logwisp.service "$$root$(PREFIX)/lib/systemd/system/logwisp.service"; \
 		sub 0644 $(PKG_DIR)/logwisp.sysusers "$$root$(PREFIX)/lib/sysusers.d/logwisp.conf"; \
 		sub 0644 $(PKG_DIR)/logwisp.tmpfiles "$$root$(PREFIX)/lib/tmpfiles.d/logwisp.conf" ;; \
@@ -228,14 +232,14 @@ uninstall:
 		"$$root$(BASHCOMPDIR)/lw" "$$root$(ZSHCOMPDIR)/_lw" "$$root$(FISHCOMPDIR)/lw.fish" \
 		"$$root$(PREFIX)/lib/systemd/system/logwisp.service" \
 		"$$root$(PREFIX)/lib/sysusers.d/logwisp.conf" "$$root$(PREFIX)/lib/tmpfiles.d/logwisp.conf" \
-		"$$root$(PREFIX)/etc/rc.d/logwisp" "$$root$(SYSCONFDIR)/logwisp/logwisp.toml.sample"; do \
+		"$$root$(PREFIX)/etc/rc.d/logwisp"; do \
 		if [ -e "$$f" ]; then rm -f "$$f"; echo "remove  $$f"; fi; \
 	done; \
 	for d in "$$root$(DOCDIR)" "$$root$(LICENSEDIR)"; do \
 		case "$$d" in */logwisp) ;; *) echo "keep    $$d (not a logwisp directory)"; continue ;; esac; \
 		if [ -d "$$d" ]; then rm -rf "$$d"; echo "remove  $$d"; fi; \
 	done; \
-	echo "keep    $$root$(SYSCONFDIR)/logwisp (configuration and credentials)"
+	if [ -d "$$root$(SYSCONFDIR)/logwisp" ]; then echo "keep    $$root$(SYSCONFDIR)/logwisp (configuration and credentials)"; fi
 
 # deb stages install in Debian's layout and takes the architecture from the
 # binary. An untagged or modified tree's version sorts below every release and
@@ -268,7 +272,23 @@ deb: release
 		sed -e 's/^$$/./' -e 's/^/ /' $(PKG_DIR)/freebsd/pkg-descr; } > "$$stage/DEBIAN/control"; \
 	dpkg-deb --root-owner-group --build "$$stage" "$(BIN_DIR)/logwisp_$${version}_$$arch.deb"
 
+# arch builds the PKGBUILD from this working tree, tracked and new files, as
+# the release tarball it names; no tag or download is needed. Untagged, the
+# version is 0.rCOUNT.gHASH, below every release and rising with each commit.
+# The package and build tree stay in bin/arch whatever makepkg.conf says.
+arch:
+	@set -eu; dir=$(BIN_DIR)/arch; [ ! -d "$$dir" ] || chmod -R u+w "$$dir"; rm -rf "$$dir"; mkdir -p "$$dir"; \
+	ver=$$(echo '$(VERSION)' | sed -e 's/^v//' -e 's/-\([0-9][0-9]*\)-g/.r\1.g/' -e 's/-/./g'); \
+	case '$(VERSION)' in v[0-9]*) ;; *) ver="0.r$$(git rev-list --count HEAD).g$$ver" ;; esac; \
+	git ls-files -z --cached --others --exclude-standard | tar --null -T - --ignore-failed-read \
+		--transform "s,^,logwisp-$$ver/,S" -czf "$$dir/logwisp-$$ver.tar.gz"; \
+	sed "s/^pkgver=.*/pkgver=$$ver/" $(PKG_DIR)/arch/PKGBUILD > "$$dir/PKGBUILD"; \
+	cd "$$dir"; export PKGDEST="$$PWD" BUILDDIR="$$PWD"; makepkg; \
+	echo "install or reinstall: sudo pacman -U $$(makepkg --packagelist | grep -v -- -debug-)"
+
+# A toolchain go downloaded into make arch's GOPATH is read-only.
 clean:
+	[ ! -d $(BIN_DIR) ] || chmod -R u+w $(BIN_DIR)
 	rm -rf $(BIN_DIR)
 
 version:
