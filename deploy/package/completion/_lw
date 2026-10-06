@@ -150,12 +150,29 @@ preset:*)
 		'(-h --help)'{-h,--help}'[print the flags]' ;;
 	esac
 	return ;;
+config:2) ;;
+config:3)
+	described=(
+		'init:Write the annotated default configuration, to edit and run'
+	)
+	_describe -t commands 'lw config command' described
+	return ;;
+config:*)
+	shift 2 words
+	(( CURRENT -= 2 ))
+	case ${words[1]} in
+	init) _arguments -S \
+		'--out=[file to write (default: ~/.config/logwisp/logwisp.toml)]:value:_default' \
+		'(-h --help)'{-h,--help}'[print the flags]' ;;
+	esac
+	return ;;
 esac
 if (( CURRENT == 2 )) && [[ $PREFIX != -* ]]; then
 	described=(
 		'auth:SCRAM users, bearer tokens, tcp sink viewing'
 		'tls:A CA and certificates for TLS and mTLS'
 		'preset:Show the pipeline a preset makes, as TOML'
+		'config:Place the annotated default configuration'
 		'help:Print the help and exit'
 	)
 	_describe -t commands 'lw command' described

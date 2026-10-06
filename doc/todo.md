@@ -11,15 +11,18 @@ The foundation exists:
   24.04 and 26.04, and the FreeBSD 15.1 ports tree.
 - The canonical module path `github.com/lixenwraith/logwisp`, which
   `go install`, FreeBSD's `USES=go:modules` and Debian's dh-golang expect.
-- `make install` with `DESTDIR`, `PREFIX` and `SYSCONFDIR`: the binary, the
-  `doc/lw.1` manual, bash, zsh and fish completion generated from `cmd/lw`'s
-  `shorts` and `commands` tables, and the service files in `deploy/package/`
-  (systemd unit, sysusers, tmpfiles, FreeBSD rc.d script).
-- `make deb`, a binary package built with `dpkg-deb`.
+- `make install` with `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `SERVICE`: the
+  binary, the `doc/lw.1` manual, bash, zsh and fish completion generated from
+  `cmd/lw`'s `shorts` and `commands` tables, and the service files in
+  `deploy/package/` (systemd unit, sysusers, tmpfiles, FreeBSD rc.d script)
+  with the configuration, kept on reinstall.
+- `make deb`, a binary package built with `dpkg-deb`, and `make arch`, the
+  PKGBUILD built from the working tree.
 - Skeletons in `deploy/package/arch/` and `deploy/package/freebsd/`.
-- `.github/workflows/package.yml`: `makepkg` on the PKGBUILD, the `.deb`
-  installed, started and purged, BSD make and the rc.d service on FreeBSD
-  15.1, and `make image image-check`.
+- `.github/workflows/package.yml`: `make arch`, the `.deb` and BSD make on
+  FreeBSD 15.1, each reinstalled over an edited configuration; the systemd
+  and rc.d services run; a home install with `SERVICE=no` and
+  `lw config init`; and `make image image-check`.
 
 What remains is the maintainer's: it needs push rights, an identity or a
 release tag, and both skeletons download the tagged source.
