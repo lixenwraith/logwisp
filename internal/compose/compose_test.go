@@ -12,8 +12,13 @@ import (
 // The engine builds as WebAssembly for the website: it links no TLS, HTTP,
 // process, signal or terminal code, nor lw's log, auth or terminal modules
 func TestEngineLinksNoHostCode(t *testing.T) {
+	// A packager's -buildmode (makepkg's pie) is the host's; wasm has only the
+	// default
+	flags := slices.DeleteFunc(strings.Fields(os.Getenv("GOFLAGS")), func(f string) bool {
+		return strings.HasPrefix(f, "-buildmode")
+	})
 	cmd := exec.Command("go", "list", "-deps", ".")
-	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm", "GOFLAGS="+strings.Join(flags, " "))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list: %v\n%s", err, out)
