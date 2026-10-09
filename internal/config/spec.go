@@ -44,7 +44,7 @@ var specKinds = []specKind{
 		}
 		id, err := instanceID(typ, opts, ids)
 		p.PluginSources = append(p.PluginSources, PluginSourceConfig{ID: id, Type: typ, Config: opts})
-		return err
+		return cmp.Or(err, Coerce("source", typ, opts))
 	}},
 	{"sink", true, true, false, func(p *PipelineConfig, typ string, opts map[string]any) error {
 		ids := make([]string, len(p.PluginSinks))
@@ -53,7 +53,7 @@ var specKinds = []specKind{
 		}
 		id, err := instanceID(typ, opts, ids)
 		p.PluginSinks = append(p.PluginSinks, PluginSinkConfig{ID: id, Type: typ, Config: opts})
-		return err
+		return cmp.Or(err, Coerce("sink", typ, opts))
 	}},
 	{"filter", true, true, false, func(p *PipelineConfig, typ string, opts map[string]any) error {
 		opts["type"] = typ

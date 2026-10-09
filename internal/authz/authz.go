@@ -7,6 +7,7 @@ package authz
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -42,21 +43,6 @@ const (
 	BindingForce  = "force"
 )
 
-// Role selects the validation and behavior appropriate to the call site
-type Role int
-
-const (
-	// RoleListener authenticates peers of a plugin with no node concept: the
-	// tcp and http sinks
-	RoleListener Role = iota
-	// RoleChainListener also binds the node label a peer declares: the
-	// tcp_chain and http_chain sources
-	RoleChainListener
-	// RoleDialer proves itself to, or pins, the server: the tcp_chain and
-	// http_chain sinks
-	RoleDialer
-)
-
 // Transport tells HTTP plugins, which carry bearer tokens, from TCP ones
 type Transport int
 
@@ -72,7 +58,7 @@ var ErrRefused = errors.New("auth: refused")
 
 // Policy is the compiled form of config.AuthOptions
 type Policy struct {
-	role      Role
+	side      config.Side
 	transport Transport
 	method    string
 	identity  string // mtls: identity field; scram: certificate-to-user binding, "" = none
@@ -113,38 +99,25 @@ func (id Identity) Apply(meta map[string]any) {
 // tlsCfg is what tlsx built from the sibling `tls` block: a policy the
 // transport cannot enforce is rejected here rather than silently accepted.
 // acl is netacl's from the `acl` block, nil for a dialer.
-func New(o *config.AuthOptions, tlsCfg *tls.Config, acl *netacl.Policy, role Role, transport Transport) (*Policy, error) {
-	if o == nil {
-		return nil, nil
+func New(o *config.AuthOptions, tlsCfg *tls.Config, acl *netacl.Policy, side config.Side, transport Transport) (*Policy, error) {
+	state := config.TLSState{On: tlsCfg != nil}
+	if tlsCfg != nil {
+		state.ClientAuth = tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert
+		state.Unverified = tlsCfg.InsecureSkipVerify && tlsCfg.VerifyPeerCertificate == nil // a pin verifies there
 	}
-	switch o.Type {
-	case "", MethodNone:
-		// Tuning keys are ignored with the block, but one that names peers or
-		// credentials means auth was intended and the type was forgotten
-		if key := intentKey(o); key != "" {
-			return nil, fmt.Errorf("auth: %s is set but auth.type is %q", key, MethodNone)
-		}
-		return nil, nil
-	case MethodMTLS, MethodSCRAM:
-	default:
-		return nil, fmt.Errorf("auth: type %q (valid: %q, %q, %q)", o.Type, MethodNone, MethodMTLS, MethodSCRAM)
-	}
-	if tlsCfg == nil && (o.Type != MethodSCRAM || len(o.TrustedProxies) == 0) {
-		return nil, fmt.Errorf("auth: type %q requires tls.enabled", o.Type)
-	}
-	if role == RoleDialer && tlsCfg != nil && tlsCfg.InsecureSkipVerify && tlsCfg.VerifyPeerCertificate == nil {
-		// An unverified server makes identities claims and exposes credentials;
-		// tls.pin_sha256 verifies it in VerifyPeerCertificate instead
-		return nil, fmt.Errorf("auth: type %q cannot be used with tls.insecure_skip_verify", o.Type)
-	}
-
-	binding, err := nodeBinding(o.NodeBinding, role)
-	if err != nil {
+	if err := o.Check(side, transport == HTTP, state); err != nil || o == nil || o.Type == "" || o.Type == MethodNone {
 		return nil, err
 	}
-	p := &Policy{role: role, transport: transport, method: o.Type, binding: binding, acl: acl}
+	binding := BindingNone
+	if side == config.ChainListener {
+		// force is the only binding under which a misconfigured or hostile edge
+		// cannot mislabel its entries
+		binding = cmp.Or(o.NodeBinding, BindingForce)
+	}
+	p := &Policy{side: side, transport: transport, method: o.Type, binding: binding, acl: acl}
+	var err error
 	if o.Type == MethodMTLS {
-		err = p.compileMTLS(o, tlsCfg)
+		err = p.compileMTLS(o)
 	} else {
 		err = p.compileSCRAM(o, tlsCfg)
 	}
@@ -154,57 +127,8 @@ func New(o *config.AuthOptions, tlsCfg *tls.Config, acl *netacl.Policy, role Rol
 	return p, nil
 }
 
-// intentKey names the first key that only makes sense with authentication on
-func intentKey(o *config.AuthOptions) string {
-	switch {
-	case len(o.Allow) > 0:
-		return "allow"
-	case len(o.AllowPatterns) > 0:
-		return "allow_patterns"
-	}
-	return scramKey(o)
-}
-
-func nodeBinding(binding string, role Role) (string, error) {
-	if role != RoleChainListener {
-		if binding != "" && binding != BindingNone {
-			return "", fmt.Errorf("auth: node_binding %q applies only to chain sources", binding)
-		}
-		return BindingNone, nil
-	}
-	switch binding {
-	case "":
-		// The only setting under which a misconfigured or hostile edge cannot
-		// mislabel its entries
-		return BindingForce, nil
-	case BindingNone, BindingAssert, BindingForce:
-		return binding, nil
-	}
-	return "", fmt.Errorf("auth: node_binding %q (valid: %q, %q, %q)", binding, BindingNone, BindingAssert, BindingForce)
-}
-
-func identityMode(mode string) (string, error) {
-	switch mode {
-	case "":
-		return tlsx.IdentityCN, nil
-	case tlsx.IdentityCN, tlsx.IdentitySANDNS, tlsx.IdentitySANURI, tlsx.IdentitySANEmail:
-		return mode, nil
-	}
-	return "", fmt.Errorf("auth: identity %q (valid: %q, %q, %q, %q)",
-		mode, tlsx.IdentityCN, tlsx.IdentitySANDNS, tlsx.IdentitySANURI, tlsx.IdentitySANEmail)
-}
-
-func (p *Policy) compileMTLS(o *config.AuthOptions, tlsCfg *tls.Config) error {
-	if key := scramKey(o); key != "" {
-		return fmt.Errorf("auth: %s applies only to type %q", key, MethodSCRAM)
-	}
-	if p.role != RoleDialer && tlsCfg.ClientAuth != tls.RequireAndVerifyClientCert {
-		return fmt.Errorf("auth: type %q requires tls.client_auth", MethodMTLS)
-	}
-	var err error
-	if p.identity, err = identityMode(o.Identity); err != nil {
-		return err
-	}
+func (p *Policy) compileMTLS(o *config.AuthOptions) error {
+	p.identity = cmp.Or(o.Identity, tlsx.IdentityCN)
 	p.allow = make(map[string]struct{}, len(o.Allow))
 	for _, a := range o.Allow {
 		if a = strings.TrimSpace(a); a != "" {
@@ -219,22 +143,6 @@ func (p *Policy) compileMTLS(o *config.AuthOptions, tlsCfg *tls.Config) error {
 		p.patterns = append(p.patterns, re)
 	}
 	return nil
-}
-
-func scramKey(o *config.AuthOptions) string {
-	switch {
-	case o.CredentialsFile != "":
-		return "credentials_file"
-	case o.TokenLifetimeMS != 0:
-		return "token_lifetime_ms"
-	case o.Username != "":
-		return "username"
-	case o.PasswordFile != "":
-		return "password_file"
-	case len(o.TrustedProxies) > 0:
-		return "trusted_proxies"
-	}
-	return ""
 }
 
 // Authorize checks the mtls certificate identity of a completed handshake. It
@@ -566,7 +474,7 @@ func (p *Policy) LogStartup(l *log.Logger, component, id string, trustNode bool)
 			l.Warn("msg", w, "component", component, "instance_id", id)
 		}
 	}
-	if p.role == RoleDialer {
+	if p.side == config.Dialer {
 		return
 	}
 	if p.BehindProxy() && p.listener.proxy.exposedHop() {
@@ -687,7 +595,7 @@ func (p *Policy) Stats() map[string]any {
 		d["auth_identity"] = p.identity
 		d["auth_unrestricted"] = p.Unrestricted()
 	}
-	if p.role == RoleChainListener {
+	if p.side == config.ChainListener {
 		d["node_binding"] = p.binding
 	}
 	return d

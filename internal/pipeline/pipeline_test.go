@@ -69,12 +69,14 @@ func (s *slowSink) GetStats() sink.SinkStats { return sink.SinkStats{} }
 
 var testSinks = map[string]*slowSink{}
 
+// The fakes take catalogue types that no plugin package registers in this
+// test binary
 func init() {
-	plugin.RegisterSource("test_finite", func(id string, cfg map[string]any, _ *log.Logger, _ *session.Proxy) (source.Source, error) {
+	plugin.RegisterSource("random", func(id string, cfg map[string]any, _ *log.Logger, _ *session.Proxy) (source.Source, error) {
 		n, _ := strconv.Atoi(fmt.Sprint(cfg["n"]))
 		return &finiteSource{n: n}, nil
 	})
-	plugin.RegisterSink("test_slow", func(id string, _ map[string]any, _ *log.Logger, _ *session.Proxy) (sink.Sink, error) {
+	plugin.RegisterSink("null", func(id string, _ map[string]any, _ *log.Logger, _ *session.Proxy) (sink.Sink, error) {
 		return testSinks[id], nil
 	})
 }
@@ -84,8 +86,8 @@ func newTestPipeline(t *testing.T, n int, s *slowSink) *Pipeline {
 	testSinks[t.Name()] = s
 	p, err := NewPipeline(&config.PipelineConfig{
 		Name:          t.Name(),
-		PluginSources: []config.PluginSourceConfig{{ID: "src", Type: "test_finite", Config: map[string]any{"n": n}}},
-		PluginSinks:   []config.PluginSinkConfig{{ID: t.Name(), Type: "test_slow"}},
+		PluginSources: []config.PluginSourceConfig{{ID: "src", Type: "random", Config: map[string]any{"n": n}}},
+		PluginSinks:   []config.PluginSinkConfig{{ID: t.Name(), Type: "null"}},
 	}, log.NewLogger())
 	if err != nil {
 		t.Fatal(err)

@@ -19,7 +19,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/sink"
 
 	"github.com/lixenwraith/color"
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/terminal/inline"
 	"golang.org/x/term"
@@ -61,14 +60,6 @@ type ConsoleSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-const (
-	// Defaults
-	DefaultConsoleTarget     = "stdout"
-	DefaultConsoleBufferSize = 1000
-	DefaultConsoleEscape     = "auto"
-	DefaultConsoleColor      = "auto"
-)
-
 // levelStyles colors the levels in ANSI 16, so the terminal's theme picks the
 // shades and a text console renders them; cyan, not blue, stays readable on black
 var levelStyles = map[string]inline.Style{
@@ -86,30 +77,14 @@ func NewConsoleSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	opts := &config.ConsoleSinkOptions{Target: DefaultConsoleTarget, Escape: DefaultConsoleEscape, Color: DefaultConsoleColor}
-
-	// Scan config map into struct
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	if err := lconfig.OneOf("stdout", "stderr")(opts.Target); err != nil {
-		return nil, fmt.Errorf("target: %w", err)
-	}
-	if err := lconfig.OneOf("auto", "always", "never")(opts.Escape); err != nil {
-		return nil, fmt.Errorf("escape: %w", err)
-	}
-	if err := lconfig.OneOf("auto", "always", "never")(opts.Color); err != nil {
-		return nil, fmt.Errorf("color: %w", err)
+	opts, err := config.Decode[config.ConsoleSinkOptions]("sink", "console", configMap)
+	if err != nil {
+		return nil, err
 	}
 
 	output := os.Stdout
 	if opts.Target == "stderr" {
 		output = os.Stderr
-	}
-
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultConsoleBufferSize
 	}
 
 	// inline decides auto: a terminal, NO_COLOR unset, TERM not dumb. Paint

@@ -168,9 +168,8 @@ write_timeout_ms = 9007199254740993
 [pipelines.plugin_sinks.config.tls]
 enabled = false
 server_name = "relay.example"
-[pipelines.plugin_sinks.config.auth]
-type = "none"
-allow = ["one", "two"]
+[pipelines.plugin_sinks.config.acl]
+allow = ["10.0.0.1", "10.0.0.2"]
 `)
 	m, err := Load(Args{File: "plugins.toml"})
 	if err != nil {
@@ -181,18 +180,18 @@ allow = ["one", "two"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := TCPSinkOptions{Host: "127.0.0.1", BufferSize: 1000}
-	if err := Scan(cfg.Pipelines[0].PluginSinks[0].Config, &opts); err != nil {
+	opts, err := Decode[TCPSinkOptions]("sink", "tcp", cfg.Pipelines[0].PluginSinks[0].Config)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Host != "127.0.0.1" || opts.BufferSize != 1000 || opts.Port != 9000 || opts.WriteTimeoutMS != 9007199254740993 ||
-		opts.TLS == nil || opts.TLS.ServerName != "relay.example" || opts.Auth == nil || !reflect.DeepEqual(opts.Auth.Allow, []string{"one", "two"}) {
+	if opts.Host != "0.0.0.0" || opts.BufferSize != 1000 || !opts.KeepAlive || opts.Port != 9000 || opts.WriteTimeoutMS != 9007199254740993 ||
+		opts.TLS == nil || opts.TLS.ServerName != "relay.example" || opts.ACL == nil || !reflect.DeepEqual(opts.ACL.Allow, []string{"10.0.0.1", "10.0.0.2"}) {
 		t.Fatalf("plugin defaults, nested tables or integer precision lost: %+v", opts)
 	}
 }
 
-// A misspelled key, even inside a nested tls or auth table, fails plugin
-// construction instead of leaving the protection it named switched off.
+// A misspelled key, even inside a nested tls or auth table, fails the load
+// instead of leaving the protection it named switched off.
 func TestPluginConfigRejectsUnknownKeys(t *testing.T) {
 	isolateConfig(t)
 	for key, table := range map[string]string{
@@ -213,16 +212,10 @@ type = "tcp"
 port = 9000
 `+table+"\n")
 		m, err := Load(Args{File: "plugins.toml"})
-		if err != nil {
-			t.Fatal(err)
+		if err == nil {
+			m.Close()
 		}
-		cfg, err := m.Snapshot()
-		m.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		err = Scan(cfg.Pipelines[0].PluginSinks[0].Config, &TCPSinkOptions{})
-		if err == nil || !strings.Contains(err.Error(), `"`+key+`"`) {
+		if err == nil || !strings.Contains(err.Error(), `pipelines[0].plugin_sinks[out].config: unknown key "`+key+`"`) {
 			t.Errorf("unknown key %s: err = %v", key, err)
 		}
 	}

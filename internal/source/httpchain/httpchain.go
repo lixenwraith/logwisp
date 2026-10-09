@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,7 +24,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/source"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -36,12 +34,8 @@ func init() {
 }
 
 const (
-	DefaultHTTPChainSourceBufferSize    = 1000
-	DefaultHTTPChainSourceIngestPath    = "/ingest"
-	DefaultHTTPChainSourceMaxBodyBytes  = 8 * 1024 * 1024
-	DefaultHTTPChainSourceReadTimeoutMS = 30000
-	HTTPChainReadHeaderTimeout          = 10 * time.Second
-	HTTPChainServerShutdownTimeout      = 2 * time.Second
+	HTTPChainReadHeaderTimeout     = 10 * time.Second
+	HTTPChainServerShutdownTimeout = 2 * time.Second
 )
 
 // HTTPChainSource accepts NDJSON batches from upstream http_chain sinks
@@ -84,35 +78,13 @@ func NewHTTPChainSourcePlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
-	opts := &config.HTTPChainSourceOptions{
-		Host:      "0.0.0.0",
-		TrustNode: true,
-	}
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-	if err := lconfig.Port(opts.Port); err != nil {
-		return nil, fmt.Errorf("port: %w", err)
+	opts, err := config.Decode[config.HTTPChainSourceOptions]("source", "http_chain", configMap)
+	if err != nil {
+		return nil, err
 	}
 	network, err := core.Network(opts.Host)
 	if err != nil {
-		return nil, fmt.Errorf("host: %w", err)
-	}
-	if opts.IngestPath == "" {
-		opts.IngestPath = DefaultHTTPChainSourceIngestPath
-	} else if !strings.HasPrefix(opts.IngestPath, "/") {
-		return nil, fmt.Errorf("ingest_path: must start with '/'")
-	} else if opts.IngestPath == chain.AuthPath {
-		return nil, fmt.Errorf("ingest_path: %s is reserved for authentication", chain.AuthPath)
-	}
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultHTTPChainSourceBufferSize
-	}
-	if opts.MaxBodyBytes <= 0 {
-		opts.MaxBodyBytes = DefaultHTTPChainSourceMaxBodyBytes
-	}
-	if opts.ReadTimeoutMS <= 0 {
-		opts.ReadTimeoutMS = DefaultHTTPChainSourceReadTimeoutMS
+		return nil, err
 	}
 	tlsCfg, err := tlsx.Server(opts.TLS, opts.Host)
 	if err != nil {
@@ -122,7 +94,7 @@ func NewHTTPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, authz.RoleChainListener, authz.HTTP)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, config.ChainListener, authz.HTTP)
 	if err != nil {
 		return nil, err
 	}

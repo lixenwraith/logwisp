@@ -23,7 +23,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/source"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -32,11 +31,6 @@ func init() {
 		panic(fmt.Sprintf("failed to register tcp_chain source: %v", err))
 	}
 }
-
-const (
-	DefaultChainSourceBufferSize     = 1000
-	DefaultChainSourceHelloTimeoutMS = 10000
-)
 
 // TCPChainSource accepts connections from upstream tcp_chain sinks and ingests NDJSON entries
 type TCPChainSource struct {
@@ -79,25 +73,13 @@ func NewTCPChainSourcePlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
-	opts := &config.TCPChainSourceOptions{
-		Host:      "0.0.0.0",
-		TrustNode: true,
-	}
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-	if err := lconfig.Port(opts.Port); err != nil {
-		return nil, fmt.Errorf("port: %w", err)
+	opts, err := config.Decode[config.TCPChainSourceOptions]("source", "tcp_chain", configMap)
+	if err != nil {
+		return nil, err
 	}
 	network, err := core.Network(opts.Host)
 	if err != nil {
-		return nil, fmt.Errorf("host: %w", err)
-	}
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultChainSourceBufferSize
-	}
-	if opts.HelloTimeoutMS <= 0 {
-		opts.HelloTimeoutMS = DefaultChainSourceHelloTimeoutMS
+		return nil, err
 	}
 	tlsCfg, err := tlsx.Server(opts.TLS, opts.Host)
 	if err != nil {
@@ -107,7 +89,7 @@ func NewTCPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, authz.RoleChainListener, authz.TCP)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, config.ChainListener, authz.TCP)
 	if err != nil {
 		return nil, err
 	}
