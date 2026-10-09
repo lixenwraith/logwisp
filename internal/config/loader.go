@@ -35,15 +35,9 @@ type Args struct {
 // Settings maps each --path setting Load takes to whether it is a switch, which
 // takes no separate value; the parser must not leave config to guess.
 func Settings() map[string]bool {
-	c := lconfig.New()
-	if err := c.RegisterStructWithTags("", defaults(), lconfig.FormatTOML); err != nil {
-		panic(err) // Config is static: every run fails or none does
-	}
 	settings := map[string]bool{}
-	for path, value := range c.GetRegisteredPathsWithDefaults() {
-		if _, tables := value.([]PipelineConfig); !tables { // the pipeline flags set those
-			_, settings[path] = value.(bool)
-		}
+	for _, k := range SettingKeys() {
+		settings[k.Name] = k.Kind == "bool"
 	}
 	return settings
 }
@@ -59,7 +53,7 @@ func Load(args Args) (*Manager, error) {
 	if len(specs) == 0 {
 		specs = envPipelineSpecs()
 	}
-	if _, err := buildPipelines(specs); err != nil {
+	if _, err := buildPipelines(specs, HostIsDir); err != nil {
 		return nil, err
 	}
 	m := &Manager{path: configPath, explicit: isExplicit, specs: specs}
@@ -132,12 +126,24 @@ func (m *Manager) Snapshot() (*Config, error) {
 	return cfg, nil
 }
 
+// Uninherit removes the color Snapshot gave each console sink, so a dump or a
+// composition leaves it inherited
+func Uninherit(pipelines []PipelineConfig, color string) {
+	for _, p := range pipelines {
+		for _, s := range p.PluginSinks {
+			if s.Type == "console" && s.Config["color"] == color {
+				delete(s.Config, "color")
+			}
+		}
+	}
+}
+
 // usePipelines replaces the file's or default pipelines with the spec ones.
 func (m *Manager) usePipelines(cfg *Config) error {
 	if len(m.specs) == 0 {
 		return nil
 	}
-	pipelines, err := buildPipelines(m.specs)
+	pipelines, err := buildPipelines(m.specs, HostIsDir)
 	cfg.Pipelines = pipelines
 	return err
 }

@@ -13,8 +13,8 @@ func TestEveryRowDecodesFromItsRequiredKeys(t *testing.T) {
 	for _, p := range plugins {
 		m := map[string]any{}
 		for _, o := range options(p.options) {
-			if o.required {
-				m[o.key] = "1"
+			if o.Required {
+				m[o.Name] = "1"
 			}
 		}
 		if err := Coerce(p.Role, p.Type, m); err != nil {

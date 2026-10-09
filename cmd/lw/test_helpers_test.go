@@ -20,6 +20,11 @@ func testLogger(t *testing.T) {
 func loadTestConfig(t *testing.T, path string, args ...string) *config.Config {
 	t.Helper()
 	testutil.ClearEnvPrefix(t, "LOGWISP_")
+	return loadWithEnvironment(t, path, args...)
+}
+
+func loadWithEnvironment(t *testing.T, path string, args ...string) *config.Config {
+	t.Helper()
 	inv, err := parseCommandLine(append([]string{"-c", path, "--quiet", "--status_reporter=false"}, args...))
 	if err != nil {
 		t.Fatal(err)

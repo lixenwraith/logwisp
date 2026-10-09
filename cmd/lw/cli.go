@@ -58,7 +58,7 @@ var shorts = map[string]struct {
 
 // switches are lw's own options that take no value and are no setting, so no
 // file or environment variable turns one on
-var switches = []string{"check", "dump", "version"}
+var switches = []string{"check", "dump", "version", "schema"}
 
 // usageError is a command-line mistake: exit status 2 rather than 1
 type usageError string
@@ -241,7 +241,7 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 		case arg == "--color":
 			// Bare, it means always: config takes no bare flag for a string key
 			inv.load.Overrides = append(inv.load.Overrides, "--color="+cmp.Or(next(&i), "always"))
-		case strings.HasPrefix(name, "--") && slices.Contains(specFlags, name[2:]):
+		case strings.HasPrefix(name, "--") && slices.ContainsFunc(specFlags, isFlag(name[2:])):
 			if !inline {
 				value = next(&i)
 			}
@@ -271,6 +271,10 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 	return inv, err
 }
 
+func isFlag(name string) func(config.SpecFlag) bool {
+	return func(f config.SpecFlag) bool { return f.Flag == name }
+}
+
 // presetCommands makes each preset a subcommand whose flags are its keys
 func presetCommands() []subcommand {
 	var subs []subcommand
@@ -294,7 +298,7 @@ func presetCommands() []subcommand {
 				for name, v := range values {
 					set[name] = *v
 				}
-				pipeline, err := config.ExpandPreset(p.Name, set)
+				pipeline, err := config.ExpandPreset(p.Name, set, config.HostIsDir)
 				if err != nil {
 					return usageError(err.Error())
 				}
