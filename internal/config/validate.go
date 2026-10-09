@@ -174,5 +174,8 @@ func checkFileKeys(path string) error {
 		return err
 	}
 	delete(root, "config_file") // runtime metadata, documented as ignored in the file
+	for _, key := range []string{"version", "check", "dump"} {
+		delete(root, key) // command-line switches, which earlier lw --dump output wrote
+	}
 	return checkKeys(root, reflect.TypeOf(Config{}), "")
 }

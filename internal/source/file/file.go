@@ -40,6 +40,12 @@ type FileSource struct {
 	// Configuration
 	config *config.FileSourceOptions
 
+	// lw's stdout and stderr when they are files: a console sink writes there,
+	// so following them would feed lw its own output. ownSkipped is per path
+	// already reported, touched only by monitorLoop.
+	own        []os.FileInfo
+	ownSkipped map[string]bool
+
 	// Application
 	subscribers []chan core.LogEntry
 	watchers    map[string]*fileWatcher
@@ -105,7 +111,13 @@ func NewFileSourcePlugin(
 		config:      opts,
 		subscribers: make([]chan core.LogEntry, 0),
 		watchers:    make(map[string]*fileWatcher),
+		ownSkipped:  make(map[string]bool),
 		logger:      logger,
+	}
+	for _, f := range []*os.File{os.Stdout, os.Stderr} {
+		if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+			fs.own = append(fs.own, info)
+		}
 	}
 	fs.lastEntryTime.Store(time.Time{})
 
@@ -388,13 +400,37 @@ func (fs *FileSource) scanFile() ([]string, error) {
 			continue
 		}
 
-		name := entry.Name()
-		if re.MatchString(name) {
-			files = append(files, filepath.Join(fs.config.Directory, name))
+		path := filepath.Join(fs.config.Directory, entry.Name())
+		if re.MatchString(entry.Name()) && !fs.isOwn(path) {
+			files = append(files, path)
 		}
 	}
 
 	return files, nil
+}
+
+// isOwn reports whether path is lw's own stdout or stderr, warning once per path
+func (fs *FileSource) isOwn(path string) bool {
+	if len(fs.own) == 0 {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	for _, own := range fs.own {
+		if os.SameFile(info, own) {
+			if !fs.ownSkipped[path] {
+				fs.ownSkipped[path] = true
+				fs.logger.Warn("msg", "Not following lw's own output",
+					"component", "file_source",
+					"instance_id", fs.id,
+					"path", path)
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // globToRegex converts a simple glob pattern to a regular expression.

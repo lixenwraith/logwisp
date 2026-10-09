@@ -83,6 +83,9 @@ func options() map[string]string {
 	for long := range config.Settings() {
 		options[long] = ""
 	}
+	for _, long := range switches {
+		options[long] = ""
+	}
 	for letter, short := range shorts {
 		if short.top {
 			options[short.long] = letter
@@ -99,7 +102,7 @@ func completionModel() (top []compFlag, cmds []compCommand, presets string) {
 		f := compFlag{long: long, short: shortOf[long], value: "text", repeat: slices.Contains(specFlags, long)}
 		if v, ok := valueOf[long]; ok {
 			f.value = v
-		} else if settings[long] {
+		} else if settings[long] || slices.Contains(switches, long) {
 			f.value = ""
 		}
 		top = append(top, f)

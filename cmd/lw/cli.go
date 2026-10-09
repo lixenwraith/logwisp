@@ -56,6 +56,10 @@ var shorts = map[string]struct {
 	"u": {"user", false},
 }
 
+// switches are lw's own options that take no value and are no setting, so no
+// file or environment variable turns one on
+var switches = []string{"check", "dump", "version"}
+
 // usageError is a command-line mistake: exit status 2 rather than 1
 type usageError string
 
@@ -168,11 +172,12 @@ func checkArgs(fs *flag.FlagSet, required []string) error {
 }
 
 // invocation is a parsed command line: a command with its arguments, a help
-// request, or what config.Load reads.
+// request, or the switches given and what config.Load reads.
 type invocation struct {
 	command *command
 	args    []string
 	help    bool
+	on      map[string]bool
 	load    config.Args
 }
 
@@ -225,12 +230,23 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 				err = cmp.Or(err, fmt.Errorf("%s requires a configuration file path", typed))
 			}
 			inv.load.File = value
+		case strings.HasPrefix(name, "--") && slices.Contains(switches, name[2:]):
+			if inline {
+				err = cmp.Or(err, fmt.Errorf("%s takes no value", typed))
+			}
+			if inv.on == nil {
+				inv.on = map[string]bool{}
+			}
+			inv.on[name[2:]] = true
 		case arg == "--color":
 			// Bare, it means always: config takes no bare flag for a string key
 			inv.load.Overrides = append(inv.load.Overrides, "--color="+cmp.Or(next(&i), "always"))
 		case strings.HasPrefix(name, "--") && slices.Contains(specFlags, name[2:]):
 			if !inline {
 				value = next(&i)
+			}
+			if value == "" {
+				err = cmp.Or(err, fmt.Errorf("%s requires a value; one that starts with '-' follows '='", typed))
 			}
 			inv.load.Specs = append(inv.load.Specs, config.Spec{Flag: name[2:], Value: value})
 		case len(name) > 1 && name[0] == '-' && unicode.IsLetter(rune(name[1])):

@@ -131,7 +131,10 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
   `self_signed`, `issuer_cert_file`/`issuer_key_file`, or more than one; an
   issuer that is no CA (`lw tls ca` makes one)
 - `pin_sha256` with `ca_file` or `insecure_skip_verify`, or not of the
-  `sha256//BASE64` form; a listener key on a dialer, or `pin_sha256` on a
+  `sha256//BASE64` form
+- a key of the other role: `self_signed`, `issuer_cert_file`,
+  `issuer_key_file`, `hosts`, `client_auth` or `client_ca_file` on a dialer;
+  `ca_file`, `server_name`, `insecure_skip_verify` or `pin_sha256` on a
   listener
 - `client_auth = true` with no `client_ca_file`
 - a dialer with only one of `cert_file` / `key_file`

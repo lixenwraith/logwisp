@@ -28,8 +28,8 @@ func TestCommandLineGrammar(t *testing.T) {
 	}{
 		{[]string{"-c", "a.toml", "--config=b.toml", "--quiet"}, invocation{load: config.Args{File: "b.toml", Overrides: []string{"--quiet"}}}},
 		{[]string{"-c=a.toml", "--config", "b.toml"}, invocation{load: config.Args{File: "b.toml"}}},
-		{[]string{"--source=null", "--sink", "http,port=1", "--filter", "--sink"},
-			invocation{load: config.Args{Specs: []config.Spec{{Flag: "source", Value: "null"}, {Flag: "sink", Value: "http,port=1"}, {Flag: "filter"}, {Flag: "sink"}}}}},
+		{[]string{"--source=null", "--sink", "http,port=1"},
+			invocation{load: config.Args{Specs: []config.Spec{{Flag: "source", Value: "null"}, {Flag: "sink", Value: "http,port=1"}}}}},
 		{[]string{"--preset", "tail,path=x", "--pipeline", "b"}, invocation{load: config.Args{Specs: []config.Spec{{Flag: "preset", Value: "tail,path=x"}, {Flag: "pipeline", Value: "b"}}}}},
 		{[]string{"--color", "--color", "never", "--color=auto"}, invocation{load: config.Args{Overrides: []string{"--color=always", "--color=never", "--color=auto"}}}},
 		{[]string{"--quiet", "--"}, invocation{load: config.Args{Overrides: []string{"--quiet"}}}},
@@ -37,9 +37,10 @@ func TestCommandLineGrammar(t *testing.T) {
 		{[]string{"-c", "-h"}, invocation{help: true}},
 		{[]string{"help"}, invocation{help: true}},
 		{[]string{"tls", "ca", "-h"}, invocation{command: &commands[1], args: []string{"ca", "-h"}}},
-		{[]string{"-q", "-t", "-V", "-p", "tail,path=x", "-c=a.toml", "--logging.level", "debug", "--logging.file.retention_hours=-1", "--dump=false"},
-			invocation{load: config.Args{File: "a.toml", Specs: []config.Spec{{Flag: "preset", Value: "tail,path=x"}},
-				Overrides: []string{"--quiet", "--check", "--version", "--logging.level=debug", "--logging.file.retention_hours=-1", "--dump=false"}}}},
+		{[]string{"-q", "-t", "-V", "-p", "tail,path=x", "-c=a.toml", "--logging.level", "debug", "--logging.file.retention_hours=-1", "--dump"},
+			invocation{on: map[string]bool{"check": true, "version": true, "dump": true},
+				load: config.Args{File: "a.toml", Specs: []config.Spec{{Flag: "preset", Value: "tail,path=x"}},
+					Overrides: []string{"--quiet", "--logging.level=debug", "--logging.file.retention_hours=-1"}}}},
 	} {
 		got, err := parseCommandLine(c.argv)
 		if err != nil || !reflect.DeepEqual(got, c.want) {
@@ -47,7 +48,8 @@ func TestCommandLineGrammar(t *testing.T) {
 		}
 	}
 	for _, argv := range [][]string{{"-c"}, {"--config"}, {"--config="}, {"-c="}, {"-c", "--quiet"},
-		{"-v"}, {"-qt"}, {"-u", "x"}, {"-config", "x"}, {"--logging.level"}, {"--logging.file.retention_hours", "-1"}} {
+		{"-v"}, {"-qt"}, {"-u", "x"}, {"-config", "x"}, {"--logging.level"}, {"--logging.file.retention_hours", "-1"},
+		{"--check=false"}, {"--version=true"}, {"--source"}, {"--sink=", "x"}, {"-p"}, {"--filter", "--sink", "x"}} {
 		if _, err := parseCommandLine(argv); err == nil {
 			t.Errorf("%q accepted", argv)
 		}

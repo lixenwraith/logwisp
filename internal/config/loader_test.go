@@ -229,7 +229,8 @@ port = 9000
 }
 
 // A misspelled table path above a plugin's config drops that whole table, so
-// the file itself is checked too; only config_file is tolerated, as documented.
+// the file itself is checked too; only config_file, as documented, and the
+// switches earlier lw --dump output wrote are tolerated.
 func TestConfigFileRejectsUnknownKeys(t *testing.T) {
 	isolateConfig(t)
 	for key, body := range map[string]string{
@@ -237,6 +238,9 @@ func TestConfigFileRejectsUnknownKeys(t *testing.T) {
 		"logging.levle":                      "[logging]\nlevle = \"debug\"",
 	} {
 		testutil.WriteFile(t, "typo.toml", `config_file = "ignored.toml"
+check = false
+dump = false
+version = false
 [[pipelines]]
 name = "typo"
 [[pipelines.plugin_sources]]

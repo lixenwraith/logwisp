@@ -4,11 +4,7 @@ package config
 
 // Config is the top-level configuration structure for the LogWisp application
 type Config struct {
-	// Top-level flags for application control
-	ShowVersion bool `toml:"version"`
-	Check       bool `toml:"check"` // build every plugin, report, exit: lw --check
-	Dump        bool `toml:"dump"`  // print the effective configuration, exit: lw --dump
-	Quiet       bool `toml:"quiet"`
+	Quiet bool `toml:"quiet"`
 
 	// Console sinks without their own color: "auto" (a terminal, NO_COLOR
 	// unset, TERM not dumb), "always", "never"

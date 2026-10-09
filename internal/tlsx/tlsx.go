@@ -36,8 +36,8 @@ func Server(o *config.TLSOptions, host string) (*tls.Config, error) {
 	}
 	files, issuer := o.CertFile != "" || o.KeyFile != "", o.IssuerCertFile != "" || o.IssuerKeyFile != ""
 	switch {
-	case o.PinSHA256 != "":
-		return nil, fmt.Errorf("tls: pin_sha256 applies to dialers")
+	case o.CAFile != "" || o.ServerName != "" || o.InsecureSkipVerify || o.PinSHA256 != "":
+		return nil, fmt.Errorf("tls: ca_file, server_name, insecure_skip_verify and pin_sha256 apply to dialers")
 	case files && (issuer || o.SelfSigned) || issuer && o.SelfSigned:
 		return nil, fmt.Errorf("tls: set one of cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file")
 	case len(o.Hosts) > 0 && !issuer && !o.SelfSigned:
@@ -91,8 +91,8 @@ func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 		return nil, nil
 	}
 	switch {
-	case o.SelfSigned || o.IssuerCertFile != "" || o.IssuerKeyFile != "" || len(o.Hosts) > 0:
-		return nil, fmt.Errorf("tls: self_signed, issuer_cert_file, issuer_key_file and hosts apply to listeners")
+	case o.SelfSigned || o.IssuerCertFile != "" || o.IssuerKeyFile != "" || len(o.Hosts) > 0 || o.ClientAuth || o.ClientCAFile != "":
+		return nil, fmt.Errorf("tls: self_signed, issuer_cert_file, issuer_key_file, hosts, client_auth and client_ca_file apply to listeners")
 	case o.PinSHA256 != "" && (o.CAFile != "" || o.InsecureSkipVerify):
 		return nil, fmt.Errorf("tls: pin_sha256 replaces ca_file and insecure_skip_verify: set one")
 	}
