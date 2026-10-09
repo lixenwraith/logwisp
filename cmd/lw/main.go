@@ -30,6 +30,9 @@ func main() {
 	case inv.help:
 		printHelp(os.Stdout)
 		os.Exit(0)
+	case inv.on["version"]:
+		fmt.Println(version.String())
+		os.Exit(0)
 	}
 
 	// --- 1. Initial setup ---
@@ -54,14 +57,10 @@ func main() {
 
 	InitOutputHandler(cfg.Quiet)
 
-	if cfg.ShowVersion {
-		fmt.Println(version.String())
-		os.Exit(0)
-	}
-	if cfg.Check {
+	if inv.on["check"] {
 		os.Exit(checkConfig(cfg))
 	}
-	if cfg.Dump {
+	if inv.on["dump"] {
 		os.Exit(dumpConfig(cfg, os.Stdout))
 	}
 

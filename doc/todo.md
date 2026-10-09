@@ -168,10 +168,10 @@ Steps:
      the site's hues badly (green to cyan, red to bright black), so the
      8-color tier is chosen by hand.
 5. `lw --tui`.
-   - A parser switch, no short form. With `-c FILE`, pipeline flags or
-     `LOGWISP_SOURCE` it starts from that composition, and never rewrites FILE
-     (TOML encoding drops its comments); bare, it opens the preset menu (pipe,
-     tail, serve, edge, aggregator, empty).
+   - A parser switch, `-T` for short (`-t` is `--check`). With `-c FILE`,
+     pipeline flags or `LOGWISP_SOURCE` it starts from that composition, and
+     never rewrites FILE (TOML encoding drops its comments); bare, it opens the
+     preset menu (pipe, tail, serve, edge, aggregator, empty).
    - The pipeline as the site draws it: SOURCES, FLOW, SINKS; a node is a
      tinted bar, its type, listens or dials, and a summary line; the four flow
      stages in order inside a dashed box, the ones off dimmed; wires drawn from

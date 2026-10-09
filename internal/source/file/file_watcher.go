@@ -251,6 +251,7 @@ func (w *fileWatcher) checkFile() error {
 
 		scanner := bufio.NewScanner(file)
 		scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
+		scanner.Split(scanLinesCapped)
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -311,6 +312,17 @@ func (w *fileWatcher) checkFile() error {
 
 // initPosition records the file's metadata and, unless the watcher was created
 // to read from the start, sets the initial read position to the end
+// scanLinesCapped is bufio.ScanLines, except that a line longer than
+// core.MaxLogEntryBytes continues in the next one, as on the console source:
+// the scanner would otherwise stop at it and every poll re-read the lines before.
+func scanLinesCapped(data []byte, atEOF bool) (int, []byte, error) {
+	advance, token, err := bufio.ScanLines(data, atEOF)
+	if advance == 0 && token == nil && err == nil && len(data) >= core.MaxLogEntryBytes {
+		return core.MaxLogEntryBytes, data[:core.MaxLogEntryBytes], nil
+	}
+	return advance, token, err
+}
+
 func (w *fileWatcher) initPosition() error {
 	file, err := os.Open(w.directory)
 	if err != nil {

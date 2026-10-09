@@ -52,6 +52,10 @@ Options, each as type and default:
   interval that this option does not change.
 - Each matched file gets its own watcher. Watchers for files that disappear are
   stopped and removed on the next scan.
+- The file lw's stdout or stderr is redirected to is never followed, with a
+  warning: `lw > out.log` in the directory would read its own output back.
+- A line longer than 1 MiB continues in the next entry, as on the console
+  source.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
   restart resumes from the current end of each file and content written while
   LogWisp was down is not read. `from = "start"` reads each file whole when its
