@@ -19,7 +19,7 @@ Usage:
   lw -t|--check [options]       Build every pipeline and plugin, report, exit
   lw --dump [options]           Print the effective configuration as TOML, exit
   lw help | -h | --help
-  lw -V | --version
+  lw -V | --version | --schema
 
 Commands (lw COMMAND -h lists its subcommands):
 %s
@@ -37,6 +37,8 @@ after '='; short options do not combine. lw takes options only.
                                 (on a terminal; default), always (a bare
                                 --color) or never
   -V, --version                 Print the version and exit
+      --schema                  Print every setting, flag, plugin option and
+                                preset as JSON, exit
   -h, --help                    Print this help and exit
       --                        End the options
 

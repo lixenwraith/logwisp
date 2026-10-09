@@ -16,6 +16,10 @@ import (
 // keys it takes
 type Side int
 
+var sideNames = []string{"local", "listener", "chain_listener", "dialer"}
+
+func (s Side) MarshalText() ([]byte, error) { return []byte(sideNames[s]), nil }
+
 const (
 	Local         Side = iota // no network
 	Listener                  // the tcp and http sinks
@@ -25,12 +29,13 @@ const (
 
 // Plugin is a catalogue row: a source or sink type and its options table
 type Plugin struct {
-	Role, Type string // "source" or "sink", and the type its config names
-	Side       Side
-	HTTP       bool // speaks HTTP: takes bearer tokens and request limits
-	Single     bool // one instance per process
-	Summary    string
-	options    reflect.Type
+	Role    string `json:"-"` // "source" or "sink"
+	Type    string `json:"type"`
+	Side    Side   `json:"side"`
+	HTTP    bool   `json:"http"`   // speaks HTTP: takes bearer tokens and request limits
+	Single  bool   `json:"single"` // one instance per process
+	Summary string `json:"summary"`
+	options reflect.Type
 }
 
 var plugins = []Plugin{
@@ -48,6 +53,12 @@ var plugins = []Plugin{
 	{"sink", "tcp_chain", Dialer, false, false, "Forward entries to a tcp_chain source", reflect.TypeFor[TCPChainSinkOptions]()},
 	{"sink", "http_chain", Dialer, true, false, "Post entry batches to an http_chain source", reflect.TypeFor[HTTPChainSinkOptions]()},
 }
+
+// Plugins lists the catalogue
+func Plugins() []Plugin { return slices.Clone(plugins) }
+
+// Keys describes the plugin's options
+func (p Plugin) Keys() []Key { return keys(p.options) }
 
 // LookupPlugin finds the catalogue row of a source or sink type
 func LookupPlugin(role, typ string) (Plugin, bool) {
@@ -73,13 +84,8 @@ func (e *KeyError) Unwrap() error { return e.Err }
 // it does, and lw: lists its rules: required, enum=a|b, min=N, max=N,
 // zero=MEANING (zero is a value, not the default), hint=KIND, listener or dialer.
 type option struct {
-	key, def, help string
-	required       bool
-	enum           []string
-	min, max       *float64
-	zero           string
-	hint, side     string
-	index          int
+	Key
+	index int
 }
 
 // options reads the keys of an options table; a malformed tag panics, as the
@@ -92,31 +98,31 @@ func options(t reflect.Type) []option {
 		if key == "" || key == "-" {
 			continue
 		}
-		o := option{key: key, def: f.Tag.Get("default"), help: f.Tag.Get("help"), index: i}
+		o := option{Key{Name: key, Kind: kinds[f.Type.Kind()], Default: f.Tag.Get("default"), Help: f.Tag.Get("help")}, i}
 		for rule := range strings.SplitSeq(f.Tag.Get("lw"), ",") {
 			name, value, _ := strings.Cut(rule, "=")
 			switch name {
 			case "":
 			case "required":
-				o.required = true
+				o.Required = true
 			case "listener", "dialer":
-				o.side = name
+				o.Side = name
 			case "enum":
-				o.enum = strings.Split(value, "|")
+				o.Enum = strings.Split(value, "|")
 			case "min", "max":
 				n, err := strconv.ParseFloat(value, 64)
 				if err != nil {
 					panic(fmt.Sprintf("%s.%s: lw %s=%q", t.Name(), key, name, value))
 				}
 				if name == "min" {
-					o.min = &n
+					o.Min = &n
 				} else {
-					o.max = &n
+					o.Max = &n
 				}
 			case "zero":
-				o.zero = value
+				o.Zero = value
 			case "hint":
-				o.hint = value
+				o.Hint = value
 			default:
 				panic(fmt.Sprintf("%s.%s: unknown lw rule %q", t.Name(), key, rule))
 			}
@@ -124,6 +130,81 @@ func options(t reflect.Type) []option {
 		opts = append(opts, o)
 	}
 	return opts
+}
+
+// Key describes one option, for lw --schema and the composer: its tags, and
+// its kind, a table's being "table" (tls, auth or acl)
+type Key struct {
+	Name     string   `json:"key"`
+	Kind     string   `json:"kind"`
+	Default  string   `json:"default,omitempty"`
+	Help     string   `json:"help,omitempty"`
+	Required bool     `json:"required,omitempty"`
+	Enum     []string `json:"enum,omitempty"`
+	Min      *float64 `json:"min,omitempty"`
+	Max      *float64 `json:"max,omitempty"`
+	Zero     string   `json:"zero,omitempty"`
+	Hint     string   `json:"hint,omitempty"`
+	Side     string   `json:"side,omitempty"`
+}
+
+var kinds = map[reflect.Kind]string{reflect.String: "string", reflect.Int64: "integer",
+	reflect.Float64: "number", reflect.Bool: "bool", reflect.Slice: "list", reflect.Pointer: "table"}
+
+// Stage is a flow stage: its key in the flow table, whether it is a list (the
+// filters), and its options
+type Stage struct {
+	Key  string `json:"key"`
+	List bool   `json:"list,omitempty"`
+	Keys []Key  `json:"keys"`
+}
+
+// FlowStages lists the flow table's stages, in the order entries pass them
+func FlowStages() []Stage {
+	var out []Stage
+	t := reflect.TypeFor[FlowConfig]()
+	for _, o := range options(t) {
+		ft := t.Field(o.index).Type
+		out = append(out, Stage{o.Name, ft.Kind() == reflect.Slice, keys(ft.Elem())})
+	}
+	return out
+}
+
+// KeysOf describes the options of a table: tls, auth or acl
+func KeysOf[T any]() []Key { return keys(reflect.TypeFor[T]()) }
+
+func keys(t reflect.Type) []Key {
+	var out []Key
+	for _, o := range options(t) {
+		if o.Kind == "" {
+			panic(fmt.Sprintf("%s.%s: no kind", t.Name(), o.Name))
+		}
+		out = append(out, o.Key)
+	}
+	return out
+}
+
+// SettingKeys describes the settings by their dotted paths, with the defaults
+// lw has when it reads a file
+func SettingKeys() []Key { return settingKeys(reflect.ValueOf(defaults()).Elem(), "") }
+
+func settingKeys(v reflect.Value, prefix string) []Key {
+	var out []Key
+	for _, o := range options(v.Type()) {
+		switch f := v.Field(o.index); f.Kind() {
+		case reflect.Pointer:
+			out = append(out, settingKeys(f.Elem(), prefix+o.Name+".")...)
+		case reflect.Slice: // the pipelines, which their flags set
+		default:
+			k := o.Key
+			k.Name = prefix + k.Name
+			if !f.IsZero() {
+				k.Default = fmt.Sprint(f.Interface())
+			}
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // Decode reads a plugin's config map into its options: unknown keys, kinds,
@@ -145,7 +226,7 @@ func decode(role, typ string, m map[string]any) (any, error) {
 	if err := checkKeys(m, p.options, ""); err != nil {
 		return nil, err
 	}
-	m = clone(m)
+	m = Clone(m)
 	if err := coerce(p.options, m, ""); err != nil {
 		return nil, err // a file's wrong kind, named by its key
 	}
@@ -168,9 +249,8 @@ func decode(role, typ string, m map[string]any) (any, error) {
 // Settle gives a decoded table its defaults, applies the tag rules, then its
 // own Check: Decode's last steps, for the flow stages a file decodes typed
 func Settle(v any) error {
-	rv := reflect.ValueOf(v).Elem()
-	settle(rv)
-	if err := checkTags(rv, ""); err != nil {
+	Fill(v)
+	if err := checkTags(reflect.ValueOf(v).Elem(), ""); err != nil {
 		return err
 	}
 	if c, ok := v.(interface{ Check() error }); ok {
@@ -179,15 +259,18 @@ func Settle(v any) error {
 	return nil
 }
 
+// Fill gives a table its defaults and checks nothing: Settle's first step
+func Fill(v any) { settle(reflect.ValueOf(v).Elem()) }
+
 // preset sets every default before decoding, so a switch that defaults on
 // stays on unless set off; it does so in the tables m sets
 func preset(v reflect.Value, m map[string]any) {
 	for _, o := range options(v.Type()) {
 		f := v.Field(o.index)
-		if sub, ok := m[o.key].(map[string]any); ok && f.Kind() == reflect.Pointer && f.Type().Elem().Kind() == reflect.Struct {
+		if sub, ok := m[o.Name].(map[string]any); ok && f.Kind() == reflect.Pointer && f.Type().Elem().Kind() == reflect.Struct {
 			f.Set(reflect.New(f.Type().Elem()))
 			preset(f.Elem(), sub)
-		} else if o.def != "" {
+		} else if o.Default != "" {
 			setDefault(f, o)
 		}
 	}
@@ -203,7 +286,7 @@ func settle(v reflect.Value) {
 			if !f.IsNil() {
 				settle(f.Elem())
 			}
-		case o.def != "" && o.zero == "" && f.Kind() != reflect.Bool && f.IsZero():
+		case o.Default != "" && o.Zero == "" && f.Kind() != reflect.Bool && f.IsZero():
 			setDefault(f, o)
 		}
 	}
@@ -213,24 +296,24 @@ func setDefault(f reflect.Value, o option) {
 	var err error
 	switch f.Kind() {
 	case reflect.String:
-		f.SetString(o.def)
+		f.SetString(o.Default)
 	case reflect.Int64:
 		var n int64
-		n, err = strconv.ParseInt(o.def, 10, 64)
+		n, err = strconv.ParseInt(o.Default, 10, 64)
 		f.SetInt(n)
 	case reflect.Float64:
 		var n float64
-		n, err = strconv.ParseFloat(o.def, 64)
+		n, err = strconv.ParseFloat(o.Default, 64)
 		f.SetFloat(n)
 	case reflect.Bool:
 		var b bool
-		b, err = strconv.ParseBool(o.def)
+		b, err = strconv.ParseBool(o.Default)
 		f.SetBool(b)
 	default:
 		err = errors.New("no default for this kind")
 	}
 	if err != nil {
-		panic(fmt.Sprintf("%s: default %q: %v", o.key, o.def, err))
+		panic(fmt.Sprintf("%s: default %q: %v", o.Name, o.Default, err))
 	}
 }
 
@@ -243,12 +326,12 @@ func checkTags(v reflect.Value, prefix string) error {
 		f := v.Field(o.index)
 		var err error
 		switch {
-		case o.required && (f.IsZero() || f.Kind() == reflect.String && strings.TrimSpace(f.String()) == ""):
+		case o.Required && (f.IsZero() || f.Kind() == reflect.String && strings.TrimSpace(f.String()) == ""):
 			err = errors.New("must be set")
-		case f.Kind() == reflect.String && len(o.enum) > 0 && (f.String() != "" || o.zero == "" && o.def == "") && !slices.Contains(o.enum, f.String()):
-			err = fmt.Errorf("must be one of %s, got %q", strings.Join(o.enum, ", "), f.String())
+		case f.Kind() == reflect.String && len(o.Enum) > 0 && (f.String() != "" || o.Zero == "" && o.Default == "") && !slices.Contains(o.Enum, f.String()):
+			err = fmt.Errorf("must be one of %s, got %q", strings.Join(o.Enum, ", "), f.String())
 		case f.CanFloat() || f.CanInt():
-			if f.IsZero() && !o.required {
+			if f.IsZero() && !o.Required {
 				break
 			}
 			n := float64(0)
@@ -260,16 +343,16 @@ func checkTags(v reflect.Value, prefix string) error {
 			switch {
 			case math.IsNaN(n) || math.IsInf(n, 0):
 				err = errors.New("must be a finite number")
-			case o.min != nil && o.max != nil && !(n >= *o.min && n <= *o.max):
-				err = fmt.Errorf("must be from %s to %s, got %s", num(*o.min), num(*o.max), num(n))
-			case o.min != nil && !(n >= *o.min):
-				err = fmt.Errorf("must be at least %s, got %s", num(*o.min), num(n))
-			case o.max != nil && !(n <= *o.max):
-				err = fmt.Errorf("must be at most %s, got %s", num(*o.max), num(n))
+			case o.Min != nil && o.Max != nil && !(n >= *o.Min && n <= *o.Max):
+				err = fmt.Errorf("must be from %s to %s, got %s", num(*o.Min), num(*o.Max), num(n))
+			case o.Min != nil && !(n >= *o.Min):
+				err = fmt.Errorf("must be at least %s, got %s", num(*o.Min), num(n))
+			case o.Max != nil && !(n <= *o.Max):
+				err = fmt.Errorf("must be at most %s, got %s", num(*o.Max), num(n))
 			}
 		}
 		if err != nil {
-			return &KeyError{prefix + o.key, err}
+			return &KeyError{prefix + o.Name, err}
 		}
 	}
 	return nil
@@ -281,8 +364,8 @@ func num(n float64) string { return strconv.FormatFloat(n, 'f', -1, 64) }
 func sideKeys(t reflect.Type, side string) []string {
 	var keys []string
 	for _, o := range options(t) {
-		if o.side == side {
-			keys = append(keys, o.key)
+		if o.Side == side {
+			keys = append(keys, o.Name)
 		}
 	}
 	return keys
@@ -301,7 +384,7 @@ func Coerce(role, typ string, m map[string]any) error {
 
 func coerce(t reflect.Type, m map[string]any, prefix string) error {
 	for _, o := range options(t) {
-		value, ok := m[o.key]
+		value, ok := m[o.Name]
 		if !ok {
 			continue
 		}
@@ -310,25 +393,28 @@ func coerce(t reflect.Type, m map[string]any, prefix string) error {
 			ft = ft.Elem()
 		}
 		if sub, ok := value.(map[string]any); ok && ft.Kind() == reflect.Struct {
-			if err := coerce(ft, sub, prefix+o.key+"."); err != nil {
+			if err := coerce(ft, sub, prefix+o.Name+"."); err != nil {
 				return err
 			}
 			continue
 		}
 		v, err := coerceValue(ft.Kind(), value)
 		if err != nil {
-			return &KeyError{prefix + o.key, err}
+			return &KeyError{prefix + o.Name, err}
 		}
-		m[o.key] = v
+		m[o.Name] = v
 	}
 	return nil
 }
 
-// coerceValue converts text, and a JSON float for an integer; its errors
-// never hold the value, which may be a misplaced secret
+// coerceValue converts text, a JSON float for an integer and a TOML integer
+// for a number; its errors never hold the value, which may be a misplaced secret
 func coerceValue(kind reflect.Kind, value any) (any, error) {
 	s, text := value.(string)
+	n, integer := value.(int64)
 	switch {
+	case kind == reflect.Float64 && integer:
+		return float64(n), nil
 	case kind == reflect.Slice && text:
 		return []any{s}, nil
 	case kind == reflect.Int64 && text:
@@ -357,14 +443,22 @@ func coerceValue(kind reflect.Kind, value any) (any, error) {
 	return value, nil
 }
 
-// clone copies m and the tables in it, so decoding leaves the caller's map be
-func clone(m map[string]any) map[string]any {
+// Clone copies an options map with its tables and lists, so decoding or an
+// edit leaves the caller's map be
+func Clone(m map[string]any) map[string]any {
 	c := make(map[string]any, len(m))
 	for k, v := range m {
-		if sub, ok := v.(map[string]any); ok {
-			v = clone(sub)
-		}
-		c[k] = v
+		c[k] = cloneValue(v)
 	}
 	return c
+}
+
+func cloneValue(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		return Clone(v)
+	case []any:
+		return slices.Clone(v)
+	}
+	return v
 }

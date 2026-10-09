@@ -92,42 +92,23 @@ What exists:
   offline and names the refused key's path.
 - `internal/config` already compiles for `GOOS=js`; it links no net/http,
   crypto/tls or terminal code.
+- The engine, `internal/compose`: starts empty, from a preset (whose path
+  `config.IsDir` resolves, nil off the host), a loaded configuration or a
+  pasted command line; adds, removes and moves sources, sinks and filters,
+  sets and unsets keys, validates; writes a command line, environment
+  variables or a file, each loading back to the same pipelines. Its test
+  fails when it links TLS, HTTP, process, signal or terminal code.
+- `lw --schema`: settings, pipeline flags, flow stages in order, the tls,
+  auth and acl tables, sources, sinks and presets, as one JSON document.
 - `github.com/lixenwraith/terminal` (pinned) and its `tui` package: regions,
   layout, boxes, List, Tree, TabBar, StatusBar, TextField, Form, Modal,
   ConfirmDialog, scrolling, mouse. `github.com/lixenwraith/color`: RGB,
   blending, RGBTo256, RGBTo16.
 
-What is missing:
-- A host-independent preset: `fileSource` (`preset.go`) decides directory or
-  pattern with `os.Stat`, so off the target host `path=/var/log` expands to
-  directory `/var`, pattern `log`.
-- Emitters: only parsers exist for the three forms.
-
 Steps:
 1. Schema, in `internal/config`: done.
-2. Engine, `internal/compose`.
-   - Imports internal/config, internal/version and lixenwraith/toml only; a
-     test fails when `go list -deps` shows net, crypto/tls, os/exec, os/signal,
-     x/term or the auth, log and terminal modules.
-   - Starts: empty; a preset, with a `stat` function that is nil off the host
-     (the UI then asks "directory or file pattern"); a loaded configuration; a
-     pasted command line (wrapping `cliSpecs` and `buildPipelines`).
-   - Operations: add or remove a source, sink or filter; set or unset an
-     option; move a filter; validate.
-   - Emitters, one form per call:
-     - Command line: `--pipeline NAME`, `id=`, the rate limit policy and
-       heartbeat `enabled` always explicit (their command-line defaults differ
-       from the file's); `--key=value` when a value starts with `-`; `,` `=`
-       `\` escaped; POSIX-quoted.
-     - Environment: `LOGWISP_SOURCE_1` and the rest, single-quoted
-       `KEY='value'` lines; an error for more than one pipeline, which the
-       environment form cannot hold.
-     - File: the TOML `lw --dump` prints for those pipelines.
-3. `lw --schema`, a parser switch like `--help` (not a Config field, so no
-   file or environment can trigger it). It prints one JSON document: version;
-   settings with kind, default, enum, flag and variable; the pipeline flags;
-   flow stage order; the tls, auth and acl tables; sources, sinks, presets.
-   The site generates its catalogue from it.
+2. Engine, `internal/compose`: done.
+3. `lw --schema`: done. The site generates its catalogue from it.
 4. In `lixenwraith/terminal`, released and pinned before the TUI:
    - Full-screen 8- and 16-color output (SGR 30-37, 90-97, 40-47) and the
      default colors 39/49; it emits only 256-color and truecolor today.
@@ -191,13 +172,6 @@ Steps:
    eval, so the page needs only `'wasm-unsafe-eval'` in its `script-src`.
 
 Verify:
-- A Go test in `cmd/lw`: for every preset, an edge and aggregator pair,
-  escaped values and two pipelines, the pipelines loaded from the emitted
-  command line, file and environment (one pipeline) are equal. It runs in an
-  empty directory with the `LOGWISP_` environment cleared, since a discovered
-  file would add settings.
-- A schema test: every option has a kind, every enum values, every catalogue
-  row a factory; `TestEveryPluginRejectsUnknownKeys` still passes.
 - CI builds `cmd/lwconf` for `GOOS=js` and runs a node test of its calls.
 - The diagram rendered into a cell buffer at 80x24 and 64x24, per tier; a
   scripted session on a pseudo-terminal for Run and each output.

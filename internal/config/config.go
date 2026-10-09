@@ -4,15 +4,13 @@ package config
 
 // Config is the top-level configuration structure for the LogWisp application
 type Config struct {
-	Quiet bool `toml:"quiet"`
+	Quiet bool `toml:"quiet" help:"silence lw's own log and notices; pipeline output still flows"`
 
-	// Console sinks without their own color: "auto" is a terminal with
-	// NO_COLOR unset and TERM not dumb
-	Color string `toml:"color" lw:"enum=auto|always|never"`
+	// "auto" is a terminal with NO_COLOR unset and TERM not dumb
+	Color string `toml:"color" lw:"enum=auto|always|never" help:"level names in color on console sinks without their own"`
 
-	// Runtime behavior flags
-	StatusReporter   bool `toml:"status_reporter"`
-	ConfigAutoReload bool `toml:"auto_reload"`
+	StatusReporter   bool `toml:"status_reporter" help:"log pipeline statistics every 30 s at debug; without a file, off"`
+	ConfigAutoReload bool `toml:"auto_reload" help:"reload when the file changes"`
 
 	// Selected file path is runtime metadata, never a configurable override.
 	ConfigFile string `toml:"-"`
@@ -26,10 +24,10 @@ type Config struct {
 
 // LogConfig represents the logging configuration for the LogWisp application itself
 type LogConfig struct {
-	Output       string `toml:"output" lw:"enum=file|stdout|stderr|split|all|none"`
-	Level        string `toml:"level" lw:"enum=debug|info|warn|error"`
-	Format       string `toml:"format" lw:"enum=raw|txt|json,zero=the log default"`
-	Sanitization string `toml:"sanitization" lw:"enum=raw|json|txt|shell,zero=the log default"` // console output
+	Output       string `toml:"output" lw:"enum=file|stdout|stderr|split|all|none" help:"where lw's own log goes; split: warn and error to stderr"`
+	Level        string `toml:"level" lw:"enum=debug|info|warn|error" help:"lowest level logged; without a file, warn"`
+	Format       string `toml:"format" lw:"enum=raw|txt|json,zero=the log default" help:"format of lw's own log"`
+	Sanitization string `toml:"sanitization" lw:"enum=raw|json|txt|shell,zero=the log default" help:"how the console log escapes control characters"`
 
 	// File output settings (when Output includes "file" or "all")
 	File *LogFileConfig `toml:"file"`
@@ -40,25 +38,16 @@ type LogConfig struct {
 
 // LogFileConfig defines settings for file-based application logging
 type LogFileConfig struct {
-	// Directory for log files
-	Directory string `toml:"directory"`
-
-	// Base name for log files
-	Name string `toml:"name"`
-
-	// Maximum size per log file in MB
-	MaxSizeMB int64 `toml:"max_size_mb"`
-
-	// Maximum total size of all logs in MB
-	MaxTotalSizeMB int64 `toml:"max_total_size_mb"`
-
-	// Log retention in hours (0 = disabled)
-	RetentionHours float64 `toml:"retention_hours"`
+	Directory      string  `toml:"directory" lw:"hint=dir" help:"where file and all write; the limits below delete old .log files in it"`
+	Name           string  `toml:"name" help:"base name of the files"`
+	MaxSizeMB      int64   `toml:"max_size_mb" help:"size at which a file rotates"`
+	MaxTotalSizeMB int64   `toml:"max_total_size_mb" help:"size of all .log files there, beyond which the oldest go"`
+	RetentionHours float64 `toml:"retention_hours" help:"hours a .log file is kept; 0 keeps them"`
 }
 
 // LogConsoleConfig defines settings for console-based application logging
 type LogConsoleConfig struct {
-	Target string `toml:"target" lw:"enum=stdout|stderr|split"`
+	Target string `toml:"target" lw:"enum=stdout|stderr|split" help:"accepted without effect: logging.output chooses the console"`
 }
 
 // --- Pipeline ---
@@ -74,12 +63,13 @@ type PipelineConfig struct {
 
 // --- Flow ---
 
-// FlowConfig consolidates all processing stages between sources and sinks
+// FlowConfig holds the stages between sources and sinks, in the order entries
+// pass them; the heartbeat runs beside them
 type FlowConfig struct {
-	Heartbeat *HeartbeatConfig `toml:"heartbeat"`
 	RateLimit *RateLimitConfig `toml:"rate_limit"`
 	Filters   []FilterConfig   `toml:"filters,omitempty"`
 	Format    *FormatConfig    `toml:"format"`
+	Heartbeat *HeartbeatConfig `toml:"heartbeat"`
 }
 
 // --- Flow stages ---

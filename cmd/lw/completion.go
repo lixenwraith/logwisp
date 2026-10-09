@@ -77,8 +77,8 @@ func (s shell) script() []byte {
 // options maps each long option lw itself takes to its short letter, if any
 func options() map[string]string {
 	options := map[string]string{}
-	for _, long := range config.SpecFlags() {
-		options[long] = ""
+	for _, f := range config.SpecFlags() {
+		options[f.Flag] = ""
 	}
 	for long := range config.Settings() {
 		options[long] = ""
@@ -99,7 +99,7 @@ func options() map[string]string {
 func completionModel() (top []compFlag, cmds []compCommand, presets string) {
 	settings, specFlags, shortOf := config.Settings(), config.SpecFlags(), options()
 	for _, long := range slices.Sorted(maps.Keys(shortOf)) {
-		f := compFlag{long: long, short: shortOf[long], value: "text", repeat: slices.Contains(specFlags, long)}
+		f := compFlag{long: long, short: shortOf[long], value: "text", repeat: slices.ContainsFunc(specFlags, isFlag(long))}
 		if v, ok := valueOf[long]; ok {
 			f.value = v
 		} else if settings[long] || slices.Contains(switches, long) {

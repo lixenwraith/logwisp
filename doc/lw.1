@@ -24,7 +24,7 @@
 .Ar command
 .Op Ar flags
 .Nm
-.Fl V | Fl \-version
+.Fl V | Fl \-version | Fl \-schema
 .Nm
 .Cm help | Fl h | Fl \-help
 .Sh DESCRIPTION
@@ -146,6 +146,10 @@ Print the effective configuration, with the options, environment and
 presets resolved into it, as a file
 .Fl c
 reads back, and exit.
+.It Fl \-schema
+Print every setting, pipeline flag, flow stage, plugin option and preset as
+one JSON document, with kinds, defaults, rules and help, and exit; tools build
+their option lists from it.
 .It Fl q , Fl \-quiet
 Turn off the log of
 .Nm

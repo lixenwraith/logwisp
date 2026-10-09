@@ -50,8 +50,8 @@ Top-level keys, each as type and default:
   set their own: `"auto"` (a terminal, `NO_COLOR` unset, `TERM` not `dumb`),
   `"always"` or `"never"`; see the [console sink](sinks.md#console).
 
-`--version`, `--check` and `--dump` print and exit; they are not persistent
-settings.
+`--version`, `--check`, `--dump` and `--schema` print and exit; they are not
+persistent settings.
 
 Note that `status_reporter` writes at DEBUG level, so it produces nothing unless
 `logging.level = "debug"`.

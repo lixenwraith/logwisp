@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -12,7 +13,9 @@ import (
 	"testing"
 
 	shipped "github.com/lixenwraith/logwisp/config"
+	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/testutil"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 )
@@ -184,6 +187,123 @@ func TestDumpReadsBack(t *testing.T) {
 	if !reflect.DeepEqual(again.Pipelines, cfg.Pipelines) || again.Color != "always" || again.Logging.Level != "debug" ||
 		strings.Count(dump.String(), "color = ") != 1 {
 		t.Fatalf("dump does not read back:\n%s\n got %+v\nwant %+v", dump.String(), again.Pipelines, cfg.Pipelines)
+	}
+}
+
+// The command line, file and environment a composition writes, read by a
+// POSIX shell and loaded as lw loads them, give its pipelines back: every
+// preset, a second sink, a file's stage without its defaults, an integer for
+// a number, an edge and aggregator pair, and values to escape and quote. The
+// environment holds one pipeline.
+func TestEveryFormLoadsTheSamePipelines(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty.toml")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	users, pass := filepath.Join(dir, "users.toml"), filepath.Join(dir, "it's.pass")
+	values := map[string]map[string]string{
+		"pipe":  {"format": "txt"},
+		"tail":  {"path": dir},
+		"serve": {"path": filepath.Join(dir, "*.log"), "listen": "127.0.0.1:15841", "tls": "self", "users": users, "allow": "127.0.0.0/8", "deny": "127.0.0.2"},
+		"edge": {"path": dir + "/", "to": "127.0.0.1:15842", "transport": "http", "pin": "sha256//" + strings.Repeat("A", 43) + "=",
+			"user": `edge,01=a\b`, "password_file": pass},
+		"aggregator": {"listen": "127.0.0.1:15843", "users": users, "out": filepath.Join(dir, "out dir"), "allow": "10.0.0.0/8,127.0.0.1"},
+	}
+	compositions := map[string]*compose.Composition{}
+	for _, p := range config.Presets() {
+		c, err := compose.FromPreset(p.Name, values[p.Name], config.HostIsDir)
+		if err != nil {
+			t.Fatalf("%s: %v", p.Name, err)
+		}
+		compositions[p.Name] = c
+	}
+	if _, err := compositions["tail"].Add(0, "sink", "null"); err != nil {
+		t.Fatal(err)
+	}
+	written := filepath.Join(dir, "written.toml")
+	if err := os.WriteFile(written, []byte(`[[pipelines]]
+name = "written"
+flow.rate_limit.rate = 5
+plugin_sources = [{id = "in", type = "null"}]
+plugin_sinks = [{id = "out", type = "http", config = {port = 15844, acl = {requests_per_second_per_client = 2}}}]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := compose.FromConfig(loadTestConfig(t, written))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compositions["written"] = c
+	pair := &compose.Composition{Pipelines: append(compositions["edge"].Pipelines, compositions["aggregator"].Pipelines...)}
+	filter, err := pair.Add(0, "filters", "exclude")
+	if err == nil {
+		err = pair.Set(0, filter, "patterns", `password=\S{8,64}`, `it's "quoted"`)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	compositions["pair"] = pair
+	shell := func(script string) []string {
+		out, err := exec.Command("sh", "-c", script).Output()
+		if err != nil {
+			t.Fatalf("sh: %v\n%s", err, script)
+		}
+		return strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	}
+	for name, c := range compositions {
+		line, err := c.CommandLine()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		words := shell("set --" + strings.TrimPrefix(line, "lw") + `printf '%s\0' "$@"`)
+		loaded := []*config.Config{loadTestConfig(t, empty, words...)}
+		file := filepath.Join(dir, name+".toml")
+		data, err := c.File()
+		if err == nil {
+			err = os.WriteFile(file, data, 0o600)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded = append(loaded, loadTestConfig(t, file))
+		env, err := c.Environment()
+		if len(c.Pipelines) > 1 {
+			if err == nil {
+				t.Errorf("%s: the environment took %d pipelines", name, len(c.Pipelines))
+			}
+		} else {
+			var names []string
+			for _, line := range strings.Split(strings.TrimSpace(env), "\n") {
+				names = append(names, `"$`+line[:strings.IndexByte(line, '=')]+`"`)
+			}
+			testutil.ClearEnvPrefix(t, "LOGWISP_")
+			for i, value := range shell(env + "printf '%s\\0' " + strings.Join(names, " ")) {
+				t.Setenv(strings.Trim(names[i], `"$`), value)
+			}
+			loaded = append(loaded, loadWithEnvironment(t, empty))
+		}
+		for _, cfg := range loaded {
+			back, err := compose.FromConfig(cfg)
+			if err != nil || !reflect.DeepEqual(back, c) {
+				t.Errorf("%s: loads back as\n%+v %v\nwant %+v\nfrom %s\n%s\n%s", name, back, err, c, line, data, env)
+			}
+		}
+	}
+}
+
+// lw --schema lists the sources and sinks lw builds
+func TestSchemaListsWhatLwBuilds(t *testing.T) {
+	s := compose.NewSchema()
+	for _, p := range s.Sources {
+		if _, ok := plugin.GetSource(p.Type); !ok {
+			t.Errorf("source %s has no factory", p.Type)
+		}
+	}
+	for _, p := range s.Sinks {
+		if _, ok := plugin.GetSink(p.Type); !ok {
+			t.Errorf("sink %s has no factory", p.Type)
+		}
 	}
 }
 

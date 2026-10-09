@@ -2,6 +2,7 @@ package config
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -16,16 +17,34 @@ import (
 // a pipeline with it. Later flags add sources, sinks and filters, or replace
 // its format, rate limit and heartbeat.
 type Preset struct {
-	Name, Summary string
-	Params        []PresetParam
-	build         func(p *PipelineConfig, v map[string]string) error
+	Name    string        `json:"name"`
+	Summary string        `json:"summary"`
+	Params  []PresetParam `json:"keys"`
+	build   func(p *PipelineConfig, v map[string]string, isDir IsDir) error
 }
 
 // PresetParam is one key. A list takes several values, ',' between them or
 // the key repeated; any other key takes one.
 type PresetParam struct {
-	Name, Default, Help string
-	Required, List      bool
+	Name     string `json:"name"`
+	Default  string `json:"default,omitempty"`
+	Help     string `json:"help"`
+	Required bool   `json:"required,omitempty"`
+	List     bool   `json:"list,omitempty"`
+}
+
+// IsDir tells whether a preset's path is a directory, whose files it follows,
+// or a file pattern. Off the target host it is the user's answer, or nil: a
+// path ending in '/' is then a directory, one with a glob a pattern, and any
+// other fails with ErrPathKind.
+type IsDir func(path string) (bool, error)
+
+var ErrPathKind = errors.New("path: a directory or a file pattern?")
+
+// HostIsDir asks this host: a path that does not exist is a pattern
+func HostIsDir(path string) (bool, error) {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir(), nil
 }
 
 // Keys several presets share
@@ -50,7 +69,7 @@ var (
 var presets = []Preset{
 	{"pipe", "Standard input to standard output, line for line: lw without a file",
 		[]PresetParam{formatParam("raw")},
-		func(p *PipelineConfig, v map[string]string) error {
+		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
 			stdio := pipeDefault("")
 			p.PluginSources, p.PluginSinks = stdio.PluginSources, stdio.PluginSinks
 			p.Flow.Format = &FormatConfig{Type: v["format"]}
@@ -58,10 +77,11 @@ var presets = []Preset{
 		}},
 	{"tail", "Follow files to standard output, like tail -F",
 		[]PresetParam{{Name: "path", Required: true, Help: "file, directory (its files) or glob to follow"}, fromParam, formatParam("raw")},
-		func(p *PipelineConfig, v map[string]string) error {
-			p.PluginSources, p.PluginSinks = pathOrStdin(v), pipeDefault("").PluginSinks
+		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
+			sources, err := pathOrStdin(v, isDir)
+			p.PluginSources, p.PluginSinks = sources, pipeDefault("").PluginSinks
 			p.Flow.Format = &FormatConfig{Type: v["format"]}
-			return nil
+			return err
 		}},
 	{"serve", "Serve files or standard input live: a browser viewer at /, SSE at /stream",
 		slices.Concat([]PresetParam{pathParam, fromParam, formatParam("json"),
@@ -71,8 +91,12 @@ var presets = []Preset{
 			{Name: "proxy", List: true, Help: "addresses or CIDRs of the TLS-terminating proxies browsers come through; ',' between them"},
 			{Name: "viewer", Default: "false", Help: "true: the login page and viewer for users, behind proxy; without users the viewer is always on"},
 		}, aclParams, tlsParams),
-		func(p *PipelineConfig, v map[string]string) error {
-			p.PluginSources = pathOrStdin(v)
+		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
+			sources, err := pathOrStdin(v, isDir)
+			if err != nil {
+				return err
+			}
+			p.PluginSources = sources
 			sink, err := listener(v, "off")
 			if err != nil {
 				return err
@@ -115,8 +139,12 @@ var presets = []Preset{
 			{Name: "key", Help: "client key file"},
 			{Name: "node", Help: "origin label; default: this host's name"},
 		},
-		func(p *PipelineConfig, v map[string]string) error {
-			p.PluginSources = pathOrStdin(v)
+		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
+			sources, err := pathOrStdin(v, isDir)
+			if err != nil {
+				return err
+			}
+			p.PluginSources = sources
 			typ, err := chainType(v["transport"])
 			if err != nil {
 				return err
@@ -159,7 +187,7 @@ var presets = []Preset{
 			{Name: "out", Help: "directory for the received entries; default: standard output"},
 			formatParam("json"),
 		}, aclParams, tlsParams),
-		func(p *PipelineConfig, v map[string]string) error {
+		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
 			typ, err := chainType(v["transport"])
 			if err != nil {
 				return err
@@ -197,18 +225,18 @@ var presets = []Preset{
 func Presets() []Preset { return slices.Clone(presets) }
 
 // ExpandPreset builds the pipeline a preset makes of values, as --preset does
-func ExpandPreset(name string, values map[string]string) (PipelineConfig, error) {
+func ExpandPreset(name string, values map[string]string, isDir IsDir) (PipelineConfig, error) {
 	p := PipelineConfig{Flow: &FlowConfig{}}
 	each := map[string][]string{}
 	for k, v := range values {
 		each[k] = []string{v}
 	}
-	err := applyPreset(&p, name, each)
+	err := applyPreset(&p, name, each, isDir)
 	return p, err
 }
 
 // applyPreset fills defaults and checks keys before the preset's build
-func applyPreset(p *PipelineConfig, name string, values map[string][]string) error {
+func applyPreset(p *PipelineConfig, name string, values map[string][]string, isDir IsDir) error {
 	i := slices.IndexFunc(presets, func(r Preset) bool { return r.Name == name })
 	if i < 0 {
 		var names []string
@@ -239,24 +267,31 @@ func applyPreset(p *PipelineConfig, name string, values map[string][]string) err
 		}
 	}
 	p.Name = cmp.Or(p.Name, name)
-	return r.build(p, v)
+	return r.build(p, v, isDir)
 }
 
-func pathOrStdin(v map[string]string) []PluginSourceConfig {
-	if v["path"] == "" {
-		return pipeDefault("").PluginSources
+// pathOrStdin follows path: a directory's files, or the files a glob or a
+// file name matches in its directory; without one, standard input
+func pathOrStdin(v map[string]string, isDir IsDir) ([]PluginSourceConfig, error) {
+	path := v["path"]
+	if path == "" {
+		return pipeDefault("").PluginSources, nil
 	}
-	return []PluginSourceConfig{fileSource(v["path"], v["from"])}
-}
-
-// fileSource follows path: a directory's files, or the files a glob or a
-// file name matches in its directory.
-func fileSource(path, from string) PluginSourceConfig {
-	dir, pattern := path, "*"
-	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
-		dir, pattern = filepath.Dir(path), filepath.Base(path)
+	dir, err := strings.HasSuffix(path, "/"), error(nil)
+	switch {
+	case isDir != nil:
+		dir, err = isDir(path)
+	case !dir && !strings.ContainsAny(path, `*?[\`):
+		err = ErrPathKind
 	}
-	return PluginSourceConfig{ID: "file", Type: "file", Config: map[string]any{"directory": dir, "pattern": pattern, "from": from}}
+	if err != nil {
+		return nil, err
+	}
+	directory, pattern := path, "*"
+	if !dir {
+		directory, pattern = filepath.Dir(path), filepath.Base(path)
+	}
+	return []PluginSourceConfig{{ID: "file", Type: "file", Config: map[string]any{"directory": directory, "pattern": pattern, "from": v["from"]}}}, nil
 }
 
 // tlsModes is what each preset tls mode sets, and the preset keys it needs

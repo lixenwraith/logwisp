@@ -29,20 +29,6 @@ func ValidateConfig(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
-
-	if len(cfg.Pipelines) == 0 {
-		return fmt.Errorf("no pipelines configured")
-	}
-
-	// Reject duplicate pipeline names (service map is keyed by name)
-	names := make(map[string]struct{}, len(cfg.Pipelines))
-	for i, p := range cfg.Pipelines {
-		if _, dup := names[p.Name]; dup {
-			return fmt.Errorf("pipeline[%d]: duplicate name %q", i, p.Name)
-		}
-		names[p.Name] = struct{}{}
-	}
-
 	if err := checkTags(reflect.ValueOf(cfg).Elem(), ""); err != nil {
 		return err
 	}
@@ -57,8 +43,24 @@ func ValidateConfig(cfg *Config) error {
 		}
 	}
 
+	return ValidatePipelines(cfg.Pipelines)
+}
+
+// ValidatePipelines is ValidateConfig's check of the pipelines
+func ValidatePipelines(pipelines []PipelineConfig) error {
+	if len(pipelines) == 0 {
+		return fmt.Errorf("no pipelines configured")
+	}
+	// Reject duplicate pipeline names (service map is keyed by name)
+	names := make(map[string]struct{}, len(pipelines))
+	for i, p := range pipelines {
+		if _, dup := names[p.Name]; dup {
+			return fmt.Errorf("pipeline[%d]: duplicate name %q", i, p.Name)
+		}
+		names[p.Name] = struct{}{}
+	}
 	single := map[string]string{} // role and type of a single-instance plugin: its pipeline
-	for i, p := range cfg.Pipelines {
+	for i, p := range pipelines {
 		if err := lconfig.NonEmpty(p.Name); err != nil {
 			return fmt.Errorf("pipeline[%d].name: %w", i, err)
 		}
@@ -196,7 +198,7 @@ func (o *TLSOptions) Check(listener bool) error {
 		other = "listener"
 	}
 	for _, opt := range options(v.Type()) {
-		if f := v.Field(opt.index); opt.side == other && !f.IsZero() && (f.Kind() != reflect.Slice || f.Len() > 0) {
+		if f := v.Field(opt.index); opt.Side == other && !f.IsZero() && (f.Kind() != reflect.Slice || f.Len() > 0) {
 			return fmt.Errorf("tls: %s apply to %ss", and(sideKeys(v.Type(), other)), other)
 		}
 	}

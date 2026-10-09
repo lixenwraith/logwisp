@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"reflect"
 	"syscall"
 
+	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
 	"github.com/lixenwraith/logwisp/internal/version"
@@ -32,6 +34,14 @@ func main() {
 		os.Exit(0)
 	case inv.on["version"]:
 		fmt.Println(version.String())
+		os.Exit(0)
+	case inv.on["schema"]:
+		out := json.NewEncoder(os.Stdout)
+		out.SetIndent("", "  ")
+		if err := out.Encode(compose.NewSchema()); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 

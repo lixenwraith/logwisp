@@ -37,6 +37,7 @@ complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l preset -o p -x -a 'pipe tail serve edge aggregator'
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l quiet -o q
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l rate-limit -r -F
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l schema
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l sink -r -F
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l source -r -F
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l status_reporter

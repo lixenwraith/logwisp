@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -59,6 +60,32 @@ func TestPresetKeysAreChecked(t *testing.T) {
 		_, err := Load(Args{Specs: specs("preset", spec)})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want %s", spec, err, want)
+		}
+	}
+}
+
+// A preset path is what isDir answers, a directory named with brackets too;
+// without isDir, off the target host, it is a directory when it ends in '/',
+// a pattern when it holds a glob, and otherwise ErrPathKind asks
+func TestPresetPathKind(t *testing.T) {
+	yes := func(string) (bool, error) { return true, nil }
+	for _, c := range []struct {
+		path  string
+		isDir IsDir
+		want  string
+	}{{"/srv/app/", nil, "/srv/app/ *"}, {"/srv/app/*.log", nil, "/srv/app *.log"}, {"/srv/app[1]", yes, "/srv/app[1] *"}, {"/srv/app", nil, ""}} {
+		p, err := ExpandPreset("tail", map[string]string{"path": c.path}, c.isDir)
+		if c.want == "" {
+			if !errors.Is(err, ErrPathKind) {
+				t.Errorf("%s: %v, want ErrPathKind", c.path, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := p.PluginSources[0].Config; m["directory"].(string)+" "+m["pattern"].(string) != c.want {
+			t.Errorf("%s: %v, want %s", c.path, m, c.want)
 		}
 	}
 }

@@ -11,7 +11,7 @@ lw tls COMMAND [flags]
 lw preset NAME [flags]
 lw config init [--out FILE]
 lw help | -h | --help
-lw -V | --version
+lw -V | --version | --schema
 ```
 
 Without a configuration file or pipeline options, lw is a filter: stdin to
@@ -66,6 +66,9 @@ pipelines have [their own flags](#pipelines):
   exit; see [Usage Patterns](#usage-patterns)
 - `--dump`: print the effective configuration, flags, environment and presets
   resolved into it, as TOML that `-c` reads back, and exit
+- `--schema`: print every setting, pipeline flag, flow stage, plugin option
+  and preset as one JSON document (kinds, defaults, rules, help), and exit;
+  tools build their option lists from it
 - `--color [WHEN]`, WHEN `auto`, `always` or `never`: level names in color on
   console sinks, default `auto` (a terminal, `NO_COLOR` unset, `TERM` not
   `dumb`); bare, `always`. A console sink's own `color` wins
