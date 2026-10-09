@@ -135,14 +135,7 @@ func checkConfig(cfg *config.Config) int {
 // dumpConfig prints the effective configuration, flags and environment
 // resolved into it, as a file lw -c reads back.
 func dumpConfig(cfg *config.Config, w io.Writer) int {
-	// Snapshot gave each console sink the top-level color: keep it inherited
-	for _, p := range cfg.Pipelines {
-		for _, s := range p.PluginSinks {
-			if s.Type == "console" && s.Config["color"] == cfg.Color {
-				delete(s.Config, "color")
-			}
-		}
-	}
+	config.Uninherit(cfg.Pipelines, cfg.Color)
 	data, err := toml.Marshal(cfg)
 	if err == nil {
 		_, err = w.Write(data)

@@ -213,3 +213,17 @@ func TestReloadKeepsSpecPipelines(t *testing.T) {
 		t.Fatalf("reload after the file was removed: %v", err)
 	}
 }
+
+// Written specs build the pipelines a file would: each flow stage with its
+// defaults, so the rate limit keeps its file policy and the heartbeat its off
+func TestWrittenSpecsBuildWhatAFileWould(t *testing.T) {
+	p := PipelineConfig{Name: "p", Flow: &FlowConfig{Format: &FormatConfig{}, RateLimit: &RateLimitConfig{Rate: 5}, Heartbeat: &HeartbeatConfig{}},
+		PluginSources: []PluginSourceConfig{{ID: "in", Type: "null", Config: map[string]any{}}},
+		PluginSinks:   []PluginSinkConfig{{ID: "out", Type: "null", Config: map[string]any{}}}}
+	got, err := SpecPipelines(PipelineSpecs([]PipelineConfig{p}), nil)
+	p.Flow = &FlowConfig{Format: &FormatConfig{Type: "raw"}, RateLimit: &RateLimitConfig{Rate: 5, Policy: "pass"},
+		Heartbeat: &HeartbeatConfig{IntervalMS: 1000, Format: "txt"}}
+	if err != nil || !reflect.DeepEqual(got, []PipelineConfig{p}) {
+		t.Fatalf("got %+v %v\nwant %+v", got, err, p)
+	}
+}
