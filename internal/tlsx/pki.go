@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/lixenwraith/logwisp/internal/config"
 )
 
 // Certificates are ECDSA P-256, for lw tls and for listeners without files.
@@ -31,7 +33,6 @@ import (
 const (
 	CAValidity   = 10 * 365 * 24 * time.Hour
 	LeafValidity = 397 * 24 * time.Hour
-	pinPrefix    = "sha256//"
 )
 
 // processKey is the key of every generated listener certificate: reloads
@@ -184,21 +185,16 @@ func pinOfKey(k *ecdsa.PrivateKey) string {
 
 func pin(spki []byte) string {
 	h := sha256.Sum256(spki)
-	return pinPrefix + base64.StdEncoding.EncodeToString(h[:])
+	return config.PinPrefix + base64.StdEncoding.EncodeToString(h[:])
 }
 
 // verifyPins replaces chain verification: the server's key must hash to one
 // of the ';'-separated pins. Its name and validity are not checked. Go skips
 // it on a resumed session, which Client therefore disables.
 func verifyPins(s string) (func([][]byte, [][]*x509.Certificate) error, error) {
-	var pins [][]byte
-	for p := range strings.SplitSeq(s, ";") {
-		b64, ok := strings.CutPrefix(strings.TrimSpace(p), pinPrefix)
-		h, err := base64.StdEncoding.DecodeString(b64)
-		if !ok || err != nil || len(h) != sha256.Size {
-			return nil, fmt.Errorf("tls: pin_sha256 %q: want %sBASE64 of a SHA-256, ';' between several", p, pinPrefix)
-		}
-		pins = append(pins, h)
+	pins, err := config.ParsePins(s)
+	if err != nil {
+		return nil, err
 	}
 	return func(raw [][]byte, _ [][]*x509.Certificate) error {
 		if len(raw) == 0 {

@@ -17,11 +17,7 @@ type Formatter interface {
 // NewFormatter creates a Formatter using formatter/sanitizer packages
 func NewFormatter(cfg *config.FormatConfig) (Formatter, error) {
 	if cfg == nil {
-		cfg = &config.FormatConfig{
-			Type:            DefaultFormatType,
-			Flags:           0,
-			SanitizerPolicy: "raw",
-		}
+		cfg = &config.FormatConfig{}
 	}
 
 	return NewFormatterAdapter(cfg)

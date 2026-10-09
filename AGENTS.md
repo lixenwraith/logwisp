@@ -73,9 +73,12 @@ change touches.
 
 ## LogWisp
 
-- Plugin options decode through `config.Scan`, never `lconfig.ScanMap`: unknown
-  keys must fail at any depth. Set defaults on the options struct before the
-  call; `TestEveryPluginRejectsUnknownKeys` covers every registered plugin.
+- Plugin options are a schema in `internal/config`: struct tags (`default:`,
+  `help:`, `lw:` rules) and one catalogue row per plugin type, without which
+  `RegisterSource`/`RegisterSink` fail. Constructors decode through
+  `config.Decode`, which applies the defaults, rules and pure checks and
+  refuses unknown keys at any depth; they keep only I/O. Rules that read
+  nothing belong in a `Check` method, so `ValidateConfig` sees them offline.
 - `cmd/lw/cli.go` owns the command line: lw's own flags, and the commands
   table whose groups (`auth`, `tls`, `preset`, `config`) share one flag
   mechanism; `config.Load` takes the parsed `config.Args`. Presets are rows of

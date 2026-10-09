@@ -25,13 +25,6 @@ func init() {
 		panic(fmt.Sprintf("failed to register console source: %v", err))
 	}
 
-	// Console stdin can only have one reader
-	if err := plugin.SetSourceMetadata("console", &plugin.PluginMetadata{
-		Capabilities: []core.Capability{core.CapSessionAware, core.CapSingleInstance},
-		MaxInstances: 1,
-	}); err != nil {
-		panic(fmt.Sprintf("failed to set console source metadata: %v", err))
-	}
 }
 
 // One reader serves the process: after a reload the new source continues
@@ -114,10 +107,6 @@ type ConsoleSource struct {
 	ended         atomic.Bool  // standard input reached its end
 }
 
-const (
-	DefaultConsoleSourceBufferSize = 1000
-)
-
 // NewConsoleSourcePlugin creates a console source through plugin factory
 func NewConsoleSourcePlugin(
 	id string,
@@ -125,19 +114,11 @@ func NewConsoleSourcePlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
-	opts := &config.ConsoleSourceOptions{}
-
-	// Scan config map
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+	opts, err := config.Decode[config.ConsoleSourceOptions]("source", "console", configMap)
+	if err != nil {
+		return nil, err
 	}
 
-	// Validate and apply defaults
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultConsoleSourceBufferSize
-	}
-
-	// Create and return plugin instance
 	cs := &ConsoleSource{
 		id:          id,
 		proxy:       proxy,

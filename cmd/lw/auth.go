@@ -258,7 +258,7 @@ func dialPolicy(o *config.TLSOptions, host, user, passwordFile string, transport
 		return nil, nil, err
 	}
 	policy, err := authz.New(&config.AuthOptions{Type: authz.MethodSCRAM, Username: user, PasswordFile: passwordFile},
-		tlsCfg, nil, authz.RoleDialer, transport)
+		tlsCfg, nil, config.Dialer, transport)
 	if err != nil {
 		return nil, nil, err
 	}

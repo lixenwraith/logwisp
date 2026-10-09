@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/sink"
@@ -59,7 +60,7 @@ func NewRegistry(pipelineName string, logger *log.Logger) *Registry {
 func (r *Registry) CreateSource(
 	id string,
 	pluginType string,
-	config map[string]any,
+	options map[string]any,
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
@@ -72,8 +73,8 @@ func (r *Registry) CreateSource(
 	}
 
 	// Check single instance constraint
-	if meta, ok := plugin.GetSourceMetadata(pluginType); ok {
-		if meta.MaxInstances == 1 && r.sourceTypeCounts[pluginType] >= 1 {
+	if row, ok := config.LookupPlugin("source", pluginType); ok {
+		if row.Single && r.sourceTypeCounts[pluginType] >= 1 {
 			return nil, fmt.Errorf("source type %s only allows single instance", pluginType)
 		}
 	}
@@ -85,7 +86,7 @@ func (r *Registry) CreateSource(
 	}
 
 	// Create instance
-	src, err := constructor(id, config, logger, proxy)
+	src, err := constructor(id, options, logger, proxy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create source %s: %w", id, err)
 	}
@@ -106,7 +107,7 @@ func (r *Registry) CreateSource(
 func (r *Registry) CreateSink(
 	id string,
 	pluginType string,
-	config map[string]any,
+	options map[string]any,
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
@@ -119,8 +120,8 @@ func (r *Registry) CreateSink(
 	}
 
 	// Check single instance constraint
-	if meta, ok := plugin.GetSinkMetadata(pluginType); ok {
-		if meta.MaxInstances == 1 && r.sinkTypeCounts[pluginType] >= 1 {
+	if row, ok := config.LookupPlugin("sink", pluginType); ok {
+		if row.Single && r.sinkTypeCounts[pluginType] >= 1 {
 			return nil, fmt.Errorf("sink type %s only allows single instance", pluginType)
 		}
 	}
@@ -132,7 +133,7 @@ func (r *Registry) CreateSink(
 	}
 
 	// Create instance
-	snk, err := constructor(id, config, logger, proxy)
+	snk, err := constructor(id, options, logger, proxy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sink %s: %w", id, err)
 	}

@@ -10,7 +10,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,7 +28,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 	"github.com/lixenwraith/logwisp/internal/version"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -39,14 +37,7 @@ func init() {
 	}
 }
 
-const (
-	DefaultHTTPHost             = "0.0.0.0"
-	DefaultHTTPBufferSize       = 1000
-	DefaultHTTPClientBufferSize = 256
-	DefaultHTTPStreamPath       = "/stream"
-	DefaultHTTPStatusPath       = "/status"
-	HTTPReadHeaderTimeout       = 10 * time.Second
-)
+const HTTPReadHeaderTimeout = 10 * time.Second
 
 // HTTPSink streams log entries via Server-Sent Events
 // Server.WriteTimeout is deliberately unset (it would terminate long-lived SSE streams)
@@ -117,42 +108,13 @@ func NewHTTPSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	opts := &config.HTTPSinkOptions{
-		Host:           DefaultHTTPHost,
-		WriteTimeoutMS: 0, // SSE indefinite streaming
-	}
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-	if err := lconfig.Port(opts.Port); err != nil {
-		return nil, fmt.Errorf("port: %w", err)
+	opts, err := config.Decode[config.HTTPSinkOptions]("sink", "http", configMap)
+	if err != nil {
+		return nil, err
 	}
 	network, err := core.Network(opts.Host)
 	if err != nil {
-		return nil, fmt.Errorf("host: %w", err)
-	}
-	if opts.StreamPath == "" {
-		opts.StreamPath = DefaultHTTPStreamPath
-	}
-	if opts.StatusPath == "" {
-		opts.StatusPath = DefaultHTTPStatusPath
-	}
-	for _, o := range []struct{ name, p string }{{"stream_path", opts.StreamPath}, {"status_path", opts.StatusPath}} {
-		if !routable(o.p) {
-			return nil, fmt.Errorf("%s %q: must start with '/', hold no '//', '.' or '..' segment, and none of '{', '}', '%%', '?', '#'", o.name, o.p)
-		}
-		if p := o.p; p == chain.AuthPath || strings.HasPrefix(p, chain.AuthPath+"/") {
-			return nil, fmt.Errorf("%s and the paths under it are reserved for authentication", chain.AuthPath)
-		}
-	}
-	if opts.StreamPath == opts.StatusPath {
-		return nil, fmt.Errorf("stream_path and status_path must differ")
-	}
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultHTTPBufferSize
-	}
-	if opts.ClientBufferSize <= 0 {
-		opts.ClientBufferSize = DefaultHTTPClientBufferSize
+		return nil, err
 	}
 	tlsCfg, err := tlsx.Server(opts.TLS, opts.Host)
 	if err != nil {
@@ -166,15 +128,9 @@ func NewHTTPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, authz.RoleListener, authz.HTTP)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, config.Listener, authz.HTTP)
 	if err != nil {
 		return nil, err
-	}
-	switch {
-	case (opts.LoginPage || opts.ViewerPage) && !authPolicy.BehindProxy():
-		return nil, errors.New("login_page and viewer_page apply to scram behind auth.trusted_proxies, where browsers log in; without auth or under mtls the viewer is always served")
-	case opts.ViewerPage && !opts.LoginPage:
-		return nil, errors.New("viewer_page needs login_page, where it sends a signed-out viewer")
 	}
 	web, err := webHandlers(opts, authPolicy)
 	if err != nil {
@@ -703,13 +659,6 @@ func (h *HTTPSink) handleAuth(w http.ResponseWriter, r *http.Request) {
 			"remote_addr", clientAddr(r),
 			"auth_identity", ident.Name)
 	}
-}
-
-// routable reports a path ServeMux and a URL take literally: clean, a trailing
-// '/' aside, without the braces of wildcards, an escape, a query or a fragment
-func routable(p string) bool {
-	c := path.Clean(p)
-	return strings.HasPrefix(p, "/") && !strings.ContainsAny(p, "{}%?#") && (c == p || c != "/" && c+"/" == p)
 }
 
 // exact keeps a path ending in '/' from matching every path beneath it

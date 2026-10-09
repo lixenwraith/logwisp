@@ -9,7 +9,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -28,26 +27,8 @@ type Filter struct {
 
 // NewFilter creates a new filter from a configuration
 func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
-	// Validate enums before setting defaults
-	if cfg.Type != "" {
-		validateType := lconfig.OneOf(config.FilterTypeInclude, config.FilterTypeExclude)
-		if err := validateType(cfg.Type); err != nil {
-			return nil, fmt.Errorf("type: %w", err)
-		}
-	}
-	if cfg.Logic != "" {
-		validateLogic := lconfig.OneOf(config.FilterLogicOr, config.FilterLogicAnd)
-		if err := validateLogic(cfg.Logic); err != nil {
-			return nil, fmt.Errorf("logic: %w", err)
-		}
-	}
-
-	// Set defaults
-	if cfg.Type == "" {
-		cfg.Type = config.FilterTypeInclude
-	}
-	if cfg.Logic == "" {
-		cfg.Logic = config.FilterLogicOr
+	if err := config.Settle(&cfg); err != nil {
+		return nil, err
 	}
 
 	f := &Filter{

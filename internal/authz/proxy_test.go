@@ -30,7 +30,7 @@ func (f forwarding) RoundTrip(r *http.Request) (*http.Response, error) {
 // proxyListener is a plaintext http sink policy behind a proxy on loopback
 func (f *fixture) proxyListener(t *testing.T) (*Policy, *httptest.Server) {
 	t.Helper()
-	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1"}}, nil, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1"}}, nil, config.Listener, HTTP)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+chain.AuthPath, func(w http.ResponseWriter, r *http.Request) { l.ServeAuth(w, r) })
 	mux.HandleFunc("GET /protected", func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +49,7 @@ func (f *fixture) proxyListener(t *testing.T) (*Policy, *httptest.Server) {
 // when every hop is inside a proxy range.
 func TestProxyModeTrustsOnlyItsProxies(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1", "10.0.0.0/8"}}, nil, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1", "10.0.0.0/8"}}, nil, config.Listener, HTTP)
 	for _, tc := range []struct{ name, peer, xff, proto, want string }{
 		{"untrusted peer", "192.0.2.1:5000", "203.0.113.7", "https", ""},
 		{"no proto", "127.0.0.1:5000", "203.0.113.7", "", ""},
@@ -91,7 +91,7 @@ func TestForwardedClientIsRefusedByTheRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	l, err := New(&config.AuthOptions{Type: MethodSCRAM, CredentialsFile: f.creds, TrustedProxies: []string{"127.0.0.1"}},
-		nil, acl, RoleListener, HTTP)
+		nil, acl, config.Listener, HTTP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestBrowserSessionBehindProxy(t *testing.T) {
 		t.Fatalf("logins = %d", l.allowed.Load())
 	}
 
-	direct := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	direct := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
 	ds, _ := f.httpListener(t, direct, f.serverTLS)
 	client = f.httpClient(f.dialer(t, "edge-01", "edge-01-secret"))
 	proof := &auth.ClientFinalRequest{FullNonce: strings.Repeat("n", 32), ClientProof: "AAAA"}
@@ -210,7 +210,7 @@ func TestBrowserSessionBehindProxy(t *testing.T) {
 // only unbound proofs (lw auth token --unbound) log in.
 func TestOnlyUnboundLoginsBehindProxy(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1"}}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1"}}, f.serverTLS, config.Listener, HTTP)
 	srv, _ := f.httpListener(t, l, f.serverTLS)
 	for _, unbound := range []bool{false, true} {
 		d := f.dialer(t, "edge-01", "edge-01-secret")

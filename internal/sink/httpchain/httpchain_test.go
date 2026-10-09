@@ -80,7 +80,7 @@ func TestRefusedTokenLogsInAgainAndDeliversOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	serverTLS := &tls.Config{Certificates: []tls.Certificate{serverCert}}
-	listener, err := authz.New(&config.AuthOptions{Type: authz.MethodSCRAM, CredentialsFile: creds}, serverTLS, nil, authz.RoleChainListener, authz.HTTP)
+	listener, err := authz.New(&config.AuthOptions{Type: authz.MethodSCRAM, CredentialsFile: creds}, serverTLS, nil, config.ChainListener, authz.HTTP)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -34,24 +34,12 @@ func Server(o *config.TLSOptions, host string) (*tls.Config, error) {
 	if o == nil || !o.Enabled {
 		return nil, nil
 	}
-	files, issuer := o.CertFile != "" || o.KeyFile != "", o.IssuerCertFile != "" || o.IssuerKeyFile != ""
-	switch {
-	case o.CAFile != "" || o.ServerName != "" || o.InsecureSkipVerify || o.PinSHA256 != "":
-		return nil, fmt.Errorf("tls: ca_file, server_name, insecure_skip_verify and pin_sha256 apply to dialers")
-	case files && (issuer || o.SelfSigned) || issuer && o.SelfSigned:
-		return nil, fmt.Errorf("tls: set one of cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file")
-	case len(o.Hosts) > 0 && !issuer && !o.SelfSigned:
-		return nil, fmt.Errorf("tls: hosts applies to self_signed and issuer certificates")
-	case files && (o.CertFile == "" || o.KeyFile == ""):
-		return nil, fmt.Errorf("tls: cert_file and key_file must be set together")
-	case issuer && (o.IssuerCertFile == "" || o.IssuerKeyFile == ""):
-		return nil, fmt.Errorf("tls: issuer_cert_file and issuer_key_file must be set together")
-	case !files && !issuer && !o.SelfSigned:
-		return nil, fmt.Errorf("tls: listeners need cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file")
+	if err := o.Check(true); err != nil {
+		return nil, err
 	}
 	var cert tls.Certificate
 	var err error
-	if files {
+	if o.CertFile != "" {
 		cert, err = tls.LoadX509KeyPair(o.CertFile, o.KeyFile)
 	} else {
 		cert, err = generated(o.IssuerCertFile, o.IssuerKeyFile, host, o.Hosts)
@@ -68,9 +56,6 @@ func Server(o *config.TLSOptions, host string) (*tls.Config, error) {
 		MinVersion:   mv,
 	}
 	if o.ClientAuth {
-		if o.ClientCAFile == "" {
-			return nil, fmt.Errorf("tls: client_auth requires client_ca_file")
-		}
 		pool, err := loadPool(o.ClientCAFile)
 		if err != nil {
 			return nil, err
@@ -90,11 +75,8 @@ func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 	if o == nil || !o.Enabled {
 		return nil, nil
 	}
-	switch {
-	case o.SelfSigned || o.IssuerCertFile != "" || o.IssuerKeyFile != "" || len(o.Hosts) > 0 || o.ClientAuth || o.ClientCAFile != "":
-		return nil, fmt.Errorf("tls: self_signed, issuer_cert_file, issuer_key_file, hosts, client_auth and client_ca_file apply to listeners")
-	case o.PinSHA256 != "" && (o.CAFile != "" || o.InsecureSkipVerify):
-		return nil, fmt.Errorf("tls: pin_sha256 replaces ca_file and insecure_skip_verify: set one")
+	if err := o.Check(false); err != nil {
+		return nil, err
 	}
 	mv, err := minVersion(o.MinVersion)
 	if err != nil {
@@ -122,9 +104,6 @@ func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 			return nil, err
 		}
 		cfg.RootCAs = pool
-	}
-	if (o.CertFile == "") != (o.KeyFile == "") {
-		return nil, fmt.Errorf("tls: cert_file and key_file must be set together")
 	}
 	if o.CertFile != "" {
 		cert, err := tls.LoadX509KeyPair(o.CertFile, o.KeyFile)

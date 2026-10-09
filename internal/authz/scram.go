@@ -34,13 +34,8 @@ const (
 	ExchangeTimeout = 10 * time.Second
 	// DefaultTokenLifetime is how long a bearer token from /auth stays valid
 	DefaultTokenLifetime = 15 * time.Minute
-	// Token lifetime bounds: exp has whole seconds, a sub-second expires_in
-	// reads as unknown, and 10 s leaves room for renewal ahead of expiry
-	MinTokenLifetime = 10 * time.Second
-	MaxTokenLifetime = 24 * time.Hour
-
-	maxAuthLine  = 4096 // pre-auth lines and /auth bodies come from unauthenticated peers
-	streamBuffer = 64 * 1024
+	maxAuthLine          = 4096 // pre-auth lines and /auth bodies come from unauthenticated peers
+	streamBuffer         = 64 * 1024
 
 	limitBurst   = 10 // failed or abandoned exchanges per address before throttling
 	limitRate    = 1  // per second
@@ -200,36 +195,11 @@ type scramListener struct {
 }
 
 func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
-	if len(o.Allow) > 0 || len(o.AllowPatterns) > 0 {
-		return fmt.Errorf("auth: allow and allow_patterns apply only to type %q; the credentials file is the allow list", MethodMTLS)
-	}
-	if p.role == RoleDialer {
+	if p.side == config.Dialer {
 		return p.compileSCRAMDialer(o)
 	}
-	switch {
-	case o.Username != "" || o.PasswordFile != "":
-		return errors.New("auth: username and password_file apply only to dialers")
-	case o.CredentialsFile == "":
-		return fmt.Errorf("auth: type %q requires credentials_file", MethodSCRAM)
-	case o.TokenLifetimeMS != 0 && (o.TokenLifetimeMS < MinTokenLifetime.Milliseconds() || o.TokenLifetimeMS > MaxTokenLifetime.Milliseconds()):
-		return fmt.Errorf("auth: token_lifetime_ms %d is outside %d (%s) to %d (%s)", o.TokenLifetimeMS,
-			MinTokenLifetime.Milliseconds(), MinTokenLifetime, MaxTokenLifetime.Milliseconds(), MaxTokenLifetime)
-	case o.TokenLifetimeMS > 0 && p.transport != HTTP:
-		return errors.New("auth: token_lifetime_ms applies only to HTTP listeners")
-	case len(o.TrustedProxies) > 0 && (p.role != RoleListener || p.transport != HTTP):
-		return errors.New("auth: trusted_proxies applies only to the http sink")
-	case len(o.TrustedProxies) > 0 && o.Identity != "":
-		return errors.New("auth: identity binds a client certificate, which a TLS-terminating proxy does not pass on; drop it or trusted_proxies")
-	}
 	if o.Identity != "" {
-		// Binds the certificate to the user: a peer needs its own of both
-		if tlsCfg.ClientAuth != tls.RequireAndVerifyClientCert {
-			return fmt.Errorf("auth: identity under type %q binds the client certificate to the user and requires tls.client_auth", MethodSCRAM)
-		}
-		var err error
-		if p.identity, err = identityMode(o.Identity); err != nil {
-			return err
-		}
+		p.identity = o.Identity // binds the certificate to the user
 	}
 	l := &scramListener{limit: netacl.NewTable(limitBurst, limitRate, limitPending)}
 	var err error
@@ -573,14 +543,6 @@ type scramDialer struct {
 }
 
 func (p *Policy) compileSCRAMDialer(o *config.AuthOptions) error {
-	switch {
-	case o.CredentialsFile != "", o.TokenLifetimeMS != 0, len(o.TrustedProxies) > 0:
-		return errors.New("auth: credentials_file, token_lifetime_ms and trusted_proxies apply only to listeners")
-	case o.Identity != "":
-		return fmt.Errorf("auth: identity on a dialer pins the server and applies only to type %q", MethodMTLS)
-	case o.Username == "" || o.PasswordFile == "":
-		return fmt.Errorf("auth: type %q on a dialer requires username and password_file", MethodSCRAM)
-	}
 	password, err := ReadPassword(o.PasswordFile)
 	if err != nil {
 		return err

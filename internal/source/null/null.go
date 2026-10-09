@@ -48,8 +48,8 @@ func NewNullSourcePlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
-	if err := config.Scan(configMap, &config.NullSourceOptions{}); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+	if _, err := config.Decode[config.NullSourceOptions]("source", "null", configMap); err != nil {
+		return nil, err
 	}
 	ns := &NullSource{
 		id:          id,

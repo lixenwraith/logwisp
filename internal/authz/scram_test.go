@@ -99,7 +99,7 @@ func (f *fixture) pool(t *testing.T) *x509.CertPool {
 	return pool
 }
 
-func (f *fixture) listener(t *testing.T, o config.AuthOptions, tlsCfg *tls.Config, role Role, transport Transport) *Policy {
+func (f *fixture) listener(t *testing.T, o config.AuthOptions, tlsCfg *tls.Config, role config.Side, transport Transport) *Policy {
 	t.Helper()
 	o.Type, o.CredentialsFile = MethodSCRAM, f.creds
 	p, err := New(&o, tlsCfg, nil, role, transport)
@@ -116,7 +116,7 @@ func (f *fixture) listener(t *testing.T, o config.AuthOptions, tlsCfg *tls.Confi
 func (f *fixture) dialer(t *testing.T, user, password string) *Policy {
 	t.Helper()
 	pw := f.write(t, user+"-"+strings.ReplaceAll(password, "/", "_")+".pass", password+"\n")
-	p, err := New(&config.AuthOptions{Type: MethodSCRAM, Username: user, PasswordFile: pw}, f.clientTLS, nil, RoleDialer, TCP)
+	p, err := New(&config.AuthOptions{Type: MethodSCRAM, Username: user, PasswordFile: pw}, f.clientTLS, nil, config.Dialer, TCP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func (f *fixture) connect(t *testing.T, listener *Policy, serverTLS *tls.Config,
 // as the final message reach the dialer through the reader Greet returns.
 func TestTCPExchangeAdmitsAndKeepsTheStream(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleChainListener, TCP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.ChainListener, TCP)
 	res, r, err := f.connect(t, l, f.serverTLS, f.dialer(t, "edge-01", "edge-01-secret"), func(a *Admission) {
 		a.final = append(a.final, "first entry\n"...) // as TCP would coalesce them
 		if err := a.Accept(); err != nil {
@@ -190,7 +190,7 @@ func TestTCPExchangeAdmitsAndKeepsTheStream(t *testing.T) {
 // probe cannot tell which accounts exist.
 func TestTCPExchangeRefusesWrongPasswordAndUnknownUserAlike(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
 	var seen []string
 	for _, d := range []*Policy{f.dialer(t, "edge-01", "not-the-secret"), f.dialer(t, "edge-99", "edge-01-secret")} {
 		res, _, err := f.connect(t, l, f.serverTLS, d, nil)
@@ -211,7 +211,7 @@ func TestTCPExchangeRefusesAnotherCertificate(t *testing.T) {
 	f := newFixture(t)
 	other := f.serverTLS.Clone()
 	other.Certificates = []tls.Certificate{f.serverLeaf(t, "relay-b")}
-	l := f.listener(t, config.AuthOptions{}, other, RoleListener, TCP) // binds to relay-b
+	l := f.listener(t, config.AuthOptions{}, other, config.Listener, TCP) // binds to relay-b
 	res, _, err := f.connect(t, l, f.serverTLS, f.dialer(t, "edge-01", "edge-01-secret"), nil)
 	if !errors.Is(err, ErrRefused) || !errors.Is(res.err, ErrRefused) {
 		t.Fatalf("dialer %v, listener %v; want both refused", err, res.err)
@@ -225,7 +225,7 @@ func TestTCPExchangeRefusesAnotherCertificate(t *testing.T) {
 // without scram answers credentials instead of leaving the dialer waiting.
 func TestHelloAndPolicyMustAgree(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleChainListener, TCP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.ChainListener, TCP)
 	if res, _, _ := f.connect(t, l, f.serverTLS, nil, nil); !errors.Is(res.err, ErrRefused) {
 		t.Fatalf("scram listener admitted a plain hello: %v", res.err)
 	}
@@ -264,7 +264,7 @@ func TestGreetEndsWithContext(t *testing.T) {
 // and the limiter at once instead of holding a slot until it times out.
 func TestAbandonedExchangeReleasesItsSlot(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
 	sc, cc := net.Pipe()
 	server, client := tls.Server(sc, f.serverTLS), tls.Client(cc, f.clientTLS)
 	t.Cleanup(func() { sc.Close(); cc.Close() })
@@ -307,7 +307,7 @@ func TestAbandonedExchangeReleasesItsSlot(t *testing.T) {
 // a reason and never as a final message it could take for admission.
 func TestRejectAfterExchangeSendsReason(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleChainListener, TCP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.ChainListener, TCP)
 	_, _, err := f.connect(t, l, f.serverTLS, f.dialer(t, "edge-01", "edge-01-secret"), func(a *Admission) {
 		a.Reject("node label rejected")
 	})
@@ -323,7 +323,7 @@ func TestCertificateBindsToUser(t *testing.T) {
 	f := newFixture(t)
 	mtls := f.serverTLS.Clone()
 	mtls.ClientAuth = tls.RequireAndVerifyClientCert
-	l := f.listener(t, config.AuthOptions{Identity: "cn"}, mtls, RoleListener, TCP)
+	l := f.listener(t, config.AuthOptions{Identity: "cn"}, mtls, config.Listener, TCP)
 	if res, _, err := f.connect(t, l, mtls, f.dialer(t, "edge-01", "edge-01-secret"), nil); err != nil || res.err != nil {
 		t.Fatalf("own certificate and password: dialer %v, listener %v", err, res.err)
 	}
@@ -331,7 +331,7 @@ func TestCertificateBindsToUser(t *testing.T) {
 		t.Fatalf("edge-01's certificate admitted user edge-02: %v", res.err)
 	}
 
-	h := f.listener(t, config.AuthOptions{Identity: "cn"}, mtls, RoleListener, HTTP)
+	h := f.listener(t, config.AuthOptions{Identity: "cn"}, mtls, config.Listener, HTTP)
 	srv, _ := f.httpListener(t, h, mtls)
 	d := f.dialer(t, "edge-01", "edge-01-secret")
 	token, err := d.Token(t.Context(), f.httpClient(d), srv.URL)
@@ -354,7 +354,7 @@ func TestUnknownUserSaltSurvivesRestart(t *testing.T) {
 	f := newFixture(t)
 	var salts []string
 	for range 2 {
-		l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+		l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
 		c, err := l.listener.server.Load().ProcessClientFirstMessage("nobody", strings.Repeat("n", 32))
 		if err != nil {
 			t.Fatal(err)
@@ -370,7 +370,7 @@ func TestUnknownUserSaltSurvivesRestart(t *testing.T) {
 // refused before it is parsed.
 func TestPreAuthInputIsCapped(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
 	sc, cc := net.Pipe()
 	server, client := tls.Server(sc, f.serverTLS), tls.Client(cc, f.clientTLS)
 	t.Cleanup(func() { sc.Close(); cc.Close() })
@@ -389,7 +389,7 @@ func TestPreAuthInputIsCapped(t *testing.T) {
 		t.Fatalf("oversized hello: %v", err)
 	}
 
-	h := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	h := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
 	srv, _ := f.httpListener(t, h, f.serverTLS)
 	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: f.clientTLS}}
 	resp, err := hc.Post(srv.URL+chain.AuthPath, "application/json", bytes.NewReader(bytes.Repeat([]byte(" "), 2*maxAuthLine)))
@@ -406,7 +406,7 @@ func TestPreAuthInputIsCapped(t *testing.T) {
 // proof, so a hostile server cannot obtain a cheaply guessable one.
 func TestDialerRefusesACheapChallenge(t *testing.T) {
 	f := newFixture(t) // verifiers at t=1, m=64 KiB
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
 	d := f.dialer(t, "edge-01", "edge-01-secret")
 	minArgonTime, minArgonMemory = auth.DefaultArgonTime, auth.DefaultArgonMemory
 	t.Cleanup(func() { minArgonTime, minArgonMemory = 1, 64 })
@@ -422,7 +422,7 @@ func TestDialerRefusesACheapChallenge(t *testing.T) {
 // answers "too many attempts" without running the exchange.
 func TestOnlyFailedAttemptsAreThrottled(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, TCP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
 	right := f.dialer(t, "edge-01", "edge-01-secret")
 	for i := range limitBurst + 1 {
 		if _, _, err := f.connect(t, l, f.serverTLS, right, nil); err != nil {
@@ -481,7 +481,7 @@ func get(t *testing.T, client *http.Client, url string, prepare func(*http.Reque
 // header; a refused token can be dropped and replaced by a fresh login.
 func TestHTTPTokenFlow(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
 	srv, _ := f.httpListener(t, l, f.serverTLS)
 	d := f.dialer(t, "edge-01", "edge-01-secret")
 	client := f.httpClient(d)
@@ -494,7 +494,7 @@ func TestHTTPTokenFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("with a token: %d", resp.StatusCode)
 	}
-	other := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	other := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
 	foreignSrv, _ := f.httpListener(t, other, f.serverTLS)
 	foreign, err := f.dialer(t, "edge-01", "edge-01-secret").Token(t.Context(), f.httpClient(d), foreignSrv.URL)
 	if err != nil {
@@ -520,7 +520,7 @@ func TestHTTPTokenFlow(t *testing.T) {
 // no token stored, whatever token it offers.
 func TestForgedFinalYieldsNoToken(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+chain.AuthPath, func(w http.ResponseWriter, r *http.Request) {
 		body := new(bytes.Buffer)
@@ -550,7 +550,7 @@ func TestForgedFinalYieldsNoToken(t *testing.T) {
 // (through a proxy) included.
 func TestPinnedCertificateAcrossConnections(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
 	a, _ := f.httpListener(t, l, f.serverTLS)
 	otherTLS := f.serverTLS.Clone()
 	otherTLS.Certificates = []tls.Certificate{f.serverLeaf(t, "relay-b")}
@@ -589,7 +589,7 @@ func TestPinnedCertificateAcrossConnections(t *testing.T) {
 // its pending slot: otherwise four of them would lock the address out.
 func TestRefusedHellosFreeTheirSlot(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
 	srv, _ := f.httpListener(t, l, f.serverTLS)
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: f.clientTLS}}
 	hello := func(user string) int {
@@ -660,7 +660,7 @@ func TestCredentialsFileValidation(t *testing.T) {
 // exchange admits nobody rather than everybody.
 func TestScramListenerAuthorizeFailsClosed(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
 	if _, err := l.Authorize(&tls.ConnectionState{}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("Authorize under scram = %v, want a refusal", err)
 	}
@@ -670,7 +670,7 @@ func TestScramListenerAuthorizeFailsClosed(t *testing.T) {
 // refused request each lifetime.
 func TestTokenIsRenewedBeforeExpiry(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: MinTokenLifetime.Milliseconds()}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: 10000}, f.serverTLS, config.Listener, HTTP)
 	srv, _ := f.httpListener(t, l, f.serverTLS)
 	d := f.dialer(t, "edge-01", "edge-01-secret")
 	client := f.httpClient(d)
@@ -686,7 +686,7 @@ func TestTokenIsRenewedBeforeExpiry(t *testing.T) {
 		t.Fatalf("logins within the lifetime = %d, want 1", n)
 	}
 	ahead := time.Until(time.Unix(0, d.dialer.renewAt.Load()))
-	if ahead <= 0 || ahead > MinTokenLifetime-5*time.Second {
+	if ahead <= 0 || ahead > 5*time.Second {
 		t.Fatalf("renewal scheduled %v ahead, want within lifetime - 5 s", ahead)
 	}
 	d.dialer.renewAt.Store(time.Now().UnixNano()) // the renewal point arrives
@@ -701,7 +701,7 @@ func TestTokenIsRenewedBeforeExpiry(t *testing.T) {
 // any other refusal, or the token's expiry, ends it.
 func TestPutOffRenewalKeepsTheValidToken(t *testing.T) {
 	f := newFixture(t)
-	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: MinTokenLifetime.Milliseconds()}, f.serverTLS, RoleListener, HTTP)
+	l := f.listener(t, config.AuthOptions{TokenLifetimeMS: 10000}, f.serverTLS, config.Listener, HTTP)
 	srv, _ := f.httpListener(t, l, f.serverTLS)
 	// An impostor with another certificate of the same CA
 	var answer, stolen atomic.Int64

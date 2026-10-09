@@ -12,7 +12,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/sink"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -50,16 +49,6 @@ type FileSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-const (
-	// Defaults
-	DefaultFileMaxSizeMB       = 100
-	DefaultFileMaxTotalSizeMB  = 1000
-	DefaultFileMinDiskFreeMB   = 100
-	DefaultFileRetentionHours  = 168 // 7 days
-	DefaultFileBufferSize      = 1000
-	DefaultFileFlushIntervalMs = 100
-)
-
 // NewFileSinkPlugin creates a file sink through plugin factory
 func NewFileSinkPlugin(
 	id string,
@@ -68,42 +57,11 @@ func NewFileSinkPlugin(
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
 	// Create empty config struct
-	opts := &config.FileSinkOptions{}
-
-	// Scan config map into struct
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+	opts, err := config.Decode[config.FileSinkOptions]("sink", "file", configMap)
+	if err != nil {
+		return nil, err
 	}
 
-	// Validate
-	if err := lconfig.NonEmpty(opts.Directory); err != nil {
-		return nil, fmt.Errorf("directory: %w", err)
-	}
-	if err := lconfig.NonEmpty(opts.Name); err != nil {
-		return nil, fmt.Errorf("name: %w", err)
-	}
-
-	// Defaults
-	if opts.MaxSizeMB <= 0 {
-		opts.MaxSizeMB = DefaultFileMaxSizeMB
-	}
-	if opts.MaxTotalSizeMB <= 0 {
-		opts.MaxTotalSizeMB = DefaultFileMaxTotalSizeMB
-	}
-	if opts.MinDiskFreeMB < 0 {
-		opts.MinDiskFreeMB = DefaultFileMinDiskFreeMB
-	}
-	if opts.RetentionHours <= 0 {
-		opts.RetentionHours = DefaultFileRetentionHours
-	}
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultFileBufferSize
-	}
-	if opts.FlushIntervalMs <= 0 {
-		opts.FlushIntervalMs = DefaultFileFlushIntervalMs
-	}
-
-	// Create configuration for the internal log writer
 	writerConfig := log.DefaultConfig()
 	writerConfig.Directory = opts.Directory
 	writerConfig.Name = opts.Name

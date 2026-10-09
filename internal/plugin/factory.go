@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/sink"
 	"github.com/lixenwraith/logwisp/internal/source"
@@ -28,18 +28,10 @@ type SinkFactory func(
 	sessions *session.Proxy,
 ) (sink.Sink, error)
 
-// PluginMetadata stores metadata about a plugin type
-type PluginMetadata struct {
-	Capabilities []core.Capability
-	MaxInstances int // 0 = unlimited, 1 = single instance only
-}
-
 // registry encapsulates all plugin factories with lazy initialization
 type registry struct {
 	sourceFactories map[string]SourceFactory
 	sinkFactories   map[string]SinkFactory
-	sourceMetadata  map[string]*PluginMetadata
-	sinkMetadata    map[string]*PluginMetadata
 	mu              sync.RWMutex
 }
 
@@ -54,15 +46,17 @@ func getRegistry() *registry {
 		globalRegistry = &registry{
 			sourceFactories: make(map[string]SourceFactory),
 			sinkFactories:   make(map[string]SinkFactory),
-			sourceMetadata:  make(map[string]*PluginMetadata),
-			sinkMetadata:    make(map[string]*PluginMetadata),
 		}
 	})
 	return globalRegistry
 }
 
-// RegisterSource registers a source factory function
+// RegisterSource registers a source factory function for a type the
+// catalogue (config.LookupPlugin) has a row for
 func RegisterSource(name string, constructor SourceFactory) error {
+	if _, ok := config.LookupPlugin("source", name); !ok {
+		return fmt.Errorf("source type %s has no catalogue row", name)
+	}
 	r := getRegistry()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -71,17 +65,15 @@ func RegisterSource(name string, constructor SourceFactory) error {
 		return fmt.Errorf("source type %s already registered", name)
 	}
 	r.sourceFactories[name] = constructor
-
-	// Set default metadata
-	r.sourceMetadata[name] = &PluginMetadata{
-		MaxInstances: 0, // Unlimited by default
-	}
-
 	return nil
 }
 
-// RegisterSink registers a sink factory function
+// RegisterSink registers a sink factory function for a type the catalogue
+// has a row for
 func RegisterSink(name string, constructor SinkFactory) error {
+	if _, ok := config.LookupPlugin("sink", name); !ok {
+		return fmt.Errorf("sink type %s has no catalogue row", name)
+	}
 	r := getRegistry()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -90,39 +82,6 @@ func RegisterSink(name string, constructor SinkFactory) error {
 		return fmt.Errorf("sink type %s already registered", name)
 	}
 	r.sinkFactories[name] = constructor
-
-	// Set default metadata
-	r.sinkMetadata[name] = &PluginMetadata{
-		MaxInstances: 0, // Unlimited by default
-	}
-
-	return nil
-}
-
-// SetSourceMetadata sets metadata for a source type (call after RegisterSource)
-func SetSourceMetadata(name string, metadata *PluginMetadata) error {
-	r := getRegistry()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.sourceFactories[name]; !exists {
-		return fmt.Errorf("source type %s not registered", name)
-	}
-	r.sourceMetadata[name] = metadata
-
-	return nil
-}
-
-// SetSinkMetadata sets metadata for a sink type (call after RegisterSink)
-func SetSinkMetadata(name string, metadata *PluginMetadata) error {
-	r := getRegistry()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.sinkFactories[name]; !exists {
-		return fmt.Errorf("sink type %s not registered", name)
-	}
-	r.sinkMetadata[name] = metadata
 	return nil
 }
 
@@ -142,24 +101,6 @@ func GetSink(name string) (SinkFactory, bool) {
 	defer r.mu.RUnlock()
 	constructor, exists := r.sinkFactories[name]
 	return constructor, exists
-}
-
-// GetSourceMetadata retrieves metadata for a source type
-func GetSourceMetadata(name string) (*PluginMetadata, bool) {
-	r := getRegistry()
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	meta, exists := r.sourceMetadata[name]
-	return meta, exists
-}
-
-// GetSinkMetadata retrieves metadata for a sink type
-func GetSinkMetadata(name string) (*PluginMetadata, bool) {
-	r := getRegistry()
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	meta, exists := r.sinkMetadata[name]
-	return meta, exists
 }
 
 // ListSources returns all registered source types

@@ -39,7 +39,7 @@ func TestPipelineSpecGrammar(t *testing.T) {
 		"source", `file,directory=/var/log/a\,b,pattern=*.log`,
 		"source", `file,id=app,directory=x\=y`,
 		"source", `file,directory=c:\\logs\\`,
-		"sink", "http,port=8080,auth.type=scram,auth.credentials_file=users.toml,tls.cert_file=c",
+		"sink", "http,port=8080,auth.type=scram,auth.credentials_file=users.toml,tls.enabled=true,tls.cert_file=c,tls.key_file=k",
 		"filter", "include,patterns=ERROR,patterns=WARN",
 		"filter", `exclude,patterns=\d{1\,3}`,
 		"format", `txt,timestamp_format=Jan 2\, 2006`,
@@ -59,9 +59,9 @@ func TestPipelineSpecGrammar(t *testing.T) {
 			{ID: "file_2", Type: "file", Config: map[string]any{"directory": `c:\logs\`}},
 		},
 		PluginSinks: []PluginSinkConfig{{ID: "http", Type: "http", Config: map[string]any{
-			"port": "8080",
+			"port": int64(8080),
 			"auth": map[string]any{"type": "scram", "credentials_file": "users.toml"},
-			"tls":  map[string]any{"cert_file": "c"},
+			"tls":  map[string]any{"enabled": true, "cert_file": "c", "key_file": "k"},
 		}}},
 	}, {
 		Name:          "b",
@@ -95,7 +95,8 @@ func TestPipelineSpecGrammar(t *testing.T) {
 func TestSpecValueIsOneListEntry(t *testing.T) {
 	isolateConfig(t)
 	sink := loadPipelines(t, "source", "null", "sink",
-		`tcp,auth.type=mtls,auth.allow_patterns=^edge-\d{1\,3}$,auth.allow=CN=a\,O=b,auth.allow=CN=c`)[0].PluginSinks[0]
+		`tcp,port=9000,tls.enabled=true,tls.self_signed=true,tls.client_auth=true,tls.client_ca_file=ca,`+
+			`auth.type=mtls,auth.allow_patterns=^edge-\d{1\,3}$,auth.allow=CN=a\,O=b,auth.allow=CN=c`)[0].PluginSinks[0]
 	var opts TCPSinkOptions
 	if err := Scan(sink.Config, &opts); err != nil {
 		t.Fatal(err)
@@ -179,7 +180,7 @@ func TestSpecPipelinesDefaultToStdio(t *testing.T) {
 		t.Fatalf("pipeline: %+v", p)
 	}
 	_, err := Load(Args{Specs: specs("pipeline", "a", "sink", "null", "pipeline", "b", "sink", "null")})
-	if err == nil || !strings.Contains(err.Error(), `console source already reads stdin in pipeline "a"`) {
+	if err == nil || !strings.Contains(err.Error(), `one console source may run, and pipeline "a" has it`) {
 		t.Fatalf("second stdin reader: %v", err)
 	}
 }
@@ -202,7 +203,7 @@ func TestReloadKeepsSpecPipelines(t *testing.T) {
 	testutil.WriteFile(t, "logwisp.toml", "status_reporter = true\n[[pipelines]]\nname = \"file\"\n")
 	next, err := m.Reload()
 	if err != nil || !next.StatusReporter || len(next.Pipelines) != 1 || next.Pipelines[0].Name != "cli" ||
-		next.Pipelines[0].PluginSources[0].Config["special"] != "true" {
+		next.Pipelines[0].PluginSources[0].Config["special"] != true {
 		t.Fatalf("reload: %+v %v", next, err)
 	}
 	if err := os.Remove("logwisp.toml"); err != nil {

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/netacl"
 
 	"github.com/lixenwraith/auth"
@@ -34,7 +35,7 @@ type proxyMode struct {
 func parseProxies(entries []string) (*proxyMode, error) {
 	m := &proxyMode{}
 	for _, e := range entries {
-		prefix, err := netacl.Parse(e, "tcp")
+		prefix, err := config.ParsePrefix(e, "tcp")
 		if err != nil {
 			return nil, fmt.Errorf("auth: trusted_proxies entry %q: %w", e, err)
 		}

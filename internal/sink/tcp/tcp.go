@@ -22,7 +22,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/sink"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -31,14 +30,6 @@ func init() {
 		panic(fmt.Sprintf("failed to register tcp sink: %v", err))
 	}
 }
-
-const (
-	DefaultTCPHost              = "0.0.0.0"
-	DefaultTCPBufferSize        = 1000
-	DefaultTCPClientBufferSize  = 256
-	DefaultTCPWriteTimeoutMS    = 5000
-	DefaultTCPKeepAlivePeriodMS = 30000
-)
 
 // TCPSink streams formatted log entries to connected TCP clients
 // Concurrency model: one broadcast loop fans out into bounded per-client queues
@@ -117,31 +108,13 @@ func NewTCPSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	opts := &config.TCPSinkOptions{
-		Host:      DefaultTCPHost,
-		KeepAlive: true,
-	}
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-	if err := lconfig.Port(opts.Port); err != nil {
-		return nil, fmt.Errorf("port: %w", err)
+	opts, err := config.Decode[config.TCPSinkOptions]("sink", "tcp", configMap)
+	if err != nil {
+		return nil, err
 	}
 	network, err := core.Network(opts.Host)
 	if err != nil {
-		return nil, fmt.Errorf("host: %w", err)
-	}
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultTCPBufferSize
-	}
-	if opts.ClientBufferSize <= 0 {
-		opts.ClientBufferSize = DefaultTCPClientBufferSize
-	}
-	if opts.WriteTimeoutMS <= 0 {
-		opts.WriteTimeoutMS = DefaultTCPWriteTimeoutMS
-	}
-	if opts.KeepAlivePeriodMS <= 0 {
-		opts.KeepAlivePeriodMS = DefaultTCPKeepAlivePeriodMS
+		return nil, err
 	}
 	tlsCfg, err := tlsx.Server(opts.TLS, opts.Host)
 	if err != nil {
@@ -151,7 +124,7 @@ func NewTCPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, authz.RoleListener, authz.TCP)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, aclPolicy, config.Listener, authz.TCP)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +190,8 @@ func (t *TCPSink) listen() (net.Listener, error) {
 			Enable: true,
 			Idle:   time.Duration(t.config.KeepAlivePeriodMS) * time.Millisecond,
 		}
+	} else {
+		lc.KeepAlive = -1 // zero would be Go's default, keep-alive every 15 s
 	}
 	ln, err := core.Listen(context.Background(), &lc, t.network, t.addr)
 	if err != nil {

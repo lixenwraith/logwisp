@@ -117,22 +117,6 @@ func TestEveryPluginRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
-// A misspelled spec key reaches the plugin as the nested key it names, so the
-// sink refuses to build instead of starting without the TLS it was asked for.
-func TestMisspelledSpecKeyFailsPluginConstruction(t *testing.T) {
-	testLogger(t)
-	path := filepath.Join(t.TempDir(), "empty.toml")
-	testutil.WriteFile(t, path, "")
-	cfg := loadTestConfig(t, path, "--source", "null", "--sink", "http,host=127.0.0.1,port=15861,tls.enabeld=true")
-	svc, err := bootstrapService(context.Background(), cfg)
-	if err == nil {
-		svc.Shutdown()
-	}
-	if err == nil || !strings.Contains(err.Error(), `unknown key "tls.enabeld"`) {
-		t.Fatalf("misspelled spec key accepted: %v", err)
-	}
-}
-
 // lw --check builds every plugin, so a bad option fails it, but starts none:
 // the port a valid sink names stays free and its log directory uncreated.
 func TestCheckBuildsWithoutStarting(t *testing.T) {
@@ -152,7 +136,9 @@ func TestCheckBuildsWithoutStarting(t *testing.T) {
 	if _, err := os.Stat(out); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("check created the file sink's directory: %v", err)
 	}
-	if code := checkConfig(loadTestConfig(t, path, "--source", "null", "--sink", "http,port=15862,tls.enabled=true")); code != 1 {
-		t.Fatalf("listener TLS without a certificate: exit %d, want 1", code)
+	missing := filepath.Join(dir, "missing")
+	if code := checkConfig(loadTestConfig(t, path, "--source", "null", "--sink",
+		"http,port=15862,tls.enabled=true,tls.cert_file="+missing+",tls.key_file="+missing)); code != 1 {
+		t.Fatalf("listener TLS without its certificate file: exit %d, want 1", code)
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,7 +25,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/sink"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -37,15 +35,7 @@ func init() {
 }
 
 const (
-	DefaultHTTPChainSinkBufferSize       = 1000
-	DefaultHTTPChainSinkIngestPath       = "/ingest"
-	DefaultHTTPChainSinkMaxBatchCount    = 100
-	DefaultHTTPChainSinkMaxBatchBytes    = 1024 * 1024
-	DefaultHTTPChainSinkFlushIntervalMS  = 1000
-	DefaultHTTPChainSinkRequestTimeoutMS = 10000
-	DefaultHTTPChainSinkBackoffMinMS     = 500
-	DefaultHTTPChainSinkBackoffMaxMS     = 30000
-	maxResponseDrain                     = 64 * 1024
+	maxResponseDrain = 64 * 1024
 )
 
 // HTTPChainSink batches structured entries and posts NDJSON to a downstream
@@ -94,47 +84,13 @@ func NewHTTPChainSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	opts := &config.HTTPChainSinkOptions{}
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-	if err := lconfig.NonEmpty(opts.Host); err != nil {
-		return nil, fmt.Errorf("host: %w", err)
-	}
-	if err := lconfig.Port(opts.Port); err != nil {
-		return nil, fmt.Errorf("port: %w", err)
+	opts, err := config.Decode[config.HTTPChainSinkOptions]("sink", "http_chain", configMap)
+	if err != nil {
+		return nil, err
 	}
 	network, err := core.Network(opts.Host)
 	if err != nil {
-		return nil, fmt.Errorf("host: %w", err)
-	}
-	if opts.IngestPath == "" {
-		opts.IngestPath = DefaultHTTPChainSinkIngestPath
-	} else if !strings.HasPrefix(opts.IngestPath, "/") {
-		return nil, fmt.Errorf("ingest_path: must start with '/'")
-	} else if opts.IngestPath == chain.AuthPath {
-		return nil, fmt.Errorf("ingest_path: %s is reserved for authentication", chain.AuthPath)
-	}
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultHTTPChainSinkBufferSize
-	}
-	if opts.MaxBatchCount <= 0 {
-		opts.MaxBatchCount = DefaultHTTPChainSinkMaxBatchCount
-	}
-	if opts.MaxBatchBytes <= 0 {
-		opts.MaxBatchBytes = DefaultHTTPChainSinkMaxBatchBytes
-	}
-	if opts.FlushIntervalMS <= 0 {
-		opts.FlushIntervalMS = DefaultHTTPChainSinkFlushIntervalMS
-	}
-	if opts.RequestTimeoutMS <= 0 {
-		opts.RequestTimeoutMS = DefaultHTTPChainSinkRequestTimeoutMS
-	}
-	if opts.BackoffMinMS <= 0 {
-		opts.BackoffMinMS = DefaultHTTPChainSinkBackoffMinMS
-	}
-	if opts.BackoffMaxMS < opts.BackoffMinMS {
-		opts.BackoffMaxMS = DefaultHTTPChainSinkBackoffMaxMS
+		return nil, err
 	}
 
 	node := opts.Node
@@ -150,7 +106,7 @@ func NewHTTPChainSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, nil, authz.RoleDialer, authz.HTTP)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, nil, config.Dialer, authz.HTTP)
 	if err != nil {
 		return nil, err
 	}

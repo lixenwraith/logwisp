@@ -88,24 +88,12 @@ func New(o *config.ACLOptions, host string, kind Kind, l *log.Logger, component,
 	if o == nil {
 		return nil, nil
 	}
+	if err := o.Check(host, kind != TCP, kind == HTTPProxied); err != nil {
+		return nil, err
+	}
 	proxied := o.ProxyProtocol == "optional" || o.ProxyProtocol == "required"
 	rps := o.RequestsPerSecondPerClient
-	switch {
-	case !proxied && o.ProxyProtocol != "" && o.ProxyProtocol != "off":
-		return nil, fmt.Errorf("acl: proxy_protocol %q is none of off, optional and required", o.ProxyProtocol)
-	case proxied && len(o.ProxyFrom) == 0:
-		return nil, fmt.Errorf("acl: proxy_protocol %s needs proxy_from, the proxies that may send the header", o.ProxyProtocol)
-	case !proxied && len(o.ProxyFrom) > 0:
-		return nil, errors.New("acl: proxy_from needs proxy_protocol optional or required")
-	case o.MaxConnectionsPerClient < 0:
-		return nil, fmt.Errorf("acl: max_connections_per_client %d is negative", o.MaxConnectionsPerClient)
-	case !(rps >= 0) || math.IsInf(rps, 0):
-		return nil, fmt.Errorf("acl: requests_per_second_per_client %v is not a rate", rps)
-	case rps > 0 && kind == TCP:
-		return nil, errors.New("acl: requests_per_second_per_client applies only to HTTP listeners")
-	case o.MaxConnectionsPerClient > 0 && kind == HTTPProxied:
-		return nil, errors.New("acl: max_connections_per_client counts connections, behind trusted_proxies the proxy's; cap clients at the proxy")
-	case len(o.Allow)+len(o.Deny)+len(o.ProxyFrom) == 0 && o.MaxConnectionsPerClient == 0 && rps == 0:
+	if len(o.Allow)+len(o.Deny)+len(o.ProxyFrom) == 0 && o.MaxConnectionsPerClient == 0 && rps == 0 {
 		return nil, nil
 	}
 	network, err := core.Network(host)
@@ -116,7 +104,7 @@ func New(o *config.ACLOptions, host string, kind Kind, l *log.Logger, component,
 	compile := func(key, network string, entries []string) ([]netip.Prefix, error) {
 		var rules []netip.Prefix
 		for _, e := range entries {
-			prefix, err := Parse(e, network)
+			prefix, err := config.ParsePrefix(e, network)
 			if err != nil {
 				return nil, fmt.Errorf("acl: %s entry %q: %w", key, e, err)
 			}
@@ -148,26 +136,6 @@ func New(o *config.ACLOptions, host string, kind Kind, l *log.Logger, component,
 	}
 	p.logStartup(host, widened)
 	return p, nil
-}
-
-// Parse reads an address or CIDR of network's family ("tcp": either)
-func Parse(entry, network string) (netip.Prefix, error) {
-	entry = strings.TrimSpace(entry)
-	prefix, err := netip.ParsePrefix(entry)
-	if err != nil {
-		addr, aerr := netip.ParseAddr(entry)
-		if aerr != nil || addr.Zone() != "" {
-			return netip.Prefix{}, fmt.Errorf("neither an address nor a CIDR (and no zone)")
-		}
-		prefix = netip.PrefixFrom(addr, addr.BitLen())
-	}
-	switch a := prefix.Addr(); {
-	case a.Is4In6():
-		return netip.Prefix{}, fmt.Errorf("IPv4-mapped; write it as IPv4")
-	case network == "tcp4" && !a.Is4(), network == "tcp6" && a.Is4():
-		return netip.Prefix{}, fmt.Errorf("not of the listener's family (%s)", network)
-	}
-	return prefix, nil
 }
 
 // ParseHost reads an address with or without a port, an IPv4-mapped one as IPv4
