@@ -19,7 +19,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/source"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -64,13 +63,6 @@ type FileSource struct {
 	lastEntryTime  atomic.Value // time.Time
 }
 
-const (
-	DefaultFileSourcePattern         = "*"
-	DefaultFileSourceCheckIntervalMS = 100
-	MinFileSourceCheckIntervalMS     = 10
-	DefaultFileSourceFrom            = "end"
-)
-
 // NewFileSourcePlugin creates a file source through plugin factory
 func NewFileSourcePlugin(
 	id string,
@@ -78,33 +70,11 @@ func NewFileSourcePlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
-	opts := &config.FileSourceOptions{}
-
-	// Use lconfig to scan map into struct (overriding defaults)
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+	opts, err := config.Decode[config.FileSourceOptions]("source", "file", configMap)
+	if err != nil {
+		return nil, err
 	}
 
-	// Validate and apply defaults
-	if err := lconfig.NonEmpty(opts.Directory); err != nil {
-		return nil, fmt.Errorf("directory: %w", err)
-	}
-
-	if opts.Pattern == "" {
-		opts.Pattern = DefaultFileSourcePattern
-	}
-	if opts.CheckIntervalMS <= 0 {
-		opts.CheckIntervalMS = DefaultFileSourceCheckIntervalMS
-	} else if opts.CheckIntervalMS < MinFileSourceCheckIntervalMS {
-		return nil, fmt.Errorf("check_interval_ms: must be >= %d", MinFileSourceCheckIntervalMS)
-	}
-	if opts.From == "" {
-		opts.From = DefaultFileSourceFrom
-	} else if err := lconfig.OneOf("start", "end")(opts.From); err != nil {
-		return nil, fmt.Errorf("from: %w", err)
-	}
-
-	// Create and return plugin instance
 	fs := &FileSource{
 		id:          id,
 		proxy:       proxy,

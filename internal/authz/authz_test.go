@@ -66,7 +66,7 @@ func TestPeerIdentityModes(t *testing.T) {
 
 func TestNewDisabled(t *testing.T) {
 	for _, o := range []*config.AuthOptions{nil, {}, {Type: MethodNone}} {
-		p, err := New(o, nil, nil, RoleListener, TCP)
+		p, err := New(o, nil, nil, config.Listener, TCP)
 		if err != nil {
 			t.Fatalf("New(%+v) error: %v", o, err)
 		}
@@ -122,41 +122,41 @@ func TestNewValidation(t *testing.T) {
 		name      string
 		auth      *config.AuthOptions
 		tls       *tls.Config
-		role      Role
+		role      config.Side
 		transport Transport
 		want      string
 	}{
-		{"unknown type", &config.AuthOptions{Type: "kerberos"}, mtlsListenerTLS(), RoleListener, TCP, `type "kerberos"`},
-		{"allow list without a type", &config.AuthOptions{Allow: []string{"edge-01"}}, mtlsListenerTLS(), RoleListener, TCP, "allow is set"},
-		{"credentials without a type", &config.AuthOptions{CredentialsFile: f.creds}, mtlsListenerTLS(), RoleListener, TCP, "credentials_file is set"},
-		{"no tls", &config.AuthOptions{Type: MethodMTLS}, nil, RoleListener, TCP, "requires tls.enabled"},
-		{"no client_auth", &config.AuthOptions{Type: MethodMTLS}, &tls.Config{}, RoleListener, TCP, "requires tls.client_auth"},
-		{"unknown identity", &config.AuthOptions{Type: MethodMTLS, Identity: "serial"}, mtlsListenerTLS(), RoleListener, TCP, `identity "serial"`},
-		{"bad pattern", &config.AuthOptions{Type: MethodMTLS, AllowPatterns: []string{"^edge-("}}, mtlsListenerTLS(), RoleListener, TCP, "allow_patterns[0]"},
-		{"unknown binding", &config.AuthOptions{Type: MethodMTLS, NodeBinding: "maybe"}, mtlsListenerTLS(), RoleChainListener, TCP, `node_binding "maybe"`},
-		{"binding on plain listener", &config.AuthOptions{Type: MethodMTLS, NodeBinding: BindingForce}, mtlsListenerTLS(), RoleListener, TCP, "only to chain sources"},
-		{"binding on dialer", &config.AuthOptions{Type: MethodMTLS, NodeBinding: BindingForce}, &tls.Config{}, RoleDialer, TCP, "only to chain sources"},
-		{"dialer skips verify", &config.AuthOptions{Type: MethodMTLS}, &tls.Config{InsecureSkipVerify: true}, RoleDialer, TCP, "insecure_skip_verify"},
-		{"mtls with a password", &config.AuthOptions{Type: MethodMTLS, PasswordFile: pw}, &tls.Config{}, RoleDialer, TCP, "password_file applies only"},
-		{"scram without tls", listener(config.AuthOptions{}), nil, RoleListener, TCP, "requires tls.enabled"},
-		{"scram without credentials", scram(config.AuthOptions{}), f.serverTLS, RoleListener, TCP, "requires credentials_file"},
-		{"scram with an allow list", listener(config.AuthOptions{Allow: []string{"edge-01"}}), f.serverTLS, RoleListener, TCP, "credentials file is the allow list"},
-		{"scram listener with a password", listener(config.AuthOptions{Username: "edge-01"}), f.serverTLS, RoleListener, TCP, "only to dialers"},
-		{"scram certificate binding without client_auth", listener(config.AuthOptions{Identity: "cn"}), f.serverTLS, RoleListener, TCP, "requires tls.client_auth"},
-		{"token lifetime on tcp", listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, RoleListener, TCP, "only to HTTP listeners"},
-		{"token lifetime too short", listener(config.AuthOptions{TokenLifetimeMS: 900}), f.serverTLS, RoleListener, HTTP, "outside"},
-		{"token lifetime too long", listener(config.AuthOptions{TokenLifetimeMS: 1e13}), f.serverTLS, RoleListener, HTTP, "outside"},
-		{"scram listener without a certificate", listener(config.AuthOptions{}), &tls.Config{}, RoleListener, TCP, "listener certificate"},
-		{"scram dialer without a password", scram(config.AuthOptions{Username: "edge-01"}), &tls.Config{}, RoleDialer, TCP, "requires username and password_file"},
-		{"scram dialer with credentials", dialer(config.AuthOptions{CredentialsFile: f.creds}), &tls.Config{}, RoleDialer, TCP, "only to listeners"},
-		{"scram dialer skips verify", dialer(config.AuthOptions{}), &tls.Config{InsecureSkipVerify: true}, RoleDialer, TCP, "insecure_skip_verify"},
-		{"trusted proxies without a type", &config.AuthOptions{TrustedProxies: proxies}, nil, RoleListener, HTTP, "trusted_proxies is set"},
-		{"trusted proxies under mtls", &config.AuthOptions{Type: MethodMTLS, TrustedProxies: proxies}, mtlsListenerTLS(), RoleListener, HTTP, "trusted_proxies applies only"},
-		{"trusted proxies on a chain source", listener(config.AuthOptions{TrustedProxies: proxies}), nil, RoleChainListener, HTTP, "only to the http sink"},
-		{"trusted proxies on tcp", listener(config.AuthOptions{TrustedProxies: proxies}), nil, RoleListener, TCP, "only to the http sink"},
-		{"trusted proxies with certificate binding", listener(config.AuthOptions{TrustedProxies: proxies, Identity: "cn"}), f.serverTLS, RoleListener, HTTP, "TLS-terminating proxy"},
-		{"malformed trusted proxy", listener(config.AuthOptions{TrustedProxies: []string{"localhost"}}), nil, RoleListener, HTTP, "neither an address"},
-		{"trusted proxies on a dialer", dialer(config.AuthOptions{TrustedProxies: proxies}), &tls.Config{}, RoleDialer, HTTP, "only to listeners"},
+		{"unknown type", &config.AuthOptions{Type: "kerberos"}, mtlsListenerTLS(), config.Listener, TCP, `got "kerberos"`},
+		{"allow list without a type", &config.AuthOptions{Allow: []string{"edge-01"}}, mtlsListenerTLS(), config.Listener, TCP, "allow is set"},
+		{"credentials without a type", &config.AuthOptions{CredentialsFile: f.creds}, mtlsListenerTLS(), config.Listener, TCP, "credentials_file is set"},
+		{"no tls", &config.AuthOptions{Type: MethodMTLS}, nil, config.Listener, TCP, "requires tls.enabled"},
+		{"no client_auth", &config.AuthOptions{Type: MethodMTLS}, &tls.Config{}, config.Listener, TCP, "requires tls.client_auth"},
+		{"unknown identity", &config.AuthOptions{Type: MethodMTLS, Identity: "serial"}, mtlsListenerTLS(), config.Listener, TCP, `got "serial"`},
+		{"bad pattern", &config.AuthOptions{Type: MethodMTLS, AllowPatterns: []string{"^edge-("}}, mtlsListenerTLS(), config.Listener, TCP, "allow_patterns[0]"},
+		{"unknown binding", &config.AuthOptions{Type: MethodMTLS, NodeBinding: "maybe"}, mtlsListenerTLS(), config.ChainListener, TCP, `got "maybe"`},
+		{"binding on plain listener", &config.AuthOptions{Type: MethodMTLS, NodeBinding: BindingForce}, mtlsListenerTLS(), config.Listener, TCP, "only to chain sources"},
+		{"binding on dialer", &config.AuthOptions{Type: MethodMTLS, NodeBinding: BindingForce}, &tls.Config{}, config.Dialer, TCP, "only to chain sources"},
+		{"dialer skips verify", &config.AuthOptions{Type: MethodMTLS}, &tls.Config{InsecureSkipVerify: true}, config.Dialer, TCP, "insecure_skip_verify"},
+		{"mtls with a password", &config.AuthOptions{Type: MethodMTLS, PasswordFile: pw}, &tls.Config{}, config.Dialer, TCP, "password_file applies only"},
+		{"scram without tls", listener(config.AuthOptions{}), nil, config.Listener, TCP, "requires tls.enabled"},
+		{"scram without credentials", scram(config.AuthOptions{}), f.serverTLS, config.Listener, TCP, "requires credentials_file"},
+		{"scram with an allow list", listener(config.AuthOptions{Allow: []string{"edge-01"}}), f.serverTLS, config.Listener, TCP, "credentials file is the allow list"},
+		{"scram listener with a password", listener(config.AuthOptions{Username: "edge-01"}), f.serverTLS, config.Listener, TCP, "only to dialers"},
+		{"scram certificate binding without client_auth", listener(config.AuthOptions{Identity: "cn"}), f.serverTLS, config.Listener, TCP, "requires tls.client_auth"},
+		{"token lifetime on tcp", listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, config.Listener, TCP, "only to HTTP listeners"},
+		{"token lifetime too short", listener(config.AuthOptions{TokenLifetimeMS: 900}), f.serverTLS, config.Listener, HTTP, "must be from 10000 to 86400000"},
+		{"token lifetime too long", listener(config.AuthOptions{TokenLifetimeMS: 1e13}), f.serverTLS, config.Listener, HTTP, "must be from 10000 to 86400000"},
+		{"scram listener without a certificate", listener(config.AuthOptions{}), &tls.Config{}, config.Listener, TCP, "listener certificate"},
+		{"scram dialer without a password", scram(config.AuthOptions{Username: "edge-01"}), &tls.Config{}, config.Dialer, TCP, "requires username and password_file"},
+		{"scram dialer with credentials", dialer(config.AuthOptions{CredentialsFile: f.creds}), &tls.Config{}, config.Dialer, TCP, "only to listeners"},
+		{"scram dialer skips verify", dialer(config.AuthOptions{}), &tls.Config{InsecureSkipVerify: true}, config.Dialer, TCP, "insecure_skip_verify"},
+		{"trusted proxies without a type", &config.AuthOptions{TrustedProxies: proxies}, nil, config.Listener, HTTP, "trusted_proxies is set"},
+		{"trusted proxies under mtls", &config.AuthOptions{Type: MethodMTLS, TrustedProxies: proxies}, mtlsListenerTLS(), config.Listener, HTTP, "trusted_proxies applies only"},
+		{"trusted proxies on a chain source", listener(config.AuthOptions{TrustedProxies: proxies}), nil, config.ChainListener, HTTP, "only to the http sink"},
+		{"trusted proxies on tcp", listener(config.AuthOptions{TrustedProxies: proxies}), nil, config.Listener, TCP, "only to the http sink"},
+		{"trusted proxies with certificate binding", listener(config.AuthOptions{TrustedProxies: proxies, Identity: "cn"}), f.serverTLS, config.Listener, HTTP, "TLS-terminating proxy"},
+		{"malformed trusted proxy", listener(config.AuthOptions{TrustedProxies: []string{"localhost"}}), nil, config.Listener, HTTP, "neither an address"},
+		{"trusted proxies on a dialer", dialer(config.AuthOptions{TrustedProxies: proxies}), &tls.Config{}, config.Dialer, HTTP, "only to listeners"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,16 +171,16 @@ func TestNewValidation(t *testing.T) {
 	pinned := &tls.Config{InsecureSkipVerify: true, VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error { return nil }}
 	for _, o := range []*config.AuthOptions{{Type: MethodMTLS}, dialer(config.AuthOptions{})} {
 		for _, c := range []*tls.Config{{}, pinned} {
-			if _, err := New(o, c, nil, RoleDialer, TCP); err != nil {
+			if _, err := New(o, c, nil, config.Dialer, TCP); err != nil {
 				t.Fatalf("dialer policy %s rejected: %v", o.Type, err)
 			}
 		}
 	}
-	if _, err := New(listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, nil, RoleListener, HTTP); err != nil {
+	if _, err := New(listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, nil, config.Listener, HTTP); err != nil {
 		t.Fatalf("scram listener rejected: %v", err)
 	}
 	// Behind proxies TLS ends at the proxy, so the hop may be plaintext
-	if _, err := New(listener(config.AuthOptions{TrustedProxies: proxies}), nil, nil, RoleListener, HTTP); err != nil {
+	if _, err := New(listener(config.AuthOptions{TrustedProxies: proxies}), nil, nil, config.Listener, HTTP); err != nil {
 		t.Fatalf("proxy-mode listener rejected: %v", err)
 	}
 }
@@ -190,7 +190,7 @@ func TestAuthorizeMatching(t *testing.T) {
 		Type:          MethodMTLS,
 		Allow:         []string{"edge-01", " edge-02 "},
 		AllowPatterns: []string{`^relay-\d{2}$`},
-	}, mtlsListenerTLS(), nil, RoleListener, TCP)
+	}, mtlsListenerTLS(), nil, config.Listener, TCP)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestAuthorizeMatching(t *testing.T) {
 // Empty allow and allow_patterns admits any CA-vouched identity, but still
 // records it and still refuses a certificate with no usable identity field
 func TestAuthorizeUnrestricted(t *testing.T) {
-	p, err := New(&config.AuthOptions{Type: MethodMTLS}, mtlsListenerTLS(), nil, RoleListener, TCP)
+	p, err := New(&config.AuthOptions{Type: MethodMTLS}, mtlsListenerTLS(), nil, config.Listener, TCP)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAuthorizeUnrestricted(t *testing.T) {
 
 func TestResolveNodeBindings(t *testing.T) {
 	newChain := func(binding string) *Policy {
-		p, err := New(&config.AuthOptions{Type: MethodMTLS, NodeBinding: binding}, mtlsListenerTLS(), nil, RoleChainListener, TCP)
+		p, err := New(&config.AuthOptions{Type: MethodMTLS, NodeBinding: binding}, mtlsListenerTLS(), nil, config.ChainListener, TCP)
 		if err != nil {
 			t.Fatalf("New(%q): %v", binding, err)
 		}
@@ -332,7 +332,7 @@ func TestIdentityApply(t *testing.T) {
 
 func TestVerifyConnectionPinsServer(t *testing.T) {
 	p, err := New(&config.AuthOptions{Type: MethodMTLS, Allow: []string{"relay.internal"}},
-		&tls.Config{}, nil, RoleDialer, TCP)
+		&tls.Config{}, nil, config.Dialer, TCP)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

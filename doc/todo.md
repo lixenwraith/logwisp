@@ -85,6 +85,11 @@ What exists:
   (`internal/config/config.go`), presets as rows with typed parameters
   (`preset.go`), the command-line and environment grammar (`spec.go`),
   `ValidateConfig`, `--check` and `--dump`.
+- The option schema, in `internal/config`: `default:`, `help:` and `lw:` tags
+  on the option structs, one catalogue row per plugin type, `Decode` (every
+  constructor decodes through it and keeps only I/O), `Coerce` for typed
+  command-line values, and a `ValidateConfig` that decodes every plugin
+  offline and names the refused key's path.
 - `internal/config` already compiles for `GOOS=js`; it links no net/http,
   crypto/tls or terminal code.
 - `github.com/lixenwraith/terminal` (pinned) and its `tui` package: regions,
@@ -93,41 +98,13 @@ What exists:
   blending, RGBTo256, RGBTo16.
 
 What is missing:
-- A machine-readable option schema. Defaults, enums and required checks live
-  inside the plugin constructors (about 50 `Default*` constants, 24 inline
-  validators); `doc/sources.md`, `doc/sinks.md`, `config/logwisp.toml` and the
-  site's catalogue copy them by hand, and the site's copy already lags.
-- Offline plugin validation: the constructors mix their checks with reading
-  certificates, credentials and files.
-- Typed command-line values: `lw --sink http,port=8080 --dump` prints
-  `port = "8080"`, a file `port = 8080`.
 - A host-independent preset: `fileSource` (`preset.go`) decides directory or
   pattern with `os.Stat`, so off the target host `path=/var/log` expands to
   directory `/var`, pattern `log`.
 - Emitters: only parsers exist for the three forms.
 
 Steps:
-1. Schema, in `internal/config`, as the one source of truth.
-   - Tags on the option structs: `default:`, `help:`, and `lw:` for required,
-     enum, min and max, what zero means (default, none, unlimited), hints
-     (path, regex, file) and roles (listener, dialer) on the shared tls, auth
-     and acl tables.
-   - One catalogue table, one row per plugin type: role, network role, single
-     instance, summary, option struct. `RegisterSource`/`RegisterSink` panic on
-     a type without a row.
-   - `Decode[T](role, type, map)` applies defaults, unknown-key and tag checks,
-     then the struct's pure `Check()`. Every constructor decodes through it and
-     keeps only I/O; the `Default*` constants and inline validators go.
-   - Pure cross-field checks become methods that tlsx, authz and netacl call
-     first: TLS role rules, auth bindings without file reads, ACL parsing, the
-     http sink's paths, filter regexes.
-   - `Coerce` converts command-line and environment strings, and JSON floats,
-     to the declared kinds; `spec.go` uses it, so a command line dumps typed.
-   - `ValidateConfig` adds unique plugin ids per pipeline and decodes every
-     plugin, naming the path (`pipelines[0].plugin_sinks[view].config.port`).
-     It opens nothing; `lw --check` stays the authority on files.
-   - Keep under test what moves: file sink `min_disk_free_mb` (negative means
-     100, 0 means none), a backoff maximum below the minimum, format `text`.
+1. Schema, in `internal/config`: done.
 2. Engine, `internal/compose`.
    - Imports internal/config, internal/version and lixenwraith/toml only; a
      test fails when `go list -deps` shows net, crypto/tls, os/exec, os/signal,

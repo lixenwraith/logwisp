@@ -23,7 +23,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/sink"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -32,15 +31,6 @@ func init() {
 		panic(fmt.Sprintf("failed to register tcp_chain sink: %v", err))
 	}
 }
-
-const (
-	DefaultChainSinkBufferSize        = 1000
-	DefaultChainSinkDialTimeoutMS     = 5000
-	DefaultChainSinkWriteTimeoutMS    = 5000
-	DefaultChainSinkBackoffMinMS      = 500
-	DefaultChainSinkBackoffMaxMS      = 30000
-	DefaultChainSinkKeepAlivePeriodMS = 30000
-)
 
 // TCPChainSink forwards structured entries to a downstream tcp_chain source
 type TCPChainSink struct {
@@ -89,40 +79,13 @@ func NewTCPChainSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	opts := &config.TCPChainSinkOptions{
-		KeepAlive: true,
-	}
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-	if err := lconfig.NonEmpty(opts.Host); err != nil {
-		return nil, fmt.Errorf("host: %w", err)
-	}
-	if err := lconfig.Port(opts.Port); err != nil {
-		return nil, fmt.Errorf("port: %w", err)
+	opts, err := config.Decode[config.TCPChainSinkOptions]("sink", "tcp_chain", configMap)
+	if err != nil {
+		return nil, err
 	}
 	network, err := core.Network(opts.Host)
 	if err != nil {
-		return nil, fmt.Errorf("host: %w", err)
-	}
-
-	if opts.BufferSize <= 0 {
-		opts.BufferSize = DefaultChainSinkBufferSize
-	}
-	if opts.DialTimeoutMS <= 0 {
-		opts.DialTimeoutMS = DefaultChainSinkDialTimeoutMS
-	}
-	if opts.WriteTimeoutMS <= 0 {
-		opts.WriteTimeoutMS = DefaultChainSinkWriteTimeoutMS
-	}
-	if opts.BackoffMinMS <= 0 {
-		opts.BackoffMinMS = DefaultChainSinkBackoffMinMS
-	}
-	if opts.BackoffMaxMS < opts.BackoffMinMS {
-		opts.BackoffMaxMS = DefaultChainSinkBackoffMaxMS
-	}
-	if opts.KeepAlivePeriodMS <= 0 {
-		opts.KeepAlivePeriodMS = DefaultChainSinkKeepAlivePeriodMS
+		return nil, err
 	}
 
 	node := opts.Node
@@ -138,7 +101,7 @@ func NewTCPChainSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	authPolicy, err := authz.New(opts.Auth, tlsCfg, nil, authz.RoleDialer, authz.TCP)
+	authPolicy, err := authz.New(opts.Auth, tlsCfg, nil, config.Dialer, authz.TCP)
 	if err != nil {
 		return nil, err
 	}
@@ -378,6 +341,8 @@ func (t *TCPChainSink) connect(ctx context.Context) error {
 			Enable: true,
 			Idle:   time.Duration(t.config.KeepAlivePeriodMS) * time.Millisecond,
 		}
+	} else {
+		nd.KeepAlive = -1 // zero would be Go's default, keep-alive every 15 s
 	}
 
 	var conn net.Conn

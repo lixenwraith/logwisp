@@ -14,7 +14,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/source"
 
-	lconfig "github.com/lixenwraith/config"
 	"github.com/lixenwraith/log"
 )
 
@@ -53,12 +52,6 @@ type RandomSource struct {
 	lastEntryTime  atomic.Value // time.Time
 }
 
-const (
-	DefaultRandomSourceIntervalMS = 500
-	DefaultRandomSourceFormat     = "txt"
-	DefaultRandomSourceLength     = 20
-)
-
 // NewRandomSourcePlugin creates a random source through plugin factory
 func NewRandomSourcePlugin(
 	id string,
@@ -67,41 +60,9 @@ func NewRandomSourcePlugin(
 	proxy *session.Proxy,
 ) (source.Source, error) {
 	// Step 1: Create empty config struct with defaults
-	opts := &config.RandomSourceOptions{
-		IntervalMS: 500,
-		JitterMS:   0,
-		Format:     "txt",
-		Length:     20,
-		Special:    false,
-	}
-
-	// Scan config map
-	if err := config.Scan(configMap, opts); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	// Defaults
-	if opts.IntervalMS <= 0 {
-		opts.IntervalMS = DefaultRandomSourceIntervalMS
-	}
-	if opts.Format == "" {
-		opts.Format = DefaultRandomSourceFormat
-	}
-	if opts.Length <= 0 {
-		opts.Length = DefaultRandomSourceLength
-	}
-
-	// Validate
-	if opts.JitterMS < 0 {
-		return nil, fmt.Errorf("jitter_ms cannot be negative")
-	}
-	if opts.JitterMS > opts.IntervalMS {
-		opts.JitterMS = opts.IntervalMS
-	}
-
-	validateFormat := lconfig.OneOf("raw", "txt", "json")
-	if err := validateFormat(opts.Format); err != nil {
-		return nil, fmt.Errorf("format: %w", err)
+	opts, err := config.Decode[config.RandomSourceOptions]("source", "random", configMap)
+	if err != nil {
+		return nil, err
 	}
 
 	rs := &RandomSource{

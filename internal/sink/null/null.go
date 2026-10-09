@@ -50,8 +50,8 @@ func NewNullSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	if err := config.Scan(configMap, &config.NullSinkOptions{}); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+	if _, err := config.Decode[config.NullSinkOptions]("sink", "null", configMap); err != nil {
+		return nil, err
 	}
 	ns := &NullSink{
 		id:     id,

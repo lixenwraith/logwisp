@@ -55,11 +55,14 @@ Package map:
 Every plugin registers itself in an `init()` function, and
 `cmd/lw/bootstrap.go` blank-imports each package to trigger those
 `init()`s. Adding a plugin therefore means writing the package, calling
-`plugin.RegisterSource` / `plugin.RegisterSink`, and adding one blank import.
+`plugin.RegisterSource` / `plugin.RegisterSink`, adding one blank import, and
+adding the type's row to the catalogue in `internal/config/schema.go`, which
+registration requires.
 
-Registration may attach metadata. The `console` source declares
-`MaxInstances: 1`, because a process has only one stdin; the per-pipeline
-registry rejects a second instance of any such type.
+The row holds the type's options struct, whose tags declare its defaults and
+rules, and whether the type is single. The `console` source is single,
+because a process has only one stdin; loading a configuration with a second
+instance of a single type fails, naming both pipelines.
 
 ## Data Flow
 
