@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -287,6 +288,33 @@ func TestNoConfigFileMeansQuietLogging(t *testing.T) {
 	defer m.Close()
 	if cfg, err := m.Snapshot(); err != nil || cfg.Logging.Level != "debug" {
 		t.Fatalf("environment over the file-less default: %+v %v", cfg, err)
+	}
+}
+
+// The pipelines are lw's built-in pipe only when no file, flag or variable
+// defined one: a file of settings alone runs the pipe
+func TestBuiltInPipeIsWhatNothingNamed(t *testing.T) {
+	isolateConfig(t)
+	builtIn := func(args Args) bool {
+		t.Helper()
+		m, err := Load(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		return m.BuiltIn()
+	}
+	named := []bool{builtIn(Args{}), builtIn(Args{Specs: []Spec{{Flag: "source", Value: "null"}}})}
+	t.Setenv("LOGWISP_SOURCE", "null")
+	named = append(named, builtIn(Args{}))
+	t.Setenv("LOGWISP_SOURCE", "")
+	testutil.WriteFile(t, "logwisp.toml", "[logging]\nlevel = \"warn\"\n")
+	named = append(named, builtIn(Args{}))
+	testutil.WriteFile(t, "logwisp.toml", "[[pipelines]]\nname = \"p\"\n"+
+		"[[pipelines.plugin_sources]]\ntype = \"null\"\n[[pipelines.plugin_sinks]]\ntype = \"null\"\n")
+	named = append(named, builtIn(Args{}))
+	if !slices.Equal(named, []bool{true, false, false, true, false}) {
+		t.Fatalf("nothing, a flag, a variable, a file of settings, a file's pipeline: %v", named)
 	}
 }
 

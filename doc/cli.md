@@ -6,6 +6,7 @@ lw -c|--config FILE [options]
 lw -p|--preset NAME[,KEY=VALUE...] [options]
 lw -t|--check [options]
 lw --dump [options]
+lw -T|--tui [options]
 lw auth COMMAND [flags]
 lw tls COMMAND [flags]
 lw preset NAME [flags]
@@ -31,7 +32,7 @@ first argument.
 - lw's own options have a long form (`--config`), and the frequent ones a
   one-letter short form that stands for it in every command that has it:
   - `-c` `--config`, `-p` `--preset`, `-q` `--quiet`, `-t` `--check`,
-    `-V` `--version`, `-h` `--help`
+    `-T` `--tui`, `-V` `--version`, `-h` `--help`
   - `-u` `--user` in `lw auth` and `lw preset edge`
 - A value follows as the next argument or after `=` (`-c FILE`, `-c=FILE`,
   `--config FILE`, `--config=FILE`); a value that starts with `-` follows `=`,
@@ -66,6 +67,8 @@ pipelines have [their own flags](#pipelines):
   exit; see [Usage Patterns](#usage-patterns)
 - `--dump`: print the effective configuration, flags, environment and presets
   resolved into it, as TOML that `-c` reads back, and exit
+- `-T`, `--tui`: compose the pipelines on screen, then run or print them
+  ([below](#lw---tui))
 - `--schema`: print every setting, pipeline flag, flow stage, plugin option
   and preset as one JSON document (kinds, defaults, rules, help), and exit;
   tools build their option lists from it
@@ -429,6 +432,40 @@ its pipelines. See [Operations](operations.md#starting) and
 kill -HUP  $(pidof lw)
 kill -USR1 $(pidof lw)
 ```
+
+## `lw --tui`
+
+`lw --tui` (`-T`) composes pipelines on a full-screen terminal, drawn as the
+website's configurator draws them, with the engine the website runs as
+WebAssembly.
+
+- Start: the pipelines `lw` would run with the same options (`-c FILE`,
+  pipeline flags, `LOGWISP_SOURCE`, a discovered file); with none but the
+  built-in pipe, the preset menu (or `empty`). A pasted `lw` command line
+  replaces the pipelines, in the preset menu too.
+- Screen: SOURCES, FLOW and SINKS side by side from 64 columns, stacked
+  below; each source and sink a tinted bar with its type, whether it listens
+  or dials, and a summary; the four flow stages in their order in a dashed
+  box, the ones off dimmed. The inspector, the chosen part's options, sits
+  below the canvas, and beside it from 110 columns.
+- Keys: arrows or `hjkl` move; Enter inspects, then edits a value (empty
+  returns it to its default); Tab sets it and goes to the next; Esc back; `a` adds a source,
+  sink or filter; `d` deletes, or returns a value to its default; Space turns
+  a flow stage or a switch on or off; `J`/`K` move a filter; `[` `]` switch
+  pipelines; `p` presets; `c` shows the first problem; `o` output; `?` keys;
+  `q` quits.
+- Output, `o`: run the pipelines with the other options given (so `--check`
+  and `--dump` apply to them, and reloads keep them), or print one of the
+  command line, the environment variables (one pipeline) and the file's
+  pipelines on standard output once the screen closes.
+- The screen draws on the controlling terminal: `lw -T > pipelines.toml` and
+  `cmd | lw -T` keep standard input and output as data. lw never writes the
+  file it starts from, but the shell empties a redirect's target before lw
+  reads it: redirect to a file lw does not load.
+- Color follows the `color` setting: `auto` the terminal and `NO_COLOR`,
+  `always` the terminal, `never` none. True color and 256 colors paint the
+  website's dark theme; 16 colors and none keep the terminal's own; a text
+  console draws with CP437 glyphs, and a terminal outside UTF-8 with ASCII.
 
 ## `lw auth`
 

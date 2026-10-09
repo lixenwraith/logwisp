@@ -94,6 +94,13 @@ func Load(args Args) (*Manager, error) {
 	return m, nil
 }
 
+// BuiltIn reports whether the pipelines are lw's built-in pipe: no file, flag
+// or variable defined one
+func (m *Manager) BuiltIn() bool {
+	_, inFile := m.config.GetSource("pipelines", lconfig.SourceFile)
+	return !inFile && len(m.specs) == 0
+}
+
 // Snapshot validates a detached candidate before it is used to build a service.
 // Builder validators only run during Load, so every reload needs this check too.
 func (m *Manager) Snapshot() (*Config, error) {

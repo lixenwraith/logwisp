@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/lixenwraith/logwisp/internal/config"
 )
 
 // The engine builds as WebAssembly for the website: it links no TLS, HTTP,
@@ -115,5 +117,45 @@ func TestSetKeepsAKeyItCannotTake(t *testing.T) {
 	if m, beat := c.Pipelines[0].PluginSinks[0].Config, c.Pipelines[0].Flow.Heartbeat; !reflect.DeepEqual(m, map[string]any{"port": int64(8080)}) ||
 		beat.IntervalMS != 1000 {
 		t.Fatalf("options %v, heartbeat %+v", m, beat)
+	}
+}
+
+// Options are a copy: changing them changes no pipeline; a stage that is off
+// has none
+func TestOptionsAreACopy(t *testing.T) {
+	c := &Composition{}
+	if err := c.AddPipeline("p"); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := c.Add(0, "sink", "tcp")
+	if err := c.Set(0, n, "port", "9000"); err != nil {
+		t.Fatal(err)
+	}
+	opts, on, err := c.Options(0, n)
+	opts["port"] = int64(1)
+	if _, rate, _ := c.Options(0, Node{Role: "rate_limit"}); err != nil || !on || rate || c.Pipelines[0].PluginSinks[0].Config["port"] != int64(9000) {
+		t.Fatalf("%v %v %v %v", opts, on, rate, err)
+	}
+}
+
+// A file may leave a source's or sink's id out: the engine names it as a
+// spec would, around the ids the file gave, so the shell forms load back
+func TestUnnamedPartsTakeFreeIDs(t *testing.T) {
+	c, err := FromConfig(&config.Config{Pipelines: []config.PipelineConfig{{Name: "p",
+		PluginSources: []config.PluginSourceConfig{{Type: "null"}, {ID: "null", Type: "null"}},
+		PluginSinks:   []config.PluginSinkConfig{{Type: "null"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Pipelines[0]
+	if ids := []string{p.PluginSources[0].ID, p.PluginSources[1].ID, p.PluginSinks[0].ID}; !slices.Equal(ids, []string{"null_2", "null", "null"}) {
+		t.Fatalf("ids %q", ids)
+	}
+	line, err := c.CommandLine()
+	if err == nil {
+		_, err = FromCommandLine(line, nil)
+	}
+	if err != nil {
+		t.Fatalf("%v\n%s", err, line)
 	}
 }

@@ -41,6 +41,7 @@ complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l sink -r -F
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l source -r -F
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l status_reporter
+complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l tui -o T
 complete -c lw -n 'not __lw_in auth; and not __lw_in tls; and not __lw_in preset; and not __lw_in config' -l version -o V
 
 complete -c lw -n '__lw_in auth; and test (count (commandline -opc)) -eq 2' -a add-user -d 'Add a user to a credentials file, or replace its password'

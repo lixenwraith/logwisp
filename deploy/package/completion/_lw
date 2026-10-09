@@ -206,4 +206,5 @@ _arguments -S \
 	'*--sink=:value:_default' \
 	'*--source=:value:_default' \
 	'--status_reporter' \
+	'(-T --tui)'{-T,--tui} \
 	'(-V --version)'{-V,--version}

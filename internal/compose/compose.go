@@ -94,14 +94,18 @@ func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 	return c, c.settle()
 }
 
-// settle gives every flow stage its defaults and every plugin's options their
-// kinds; the rules are Validate's
+// settle gives every flow stage its defaults, every plugin's options their
+// kinds and every source and sink an id; the rules are Validate's
 func (c *Composition) settle() error {
 	for i := range c.Pipelines {
 		p := &c.Pipelines[i]
 		if p.Flow == nil {
 			p.Flow = &config.FlowConfig{}
 		}
+		name(len(p.PluginSources), func(j int) *string { return &p.PluginSources[j].ID },
+			func(j int) string { return p.PluginSources[j].Type })
+		name(len(p.PluginSinks), func(j int) *string { return &p.PluginSinks[j].ID },
+			func(j int) string { return p.PluginSinks[j].Type })
 		for _, stage := range stages(p.Flow) {
 			if !stage.IsNil() {
 				config.Fill(stage.Interface())
@@ -124,6 +128,23 @@ func (c *Composition) settle() error {
 		}
 	}
 	return nil
+}
+
+// name gives the parts a file left unnamed the ids their specs would get: the
+// shell forms write no empty id
+func name(n int, id func(int) *string, typ func(int) string) {
+	var taken []string
+	for j := range n {
+		if *id(j) != "" {
+			taken = append(taken, *id(j))
+		}
+	}
+	for j := range n {
+		if *id(j) == "" {
+			*id(j) = config.FreeID(typ(j), taken)
+			taken = append(taken, *id(j))
+		}
+	}
 }
 
 // stages are the flow table's fields that hold one stage each, by key: a
@@ -356,6 +377,31 @@ func editStage(stage reflect.Value, change func(map[string]any) error) error {
 	config.Fill(next.Interface())
 	stage.Set(next)
 	return nil
+}
+
+// Options returns a copy of a node's options that are set, and whether it is
+// on: a flow stage that is off has none
+func (c *Composition) Options(pi int, n Node) (map[string]any, bool, error) {
+	p, err := c.pipeline(pi)
+	if err != nil {
+		return nil, false, err
+	}
+	switch i := index(p, n); {
+	case i < 0:
+	case n.Role == "source":
+		return config.Clone(p.PluginSources[i].Config), true, nil
+	case n.Role == "sink":
+		return config.Clone(p.PluginSinks[i].Config), true, nil
+	case n.Role == "filters":
+		return config.Values(&p.Flow.Filters[i]), true, nil
+	}
+	if stage, ok := stages(p.Flow)[n.Role]; ok {
+		if stage.IsNil() {
+			return nil, false, nil
+		}
+		return config.Values(stage.Interface()), true, nil
+	}
+	return nil, false, n.missing()
 }
 
 // Validate applies every rule lw applies at load, naming the refused key's path

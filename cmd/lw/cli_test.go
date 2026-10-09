@@ -39,6 +39,7 @@ func TestCommandLineGrammar(t *testing.T) {
 		{[]string{"--quiet", "-h"}, invocation{help: true, load: config.Args{Overrides: []string{"--quiet"}}}},
 		{[]string{"-c", "-h"}, invocation{help: true}},
 		{[]string{"help"}, invocation{help: true}},
+		{[]string{"-T", "-c", "a.toml"}, invocation{on: map[string]bool{"tui": true}, load: config.Args{File: "a.toml"}}},
 		{[]string{"tls", "ca", "-h"}, invocation{command: &commands[1], args: []string{"ca", "-h"}}},
 		{[]string{"-q", "-t", "-V", "-p", "tail,path=x", "-c=a.toml", "--logging.level", "debug", "--logging.file.retention_hours=-1", "--dump"},
 			invocation{on: map[string]bool{"check": true, "version": true, "dump": true},
@@ -52,7 +53,7 @@ func TestCommandLineGrammar(t *testing.T) {
 	}
 	for _, argv := range [][]string{{"-c"}, {"--config"}, {"--config="}, {"-c="}, {"-c", "--quiet"},
 		{"-v"}, {"-qt"}, {"-u", "x"}, {"-config", "x"}, {"--logging.level"}, {"--logging.file.retention_hours", "-1"},
-		{"--check=false"}, {"--version=true"}, {"--source"}, {"--sink=", "x"}, {"-p"}, {"--filter", "--sink", "x"}} {
+		{"--check=false"}, {"--version=true"}, {"--tui=x"}, {"-T", "x"}, {"--source"}, {"--sink=", "x"}, {"-p"}, {"--filter", "--sink", "x"}} {
 		if _, err := parseCommandLine(argv); err == nil {
 			t.Errorf("%q accepted", argv)
 		}
@@ -433,5 +434,17 @@ func TestCompletionScriptsAreCurrent(t *testing.T) {
 		if !bytes.Equal(have, script) {
 			t.Errorf("%s is not what lw's tables generate: run make completion", path)
 		}
+	}
+}
+
+// A named configuration file that is missing is a usage error, on the screen
+// as without it
+func TestAMissingNamedFileIsAUsageError(t *testing.T) {
+	inv, err := parseCommandLine([]string{"-T", "-c", filepath.Join(t.TempDir(), "none.toml")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, exit := composeOnScreen(&inv); code != 2 || !exit {
+		t.Fatalf("exit %d, %v", code, exit)
 	}
 }

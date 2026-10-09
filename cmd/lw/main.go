@@ -13,6 +13,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/tui"
 	"github.com/lixenwraith/logwisp/internal/version"
 
 	"github.com/lixenwraith/log"
@@ -45,18 +46,19 @@ func main() {
 		os.Exit(0)
 	}
 
+	if inv.on["tui"] {
+		if code, exit := composeOnScreen(&inv); exit {
+			os.Exit(code)
+		}
+	}
+
 	// --- 1. Initial setup ---
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
 
 	manager, err := config.Load(inv.load)
 	if err != nil {
-		if errors.Is(err, config.ErrConfigNotFound) {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(2)
-		}
-		fmt.Fprintf(os.Stderr, "Error: Failed to load config: %v\n", err)
-		os.Exit(1)
+		os.Exit(loadFailed(err))
 	}
 	defer manager.Close()
 	cfg, err := manager.Snapshot()
@@ -215,4 +217,50 @@ func readsStdin(cfg *config.Config) bool {
 		}
 	}
 	return false
+}
+
+// loadFailed reports a configuration that did not load and returns lw's exit
+// code: a named file that is missing is a usage error
+func loadFailed(err error) int {
+	if errors.Is(err, config.ErrConfigNotFound) {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 2
+	}
+	fmt.Fprintf(os.Stderr, "Error: Failed to load config: %v\n", err)
+	return 1
+}
+
+// composeOnScreen is lw --tui: it starts from the pipelines lw would load, or
+// the preset menu in place of the built-in pipe, then prints a form and exits,
+// or leaves inv to run the pipelines composed in place of the loaded ones
+func composeOnScreen(inv *invocation) (code int, exit bool) {
+	fail := func(err error) (int, bool) {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1, true
+	}
+	manager, err := config.Load(inv.load)
+	if err != nil {
+		return loadFailed(err), true
+	}
+	cfg, err := manager.Snapshot()
+	builtIn := manager.BuiltIn()
+	manager.Close()
+	start := &compose.Composition{}
+	if err == nil && !builtIn {
+		start, err = compose.FromConfig(cfg)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	res, err := tui.Run(start, cfg.Color)
+	switch {
+	case err != nil:
+		return fail(err)
+	case res.Exit == tui.Print:
+		fmt.Print(res.Output)
+	case res.Exit == tui.Start:
+		inv.load.Specs = config.PipelineSpecs(res.Pipelines)
+		return 0, false
+	}
+	return 0, true
 }

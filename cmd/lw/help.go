@@ -18,6 +18,8 @@ Usage:
   lw -p|--preset SPEC [options] Run a preset's pipeline
   lw -t|--check [options]       Build every pipeline and plugin, report, exit
   lw --dump [options]           Print the effective configuration as TOML, exit
+  lw -T|--tui [options]         Compose pipelines on screen, then run them or
+                                print them as flags, variables or a file
   lw help | -h | --help
   lw -V | --version | --schema
 
@@ -31,6 +33,9 @@ after '='; short options do not combine. lw takes options only.
                                 else ./logwisp.toml)
   -t, --check                   Build every pipeline and plugin, report, exit
       --dump                    Print the effective configuration, exit
+  -T, --tui                     Compose the pipelines on a full-screen
+                                terminal, starting from the ones lw would run
+                                or a preset; then run them, or print them
   -q, --quiet                   Silence lw's own log and notices; pipeline
                                 output still flows
       --color [WHEN]            Level names in color on console sinks: auto
