@@ -52,13 +52,13 @@ var shorts = map[string]struct {
 	top  bool
 }{
 	"c": {"config", true}, "h": {"help", true}, "p": {"preset", true},
-	"q": {"quiet", true}, "t": {"check", true}, "V": {"version", true},
+	"q": {"quiet", true}, "t": {"check", true}, "T": {"tui", true}, "V": {"version", true},
 	"u": {"user", false},
 }
 
 // switches are lw's own options that take no value and are no setting, so no
 // file or environment variable turns one on
-var switches = []string{"check", "dump", "version", "schema"}
+var switches = []string{"check", "dump", "version", "schema", "tui"}
 
 // usageError is a command-line mistake: exit status 2 rather than 1
 type usageError string

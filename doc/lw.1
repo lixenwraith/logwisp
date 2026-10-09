@@ -20,6 +20,9 @@
 .Op Fl \-rate\-limit Ar spec
 .Op Fl \-heartbeat Ar spec
 .Nm
+.Fl T | Fl \-tui
+.Op Ar options
+.Nm
 .Cm auth | tls | preset | config
 .Ar command
 .Op Ar flags
@@ -146,6 +149,23 @@ Print the effective configuration, with the options, environment and
 presets resolved into it, as a file
 .Fl c
 reads back, and exit.
+.It Fl T , Fl \-tui
+Compose pipelines on a full-screen terminal, starting from the ones
+.Nm
+would run with the other options given, or from a preset when that is only
+the built-in standard input to standard output pipe.
+On leaving, run them with the other options, as
+.Fl \-check
+and
+.Fl \-dump
+also do, or print them as a command line, environment variables or a
+configuration file's pipelines.
+The screen draws on the controlling terminal, so standard input and output
+stay data:
+.Ql lw \-T > pipelines.toml .
+A file is read, never written; the shell empties a redirect's target before
+.Nm
+reads it, so the redirect names a file it does not load.
 .It Fl \-schema
 Print every setting, pipeline flag, flow stage, plugin option and preset as
 one JSON document, with kinds, defaults, rules and help, and exit; tools build

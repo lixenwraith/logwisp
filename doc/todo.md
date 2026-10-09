@@ -109,61 +109,11 @@ Steps:
 1. Schema, in `internal/config`: done.
 2. Engine, `internal/compose`: done.
 3. `lw --schema`: done. The site generates its catalogue from it.
-4. In `lixenwraith/terminal`, released and pinned before the TUI:
-   - Full-screen 8- and 16-color output (SGR 30-37, 90-97, 40-47) and the
-     default colors 39/49; it emits only 256-color and truecolor today.
-   - Detection as `inline` does it: 16 colors on text consoles, none under
-     `NO_COLOR`, refusal on `TERM=dumb`, and an override for LogWisp's `color`
-     key.
-   - Drawing on `/dev/tty`, so `lw --tui > logwisp.toml` and `cmd | lw --tui`
-     keep stdin and stdout as data.
-   - Bracketed paste into text fields.
-   - `tui` widgets the site's controls have: segmented choice, filterable
-     option list, toggle, typed fields (default as placeholder, required mark,
-     error and help line, folded groups), a focus ring; every widget styled
-     from one `tui.Theme`.
-   - In `color`, optional: export the 16 xterm reference shades. RGBTo16 maps
-     the site's hues badly (green to cyan, red to bright black), so the
-     8-color tier is chosen by hand.
-5. `lw --tui`.
-   - A parser switch, `-T` for short (`-t` is `--check`). With `-c FILE`,
-     pipeline flags or `LOGWISP_SOURCE` it starts from that composition, and
-     never rewrites FILE (TOML encoding drops its comments); bare, it opens the
-     preset menu (pipe, tail, serve, edge, aggregator, empty).
-   - The pipeline as the site draws it: SOURCES, FLOW, SINKS; a node is a
-     tinted bar, its type, listens or dials, and a summary line; the four flow
-     stages in order inside a dashed box, the ones off dimmed; wires drawn from
-     per-cell connectivity so every junction is right. The inspector sits
-     below at 80 to 109 columns, beside at 110 and over; under 64 columns the
-     stages stack, as on the site.
-     ```
-      ● SOURCES              ● FLOW                       ● SINKS
-      ▌ file             ─┐  ╭╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╮  ┌─▌ http      listens
-      ▌ /var/log  *.log   │  ╎ ▌ rate_limit 400/s   ╎  │ ▌ :8080  /stream
-      █ tcp_chain listens─┴─►╎ ▌ filters -TRACE     ╎─►┤
-      █ :9000  tls  scram    ╎ ▌ format txt         ╎  └─▌ console
-                             ╎ ○ heartbeat off      ╎    ▌ stdout
-                             ╰╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╯
-     ── tcp_chain · source · id src-2 ─────────────────── ⏎ edit  tab next ──
-        host     0.0.0.0  default        format   raw [txt] json
-        port *   9000▌                   tls      ▸ on   (auth, acl folded)
-      ✓ valid   a add  d delete  ␣ on/off  J/K move  p preset  o output  ? help
-     ```
-   - Keys: arrows or hjkl move, Enter edits, `a` adds from the catalogue, `d`
-     deletes, Space switches a flow stage, `J`/`K` reorder filters, `p`
-     presets, `[` `]` switch pipelines, `c` lists errors, `o` output, `?`
-     help, `q` quits.
-   - Theme: the site's dark tokens as one role table in four tiers. Truecolor
-     and 256 colors paint the site's background; 8 colors and mono keep the
-     terminal's. Sources cyan, flow violet, sinks green, accent blue, muted
-     grey, errors red. A selection always changes a glyph (bar, `▸`,
-     underline), never only a shade. Glyphs: Unicode, a CP437 set on text
-     consoles, ASCII outside UTF-8.
-   - Output, `o`: Run hands `config.Args` built from the composition to the
-     usual `config.Load`, after the terminal is released and before anything
-     reads stdin; reloads keep the pipelines, and `--tui --check` and `--tui
-     --dump` follow. Or exactly one of command line, environment and file,
-     printed to stdout once the screen closes.
+4. `lixenwraith/terminal` v0.2.0: done: 16 and no color, the terminal's
+   default colors, `/dev/tty`, bracketed paste, themed form controls. Still
+   optional, in `color`: export the 16 xterm reference shades (RGBTo16 maps
+   the site's hues badly, so the 16-color tier is chosen by hand).
+5. `lw --tui`: done ([doc/cli.md](cli.md#lw---tui)).
 6. WebAssembly: `cmd/lwconf` (`js && wasm`) exposes schema, preset, parse,
    validate and emit to the page as JSON strings. `make wasm` builds
    `bin/lwconf.wasm` with the version stamped, copies the toolchain's
