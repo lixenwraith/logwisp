@@ -2,7 +2,7 @@
   <img src="logwisp-logo.svg" alt="LogWisp Logo" width="160"/>
   <br>
   <br>
-  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.27.1-00ADD8?style=flat&logo=go" alt="Go"></a>
+  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.27.2-00ADD8?style=flat&logo=go" alt="Go"></a>
   <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/Platform-Linux%20|%20FreeBSD%20|%20amd64-lightgrey" alt="Platforms">
   <a href="doc/"><img src="https://img.shields.io/badge/Docs-Available-green.svg" alt="Documentation"></a>
@@ -196,7 +196,7 @@ systemd unit or FreeBSD rc.d script and its configuration; `make deb` and
 
 - **Operating systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
 - **Architecture**: amd64
-- **Go**: 1.27.1+ to build from source
+- **Go**: 1.27.2+ to build from source
 
 Network sources and sinks use IPv4 or IPv6, following the address family of
 the configured host.

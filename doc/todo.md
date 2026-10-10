@@ -114,7 +114,7 @@ Steps:
 4. `lixenwraith/terminal` v0.2.0: done: 16 and no color, the terminal's
    default colors, `/dev/tty`, bracketed paste, themed form controls. Still
    optional, in `color`: export the 16 xterm reference shades (RGBTo16 maps
-   the site's hues badly, so the 16-color tier is chosen by hand). v0.3.0:
+   the site's hues badly, so the 16-color tier is chosen by hand). v0.2.1:
    radio buttons, narrow form fields and option lists, menus, frames, rules,
    wires and windows, moved from `lw --tui`.
 5. `lw --tui`: done ([doc/cli.md](cli.md#lw---tui)).

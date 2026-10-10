@@ -58,10 +58,6 @@ func TestZeroDefaultsAndNegatives(t *testing.T) {
 	if err != nil || chain.BackoffMaxMS != 30000 {
 		t.Fatalf("backoff maximum below the minimum: %+v %v", chain, err)
 	}
-	format := FormatConfig{Type: "text"}
-	if err := Settle(&format); err != nil {
-		t.Fatalf("format text: %v", err)
-	}
 }
 
 // Command-line text and JSON numbers become the kinds the options declare, so
@@ -122,6 +118,9 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 		},
 		"color: must be one of auto, always, never, got \"\"": func(c *Config) {
 			c.Color = ""
+		},
+		`pipelines[0].flow.format.type: must be one of raw, txt, json, got "text"`: func(c *Config) {
+			c.Pipelines[0].Flow.Format = &FormatConfig{Type: "text"}
 		},
 		"pipelines[0].flow.heartbeat.interval_ms: must be at least 100, got 10": func(c *Config) {
 			c.Pipelines[0].Flow.Heartbeat = &HeartbeatConfig{IntervalMS: 10}
