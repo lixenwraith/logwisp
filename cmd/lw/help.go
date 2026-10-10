@@ -81,7 +81,7 @@ key alone means true:
                                 chooses the console
 
 Pipelines (they replace the configuration file's pipelines):
-  -p, --preset NAME[,KEY=VALUE...]
+  -p, --preset NAME[:KEY=VALUE,...]
                                 Start a pipeline with a preset: pipe, tail,
                                 serve, edge, aggregator; lw preset NAME -h
                                 lists its keys, lw preset NAME prints it
@@ -89,27 +89,32 @@ Pipelines (they replace the configuration file's pipelines):
                                 pipeline options after it configure; those
                                 before any --pipeline make one named after
                                 its --preset, or "cli" without one
-      --source SPEC             TYPE[,KEY=VALUE...], repeatable
-      --sink SPEC               e.g. http,host=0.0.0.0,port=8080, repeatable
-      --filter SPEC             include|exclude,patterns=RE, repeatable
-      --format SPEC             json|txt|raw[,KEY=VALUE...]
-      --rate-limit SPEC         rate=N[,burst=N,policy=drop|pass]
+      --source SPEC             TYPE[:KEY=VALUE,...], repeatable
+      --sink SPEC               e.g. http:host=0.0.0.0,port=8080, repeatable
+      --filter SPEC             include|exclude:patterns=RE, repeatable
+      --format SPEC             json|txt|raw[:KEY=VALUE,...]
+      --rate-limit SPEC         entries_per_second=N[,burst_entries=N,
+                                policy=drop|pass]
       --heartbeat SPEC          interval_ms=N[,include_stats=true,...]
   A pipeline without --source reads stdin, one without --sink writes stdout.
-  Keys nest with '.' (tls.cert_file=...), a repeated key makes a list, and
-  '\' escapes ',' '=' '\' in values.
+  TYPE ends at the first ':'. Keys nest with '.' (tls.cert_file=...), a
+  repeated key makes a list, and '\' escapes ',' '=' '\' in values.
 
 Examples:
   lw < app.log > copy.log                         Copy, line for line
-  tail -F app.log | lw --filter include,patterns=ERROR,patterns=WARN
-  journalctl -f | lw --sink http,host=127.0.0.1,port=8080
+  tail -F app.log | lw --filter include:patterns=ERROR,patterns=WARN
+  journalctl -f | lw --sink http:host=127.0.0.1,port=8080
                                 Serve stdin live; browse http://127.0.0.1:8080/
-  lw --source file,directory=/var/log/app,pattern='*.log' --format txt
-  lw -p tail,path=/var/log/app                    Follow a directory's files
-  lw --preset serve,path=/var/log/app,tls=self,users=users.toml
+  lw --source file:directory=/var/log/app,pattern='*.log' --format txt
+  lw -p tail:path=/var/log/app                    Follow a directory's files
+  lw --preset serve:path=/var/log/app,tls=self,users=users.toml
                                                   HTTPS stream, SCRAM logins
-  lw --preset edge,path=/var/log/app,to=agg:9000,ca=ca.crt,user=edge-01,\
+  lw --preset edge:path=/var/log/app,to=agg:9000,ca=ca.crt,user=edge-01,\
 password_file=edge-01.pass                        Forward to an aggregator
+  lw -p aggregator:user=pipe,format=raw           A temporary pipe's end: Enter
+                                                  at the prompt draws a password
+  cmd | lw -p edge:to=HOST:9000,pin=PIN,user=pipe
+                                                  Its source, asked the password
 
 Environment:
   LOGWISP_<KEY>                 A configuration key, '.' as '_', uppercase:

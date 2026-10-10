@@ -1,13 +1,13 @@
 module github.com/lixenwraith/logwisp
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/lixenwraith/auth v0.5.1
 	github.com/lixenwraith/color v0.1.3
 	github.com/lixenwraith/config v0.2.2
 	github.com/lixenwraith/log v0.1.11
-	github.com/lixenwraith/terminal v0.2.0
+	github.com/lixenwraith/terminal v0.2.1
 	github.com/lixenwraith/toml v0.1.3
 	golang.org/x/term v0.47.0
 )

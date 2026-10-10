@@ -23,7 +23,7 @@ streams, or downstream LogWisp nodes.
   to stdout line for line and exits at the end of input; flags add filters,
   formats, sources and sinks
 - **Presets**: `tail`, `serve`, `edge` and `aggregator` build the common
-  pipelines from a few keys (`lw --preset tail,path=/var/log/app`);
+  pipelines from a few keys (`lw --preset tail:path=/var/log/app`);
   `lw --dump` turns any command line into a configuration file
 - **Independent pipelines**, each `sources → flow → sinks`, running concurrently
   in one process
@@ -132,18 +132,18 @@ one without `--sink` writes stdout:
 
 ```bash
 ./bin/lw < app.log > copy.log
-tail -F app.log | ./bin/lw --filter include,patterns=ERROR,patterns=WARN
+tail -F app.log | ./bin/lw --filter include:patterns=ERROR,patterns=WARN
 
 # stdin as a live SSE stream, with a browser viewer at http://127.0.0.1:8080/;
 # the http sink binds 0.0.0.0 unless told
-journalctl -f | ./bin/lw --sink http,host=127.0.0.1,port=8080
+journalctl -f | ./bin/lw --sink http:host=127.0.0.1,port=8080
 
 # tail a directory instead of stdin
-./bin/lw --source 'file,directory=/var/log/myapp,pattern=*.log' \
-    --format json,sanitizer_policy=json > all.json
+./bin/lw --source 'file:directory=/var/log/myapp,pattern=*.log' \
+    --format json:sanitizer_policy=json > all.json
 
 # the same with a preset; on a terminal the level names are in color
-./bin/lw --preset tail,path=/var/log/myapp
+./bin/lw --preset tail:path=/var/log/myapp
 ```
 
 As a service, a configuration file holds the pipelines:

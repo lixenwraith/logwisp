@@ -16,8 +16,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/chain"
@@ -27,6 +30,7 @@ import (
 
 	"github.com/lixenwraith/auth"
 	"github.com/lixenwraith/toml"
+	"golang.org/x/term"
 )
 
 const (
@@ -162,10 +166,87 @@ func (c *Credentials) Marshal() ([]byte, error) {
 	return append([]byte(header), body...), nil
 }
 
-// ReadPassword reads a password file, trimming one trailing line break so a
-// file from an editor and one from `lw auth add-user` agree.
-func ReadPassword(path string) (string, error) {
-	data, err := os.ReadFile(path)
+// processDecoy is the decoy key of listeners without a credentials file:
+// one per process, so reloads keep unknown-user challenges stable
+var processDecoy = sync.OnceValue(func() []byte { key := make([]byte, 32); rand.Read(key); return key })
+
+// oneUser is a listener's only user, derived in memory at the dialers' floor
+// cost, the default outside tests
+func oneUser(user, path string) (*Credentials, error) {
+	pw, err := ReadPassword(path, user, true)
+	if err != nil {
+		return nil, err
+	}
+	cred, err := auth.NewCredential(user, pw, auth.WithTime(minArgonTime), auth.WithMemory(minArgonMemory))
+	if err != nil {
+		return nil, fmt.Errorf("auth: user %q: %w", user, err)
+	}
+	return &Credentials{DecoyKey: processDecoy(), Users: []*auth.Credential{cred}}, nil
+}
+
+// readOnce keeps what a reload cannot read again, by path and user, and
+// whether a terminal was asked: one may be asked for several users
+var readOnce = struct {
+	sync.Mutex
+	m map[[2]string]asked
+}{m: map[[2]string]asked{}}
+
+type asked struct {
+	pw  string
+	tty bool
+}
+
+// startupOver is set once lw's first service is built
+var startupOver atomic.Bool
+
+// EndStartup stops reading descriptors, pipes, FIFOs and terminals: at a
+// reload a console source may be reading the same one, and a read would hold
+// the reload and its signals. What was read before stays for reloads.
+func EndStartup() { startupOver.Store(true) }
+
+// ReadPassword reads user's password from path, trimming one trailing line
+// break so a file from an editor and one from `lw auth add-user` agree. A
+// regular file is read each time, for rotation by reload; /dev/fd/N, a pipe,
+// a FIFO or another device once, before EndStartup; a terminal is asked once,
+// where generate lets Enter alone draw the password.
+func ReadPassword(path, user string, generate bool) (string, error) {
+	fd, inherited := descriptor(path)
+	if fi, err := os.Stat(path); !inherited && (err != nil || fi.Mode().IsRegular()) {
+		data, err := os.ReadFile(path)
+		return checkPassword(path, data, err)
+	}
+	readOnce.Lock()
+	defer readOnce.Unlock()
+	key := [2]string{path, user}
+	if a, ok := readOnce.m[key]; ok {
+		return a.pw, nil
+	}
+	if startupOver.Load() {
+		return "", fmt.Errorf("auth: password_file %s is read only at startup; name a regular file or restart lw", path)
+	}
+	for k, a := range readOnce.m {
+		if k[0] == path && !a.tty {
+			return "", fmt.Errorf("auth: password_file %s was read for user %q and holds one password", path, k[1])
+		}
+	}
+	var (
+		data []byte
+		tty  bool
+		err  error
+	)
+	if inherited {
+		data, err = readDescriptor(fd, path)
+	} else {
+		data, tty, err = readDevice(path, user, generate)
+	}
+	pw, err := checkPassword(path, data, err)
+	if err == nil {
+		readOnce.m[key] = asked{pw, tty}
+	}
+	return pw, err
+}
+
+func checkPassword(path string, data []byte, err error) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("auth: password_file: %w", err)
 	}
@@ -174,6 +255,70 @@ func ReadPassword(path string) (string, error) {
 		return "", fmt.Errorf("auth: password_file %s: password must be 1-%d bytes", path, auth.MaxPasswordLen)
 	}
 	return pw, nil
+}
+
+// descriptor is N of /dev/fd/N, which ReadPassword closes: the path then
+// names another file. 0-2 stay open, or stdio would go to the next file.
+func descriptor(path string) (int, bool) {
+	n, ok := strings.CutPrefix(path, "/dev/fd/")
+	fd, err := strconv.Atoi(n)
+	return fd, ok && err == nil && fd > 2
+}
+
+// readDescriptor reads an inherited descriptor to its end and closes it,
+// which needs no fdescfs on FreeBSD. Go opens its own close-on-exec, so a
+// descriptor with the flag is lw's: reading or closing it would break lw.
+func readDescriptor(fd int, path string) ([]byte, error) {
+	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
+	if errno != 0 || flags&syscall.FD_CLOEXEC != 0 {
+		return nil, fmt.Errorf("%s was not passed to lw: redirect it, as in %d<FILE", path, fd)
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, auth.MaxPasswordLen+3))
+}
+
+// readDevice reads a pipe, FIFO or device to its end, or asks when it is a
+// terminal. The open file decides: on FreeBSD stat calls /dev/stdin a device
+// whatever it holds.
+func readDevice(path, user string, generate bool) ([]byte, bool, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, syscall.ENXIO) {
+		err = fmt.Errorf("%s: no terminal to ask on; name a password file", path)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	if term.IsTerminal(int(f.Fd())) {
+		data, err := ask(path, user, generate)
+		return data, true, err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, auth.MaxPasswordLen+3))
+	return data, false, err
+}
+
+// ask prompts on the terminal at path without echo. A generated password is
+// shown there only: logs persist, and stderr is often a file.
+func ask(path, user string, generate bool) ([]byte, error) {
+	tty, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer tty.Close()
+	hint := ""
+	if generate {
+		hint = " (Enter generates one)"
+	}
+	fmt.Fprintf(tty, "password for %s%s: ", user, hint)
+	data, err := term.ReadPassword(int(tty.Fd()))
+	fmt.Fprintln(tty)
+	if err == nil && len(data) == 0 && generate {
+		pw := rand.Text()
+		fmt.Fprintf(tty, "generated password for %s, shown once: %s\n", user, pw)
+		return []byte(pw), nil
+	}
+	return data, err
 }
 
 // --- Listener ---
@@ -215,7 +360,14 @@ func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
 		cb := sha256.Sum256(tlsCfg.Certificates[0].Certificate[0])
 		l.cb = cb[:]
 	}
-	if l.creds, err = LoadCredentials(o.CredentialsFile); err != nil {
+	secret := secretFile{"auth.credentials_file", o.CredentialsFile}
+	if o.CredentialsFile != "" {
+		l.creds, err = LoadCredentials(o.CredentialsFile)
+	} else {
+		secret = secretFile{"auth.password_file", o.PasswordFile}
+		l.creds, err = oneUser(o.Username, o.PasswordFile)
+	}
+	if err != nil {
 		return err
 	}
 	if p.transport == HTTP {
@@ -231,7 +383,7 @@ func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
 		}
 	}
 	p.listener = l
-	p.secrets = append(p.secrets, secretFile{"auth.credentials_file", o.CredentialsFile})
+	p.secrets = append(p.secrets, secret)
 	return nil
 }
 
@@ -543,7 +695,7 @@ type scramDialer struct {
 }
 
 func (p *Policy) compileSCRAMDialer(o *config.AuthOptions) error {
-	password, err := ReadPassword(o.PasswordFile)
+	password, err := ReadPassword(o.PasswordFile, o.Username, false)
 	if err != nil {
 		return err
 	}

@@ -4,10 +4,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -198,5 +201,35 @@ func TestTLSOptionConflicts(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: %v, want %q", c.o, err, c.want)
 		}
+	}
+}
+
+// Terminals, pipes and descriptors hold no secret at rest: /dev/tty, mode
+// 0666 like /dev/null, is not warned about, nor /dev/fd/N whatever it names,
+// while a world-readable file is.
+func TestSecretFileWarningSkipsTerminalsAndPipes(t *testing.T) {
+	dir := t.TempDir()
+	fifo, file := filepath.Join(dir, "fifo"), filepath.Join(dir, "pw")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, file, "secret\n")
+	for _, path := range []string{fifo, file} {
+		if err := os.Chmod(path, 0o644); err != nil { // past the umask
+			t.Fatal(err)
+		}
+	}
+	held, err := os.Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	for _, path := range []string{os.DevNull, fifo, fmt.Sprintf("/dev/fd/%d", held.Fd())} {
+		if w := SecretFileWarning("auth.password_file", path); w != "" {
+			t.Errorf("%s: %s", path, w)
+		}
+	}
+	if SecretFileWarning("auth.password_file", file) == "" {
+		t.Error("a world-readable file was not warned about")
 	}
 }

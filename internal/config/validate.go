@@ -296,7 +296,7 @@ func (o *AuthOptions) Check(side Side, http bool, t TLSState) error {
 		}
 		return nil
 	case len(o.Allow) > 0 || len(o.AllowPatterns) > 0:
-		return fmt.Errorf("auth: allow and allow_patterns apply only to type %q; the credentials file is the allow list", "mtls")
+		return fmt.Errorf("auth: allow and allow_patterns apply only to type %q; the users are the allow list", "mtls")
 	case side == Dialer && (o.CredentialsFile != "" || o.TokenLifetimeMS != 0 || len(o.TrustedProxies) > 0):
 		return errors.New("auth: credentials_file, token_lifetime_ms and trusted_proxies apply only to listeners")
 	case side == Dialer && o.Identity != "":
@@ -305,10 +305,12 @@ func (o *AuthOptions) Check(side Side, http bool, t TLSState) error {
 		return fmt.Errorf("auth: type %q on a dialer requires username and password_file", "scram")
 	case side == Dialer:
 		return nil
-	case o.Username != "" || o.PasswordFile != "":
-		return errors.New("auth: username and password_file apply only to dialers")
-	case o.CredentialsFile == "":
-		return fmt.Errorf("auth: type %q requires credentials_file", "scram")
+	case o.CredentialsFile != "" && (o.Username != "" || o.PasswordFile != ""):
+		return errors.New("auth: credentials_file, or username and password_file: not both")
+	case (o.Username == "") != (o.PasswordFile == ""):
+		return errors.New("auth: username and password_file go together")
+	case o.CredentialsFile == "" && o.Username == "":
+		return fmt.Errorf("auth: type %q requires credentials_file, or username and password_file", "scram")
 	case o.TokenLifetimeMS > 0 && !http:
 		return errors.New("auth: token_lifetime_ms applies only to HTTP listeners")
 	case len(o.TrustedProxies) > 0 && (side != Listener || !http):
@@ -425,6 +427,10 @@ func and(keys []string) string {
 	return strings.Join(keys[:len(keys)-1], ", ") + " and " + keys[len(keys)-1]
 }
 
+// pagesBehind is why a login or viewer page needs a proxy: only there do
+// browsers log in, and elsewhere the viewer needs no page
+const pagesBehind = "only for scram behind auth.trusted_proxies, where browsers log in; without auth or under mtls, the viewer is always at /"
+
 // Check keeps a stream and a status path ServeMux and a URL take literally,
 // apart, and off the authentication paths; a login page needs browsers that
 // log in, behind a proxy
@@ -442,10 +448,12 @@ func (o *HTTPSinkOptions) Check() error {
 	switch {
 	case o.StreamPath == o.StatusPath:
 		return fmt.Errorf("stream_path and status_path must differ")
-	case (o.LoginPage || o.ViewerPage) && !behind:
-		return errors.New("login_page and viewer_page apply to scram behind auth.trusted_proxies, where browsers log in; without auth or under mtls the viewer is always served")
+	case o.LoginPage && !behind:
+		return &KeyError{"login_page", errors.New(pagesBehind)}
+	case o.ViewerPage && !behind:
+		return &KeyError{"viewer_page", errors.New(pagesBehind)}
 	case o.ViewerPage && !o.LoginPage:
-		return errors.New("viewer_page needs login_page, where it sends a signed-out viewer")
+		return &KeyError{"viewer_page", errors.New("needs login_page, where it sends a signed-out viewer")}
 	}
 	return nil
 }

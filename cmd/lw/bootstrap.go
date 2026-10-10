@@ -22,6 +22,7 @@ import (
 	_ "github.com/lixenwraith/logwisp/internal/sink/tcp"
 	_ "github.com/lixenwraith/logwisp/internal/sink/tcpchain"
 
+	"github.com/lixenwraith/logwisp/internal/authz"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/service"
 	"github.com/lixenwraith/logwisp/internal/version"
@@ -37,6 +38,7 @@ func bootstrapInitial(ctx context.Context, cfg *config.Config) (*service.Service
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to bootstrap service: %w", err)
 	}
+	authz.EndStartup() // a reload reads no descriptor, pipe or terminal
 
 	if err := svc.Start(); err != nil {
 		svc.Shutdown()

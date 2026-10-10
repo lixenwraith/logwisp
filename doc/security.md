@@ -159,8 +159,8 @@ allow_patterns    = []                    # mtls
 node_binding      = "force"               # chain sources only
 credentials_file  = ""                    # scram listeners
 token_lifetime_ms = 0                     # scram, HTTP listeners; 10 s to 24 h, 0 = 15 minutes
-username          = ""                    # scram dialers
-password_file     = ""                    # scram dialers
+username          = ""                    # scram dialers, or a listener's one user
+password_file     = ""                    # scram, with username
 trusted_proxies   = []                    # scram http sink behind a TLS-terminating proxy
 ```
 
@@ -181,7 +181,9 @@ Options by where they apply, each with its default:
     them yourself.
 - `scram` listeners
   - `credentials_file`: verifiers written by
-    [`lw auth add-user`](cli.md#lw-auth).
+    [`lw auth add-user`](cli.md#lw-auth); or, in its place, `username` and
+    `password_file`, see
+    [One user without a credentials file](#one-user-without-a-credentials-file).
   - `token_lifetime_ms` (15 minutes): bearer token lifetime, 10 s to 24 h; the
     `http` sink and `http_chain` source only.
   - `trusted_proxies` (`[]`): addresses or CIDRs of the reverse proxies that
@@ -190,7 +192,7 @@ Options by where they apply, each with its default:
 - `scram` dialers
   - `username`: user to log in as.
   - `password_file`: file holding the password; one trailing line break is
-    trimmed.
+    trimmed. `/dev/fd/N`, a pipe or a terminal are read once, as on listeners.
 
 **Roles by plugin**, and what the block decides:
 
@@ -306,9 +308,10 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
   type forgotten
 - a key of the other method: `allow` or `allow_patterns` under `scram`, a
   `scram` key under `mtls`
-- a `scram` listener without a loadable `credentials_file` (see
-  [Credentials file](#credentials-file)), with `username` or `password_file`,
-  with a `token_lifetime_ms` outside 10 s to 24 h or on a TCP listener, or with
+- a `scram` listener with neither a loadable `credentials_file` (see
+  [Credentials file](#credentials-file)) nor `username` and `password_file`,
+  or with both, with only one of `username` and `password_file`, with a
+  `token_lifetime_ms` outside 10 s to 24 h or on a TCP listener, or with
   `identity` but no `tls.client_auth`
 - a `scram` dialer without `username` and `password_file`, with
   `credentials_file`, `token_lifetime_ms`, `trusted_proxies` or `identity`
@@ -435,8 +438,8 @@ when it is constructed, so startup and every reload repeat them:
 - an `allow_patterns` entry not anchored at both ends of every alternative
   (`^a|b$` admits `a…` and `…b`)
 - a `key_file`, `issuer_key_file`, `credentials_file` or `password_file` every
-  local user can read
-  (once per path per process)
+  local user can read (once per path per process); terminals, pipes and
+  descriptors hold nothing at rest and are not reported
 - an `acl` entry with host bits set (`10.0.0.1/8`), naming the network it
   matches; an `acl.allow` entry of a whole family (`0.0.0.0/0`, `::/0`); a
   wildcard listener whose `acl` has `deny` but no `allow`; an `acl.proxy_from`
@@ -475,6 +478,18 @@ the listeners use `cert_file`.
 lw tls ca --dir /etc/logwisp/pki                       # ca.crt, ca.key (0600)
 lw tls cert --ca-dir /etc/logwisp/pki --name agg.example.org --server
 lw tls cert --ca-dir /etc/logwisp/pki --name edge-01 --client
+```
+
+A temporary pipe needs no file at all: a self-signed certificate and
+[one user](#one-user-without-a-credentials-file) whose password is typed, or
+generated, at startup. Both last until lw exits.
+
+```bash
+# receiver: Enter at the prompt generates the password; copy it, and the
+# pin_sha256 of the WARN line (-q would hide it)
+lw -p aggregator:listen=0.0.0.0:9000,tls=self,user=pipe,format=raw,allow=SENDER/32
+# sender: asked for the password
+cmd | lw -p edge:to=RECEIVER:9000,pin=sha256//PIN,user=pipe
 ```
 
 ## Enabling mTLS
@@ -701,6 +716,50 @@ its salt change when the user is added, rotated or removed. The file is read
 only when the plugin is built and `auto_reload` does not watch it: send
 `SIGHUP` after every change. Use one file per listener when listeners admit
 different users.
+
+### One user without a credentials file
+
+`username` and `password_file` on a listener replace `credentials_file`: one
+user whose verifier is derived in memory when the plugin is built (one
+Argon2id at startup and each reload, never per login), with a decoy key drawn
+once per process. Nothing is written. It suits a temporary pipe or a single
+edge. `password_file` is read by what it names, on either side:
+
+- A regular file: at every build, so `SIGHUP` rotates it. A systemd
+  `LoadCredential=` file sits on tmpfs.
+- `/dev/fd/N`, a pipe, a FIFO or another device: once, at startup, then kept
+  in memory for reloads; restart lw to change it. A reload naming a new one
+  fails and the running pipelines stay: a console source may be reading the
+  same input, and the read would hold the reload and its signals.
+  - `/dev/fd/N` is the descriptor lw was given (`3< <(pass show lw/pipe)`),
+    read and closed; it needs no fdescfs on FreeBSD. A descriptor lw opened
+    itself is refused.
+  - One such source holds one user's password. `/dev/stdin` would take the
+    console source's input.
+- A terminal: `/dev/tty`, the presets' default with `user`, asked once, at
+  startup, without echo. lw asks whatever file is a terminal once opened, so
+  `/dev/stdin` holding a pipe is read on FreeBSD too, where stat calls it a
+  device.
+  - On a listener, Enter alone generates a 130-bit password and shows it once
+    on that terminal, never in the log or on stderr: logs persist, are
+    forwarded, and stderr is often a file.
+  - With no terminal (systemd, cron) the plugin fails. `lw ... &` stops on
+    `SIGTTIN` at the prompt.
+
+Trade-offs:
+
+- The password lives as long as the process, as dialers' passwords do:
+  `tcp_chain` logs in again on every reconnect and `http_chain` at every token
+  renewal, so it cannot be single-use.
+- A generated password stays in terminal scrollback, tmux or screen logs, and
+  the clipboard that carries it. A typed one may be as short as 8 bytes; on an
+  exposed listener prefer the generated one and `acl.allow`.
+- It never goes in argv or the environment: `/proc/PID/cmdline` is
+  world-readable, and `--dump` keeps only the path.
+- Each build draws a new salt, which, like a rotation, shows a prober that the
+  name exists.
+- Older bash and zsh back a here-string (`<<<`) with a temporary file; prefer
+  `3< <(...)`.
 
 ### Rollout, rotation and revocation
 

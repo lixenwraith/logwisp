@@ -240,13 +240,14 @@ var warnedSecrets sync.Map
 
 // SecretFileWarning describes a secret file every local user can read, once
 // per path per process. Group access is left alone: container secret mounts
-// commonly grant it on purpose.
+// commonly grant it on purpose. Terminals, pipes and descriptors hold no
+// secret at rest; lw closes /dev/fd/N after reading, and N then names another.
 func SecretFileWarning(key, path string) string {
-	if path == "" {
+	if path == "" || strings.HasPrefix(path, "/dev/fd/") {
 		return ""
 	}
 	fi, err := os.Stat(path)
-	if err != nil || fi.Mode().Perm()&0o004 == 0 {
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o004 == 0 {
 		return ""
 	}
 	if _, seen := warnedSecrets.LoadOrStore(path, struct{}{}); seen {

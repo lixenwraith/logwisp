@@ -55,14 +55,14 @@ rc=${PIPESTATUS[1]}
 check "reader gone: lw exits on SIGPIPE ($rc)" "$((rc == 141))"
 
 # 7. filters and formats compose with stdin and stdout
-check "--filter keeps matching lines" "$(is "$(printf 'x INFO\ny ERROR\n' | lw bare --filter include,patterns=ERROR)" "y ERROR")"
+check "--filter keeps matching lines" "$(is "$(printf 'x INFO\ny ERROR\n' | lw bare --filter include:patterns=ERROR)" "y ERROR")"
 
 # 8. control characters pass to a pipe unchanged and are escaped on request
 check "control bytes reach a pipe unchanged" "$(is "$(printf 'a\033[31mb\n' | lw bare | od -An -tx1 | tr -d ' ')" 611b5b33316d620a)"
-check "escape=always writes them as <hex>" "$(is "$(printf 'a\033[31mb\n' | lw bare --sink console,escape=always)" 'a<1b>[31mb')"
+check "escape=always writes them as <hex>" "$(is "$(printf 'a\033[31mb\n' | lw bare --sink console:escape=always)" 'a<1b>[31mb')"
 
 # 9. at the end of input the file sink writes its queue before lw exits
-seq 1 5000 | lw bare --sink "file,directory=$RUN/fsink,name=out,buffer_size=10000"
+seq 1 5000 | lw bare --sink "file:directory=$RUN/fsink,name=out,buffer_size=10000"
 n=$(cat "$RUN"/fsink/out*.log 2>/dev/null | wc -l)
 check "file sink holds all 5000 lines at exit ($n)" "$((n == 5000))"
 

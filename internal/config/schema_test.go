@@ -117,8 +117,8 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 			c.Pipelines[0].PluginSinks[0] = PluginSinkConfig{ID: "up", Type: "tcp_chain", Config: map[string]any{"host": "h", "port": int64(1),
 				"tls": map[string]any{"enabled": true, "insecure_skip_verify": true}, "auth": map[string]any{"type": "mtls"}}}
 		},
-		"pipelines[0].flow.rate_limit.rate: must be a finite number": func(c *Config) {
-			c.Pipelines[0].Flow.RateLimit = &RateLimitConfig{Rate: math.Inf(1)}
+		"pipelines[0].flow.rate_limit.entries_per_second: must be a finite number": func(c *Config) {
+			c.Pipelines[0].Flow.RateLimit = &RateLimitConfig{EntriesPerSecond: math.Inf(1)}
 		},
 		"color: must be one of auto, always, never, got \"\"": func(c *Config) {
 			c.Color = ""

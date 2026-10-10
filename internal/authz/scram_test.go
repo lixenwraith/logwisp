@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -101,7 +102,9 @@ func (f *fixture) pool(t *testing.T) *x509.CertPool {
 
 func (f *fixture) listener(t *testing.T, o config.AuthOptions, tlsCfg *tls.Config, role config.Side, transport Transport) *Policy {
 	t.Helper()
-	o.Type, o.CredentialsFile = MethodSCRAM, f.creds
+	if o.Type = MethodSCRAM; o.Username == "" {
+		o.CredentialsFile = f.creds
+	}
 	p, err := New(&o, tlsCfg, nil, role, transport)
 	if err != nil {
 		t.Fatal(err)
@@ -348,21 +351,24 @@ func TestCertificateBindsToUser(t *testing.T) {
 	}
 }
 
-// An unknown user's challenge salt comes from the file's decoy key, so it is
-// the same after a restart and a prober learns nothing from restarts.
+// An unknown user's challenge salt comes from the decoy key, the file's or,
+// for one user without a file, the process's, so it is the same after a
+// rebuild and a prober learns nothing from restarts or reloads.
 func TestUnknownUserSaltSurvivesRestart(t *testing.T) {
 	f := newFixture(t)
-	var salts []string
-	for range 2 {
-		l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
-		c, err := l.listener.server.Load().ProcessClientFirstMessage("nobody", strings.Repeat("n", 32))
-		if err != nil {
-			t.Fatal(err)
+	for _, o := range []config.AuthOptions{{}, {Username: "pipe", PasswordFile: f.write(t, "pipe.pass", "pipe-secret\n")}} {
+		var salts []string
+		for range 2 {
+			l := f.listener(t, o, f.serverTLS, config.Listener, TCP)
+			c, err := l.listener.server.Load().ProcessClientFirstMessage("nobody", strings.Repeat("n", 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			salts = append(salts, c.Salt)
 		}
-		salts = append(salts, c.Salt)
-	}
-	if salts[0] != salts[1] {
-		t.Fatalf("unknown user salts differ across restarts: %q, %q", salts[0], salts[1])
+		if salts[0] != salts[1] {
+			t.Fatalf("%+v: unknown user salts differ across rebuilds: %q, %q", o, salts[0], salts[1])
+		}
 	}
 }
 
@@ -615,12 +621,118 @@ func TestRefusedHellosFreeTheirSlot(t *testing.T) {
 func TestReadPasswordTrimsOneLineBreak(t *testing.T) {
 	f := newFixture(t)
 	for _, contents := range []string{"secret", "secret\n", "secret\r\n"} {
-		if pw, err := ReadPassword(f.write(t, "pw", contents)); err != nil || pw != "secret" {
+		if pw, err := ReadPassword(f.write(t, "pw", contents), "edge-01", false); err != nil || pw != "secret" {
 			t.Errorf("ReadPassword(%q) = %q, %v", contents, pw, err)
 		}
 	}
-	if _, err := ReadPassword(f.write(t, "pw", "\n")); err == nil {
+	if _, err := ReadPassword(f.write(t, "pw", "\n"), "edge-01", false); err == nil {
 		t.Error("an empty password was accepted")
+	}
+}
+
+// A descriptor's password is read once and the descriptor closed: a reload
+// gets it from memory, and another user naming it is refused.
+func TestPasswordFromADescriptorSurvivesReload(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd, err := syscall.Dup(int(r.Fd())) // not close-on-exec, as a shell passes it
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { readOnce.Lock(); clear(readOnce.m); readOnce.Unlock() })
+	var before, after syscall.Stat_t
+	syscall.Fstat(fd, &before)
+	w.WriteString("pipe-secret\n")
+	w.Close()
+	path := fmt.Sprintf("/dev/fd/%d", fd)
+	for range 2 {
+		if pw, err := ReadPassword(path, "pipe", true); err != nil || pw != "pipe-secret" {
+			t.Fatalf("ReadPassword(%s) = %q, %v", path, pw, err)
+		}
+	}
+	if syscall.Fstat(fd, &after) == nil && after.Ino == before.Ino {
+		t.Error("the descriptor was left open")
+	}
+	if _, err := ReadPassword(path, "other", false); err == nil || !strings.Contains(err.Error(), `read for user "pipe"`) {
+		t.Errorf("another user of the descriptor: %v", err)
+	}
+}
+
+// After startup a descriptor, pipe or terminal is not read: a console source
+// may read the same one. One read at startup stays for reloads.
+func TestOnceReadSourcesAreReadAtStartupOnly(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd, err := syscall.Dup(int(r.Fd()))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { startupOver.Store(false); readOnce.Lock(); clear(readOnce.m); readOnce.Unlock() })
+	w.WriteString("pipe-secret\n")
+	w.Close()
+	path := fmt.Sprintf("/dev/fd/%d", fd)
+	if _, err := ReadPassword(path, "early", false); err != nil {
+		t.Fatalf("at startup: %v", err)
+	}
+	EndStartup()
+	if _, err := ReadPassword(os.DevNull, "late", false); err == nil || !strings.Contains(err.Error(), "only at startup") {
+		t.Fatalf("a device after startup: %v", err)
+	}
+	if pw, err := ReadPassword(path, "early", false); err != nil || pw != "pipe-secret" {
+		t.Fatalf("a reload of the early user: %q, %v", pw, err)
+	}
+}
+
+// A device is classed by the file it opens, not by stat: FreeBSD stats
+// /dev/stdin as a device whatever it holds, so one that is no terminal is read.
+func TestADeviceThatIsNoTerminalIsRead(t *testing.T) {
+	if _, err := ReadPassword(os.DevNull, "dev", false); err == nil || !strings.Contains(err.Error(), "password must be") {
+		t.Fatalf("%s: %v; want it read, and empty", os.DevNull, err)
+	}
+}
+
+// A /dev/fd/N lw opened itself, close-on-exec as Go opens every file, was
+// never passed to it: it is refused and left open.
+func TestOwnDescriptorIsNeverRead(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := ReadPassword(fmt.Sprintf("/dev/fd/%d", f.Fd()), "pipe", false); err == nil || !strings.Contains(err.Error(), "not passed to lw") {
+		t.Fatalf("lw's own descriptor: %v", err)
+	}
+	if _, err := f.Stat(); err != nil {
+		t.Fatalf("lw's own descriptor was closed: %v", err)
+	}
+}
+
+// A listener's one user, from username and password_file, logs in with its
+// password; another password and an unknown user fail alike.
+func TestOneUserListenerAdmitsItsPassword(t *testing.T) {
+	f := newFixture(t)
+	o := config.AuthOptions{Username: "pipe", PasswordFile: f.write(t, "pipe.pass", "pipe-secret\n")}
+	l := f.listener(t, o, f.serverTLS, config.ChainListener, TCP)
+	res, _, err := f.connect(t, l, f.serverTLS, f.dialer(t, "pipe", "pipe-secret"), nil)
+	if err != nil || res.err != nil || res.adm.Identity.Name != "pipe" {
+		t.Fatalf("exchange: dialer %v, listener %v", err, res.err)
+	}
+	var seen []string
+	for _, d := range []*Policy{f.dialer(t, "pipe", "edge-01-secret"), f.dialer(t, "edge-01", "pipe-secret")} {
+		res, _, err := f.connect(t, l, f.serverTLS, d, nil)
+		if !errors.Is(err, ErrRefused) || !errors.Is(res.err, ErrRefused) {
+			t.Fatalf("dialer %v, listener %v; want both refused", err, res.err)
+		}
+		seen = append(seen, err.Error())
+	}
+	if seen[0] != seen[1] {
+		t.Fatalf("wrong password and unknown user differ: %q vs %q", seen[0], seen[1])
 	}
 }
 

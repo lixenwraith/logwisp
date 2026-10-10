@@ -173,11 +173,12 @@ Options, each as type and default:
 - `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
   a new stream gets after its `connected` event, before the live ones, so a
   browser opened late sees a backlog; `0` = none.
-- `login_page` (bool, `false`): `scram` in proxy mode only (an error
-  elsewhere): the browser login page at `/auth/login`.
-- `viewer_page` (bool, `false`): `scram` in proxy mode only (an error
-  elsewhere): the live viewer at `/auth/view`; needs `login_page`. Without
-  auth, or under `mtls`, the viewer is always served.
+- `login_page` (bool, `false`): only for `scram` behind
+  `auth.trusted_proxies`, where browsers log in (an error elsewhere): the
+  login page at `/auth/login`.
+- `viewer_page` (bool, `false`): the same, the live viewer at `/auth/view`
+  after a login; needs `login_page`. Without auth, or under `mtls`, the
+  viewer is always at `/`, with neither key.
 - `tls` (table): listener TLS; see [Security](security.md).
 - `auth` (table): client authentication (`mtls` or `scram`); see
   [Security](security.md#the-auth-block).
