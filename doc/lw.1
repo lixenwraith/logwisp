@@ -141,7 +141,10 @@ Build every pipeline and plugin as a start would, loading options, TLS files
 and credentials files and printing startup warnings, without binding a port
 or opening, reading or creating a log file; print
 .Dq configuration ok
-and exit 0, or the error and exit 1, or 2 when a named configuration file is
+and exit 0.
+Otherwise print the first problem of each setting, flow stage, source, sink
+and pipeline, a line each named by its key's path, or else the first file
+that fails to open, and exit 1, or 2 when a named configuration file is
 missing
 .Pq see Sx EXIT STATUS .
 .It Fl \-dump
@@ -167,9 +170,13 @@ A file is read, never written; the shell empties a redirect's target before
 .Nm
 reads it, so the redirect names a file it does not load.
 .It Fl \-schema
-Print every setting, pipeline flag, flow stage, plugin option and preset as
-one JSON document, with kinds, defaults, rules and help, and exit; tools build
-their option lists from it.
+Print every setting, pipeline flag, flow stage, plugin option, preset and
+output form as one JSON document, with kinds, defaults, rules and help, and
+exit; tools build their option lists from it.
+A plugin's table holds the keys of its side; a flow stage carries
+.Ql on ,
+the values that turn it on; a preset key carries the choices and hint of the
+option it sets.
 .It Fl q , Fl \-quiet
 Turn off the log of
 .Nm

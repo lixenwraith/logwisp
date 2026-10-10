@@ -15,12 +15,13 @@ GIT_COMMIT ?= $(GIT_COMMIT_DEFAULT)
 BUILD_TIME_DEFAULT != f='+%Y-%m-%d_%H:%M:%S'; e="$${SOURCE_DATE_EPOCH:-}"; \
 	if [ -n "$$e" ]; then date -u -d "@$$e" "$$f" 2>/dev/null || date -u -r "$$e" "$$f"; else date -u "$$f"; fi
 BUILD_TIME ?= $(BUILD_TIME_DEFAULT)
-# The image stamps the commit time, so a rebuild of one commit stays cached
+# The image and the wasm stamp the commit time, so a rebuild of one commit
+# stays cached, and the website's engine keeps its checksums
 IMAGE_BUILD_TIME_DEFAULT != TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%d_%H:%M:%S 2>/dev/null || echo unknown
 IMAGE_BUILD_TIME ?= $(IMAGE_BUILD_TIME_DEFAULT)
-VERSION_LDFLAGS = -X 'github.com/lixenwraith/logwisp/internal/version.Version=$(VERSION)' \
-	-X 'github.com/lixenwraith/logwisp/internal/version.GitCommit=$(GIT_COMMIT)' \
-	-X 'github.com/lixenwraith/logwisp/internal/version.BuildTime=$(BUILD_TIME)'
+COMMIT_LDFLAGS = -X 'github.com/lixenwraith/logwisp/internal/version.Version=$(VERSION)' \
+	-X 'github.com/lixenwraith/logwisp/internal/version.GitCommit=$(GIT_COMMIT)'
+VERSION_LDFLAGS = $(COMMIT_LDFLAGS) -X 'github.com/lixenwraith/logwisp/internal/version.BuildTime=$(BUILD_TIME)'
 # Not LDFLAGS/GOFLAGS: packagers export those for the C linker and go itself.
 GO_BUILDFLAGS ?=
 GO_LDFLAGS ?=
@@ -78,8 +79,8 @@ help:
 	@echo "  build        Build $(BIN_DIR)/$(BINARY) with version metadata"
 	@echo "  release      Build it static, stripped and trimmed (CGO_ENABLED=0)"
 	@echo "  dev          Build it with the race detector"
-	@echo "  wasm         Build $(BIN_DIR)/lwconf.wasm, the engine for the website, beside its"
-	@echo "               loader wasm_exec.js, and print both checksums"
+	@echo "  wasm         Write $(WASM_DIR)/, the engine a website drops in: lwconf.wasm, its"
+	@echo "               loader wasm_exec.js, lwconf.js, schema.json, and lwconf.json, their manifest"
 	@echo "  version      Print the version metadata a build embeds"
 	@echo "  completion   Regenerate $(PKG_DIR)/completion from lw's command tables"
 	@echo "  clean        Remove $(BIN_DIR)/"
@@ -123,11 +124,21 @@ dev: check-go
 	$(GO) build -race $(GO_BUILDFLAGS) -ldflags "$(VERSION_LDFLAGS) $(GO_LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(SRC)
 
 # The page loads the toolchain's own loader, which uses no eval: its CSP needs
-# only 'wasm-unsafe-eval'
+# only 'wasm-unsafe-eval'. schema.json is lw --schema stamped as the engine is,
+# so it equals the engine's schema(); lwconf.json records the build.
+WASM_DIR = $(BIN_DIR)/lwconf
+WASM_FILES = lwconf.wasm wasm_exec.js lwconf.js schema.json
+WASM_LDFLAGS = -s -w $(COMMIT_LDFLAGS) -X 'github.com/lixenwraith/logwisp/internal/version.BuildTime=$(IMAGE_BUILD_TIME)' $(GO_LDFLAGS)
 wasm: check-go
-	GOOS=js GOARCH=wasm $(GO) build -trimpath $(GO_BUILDFLAGS) -ldflags "-s -w $(VERSION_LDFLAGS) $(GO_LDFLAGS)" -o $(BIN_DIR)/lwconf.wasm ./cmd/lwconf
-	install -m 0644 "$$($(GO) env GOROOT)/lib/wasm/wasm_exec.js" $(BIN_DIR)/wasm_exec.js
-	@cd $(BIN_DIR) && { sha256sum lwconf.wasm wasm_exec.js 2>/dev/null || sha256 -r lwconf.wasm wasm_exec.js; }
+	@rm -rf $(WASM_DIR) && mkdir -p $(WASM_DIR)
+	GOOS=js GOARCH=wasm $(GO) build -trimpath $(GO_BUILDFLAGS) -ldflags "$(WASM_LDFLAGS)" -o $(WASM_DIR)/lwconf.wasm ./cmd/lwconf
+	install -m 0644 "$$($(GO) env GOROOT)/lib/wasm/wasm_exec.js" cmd/lwconf/lwconf.js $(WASM_DIR)
+	$(GO) run -trimpath $(GO_BUILDFLAGS) -ldflags "$(WASM_LDFLAGS)" $(SRC) --schema > $(WASM_DIR)/schema.json
+	@set -eu; go=$$($(GO) env GOVERSION); cd $(WASM_DIR); \
+	sums=$$(sha256sum $(WASM_FILES) 2>/dev/null || sha256 -r $(WASM_FILES)); echo "$$sums"; \
+	{ printf '{\n  "version": "%s",\n  "commit": "%s",\n  "go": "%s",\n  "sha256": {' '$(VERSION)' '$(GIT_COMMIT)' "$$go"; \
+		echo "$$sums" | awk '{ sub(/^\*/, "", $$2); printf "%s\n    \"%s\": \"%s\"", (NR > 1 ? "," : ""), $$2, $$1 }'; \
+		printf '\n  }\n}\n'; } > lwconf.json
 
 test: check-go
 	$(GO) test ./...
@@ -157,7 +168,7 @@ verify: test
 	done
 	@echo "cross build js/wasm"; GOOS=js GOARCH=wasm $(GO) build -o /dev/null ./cmd/lwconf
 	@if command -v node >/dev/null 2>&1; then \
-		(cd $(WEB_DIR) && node --test) && cd cmd/lwconf && node --test; \
+		(cd $(WEB_DIR) && node --test) && cd cmd/lwconf && GO='$(GO)' node --test; \
 	else \
 		echo "node not found: web client and lwconf tests skipped"; \
 	fi

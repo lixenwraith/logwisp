@@ -399,17 +399,27 @@ func TestPasteReplacesThePipelines(t *testing.T) {
 	}
 }
 
-// The first problem marks the part it names, and ! moves there, to the key
+// Every problem marks the part it names and its key's row, the status counts
+// those after the first, and ! moves to the first, to the key
 func TestProblemNamesItsPart(t *testing.T) {
-	a := mono(pipeline(t, []string{"null"}, []string{"null", "tcp"}))
+	a := mono(pipeline(t, []string{"null"}, []string{"null", "tcp", "http"}))
 	sink := compose.Node{Role: "sink", ID: "tcp"}
-	if !a.faulty(sink) || a.faulty(compose.Node{Role: "source", ID: "null"}) || a.faulty(compose.Node{Role: "sink", ID: "null"}) {
+	if !a.faulty(sink) || !a.faulty(compose.Node{Role: "sink", ID: "http"}) ||
+		a.faulty(compose.Node{Role: "source", ID: "null"}) || a.faulty(compose.Node{Role: "sink", ID: "null"}) {
 		t.Fatalf("problem %v", a.problem)
+	}
+	if status, _ := a.bottom(200); !strings.Contains(strings.Join(status, " "), "sink tcp · port: must be set (1 more") {
+		t.Fatalf("status %q", status)
 	}
 	press(a, "!")
 	n, _ := a.node()
 	if l := a.lines()[a.insp.cursor]; n != sink || !a.inspect || l.key.Name != "port" {
 		t.Fatalf("on %+v, row %+v", n, l)
+	}
+	a.choose(compose.Node{Role: "sink", ID: "http"})
+	lines := a.lines()
+	if text, style := a.help(lines[slices.IndexFunc(lines, func(l line) bool { return l.key.Name == "port" })]); text != "must be set" || style != a.th.Error {
+		t.Fatalf("http's port row: %q", text)
 	}
 }
 
@@ -513,6 +523,19 @@ func presetForm(a *app, name string) *form {
 	f.fill(nil)
 	a.dialog = f
 	return f
+}
+
+// A preset form's note shows the focused key's choices before its help
+func TestPresetFormShowsTheChoices(t *testing.T) {
+	a := mono(pipeline(t, nil, nil))
+	presetForm(a, "tail")
+	press(a, terminal.KeyBacktab)
+	ps := config.Presets()
+	tail := ps[slices.IndexFunc(ps, func(p config.Preset) bool { return p.Name == "tail" })].Params
+	format := tail[slices.IndexFunc(tail, func(p config.PresetParam) bool { return p.Name == "format" })]
+	if screen := strings.Join(text(render(a, 80, 24), 80), "\n"); !strings.Contains(screen, format.Usage()) || len(format.Enum) == 0 {
+		t.Fatalf("format's choices not shown:\n%s", screen)
+	}
 }
 
 // A preset form is usable at 25 columns: labels stack above their values,

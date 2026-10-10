@@ -85,7 +85,6 @@ type app struct {
 	look    look
 	th      ui.Theme
 	font    font
-	tables  map[string][]config.Key
 	pi      int               // the pipeline shown
 	col     int               // the chosen column
 	row     [3]int            // the chosen node of each column
@@ -96,14 +95,14 @@ type app struct {
 	dialog  dialog // takes every key while open
 	status  string // the last edit's refusal
 	note    string // what the last action did
-	problem error  // the composition's first problem
+	problem error  // the composition's problems, joined
 	changed bool
 	done    bool
 	result  Result
 }
 
 func newApp(c *compose.Composition, l look, f font) *app {
-	a := &app{comp: c, look: l, th: l.Theme, font: f, tables: compose.NewSchema().Tables}
+	a := &app{comp: c, look: l, th: l.Theme, font: f}
 	a.th.Glyphs = f.Glyphs
 	a.insp.open = map[string]bool{}
 	if len(c.Pipelines) == 0 {
@@ -167,10 +166,10 @@ func (a *app) plugin(n compose.Node) (config.Plugin, bool) {
 	return config.LookupPlugin(n.Role, typ)
 }
 
-// keys are the options a node takes: a plugin's of its side, a stage's
+// keys are the options a node takes: a plugin's, a stage's
 func (a *app) keys(n compose.Node) []config.Key {
 	if p, ok := a.plugin(n); ok {
-		return sided(p.Keys(), p.Side)
+		return p.Keys()
 	}
 	for _, s := range config.FlowStages() {
 		if s.Key == n.Role {
@@ -178,18 +177,6 @@ func (a *app) keys(n compose.Node) []config.Key {
 		}
 	}
 	return nil
-}
-
-// sided drops the keys of the other network side
-func sided(keys []config.Key, side config.Side) []config.Key {
-	name := map[config.Side]string{config.Listener: "listener", config.ChainListener: "listener", config.Dialer: "dialer"}[side]
-	var out []config.Key
-	for _, k := range keys {
-		if k.Side == "" || k.Side == name {
-			out = append(out, k)
-		}
-	}
-	return out
 }
 
 // edit applies one engine edit: a refusal is the status, a change revalidates
@@ -418,13 +405,13 @@ func (a *app) quit() {
 	a.dialog = &confirm{question: "Quit without running or printing the pipelines?", yes: func(a *app) { a.done = true }}
 }
 
-// showProblem chooses the part the first problem names and shows it whole
+// showProblem chooses the part the first problem names and shows them all
 func (a *app) showProblem() {
 	if a.problem == nil {
 		a.note = "the pipelines are valid"
 		return
 	}
-	if pi, n, key, _, ok := locate(a.problem); ok && pi < len(a.comp.Pipelines) {
+	if pi, n, key, _, ok := compose.Locate(compose.Problems(a.problem)[0]); ok && pi < len(a.comp.Pipelines) {
 		a.pi = pi
 		a.choose(n)
 		a.inspectAt(func(l line) bool { return l.node == n && l.key.Name == key })
@@ -539,7 +526,8 @@ func (a *app) paint(cells []terminal.Cell, w, h int) {
 }
 
 // bottom is the status rows, wrapped to three at most: an edit's refusal, a
-// note, the first problem by its part, or the keys while all is valid
+// note, the first problem by its part and how many follow, or the keys while
+// all is valid
 func (a *app) bottom(w int) ([]string, ui.Style) {
 	th, f := a.th, a.font
 	text, style := "", th.Error
@@ -549,9 +537,13 @@ func (a *app) bottom(w int) ([]string, ui.Style) {
 	case a.note != "":
 		text, style = a.note, th.Muted
 	case a.problem != nil:
-		pi, n, key, msg, _ := locate(a.problem)
+		problems := compose.Problems(a.problem)
+		pi, n, key, msg, _ := compose.Locate(problems[0])
 		if where := a.where(pi, n, key); where != "" {
 			msg = where + ": " + msg
+		}
+		if len(problems) > 1 {
+			msg += fmt.Sprintf(" (%d more: ! shows them)", len(problems)-1)
 		}
 		text = f.invalid + " " + msg
 	default:

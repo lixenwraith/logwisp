@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
@@ -57,8 +58,25 @@ var plugins = []Plugin{
 // Plugins lists the catalogue
 func Plugins() []Plugin { return slices.Clone(plugins) }
 
-// Keys describes the plugin's options
-func (p Plugin) Keys() []Key { return keys(p.options) }
+// Keys describes the plugin's options, its tables holding the keys of its
+// side, and HTTP's keys only when it speaks HTTP
+func (p Plugin) Keys() []Key { return p.applying(keys(p.options)) }
+
+func (p Plugin) applying(all []Key) []Key {
+	side, out := "listener", []Key{}
+	if p.Side == Dialer {
+		side = "dialer"
+	}
+	for _, k := range all {
+		if (k.Side == "" || k.Side == side) && (!k.HTTP || p.HTTP) {
+			if k.Keys != nil {
+				k.Keys = p.applying(k.Keys)
+			}
+			out = append(out, k)
+		}
+	}
+	return out
+}
 
 // LookupPlugin finds the catalogue row of a source or sink type
 func LookupPlugin(role, typ string) (Plugin, bool) {
@@ -82,7 +100,8 @@ func (e *KeyError) Unwrap() error { return e.Err }
 // option is one key of an options table, from its field's tags: toml names
 // it, default: holds the default as typed on a command line, help: says what
 // it does, and lw: lists its rules: required, enum=a|b, min=N, max=N,
-// zero=MEANING (zero is a value, not the default), hint=KIND, listener or dialer.
+// zero=MEANING (zero is a value, not the default), hint=KIND, listener or
+// dialer, and http (only plugins that speak HTTP take it).
 type option struct {
 	Key
 	index int
@@ -107,6 +126,8 @@ func options(t reflect.Type) []option {
 				o.Required = true
 			case "listener", "dialer":
 				o.Side = name
+			case "http":
+				o.HTTP = true
 			case "enum":
 				o.Enum = strings.Split(value, "|")
 			case "min", "max":
@@ -133,7 +154,7 @@ func options(t reflect.Type) []option {
 }
 
 // Key describes one option, for lw --schema and the composer: its tags, and
-// its kind, a table's being "table" (tls, auth or acl)
+// its kind, a table's being "table" (tls, auth or acl) with the table's keys
 type Key struct {
 	Name     string   `json:"key"`
 	Kind     string   `json:"kind"`
@@ -146,17 +167,21 @@ type Key struct {
 	Zero     string   `json:"zero,omitempty"`
 	Hint     string   `json:"hint,omitempty"`
 	Side     string   `json:"side,omitempty"`
+	HTTP     bool     `json:"http,omitempty"`
+	Keys     []Key    `json:"keys,omitempty"`
 }
 
 var kinds = map[reflect.Kind]string{reflect.String: "string", reflect.Int64: "integer",
 	reflect.Float64: "number", reflect.Bool: "bool", reflect.Slice: "list", reflect.Pointer: "table"}
 
 // Stage is a flow stage: its key in the flow table, whether it is a list (the
-// filters), and its options
+// filters), its options, and the values that turn it on, which a file's
+// defaults leave off
 type Stage struct {
-	Key  string `json:"key"`
-	List bool   `json:"list,omitempty"`
-	Keys []Key  `json:"keys"`
+	Key  string         `json:"key"`
+	List bool           `json:"list,omitempty"`
+	Keys []Key          `json:"keys"`
+	On   map[string]any `json:"on,omitempty"`
 }
 
 // FlowStages lists the flow table's stages, in the order entries pass them
@@ -165,19 +190,19 @@ func FlowStages() []Stage {
 	t := reflect.TypeFor[FlowConfig]()
 	for _, o := range options(t) {
 		ft := t.Field(o.index).Type
-		out = append(out, Stage{o.Name, ft.Kind() == reflect.Slice, keys(ft.Elem())})
+		out = append(out, Stage{o.Name, ft.Kind() == reflect.Slice, keys(ft.Elem()), maps.Clone(stageOn[o.Name])})
 	}
 	return out
 }
 
-// KeysOf describes the options of a table: tls, auth or acl
-func KeysOf[T any]() []Key { return keys(reflect.TypeFor[T]()) }
-
 func keys(t reflect.Type) []Key {
-	var out []Key
+	out := []Key{}
 	for _, o := range options(t) {
 		if o.Kind == "" {
 			panic(fmt.Sprintf("%s.%s: no kind", t.Name(), o.Name))
+		}
+		if ft := t.Field(o.index).Type; ft.Kind() == reflect.Pointer {
+			o.Keys = keys(ft.Elem())
 		}
 		out = append(out, o.Key)
 	}

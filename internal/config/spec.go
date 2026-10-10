@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -183,12 +182,15 @@ func cliSpecs(in []Spec) ([]pipelineSpec, error) {
 	return specs, nil
 }
 
-// envPipelineSpecs reads the one-pipeline environment form. An empty variable
-// counts as unset, so container templates may leave optional ones blank.
-func envPipelineSpecs() []pipelineSpec {
+// envPipelineSpecs reads the one-pipeline environment form from environ,
+// NAME=value each. An empty variable counts as unset, so container templates
+// may leave optional ones blank.
+func envPipelineSpecs(environ []string) []pipelineSpec {
 	var specs []pipelineSpec
-	if name := os.Getenv(specVariable("pipeline")); name != "" {
-		specs = append(specs, pipelineSpec{specVariable("pipeline"), nil, name})
+	for _, kv := range environ {
+		if name, value, _ := strings.Cut(kv, "="); name == specVariable("pipeline") && value != "" {
+			specs = append(specs, pipelineSpec{name, nil, value})
+		}
 	}
 	for i := range specKinds {
 		kind := &specKinds[i]
@@ -198,7 +200,7 @@ func envPipelineSpecs() []pipelineSpec {
 			name, spec string
 		}
 		var found []numbered
-		for _, kv := range os.Environ() {
+		for _, kv := range environ {
 			name, spec, _ := strings.Cut(kv, "=")
 			suffix, ok := strings.CutPrefix(name, base+"_")
 			n, err := strconv.ParseUint(suffix, 10, 64)
@@ -214,6 +216,16 @@ func envPipelineSpecs() []pipelineSpec {
 		}
 	}
 	return specs
+}
+
+// EnvPipelines builds the pipeline of LOGWISP_ variables, NAME=value each, as
+// Load does without pipeline flags
+func EnvPipelines(environ []string, isDir IsDir) ([]PipelineConfig, error) {
+	specs := envPipelineSpecs(environ)
+	if len(specs) == 0 {
+		return nil, errors.New("no LOGWISP_ pipeline variables")
+	}
+	return buildPipelines(specs, isDir)
 }
 
 // SpecPipelines builds the pipelines of command-line specs, as Load does
