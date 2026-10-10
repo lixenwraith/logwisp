@@ -69,9 +69,18 @@ pipelines have [their own flags](#pipelines):
   resolved into it, as TOML that `-c` reads back, and exit
 - `-T`, `--tui`: compose the pipelines on screen, then run or print them
   ([below](#lw---tui))
-- `--schema`: print every setting, pipeline flag, flow stage, plugin option
-  and preset as one JSON document (kinds, defaults, rules, help), and exit;
-  tools build their option lists from it
+- `--schema`: print every setting, pipeline flag, flow stage, plugin option,
+  preset and output form as one JSON document, and exit; tools build their
+  option lists from it:
+  - a key: its kind, default, rules and help; a table (`tls`, `auth`, `acl`)
+    holds its own keys, those of the plugin's side (listener or dialer),
+    HTTP's only on a plugin that speaks HTTP. Every listener lists
+    `auth.node_binding` and `auth.trusted_proxies`, which validation admits
+    only on chain sources and on the http sink
+  - a flow stage: its keys, and `on`, the values that turn it on
+  - a preset key: its default and help, and the choices (`enum`) and `hint`
+    of the option it sets
+  - `forms`: `command`, `environment` and `file`, each with its hint
 - `--color [WHEN]`, WHEN `auto`, `always` or `never`: level names in color on
   console sinks, default `auto` (a terminal, `NO_COLOR` unset, `TERM` not
   `dumb`); bare, `always`. A console sink's own `color` wins
@@ -421,12 +430,20 @@ lw -c dev.toml --logging.level=debug
 `lw --check` validates without running: it builds every pipeline and plugin as
 a start would (options, TLS files, credentials files, startup warnings), but
 binds no port, reads no stdin, and opens, reads or creates no log file; it
-prints `configuration ok: N pipeline(s)` and exits 0, or the error and exits 1
-(2 when a named file is missing, see [Exit Codes](#exit-codes)):
+prints `configuration ok: N pipeline(s)` and exits 0. Otherwise it prints the
+first problem of each setting, flow stage, source, sink and pipeline, a line
+each named by its key's path, or else the first file that fails to open, and
+exits 1 (2 when a named file is missing, see [Exit Codes](#exit-codes)):
 
 ```bash
 lw --check -c /etc/logwisp/logwisp.toml
 lw --check --source file:directory=/var/log/app --sink http:port=8080
+```
+
+```text
+Error: Failed to load config: invalid configuration:
+pipelines[0].plugin_sources[file].config.directory: must be set
+pipelines[0].plugin_sinks[tcp].config.port: must be from 1 to 65535, got 70000
 ```
 
 **Production**
@@ -472,8 +489,8 @@ WebAssembly.
   Space flips it; Esc goes back. `a` adds a source, sink or filter; `c`
   changes a source's or sink's type in its place; `d` deletes, or returns a
   value to its default; Space turns a flow stage on or off; `J`/`K` move a
-  filter; `[` `]` switch pipelines; `p` presets; `!` shows the first
-  problem; `r` runs; `o` output; `?` keys; `q` quits.
+  filter; `[` `]` switch pipelines; `p` presets; `!` shows every problem,
+  moving to the first; `r` runs; `o` output; `?` keys; `q` quits.
 - Pipelines: Up from a column's top row reaches the bar, where `[` `]` or
   Left/Right switch, `a` adds one (empty or from a preset), Enter renames and
   `d` deletes, asking first when it has parts.

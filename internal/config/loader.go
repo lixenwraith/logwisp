@@ -51,7 +51,7 @@ func Load(args Args) (*Manager, error) {
 		return nil, err
 	}
 	if len(specs) == 0 {
-		specs = envPipelineSpecs()
+		specs = envPipelineSpecs(os.Environ())
 	}
 	if _, err := buildPipelines(specs, HostIsDir); err != nil {
 		return nil, err
@@ -63,6 +63,7 @@ func Load(args Args) (*Manager, error) {
 		initial.Logging.Level = "warn"
 		initial.StatusReporter = false
 	}
+	var invalid error // the validator's problems, which lw prints a line each
 	cfg, err := lconfig.NewBuilder().
 		WithTarget(initial).
 		WithEnvPrefix("LOGWISP_").
@@ -70,10 +71,10 @@ func Load(args Args) (*Manager, error) {
 		WithFile(configPath).
 		WithTypedValidator(func(cfg *Config) error {
 			effective := *cfg // the builder keeps cfg; only the copy is replaced
-			if err := m.usePipelines(&effective); err != nil {
-				return err
+			if invalid = m.usePipelines(&effective); invalid == nil {
+				invalid = ValidateConfig(&effective)
 			}
-			return ValidateConfig(&effective)
+			return invalid
 		}).
 		WithSecurityOptions(lconfig.SecurityOptions{
 			PreventPathTraversal: true,
@@ -81,7 +82,10 @@ func Load(args Args) (*Manager, error) {
 		}).
 		Build()
 	if err != nil {
-		if !errors.Is(err, lconfig.ErrConfigNotFound) {
+		switch {
+		case invalid != nil:
+			return nil, fmt.Errorf("invalid configuration:\n%w", invalid)
+		case !errors.Is(err, lconfig.ErrConfigNotFound):
 			return nil, fmt.Errorf("failed to load or validate config: %w", err)
 		}
 		if isExplicit {

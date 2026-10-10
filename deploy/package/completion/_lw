@@ -94,10 +94,10 @@ preset:*)
 	(( CURRENT -= 2 ))
 	case ${words[1]} in
 	pipe) _arguments -S \
-		'--format=[raw|txt|json]:value:_default' \
+		'--format=[raw|txt|json: entry format]:value:_default' \
 		'(-h --help)'{-h,--help}'[print the flags]' ;;
 	tail) _arguments -S \
-		'--format=[raw|txt|json]:value:_default' \
+		'--format=[raw|txt|json: entry format]:value:_default' \
 		'--from=[start|end: where reading a file starts]:value:_default' \
 		'--path=[file, directory (its files) or glob to follow]:value:_default' \
 		'(-h --help)'{-h,--help}'[print the flags]' ;;
@@ -105,7 +105,7 @@ preset:*)
 		'--allow=[addresses or CIDRs that may connect, of listen'\''s family (either behind proxy=); default: all; '\'','\'' between them]:value:_default' \
 		'--cert=[certificate file, for tls=files]:value:_default' \
 		'--deny=[addresses or CIDRs refused, allow or not; '\'','\'' between them]:value:_default' \
-		'--format=[raw|txt|json]:value:_default' \
+		'--format=[raw|txt|json: entry format]:value:_default' \
 		'--from=[start|end: where reading a file starts]:value:_default' \
 		'--hosts=[names and addresses, beyond this host'\''s, of a self or issuer certificate; '\'','\'' between them]:value:_default' \
 		'--issuer_cert=[CA certificate file (lw tls ca), for tls=issuer]:value:_default' \
@@ -115,10 +115,10 @@ preset:*)
 		'--password_file=[file holding user'\''s password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks]:value:_default' \
 		'--path=[file, directory (its files) or glob to follow; default: standard input]:value:_default' \
 		'--proxy=[addresses or CIDRs of the TLS-terminating proxies browsers come through; '\'','\'' between them]:value:_default' \
-		'--tls=[off|self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files]:value:_default' \
+		'--tls=[off|self|issuer|files: plain text, a certificate made at startup (self-signed, or from issuer_*), or files]:value:_default' \
 		'(-u --user)'{-u=,--user=}'[SCRAM user: an edge'\''s login, or a listener'\''s only user in place of users]:value:_default' \
 		'--users=[credentials file (lw auth add-user): readers log in with SCRAM]:value:_default' \
-		'--viewer=[true: the login page and viewer, behind proxy; without user or users the viewer is always on]:value:_default' \
+		'--viewer=[true|false: the login page and viewer, behind proxy; without user or users the viewer is always on]:value:_default' \
 		'(-h --help)'{-h,--help}'[print the flags]' ;;
 	edge) _arguments -S \
 		'--ca=[CA file that verifies the aggregator; default: system roots]:value:_default' \
@@ -139,7 +139,7 @@ preset:*)
 		'--cert=[certificate file, for tls=files]:value:_default' \
 		'--client_ca=[CA file that verifies edge certificates (mTLS)]:value:_default' \
 		'--deny=[addresses or CIDRs refused, allow or not; '\'','\'' between them]:value:_default' \
-		'--format=[raw|txt|json]:value:_default' \
+		'--format=[raw|txt|json: entry format]:value:_default' \
 		'--hosts=[names and addresses, beyond this host'\''s, of a self or issuer certificate; '\'','\'' between them]:value:_default' \
 		'--issuer_cert=[CA certificate file (lw tls ca), for tls=issuer]:value:_default' \
 		'--issuer_key=[CA key file, for tls=issuer]:value:_default' \
@@ -147,7 +147,7 @@ preset:*)
 		'--listen=[HOST:PORT; [IPV6\]:PORT; [::\] for IPv6 only]:value:_default' \
 		'--out=[directory for the received entries; default: standard output]:value:_default' \
 		'--password_file=[file holding user'\''s password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks]:value:_default' \
-		'--tls=[self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files]:value:_default' \
+		'--tls=[self|issuer|files: a certificate made at startup (self-signed, or from issuer_*), or files]:value:_default' \
 		'--transport=[tcp|http: tcp_chain or http_chain]:value:_default' \
 		'(-u --user)'{-u=,--user=}'[SCRAM user: an edge'\''s login, or a listener'\''s only user in place of users]:value:_default' \
 		'--users=[credentials file (lw auth add-user): edges log in with SCRAM]:value:_default' \

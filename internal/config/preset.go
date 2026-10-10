@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,22 +25,48 @@ type Preset struct {
 }
 
 // PresetParam is one key. A list takes several values, ',' between them or
-// the key repeated; any other key takes one.
+// the key repeated; any other key takes one. Enum and Hint are those of the
+// option the key sets.
 type PresetParam struct {
-	Name     string `json:"name"`
-	Default  string `json:"default,omitempty"`
-	Help     string `json:"help"`
-	Required bool   `json:"required,omitempty"`
-	List     bool   `json:"list,omitempty"`
+	Name     string   `json:"name"`
+	Default  string   `json:"default,omitempty"`
+	Help     string   `json:"help"`
+	Required bool     `json:"required,omitempty"`
+	List     bool     `json:"list,omitempty"`
+	Enum     []string `json:"enum,omitempty"`
+	Hint     string   `json:"hint,omitempty"`
+}
+
+// Usage is the key's help after its choices, as lw preset and lw --tui show it
+func (p PresetParam) Usage() string {
+	if len(p.Enum) == 0 {
+		return p.Help
+	}
+	return strings.Join(p.Enum, "|") + ": " + p.Help
+}
+
+// mirror gives a key the enum and hint of option key of table T, which it
+// sets; a switch takes true or false
+func mirror[T any](p PresetParam, key string) PresetParam {
+	opts := options(reflect.TypeFor[T]())
+	i := slices.IndexFunc(opts, func(o option) bool { return o.Name == key })
+	if i < 0 {
+		panic(fmt.Sprintf("preset key %s: %s has no key %q", p.Name, reflect.TypeFor[T]().Name(), key))
+	}
+	p.Enum, p.Hint = opts[i].Enum, opts[i].Hint
+	if opts[i].Kind == "bool" {
+		p.Enum = []string{"true", "false"}
+	}
+	return p
 }
 
 // IsDir tells whether a preset's path is a directory, whose files it follows,
-// or a file pattern. Off the target host it is the user's answer, or nil: a
+// or a file pattern. Off the target host it is the user's Answers, or nil: a
 // path ending in '/' is then a directory, one with a glob a pattern, and any
 // other fails with ErrPathKind.
 type IsDir func(path string) (bool, error)
 
-var ErrPathKind = errors.New("path: a directory or a file pattern?")
+var ErrPathKind error = &KeyError{"path", errors.New("a directory or a file pattern?")}
 
 // HostIsDir asks this host: a path that does not exist is a pattern
 func HostIsDir(path string) (bool, error) {
@@ -47,28 +74,66 @@ func HostIsDir(path string) (bool, error) {
 	return err == nil && fi.IsDir(), nil
 }
 
+// Answers is IsDir off the host: whether each path answered is a directory,
+// and nil's rule for the others
+func Answers(dirs map[string]bool) IsDir {
+	return func(path string) (bool, error) {
+		if dir, ok := dirs[path]; ok {
+			return dir, nil
+		}
+		if dir := strings.HasSuffix(path, "/"); dir || strings.ContainsAny(path, `*?[\`) {
+			return dir, nil
+		}
+		return false, ErrPathKind
+	}
+}
+
 // Keys several presets share
 var (
 	pathParam   = PresetParam{Name: "path", Help: "file, directory (its files) or glob to follow; default: standard input"}
-	fromParam   = PresetParam{Name: "from", Default: "end", Help: "start|end: where reading a file starts"}
-	formatParam = func(def string) PresetParam { return PresetParam{Name: "format", Default: def, Help: "raw|txt|json"} }
-	tlsParams   = []PresetParam{
-		{Name: "cert", Help: "certificate file, for tls=files"},
-		{Name: "key", Help: "key file, for tls=files"},
-		{Name: "issuer_cert", Help: "CA certificate file (lw tls ca), for tls=issuer"},
-		{Name: "issuer_key", Help: "CA key file, for tls=issuer"},
+	fromParam   = mirror[FileSourceOptions](PresetParam{Name: "from", Default: "end", Help: "where reading a file starts"}, "from")
+	formatParam = func(def string) PresetParam {
+		return mirror[FormatConfig](PresetParam{Name: "format", Default: def, Help: "entry format"}, "type")
+	}
+	tlsParams = []PresetParam{
+		mirror[TLSOptions](PresetParam{Name: "cert", Help: "certificate file, for tls=files"}, "cert_file"),
+		mirror[TLSOptions](PresetParam{Name: "key", Help: "key file, for tls=files"}, "key_file"),
+		mirror[TLSOptions](PresetParam{Name: "issuer_cert", Help: "CA certificate file (lw tls ca), for tls=issuer"}, "issuer_cert_file"),
+		mirror[TLSOptions](PresetParam{Name: "issuer_key", Help: "CA key file, for tls=issuer"}, "issuer_key_file"),
 		{Name: "hosts", List: true, Help: "names and addresses, beyond this host's, of a self or issuer certificate; ',' between them"},
 	}
 	aclParams = []PresetParam{
-		{Name: "allow", List: true, Help: "addresses or CIDRs that may connect, of listen's family (either behind proxy=); default: all; ',' between them"},
-		{Name: "deny", List: true, Help: "addresses or CIDRs refused, allow or not; ',' between them"},
+		mirror[ACLOptions](PresetParam{Name: "allow", List: true, Help: "addresses or CIDRs that may connect, of listen's family (either behind proxy=); default: all; ',' between them"}, "allow"),
+		mirror[ACLOptions](PresetParam{Name: "deny", List: true, Help: "addresses or CIDRs refused, allow or not; ',' between them"}, "deny"),
 	}
-	transportParam = PresetParam{Name: "transport", Default: "tcp", Help: "tcp|http: tcp_chain or http_chain"}
-	userParams     = []PresetParam{
+	transportParam = PresetParam{Name: "transport", Default: "tcp", Help: "tcp_chain or http_chain", Enum: transports()}
+	usersParam     = func(who string) PresetParam {
+		return mirror[AuthOptions](PresetParam{Name: "users", Help: "credentials file (lw auth add-user): " + who + " log in with SCRAM"}, "credentials_file")
+	}
+	userParams = []PresetParam{
 		{Name: "user", Help: "SCRAM user: an edge's login, or a listener's only user in place of users"},
-		{Name: "password_file", Help: "file holding user's password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks"},
+		mirror[AuthOptions](PresetParam{Name: "password_file", Help: "file holding user's password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks"}, "password_file"),
 	}
 )
+
+// tlsParam is a listener's tls key: a tlsModes name, off only where the
+// listener may serve plain text
+func tlsParam(def string, off bool) PresetParam {
+	p := PresetParam{Name: "tls", Default: def, Help: "a certificate made at startup (self-signed, or from issuer_*), or files"}
+	if off {
+		p.Help = "plain text, " + p.Help
+	}
+	for _, m := range tlsModes {
+		if m.name != "off" || off {
+			p.Enum = append(p.Enum, m.name)
+		}
+	}
+	return p
+}
+
+// The listeners' tls keys: the aggregator always serves TLS, as edges send
+// credentials and logs
+var serveTLS, aggregatorTLS = tlsParam("off", true), tlsParam("self", false)
 
 var presets = []Preset{
 	{"pipe", "Standard input to standard output, line for line: lw without a file",
@@ -90,11 +155,11 @@ var presets = []Preset{
 	{"serve", "Serve files or standard input live: a browser viewer at /, SSE at /stream",
 		slices.Concat([]PresetParam{pathParam, fromParam, formatParam("json"),
 			{Name: "listen", Default: "127.0.0.1:8080", Help: "HOST:PORT; [IPV6]:PORT"},
-			{Name: "tls", Default: "off", Help: "off|self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files"},
-			{Name: "users", Help: "credentials file (lw auth add-user): readers log in with SCRAM"},
+			serveTLS,
+			usersParam("readers"),
 		}, userParams, []PresetParam{
-			{Name: "proxy", List: true, Help: "addresses or CIDRs of the TLS-terminating proxies browsers come through; ',' between them"},
-			{Name: "viewer", Default: "false", Help: "true: the login page and viewer, behind proxy; without user or users the viewer is always on"},
+			mirror[AuthOptions](PresetParam{Name: "proxy", List: true, Help: "addresses or CIDRs of the TLS-terminating proxies browsers come through; ',' between them"}, "trusted_proxies"),
+			mirror[HTTPSinkOptions](PresetParam{Name: "viewer", Default: "false", Help: "the login page and viewer, behind proxy; without user or users the viewer is always on"}, "viewer_page"),
 		}, aclParams, tlsParams),
 		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
 			sources, err := pathOrStdin(v, isDir)
@@ -102,7 +167,7 @@ var presets = []Preset{
 				return err
 			}
 			p.PluginSources = sources
-			sink, err := listener(v, "off")
+			sink, err := listener(v, serveTLS)
 			if err != nil {
 				return err
 			}
@@ -139,12 +204,12 @@ var presets = []Preset{
 		slices.Concat([]PresetParam{pathParam, fromParam,
 			{Name: "to", Required: true, Help: "the aggregator's HOST:PORT; [IPV6]:PORT"},
 			transportParam,
-			{Name: "ca", Help: "CA file that verifies the aggregator; default: system roots"},
+			mirror[TLSOptions](PresetParam{Name: "ca", Help: "CA file that verifies the aggregator; default: system roots"}, "ca_file"),
 			{Name: "pin", Help: "sha256//BASE64 of the aggregator's key, which it logs with tls=self"},
 			{Name: "server_name", Help: "name the aggregator's certificate carries; default: to's host"},
 		}, userParams, []PresetParam{
-			{Name: "cert", Help: "client certificate file, for an aggregator with client_ca"},
-			{Name: "key", Help: "client key file"},
+			mirror[TLSOptions](PresetParam{Name: "cert", Help: "client certificate file, for an aggregator with client_ca"}, "cert_file"),
+			mirror[TLSOptions](PresetParam{Name: "key", Help: "client key file"}, "key_file"),
 			{Name: "node", Help: "origin label; default: this host's name"},
 		}),
 		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
@@ -188,11 +253,11 @@ var presets = []Preset{
 		slices.Concat([]PresetParam{
 			{Name: "listen", Default: "0.0.0.0:9000", Help: "HOST:PORT; [IPV6]:PORT; [::] for IPv6 only"},
 			transportParam,
-			{Name: "tls", Default: "self", Help: "self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files"},
-			{Name: "users", Help: "credentials file (lw auth add-user): edges log in with SCRAM"},
+			aggregatorTLS,
+			usersParam("edges"),
 		}, userParams, []PresetParam{
-			{Name: "client_ca", Help: "CA file that verifies edge certificates (mTLS)"},
-			{Name: "out", Help: "directory for the received entries; default: standard output"},
+			mirror[TLSOptions](PresetParam{Name: "client_ca", Help: "CA file that verifies edge certificates (mTLS)"}, "client_ca_file"),
+			mirror[FileSinkOptions](PresetParam{Name: "out", Help: "directory for the received entries; default: standard output"}, "directory"),
 			formatParam("json"),
 		}, aclParams, tlsParams),
 		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
@@ -200,10 +265,7 @@ var presets = []Preset{
 			if err != nil {
 				return err
 			}
-			if v["tls"] == "off" {
-				return fmt.Errorf("tls=off: edges send credentials and logs, the aggregator always serves TLS")
-			}
-			src, err := listener(v, "self")
+			src, err := listener(v, aggregatorTLS)
 			if err != nil {
 				return err
 			}
@@ -288,13 +350,10 @@ func pathOrStdin(v map[string]string, isDir IsDir) ([]PluginSourceConfig, error)
 	if path == "" {
 		return pipeDefault("").PluginSources, nil
 	}
-	dir, err := strings.HasSuffix(path, "/"), error(nil)
-	switch {
-	case isDir != nil:
-		dir, err = isDir(path)
-	case !dir && !strings.ContainsAny(path, `*?[\`):
-		err = ErrPathKind
+	if isDir == nil {
+		isDir = Answers(nil)
 	}
+	dir, err := isDir(path)
 	if err != nil {
 		return nil, err
 	}
@@ -308,20 +367,23 @@ func pathOrStdin(v map[string]string, isDir IsDir) ([]PluginSourceConfig, error)
 // tlsModes is what each preset tls mode sets, and the preset keys it needs
 // by the tls option each fills; made marks a certificate made at startup,
 // which takes hosts.
-var tlsModes = map[string]struct {
+var tlsModes = []tlsMode{
+	{name: "off"},
+	{name: "self", set: map[string]any{"self_signed": true}, made: true},
+	{name: "issuer", needs: map[string]string{"issuer_cert": "issuer_cert_file", "issuer_key": "issuer_key_file"}, made: true},
+	{name: "files", needs: map[string]string{"cert": "cert_file", "key": "key_file"}},
+}
+
+type tlsMode struct {
+	name  string
 	set   map[string]any
 	needs map[string]string
 	made  bool
-}{
-	"off":    {},
-	"self":   {set: map[string]any{"self_signed": true}, made: true},
-	"issuer": {needs: map[string]string{"issuer_cert": "issuer_cert_file", "issuer_key": "issuer_key_file"}, made: true},
-	"files":  {needs: map[string]string{"cert": "cert_file", "key": "key_file"}},
 }
 
-// listener starts a listening plugin's options: host, port, acl and tls,
-// whose mode decides which certificate keys apply.
-func listener(v map[string]string, def string) (map[string]any, error) {
+// listener starts a listening plugin's options: host, port, acl and tls, in
+// a mode its key offers, which decides the certificate keys that apply
+func listener(v map[string]string, key PresetParam) (map[string]any, error) {
 	host, port, err := splitAddr("listen", v["listen"])
 	if err != nil {
 		return nil, err
@@ -335,11 +397,12 @@ func listener(v map[string]string, def string) (map[string]any, error) {
 	if len(acl) > 0 {
 		opts["acl"] = acl
 	}
-	mode := cmp.Or(v["tls"], def)
-	m, ok := tlsModes[mode]
-	if !ok {
-		return nil, fmt.Errorf("tls %q (valid: %s)", mode, strings.Join(slices.Sorted(maps.Keys(tlsModes)), ", "))
+	mode := cmp.Or(v["tls"], key.Default)
+	i := slices.IndexFunc(tlsModes, func(m tlsMode) bool { return m.name == mode })
+	if i < 0 || !slices.Contains(key.Enum, mode) {
+		return nil, fmt.Errorf("tls %q (valid: %s)", mode, strings.Join(key.Enum, ", "))
 	}
+	m := tlsModes[i]
 	for _, other := range tlsModes {
 		for k := range other.needs {
 			if _, needed := m.needs[k]; needed && v[k] == "" {
@@ -392,11 +455,23 @@ func splitAddr(key, addr string) (string, int64, error) {
 	return host, int64(port), nil
 }
 
+// chainType is a transport's chain plugin type, both a source and a sink
 func chainType(transport string) (string, error) {
-	if transport != "tcp" && transport != "http" {
-		return "", fmt.Errorf("transport %q (valid: tcp, http)", transport)
+	if !slices.Contains(transports(), transport) {
+		return "", fmt.Errorf("transport %q (valid: %s)", transport, strings.Join(transports(), ", "))
 	}
 	return transport + "_chain", nil
+}
+
+// transports name the chain plugins: the catalogue's TRANSPORT_chain types
+func transports() []string {
+	var out []string
+	for _, p := range plugins {
+		if t, ok := strings.CutSuffix(p.Type, "_chain"); ok && p.Role == "sink" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func list(s string) []any {

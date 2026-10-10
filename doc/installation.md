@@ -26,9 +26,12 @@ The Makefile works with GNU make and BSD make alike. Targets:
   - `make build`: `bin/lw`, with version, commit and build time from git
   - `make release`: the same, static (`CGO_ENABLED=0`), `-trimpath`, stripped
   - `make dev`: built with the race detector
-  - `make wasm`: `bin/lwconf.wasm`, the configuration engine for the
-    website, version stamped, beside the toolchain's `wasm_exec.js`; prints
-    both checksums
+  - `make wasm`: `bin/lwconf/`, the configuration engine a website drops in:
+    `lwconf.wasm` (version stamped), the toolchain's `wasm_exec.js`,
+    `lwconf.js` that loads and calls it, `schema.json` (`lw --schema`) and
+    `lwconf.json`, their manifest: version, commit, Go version and each
+    file's sha256. Stamped with the commit's time, a commit's files are the
+    same on every build
   - `make version`: the metadata a build would embed
   - `make completion`: regenerate the bash, zsh and fish completion in
     `deploy/package/completion/` from `cmd/lw`'s `shorts` and `commands`

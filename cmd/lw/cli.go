@@ -291,7 +291,7 @@ func presetCommands() []subcommand {
 		s.define = func(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			values := map[string]*string{}
 			for _, k := range p.Params {
-				values[k.Name] = fs.String(k.Name, k.Default, k.Help)
+				values[k.Name] = fs.String(k.Name, k.Default, k.Usage())
 			}
 			return func(stdout, _ io.Writer) error {
 				set := map[string]string{}

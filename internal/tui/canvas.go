@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -164,7 +163,7 @@ func join(g ui.Wires, l layout, col int) {
 
 // drawNode draws a source or sink: a tinted bar, its type and whether it
 // listens or dials, then a summary of its options. The chosen node's bar is
-// solid; a node the first problem names has its bar in the error style.
+// solid; a node a problem names has its bar in the error style.
 func (a *app) drawNode(r ui.Region, s spot, n compose.Node, tint ui.Style, chosen bool) {
 	th := a.th
 	bg, bar := th.Text, a.font.bar
@@ -295,41 +294,15 @@ func show(v any) string {
 	return fmt.Sprint(v)
 }
 
-// problemPath reads the part a validation error names: its pipeline, node and
-// key, as config's key paths write them
-var problemPath = regexp.MustCompile(`^pipelines?\[(\d+)\](?:\.(plugin_sources|plugin_sinks)\[([^\]]*)\](?:\.config\.?([\w.]*))?|\.flow\.(\w+)(?:\[(\d+)\])?\.?([\w.]*))?`)
-
-// locate reads a problem's part, and its text past the path
-func locate(err error) (pi int, n compose.Node, key, text string, ok bool) {
-	at := problemPath.FindStringSubmatchIndex(err.Error())
-	if at == nil {
-		return 0, n, "", err.Error(), false
-	}
-	m := problemPath.FindStringSubmatch(err.Error())
-	text = strings.TrimPrefix(err.Error()[at[1]:], ": ")
-	pi, _ = strconv.Atoi(m[1])
-	switch {
-	case m[2] != "":
-		n = compose.Node{Role: map[string]string{"plugin_sources": "source", "plugin_sinks": "sink"}[m[2]], ID: m[3]}
-		key = m[4]
-	case m[5] != "":
-		n = compose.Node{Role: m[5]}
-		if m[6] != "" {
-			n.Index, _ = strconv.Atoi(m[6])
-		}
-		key = m[7]
-	}
-	return pi, n, key, text, true
-}
-
-// faulty reports whether the first problem names this node, or a filter
-// when n is the filters stage
+// faulty reports whether a problem names this node, or a filter when n is
+// the filters stage
 func (a *app) faulty(n compose.Node) bool {
-	if a.problem == nil {
-		return false
+	for _, p := range compose.Problems(a.problem) {
+		if pi, m, _, _, ok := compose.Locate(p); ok && pi == a.pi && m.Role == n.Role && m.ID == n.ID {
+			return true
+		}
 	}
-	pi, m, _, _, ok := locate(a.problem)
-	return ok && pi == a.pi && m.Role == n.Role && m.ID == n.ID
+	return false
 }
 
 // where names a problem's part as the screen shows it: its pipeline when

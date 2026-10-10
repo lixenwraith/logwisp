@@ -69,8 +69,7 @@ func (a *app) keyLines(out []line, n compose.Node, keys []config.Key, prefix str
 		case "table":
 			out = append(out, line{node: n, key: k, depth: depth, group: name, item: -1})
 			if a.insp.open[a.foldKey(n, k.Name)] {
-				p, _ := a.plugin(n)
-				out = a.keyLines(out, n, sided(a.tables[name], p.Side), k.Name+".", depth+1)
+				out = a.keyLines(out, n, k.Keys, k.Name+".", depth+1)
 			}
 		case "list":
 			out = append(out, line{node: n, key: k, depth: depth, group: name, item: -1})
@@ -180,10 +179,10 @@ func (a *app) nodeTitle(n compose.Node) string {
 	return n.Role + " · flow"
 }
 
-// help is the focused row's problem, or its key's help and default
+// help is the focused row's first problem, or its key's help and default
 func (a *app) help(l line) (string, ui.Style) {
-	if a.problem != nil {
-		if pi, n, key, text, ok := locate(a.problem); ok && pi == a.pi && n == l.node && key == l.key.Name {
+	for _, p := range compose.Problems(a.problem) {
+		if pi, n, key, text, ok := compose.Locate(p); ok && pi == a.pi && n == l.node && key == l.key.Name {
 			return text, a.th.Error
 		}
 	}
@@ -264,7 +263,7 @@ func (a *app) groupSummary(l line) string {
 		return show(v)
 	case map[string]any:
 		var out []string
-		for _, k := range a.tables[l.group] {
+		for _, k := range l.key.Keys {
 			if s, ok := v[k.Name]; ok {
 				out = append(out, k.Name+" "+show(s))
 			}

@@ -265,7 +265,7 @@ func (f *form) draw(a *app, r ui.Region) {
 	}
 	summary, noteRows := wrap(f.summary, w, 2), len(wrap(f.err, w, 3))
 	for _, p := range f.params {
-		noteRows = max(noteRows, len(wrap(p.Help, w, 3)))
+		noteRows = max(noteRows, len(wrap(p.Usage(), w, 3)))
 	}
 	top, bottom := len(summary)+min(1, len(summary)), noteRows+min(1, noteRows)
 	in := a.frame(r, w, top+len(f.fields)*tall+bottom, f.title)
@@ -281,7 +281,7 @@ func (f *form) draw(a *app, r ui.Region) {
 			v.TextInput(f.fields[i], p.Default, i == f.focus.Index, th)
 		}
 	})
-	note, style := f.params[f.focus.Index].Help, th.Muted
+	note, style := f.params[f.focus.Index].Usage(), th.Muted
 	if f.err != "" {
 		note, style = f.err, th.Error
 	}
@@ -456,7 +456,7 @@ func help(f font) dialog {
 		{"p", "start over from a preset"},
 		{"r", "run the pipelines"},
 		{"o", "run, or print a command line, environment or file"},
-		{"!", "the first problem"},
+		{"!", "every problem, moving to the first"},
 		{"paste", "an lw command line replaces the pipelines"},
 		{"q", "quit"},
 	}

@@ -319,8 +319,8 @@ type AuthOptions struct {
 	CredentialsFile string   `toml:"credentials_file" lw:"listener,hint=file" help:"scram: verifiers, from lw auth add-user"`
 	// exp has whole seconds, a sub-second expires_in reads as unknown, and 10 s
 	// leaves room for renewal ahead of expiry
-	TokenLifetimeMS int64    `toml:"token_lifetime_ms" lw:"listener,min=10000,max=86400000,zero=15 minutes" help:"scram on HTTP: bearer token lifetime"`
-	TrustedProxies  []string `toml:"trusted_proxies" lw:"listener,hint=cidr" help:"scram on the http sink: proxies ending the browsers' TLS; logins are then unbound"`
+	TokenLifetimeMS int64    `toml:"token_lifetime_ms" lw:"listener,http,min=10000,max=86400000,zero=15 minutes" help:"scram on HTTP: bearer token lifetime"`
+	TrustedProxies  []string `toml:"trusted_proxies" lw:"listener,http,hint=cidr" help:"scram on the http sink: proxies ending the browsers' TLS; logins are then unbound"`
 	Username        string   `toml:"username" help:"scram: the user a dialer logs in as, or a listener's one user"`
 	PasswordFile    string   `toml:"password_file" lw:"hint=file" help:"scram: file holding the password; /dev/fd/N or a pipe is read once, /dev/tty asks"`
 }
@@ -335,7 +335,7 @@ type ACLOptions struct {
 	ProxyProtocol              string   `toml:"proxy_protocol" default:"off" lw:"enum=off|optional|required" help:"read a PROXY header from proxy_from"`
 	ProxyFrom                  []string `toml:"proxy_from" lw:"hint=cidr" help:"proxies that may send a PROXY header"`
 	MaxConnectionsPerClient    int64    `toml:"max_connections_per_client" lw:"min=0,zero=unlimited" help:"connections a client may hold"`
-	RequestsPerSecondPerClient float64  `toml:"requests_per_second_per_client" lw:"min=0,zero=unlimited" help:"HTTP: requests a client may make each second"`
+	RequestsPerSecondPerClient float64  `toml:"requests_per_second_per_client" lw:"http,min=0,zero=unlimited" help:"HTTP: requests a client may make each second"`
 }
 
 // --- TLS Options ---
