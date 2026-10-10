@@ -5,6 +5,7 @@
 package compose
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -59,7 +60,8 @@ func FromPreset(name string, values map[string]string, isDir config.IsDir) (*Com
 }
 
 // FromCommandLine starts from a pasted lw command line, quoted as a POSIX
-// shell reads it; it takes pipeline flags only, as a composition holds no settings
+// shell reads it; it takes pipeline flags only, at least one, as a composition
+// holds no settings
 func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 	words, err := split(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(line)) // pasted line ends
 	if err != nil {
@@ -85,6 +87,9 @@ func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 			value = words[i]
 		}
 		specs = append(specs, config.Spec{Flag: flag, Value: value})
+	}
+	if len(specs) == 0 {
+		return nil, errors.New("no pipeline flags")
 	}
 	pipelines, err := config.SpecPipelines(specs, isDir)
 	if err != nil {
@@ -117,13 +122,13 @@ func (c *Composition) settle() error {
 		for j, s := range p.PluginSources {
 			p.PluginSources[j].Config = orEmpty(s.Config)
 			if err := config.Coerce("source", s.Type, p.PluginSources[j].Config); err != nil {
-				return fmt.Errorf("source %s: %w", s.ID, err)
+				return config.At(fmt.Sprintf("pipelines[%d].plugin_sources[%s].config", i, s.ID), err)
 			}
 		}
 		for j, s := range p.PluginSinks {
 			p.PluginSinks[j].Config = orEmpty(s.Config)
 			if err := config.Coerce("sink", s.Type, p.PluginSinks[j].Config); err != nil {
-				return fmt.Errorf("sink %s: %w", s.ID, err)
+				return config.At(fmt.Sprintf("pipelines[%d].plugin_sinks[%s].config", i, s.ID), err)
 			}
 		}
 	}
@@ -475,6 +480,75 @@ func (c *Composition) File() ([]byte, error) {
 		return nil, err
 	}
 	return toml.Marshal(map[string]any{"pipelines": c.Pipelines})
+}
+
+// Form is a way to write a composition, named for what it is: each loads back
+// to the same pipelines
+type Form struct {
+	Name, Hint string
+	Write      func(*Composition) (string, error)
+}
+
+var forms = []Form{
+	{"command", "lw's flags", (*Composition).CommandLine},
+	{"environment", "LOGWISP_ variables: one pipeline", (*Composition).Environment},
+	{"file", "a configuration file's pipelines", func(c *Composition) (string, error) {
+		data, err := c.File()
+		return string(data), err
+	}},
+}
+
+// Forms are what a composition writes: lw --tui prints one, the website shows them
+func Forms() []Form { return slices.Clone(forms) }
+
+// FromJSON starts from pipelines as the website keeps them: a JSON list of
+// tables in a file's shape, a misspelled key refused as a file's is, a null
+// a value left unset
+func FromJSON(data []byte) (*Composition, error) {
+	var tables any
+	if err := json.Unmarshal(data, &tables); err != nil {
+		return nil, err
+	}
+	cfg := &config.Config{}
+	if err := config.Scan(map[string]any{"pipelines": dropNulls(tables)}, cfg); err != nil {
+		return nil, err
+	}
+	return FromConfig(cfg)
+}
+
+// dropNulls removes JSON's nulls from tables and lists, which the shell forms
+// would write as text
+func dropNulls(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, e := range v {
+			if e == nil {
+				delete(v, k)
+			} else {
+				v[k] = dropNulls(e)
+			}
+		}
+	case []any:
+		v = slices.DeleteFunc(v, func(e any) bool { return e == nil })
+		for i, e := range v {
+			v[i] = dropNulls(e)
+		}
+		return v
+	}
+	return v
+}
+
+// JSON writes the pipelines as FromJSON reads them, keyed as File writes them
+func (c *Composition) JSON() ([]byte, error) {
+	data, err := toml.Marshal(map[string]any{"pipelines": c.Pipelines})
+	if err != nil {
+		return nil, err
+	}
+	root, err := toml.NewParser(data).Parse()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(root["pipelines"])
 }
 
 // quote leaves a word of these characters bare, and single-quotes any other,

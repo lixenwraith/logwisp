@@ -240,29 +240,16 @@ func (f *presetForm) apply(a *app) {
 	a.use(c.Pipelines[0])
 }
 
-// outputs are what o offers: run, or print one form
-var outputs = []struct {
-	name, hint string
-	form       func(*compose.Composition) (string, error) // nil runs
-}{
-	{"run", "start the pipelines now, with lw's other settings", nil},
-	{"command line", "print lw's flags", (*compose.Composition).CommandLine},
-	{"environment", "print LOGWISP_ variables: one pipeline", (*compose.Composition).Environment},
-	{"file", "print a configuration file's pipelines", func(c *compose.Composition) (string, error) {
-		data, err := c.File()
-		return string(data), err
-	}},
-}
-
+// outputMenu is what o offers: run, or print one of the forms
 func (a *app) outputMenu() dialog {
-	var options []ui.Option
-	for _, o := range outputs {
-		options = append(options, ui.Option{Name: o.name, Hint: o.hint})
+	forms := compose.Forms()
+	options := []ui.Option{{Name: "run", Hint: "start the pipelines now, with lw's other settings"}}
+	for _, f := range forms {
+		options = append(options, ui.Option{Name: f.Name, Hint: "print " + f.Hint})
 	}
 	return &chooser{title: "Output, once the screen closes", list: ui.NewOptionListState(options),
 		pick: func(a *app, i int) {
-			o := outputs[i]
-			if o.form == nil {
+			if i == 0 {
 				if a.problem != nil {
 					a.status = "not valid yet: c shows the problem"
 					return
@@ -270,7 +257,7 @@ func (a *app) outputMenu() dialog {
 				a.result, a.done = Result{Exit: Start, Pipelines: a.comp.Pipelines}, true
 				return
 			}
-			text, err := o.form(a.comp)
+			text, err := forms[i-1].Write(a.comp)
 			if err != nil {
 				a.status = err.Error()
 				return
