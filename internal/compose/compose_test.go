@@ -34,10 +34,11 @@ func TestEngineLinksNoHostCode(t *testing.T) {
 	}
 }
 
-// A pasted command line, its line ends LF or CRLF, starts the composition that
-// wrote it: escaped and quoted values, nested keys, lists, moved filters,
-// stages whose flags' defaults differ from a file's, a value starting with '-'
-func TestPastedCommandLineStartsTheSameComposition(t *testing.T) {
+// A pasted command line, its line ends LF or CRLF, and the website's JSON each
+// start the composition that wrote them: escaped and quoted values, nested
+// keys, lists, moved filters, stages whose flags' defaults differ from a
+// file's, a value starting with '-', JSON's numbers for integers
+func TestWrittenFormsStartTheSameComposition(t *testing.T) {
 	c := &Composition{}
 	must := func(err error) {
 		t.Helper()
@@ -78,6 +79,36 @@ func TestPastedCommandLineStartsTheSameComposition(t *testing.T) {
 		got, err := FromCommandLine(pasted, nil)
 		if err != nil || !reflect.DeepEqual(got, c) {
 			t.Fatalf("%q\n got %+v %v\nwant %+v", pasted, got, err, c)
+		}
+	}
+	data, err := c.JSON()
+	must(err)
+	if got, err := FromJSON(data); err != nil || !reflect.DeepEqual(got, c) {
+		t.Fatalf("%s\n got %+v %v\nwant %+v", data, got, err, c)
+	}
+}
+
+// A null in the website's JSON is a value left unset, which every form then
+// leaves out, in a table or a list
+func TestANullInJSONIsUnset(t *testing.T) {
+	with, err := FromJSON([]byte(`[{"name":"p","flow":{"rate_limit":null,"filters":[{"patterns":["a",null]}]},
+		"plugin_sources":[{"type":"file","config":{"directory":"/x/","pattern":null}}],
+		"plugin_sinks":[{"type":"console","config":{"color":null}}]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := FromJSON([]byte(`[{"name":"p","flow":{"filters":[{"patterns":["a"]}]},
+		"plugin_sources":[{"type":"file","config":{"directory":"/x/"}}],"plugin_sinks":[{"type":"console"}]}]`))
+	if err != nil || !reflect.DeepEqual(with, without) {
+		t.Fatalf("%v\n got %+v\nwant %+v", err, with, without)
+	}
+}
+
+// The website's JSON refuses a misspelled key as a file does, at any depth
+func TestAMisspelledJSONKeyIsRefused(t *testing.T) {
+	for _, data := range []string{`[{"name":"p","plugin_source":[]}]`, `[{"name":"p","flow":{"rate_limt":{}}}]`} {
+		if _, err := FromJSON([]byte(data)); err == nil || !strings.Contains(err.Error(), "unknown key") {
+			t.Errorf("%s: %v", data, err)
 		}
 	}
 }

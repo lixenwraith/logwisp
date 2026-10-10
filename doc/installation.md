@@ -26,6 +26,9 @@ The Makefile works with GNU make and BSD make alike. Targets:
   - `make build`: `bin/lw`, with version, commit and build time from git
   - `make release`: the same, static (`CGO_ENABLED=0`), `-trimpath`, stripped
   - `make dev`: built with the race detector
+  - `make wasm`: `bin/lwconf.wasm`, the configuration engine for the
+    website, version stamped, beside the toolchain's `wasm_exec.js`; prints
+    both checksums
   - `make version`: the metadata a build would embed
   - `make completion`: regenerate the bash, zsh and fish completion in
     `deploy/package/completion/` from `cmd/lw`'s `shorts` and `commands`
@@ -34,8 +37,9 @@ The Makefile works with GNU make and BSD make alike. Targets:
 - Check
   - `make test`: the Go tests
   - `make verify`: tests, `go vet`, `gofmt -l` on the Go files changed since
-    `main`, linux and freebsd cross builds for amd64 and arm64, and the web
-    client's `node --test` when node is installed
+    `main`, linux and freebsd cross builds for amd64 and arm64 and the js/wasm
+    one, and, when node is installed, `node --test` for the web client and
+    for `cmd/lwconf` (which runs `make wasm`)
   - `make e2e`: builds, then runs every `test/*-test.sh --auto` in turn and
     reports passes, failures and skips; `E2E='test/scram-*-test.sh'` runs a
     subset; see [Test Scripts](#test-scripts)

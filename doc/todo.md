@@ -114,14 +114,21 @@ Steps:
    optional, in `color`: export the 16 xterm reference shades (RGBTo16 maps
    the site's hues badly, so the 16-color tier is chosen by hand).
 5. `lw --tui`: done ([doc/cli.md](cli.md#lw---tui)).
-6. WebAssembly: `cmd/lwconf` (`js && wasm`) exposes schema, preset, parse,
-   validate and emit to the page as JSON strings. `make wasm` builds
-   `bin/lwconf.wasm` with the version stamped, copies the toolchain's
-   `wasm_exec.js`, and prints both checksums. A prototype measured about 6 MB,
-   1.7 MB gzipped, ready in about 60 ms in Chromium; `wasm_exec.js` uses no
-   eval, so the page needs only `'wasm-unsafe-eval'` in its `script-src`.
+6. WebAssembly: done. `make wasm` builds `bin/lwconf.wasm`, version stamped,
+   beside the toolchain's `wasm_exec.js`, and prints both checksums: about
+   6.9 MB, 1.9 MB gzipped. `wasm_exec.js` uses no eval, so the page needs only
+   `'wasm-unsafe-eval'` in its `script-src`. The page runs the module with
+   `new Go().run(instance)`, then calls `globalThis.lwconf`; each call takes
+   strings and returns a JSON object, `{"value": ...}` or `{"error": "..."}`:
+   - `schema()`: what `lw --schema` prints.
+   - `preset(name, values)`: a preset's pipelines; `values` is a JSON object
+     of strings, and a directory path ends in `/`.
+   - `parse(line)`: a pasted command line's pipelines.
+   - `validate(pipelines)`: the pipelines settled (defaults, kinds, ids), or
+     the first problem by its key path.
+   - `emit(pipelines, form)`: `command`, `environment` or `file`.
+   - Pipelines are a JSON list in the file's shape (`name`, `flow`,
+     `plugin_sources`, `plugin_sinks`); a misspelled key is refused.
 
-Verify:
-- CI builds `cmd/lwconf` for `GOOS=js` and runs a node test of its calls.
-- The diagram rendered into a cell buffer at 80x24 and 64x24, per tier; a
-  scripted session on a pseudo-terminal for Run and each output.
+Still to verify: a scripted session on a pseudo-terminal for Run and each
+output.

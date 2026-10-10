@@ -311,9 +311,6 @@ func slicesHasKey(keys []config.Key, name string) bool {
 // paste starts over from a pasted command line
 func (a *app) paste(text string) {
 	c, err := compose.FromCommandLine(text, config.HostIsDir)
-	if err == nil && len(c.Pipelines) == 0 {
-		err = errors.New("no pipeline flags")
-	}
 	if err != nil {
 		a.status = "paste: " + err.Error()
 		return
