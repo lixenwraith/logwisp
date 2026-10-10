@@ -197,8 +197,9 @@ func TestSelectionChangesAGlyph(t *testing.T) {
 }
 
 // The inspector types a value and sets it, typed by the key's kind, and Tab
-// moves on; empty or d returns it to its default; arrows step a choice,
-// setting nothing past either end, and Space a switch
+// or Up moves on; empty or d returns it to its default; arrows step a choice,
+// setting nothing past either end, and set a switch; Enter opens a choice's
+// options, at its value, and Space flips a switch
 func TestInspectorSetsKeys(t *testing.T) {
 	a := mono(pipeline(t, []string{"file"}, []string{"null"}))
 	press(a, terminal.KeyEnter)
@@ -221,8 +222,24 @@ func TestInspectorSetsKeys(t *testing.T) {
 	focusKey(t, a, "from")
 	press(a, terminal.KeyLeft)
 	focusKey(t, a, "raw")
-	press(a, " ")
-	if o := opts(); o["directory"] != "/srv/a b" || o["check_interval_ms"] != int64(15) || o["from"] != "start" || o["raw"] != true {
+	if press(a, " ", terminal.KeyLeft, terminal.KeyLeft); opts()["raw"] != false {
+		t.Fatalf("Left left raw %v", opts()["raw"])
+	}
+	press(a, terminal.KeyRight, terminal.KeyRight)
+	focusKey(t, a, "pattern")
+	at = a.insp.cursor
+	if press(a, terminal.KeyEnter, "x", terminal.KeyUp); a.insp.cursor != at-1 || opts()["pattern"] != "x" {
+		t.Fatalf("Up left the cursor on row %d, pattern %v", a.insp.cursor, opts()["pattern"])
+	}
+	focusKey(t, a, "from")
+	if press(a, terminal.KeyEnter); a.dialog.(*chooser).list.Cursor != 0 {
+		t.Fatalf("the options open off the value: %+v", a.dialog)
+	}
+	if press(a, terminal.KeyDown, terminal.KeyEscape); opts()["from"] != "start" {
+		t.Fatalf("Esc set %v", opts()["from"])
+	}
+	press(a, terminal.KeyEnter, terminal.KeyDown, terminal.KeyEnter)
+	if o := opts(); o["directory"] != "/srv/a b" || o["check_interval_ms"] != int64(15) || o["from"] != "end" || o["raw"] != true {
 		t.Fatalf("%v", o)
 	}
 	focusKey(t, a, "directory")
@@ -294,8 +311,9 @@ func TestFiltersMoveWithTheirFold(t *testing.T) {
 	}
 }
 
-// o leaves with the chosen form, printed as the engine writes it, or with
-// the pipelines to run; a composition that does not validate stays
+// o leaves with the form its letter picks, printed as the engine writes it,
+// or with the pipelines to run, as r does; a composition that does not
+// validate stays
 func TestOutputLeavesWithTheForm(t *testing.T) {
 	c := pipeline(t, []string{"null"}, []string{"null"})
 	line, err := c.CommandLine()
@@ -303,7 +321,7 @@ func TestOutputLeavesWithTheForm(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := mono(c)
-	press(a, "o", "comm", terminal.KeyEnter)
+	press(a, "o", "c")
 	if !a.done || a.result.Exit != Print || a.result.Output != line {
 		t.Fatalf("%+v", a.result)
 	}
@@ -312,8 +330,13 @@ func TestOutputLeavesWithTheForm(t *testing.T) {
 	if !a.done || a.result.Exit != Start || len(a.result.Pipelines) != 1 {
 		t.Fatalf("%+v", a.result)
 	}
+	a = mono(pipeline(t, []string{"null"}, []string{"null"}))
+	press(a, "r")
+	if !a.done || a.result.Exit != Start || len(a.result.Pipelines) != 1 {
+		t.Fatalf("r: %+v", a.result)
+	}
 	a = mono(pipeline(t, []string{"file"}, []string{"null"}))
-	press(a, "o", terminal.KeyEnter)
+	press(a, "o", terminal.KeyEnter, "r")
 	if a.done || a.status == "" {
 		t.Fatalf("ran an invalid composition: %+v", a.result)
 	}
@@ -351,7 +374,8 @@ func TestPresetsStartThePipeline(t *testing.T) {
 }
 
 // A pasted command line replaces the pipelines, from the preset menu too,
-// asking first once they were edited; one that names none is refused
+// asking first once they were edited and while some remain; one that names
+// none is refused
 func TestPasteReplacesThePipelines(t *testing.T) {
 	a := mono(&compose.Composition{})
 	if press(a, []byte("lw\n")); a.status == "" {
@@ -368,19 +392,39 @@ func TestPasteReplacesThePipelines(t *testing.T) {
 	if a.pipeline().Name != "x" {
 		t.Fatalf("replaced edited pipelines without asking: %+v", a.comp.Pipelines)
 	}
+	a = mono(pipeline(t, []string{"null"}, []string{"null"}))
+	press(a, "k", "d", "y", []byte("lw --pipeline z --source null --sink null"))
+	if a.dialog != nil || len(a.comp.Pipelines) != 1 || a.pipeline().Name != "z" {
+		t.Fatalf("a paste after the last pipeline was deleted: %T %+v", a.dialog, a.comp.Pipelines)
+	}
 }
 
-// The first problem marks the part it names, and c moves there, to the key
+// The first problem marks the part it names, and ! moves there, to the key
 func TestProblemNamesItsPart(t *testing.T) {
 	a := mono(pipeline(t, []string{"null"}, []string{"null", "tcp"}))
 	sink := compose.Node{Role: "sink", ID: "tcp"}
 	if !a.faulty(sink) || a.faulty(compose.Node{Role: "source", ID: "null"}) || a.faulty(compose.Node{Role: "sink", ID: "null"}) {
 		t.Fatalf("problem %v", a.problem)
 	}
-	press(a, "c")
+	press(a, "!")
 	n, _ := a.node()
 	if l := a.lines()[a.insp.cursor]; n != sink || !a.inspect || l.key.Name != "port" {
 		t.Fatalf("on %+v, row %+v", n, l)
+	}
+}
+
+// ! and c on the pipeline bar open the inspector, which then takes the keys:
+// Enter edits the key it shows, not the pipeline's name
+func TestTheInspectorTakesTheKeysFromTheBar(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, []string{"tcp"}))
+	press(a, "k", "!", terminal.KeyEscape, terminal.KeyEnter)
+	if a.bar || a.insp.field == nil {
+		t.Fatalf("Enter after ! on the bar: bar %v, %T", a.bar, a.dialog)
+	}
+	a = mono(pipeline(t, []string{"null"}, []string{"null"}))
+	press(a, "k", "c", terminal.KeyEnter, terminal.KeyEnter)
+	if a.bar || !a.inspect || a.dialog != nil {
+		t.Fatalf("Enter after c on the bar: bar %v, %T", a.bar, a.dialog)
 	}
 }
 
@@ -451,11 +495,103 @@ func TestPresetFormShowsTheFocusedField(t *testing.T) {
 	presets := config.Presets()
 	p := slices.MaxFunc(presets, func(x, y config.Preset) int { return len(x.Params) - len(y.Params) })
 	a := mono(pipeline(t, []string{"null"}, []string{"null"}))
-	a.dialog = newPresetForm(p)
+	f := &form{title: p.Name, params: p.Params}
+	f.fill(nil)
+	a.dialog = f
 	press(a, terminal.KeyBacktab)
 	last := p.Params[len(p.Params)-1].Name
 	if screen := strings.Join(text(render(a, 80, 12), 80), "\n"); !strings.Contains(screen, last) {
 		t.Fatalf("%s: focused %s not shown:\n%s", p.Name, last, screen)
+	}
+}
+
+// presetForm is a preset's form, open on a
+func presetForm(a *app, name string) *form {
+	presets := config.Presets()
+	p := presets[slices.IndexFunc(presets, func(p config.Preset) bool { return p.Name == name })]
+	f := &form{title: "preset " + p.Name, summary: p.Summary, params: p.Params}
+	f.fill(nil)
+	a.dialog = f
+	return f
+}
+
+// A preset form is usable at 25 columns: labels stack above their values,
+// which take the row, so typed text shows whole
+func TestPresetFormFitsANarrowScreen(t *testing.T) {
+	a := mono(pipeline(t, nil, nil))
+	presetForm(a, "serve")
+	press(a, terminal.KeyTab, terminal.KeyTab, terminal.KeyTab, "127.0.0.1:9000")
+	if screen := strings.Join(text(render(a, 25, 20), 25), "\n"); !strings.Contains(screen, "listen") || !strings.Contains(screen, "127.0.0.1:9000") {
+		t.Fatalf("listen and its value not whole at 25 columns:\n%s", screen)
+	}
+}
+
+// A dialog is sized to what it holds: its first and last rows inside the
+// box have text, a form without a summary included
+func TestDialogsHaveNoBlankEdgeRows(t *testing.T) {
+	var a *app
+	for name, open := range map[string]func(){
+		"add":     func() { press(a, "a") },
+		"presets": func() { press(a, "p") },
+		"output":  func() { press(a, "o") },
+		"confirm": func() { press(a, "q") },
+		"help":    func() { press(a, "?") },
+		"problem": func() { press(a, "!") },
+		"rename":  func() { press(a, terminal.KeyUp, terminal.KeyEnter) },
+		"form":    func() { presetForm(a, "serve") },
+	} {
+		a = mono(pipeline(t, nil, nil))
+		a.changed, a.dialog = true, nil
+		open()
+		rows := text(render(a, 80, 40), 80)
+		bottom := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "└") })
+		top := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "┌") })
+		if a.dialog == nil || top < 0 || bottom < top+2 {
+			t.Errorf("%s: no dialog:\n%s", name, strings.Join(rows, "\n"))
+			continue
+		}
+		edge := []rune(rows[bottom])
+		left, right := slices.Index(edge, '└'), slices.Index(edge, '┘')
+		for _, y := range []int{top + 1, bottom - 1} {
+			if inside := strings.Trim(string([]rune(rows[y])[left:right]), " │"); inside == "" {
+				t.Errorf("%s: row %d blank:\n%s", name, y, strings.Join(rows[top:bottom+1], "\n"))
+			}
+		}
+	}
+}
+
+// A question is answered by y or n, or by Enter on the answer the arrows
+// chose; no is chosen first
+func TestConfirmAnswersOnEnter(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, []string{"null"}))
+	a.changed = true
+	if press(a, "q", terminal.KeyEnter); a.done || a.dialog != nil {
+		t.Fatalf("Enter on no: done %v, dialog %T", a.done, a.dialog)
+	}
+	if press(a, "q", terminal.KeyLeft, terminal.KeyEnter); !a.done {
+		t.Fatal("Enter on yes did not quit")
+	}
+}
+
+// The canvas scrolls to keep the chosen part in view, its bar solid
+func TestCanvasKeepsTheChosenInView(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, slices.Repeat([]string{"null"}, 8)))
+	a.col, a.row[sinksCol] = sinksCol, 7
+	if screen := strings.Join(text(render(a, 80, 24), 80), "\n"); !strings.ContainsRune(screen, a.font.barOn) {
+		t.Fatalf("the eighth sink is out of view:\n%s", screen)
+	}
+}
+
+// A notice taller than the screen scrolls with j and k and says where it is
+func TestNoticeScrolls(t *testing.T) {
+	a := mono(pipeline(t, nil, nil))
+	press(a, "?")
+	screen := func() string { return strings.Join(text(render(a, 25, 20), 25), "\n") }
+	if s := screen(); strings.Contains(s, "quit") || !strings.Contains(s, "j k: 1-") {
+		t.Fatalf("help at 25 columns:\n%s", s)
+	}
+	if press(a, strings.Repeat("j", 60)); a.dialog == nil || !strings.Contains(screen(), "quit") {
+		t.Fatalf("scrolled to the end:\n%s", screen())
 	}
 }
 
@@ -470,5 +606,105 @@ func TestDialogsWrapToTheScreen(t *testing.T) {
 			!strings.Contains(screen, "environment") && open == "?" {
 			t.Errorf("%s at 40 columns:\n%s", open, strings.Join(text(render(a, 40, 30), 40), "\n"))
 		}
+	}
+}
+
+// The inspector opens on a part's first required key, after a adds it or
+// Enter chooses it
+func TestInspectorOpensOnTheFirstRequiredKey(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, []string{"tcp_chain"}))
+	a.col = sinksCol
+	press(a, terminal.KeyEnter)
+	at := func() string { return a.lines()[a.insp.cursor].key.Name }
+	if got := at(); got != "host" {
+		t.Fatalf("Enter on tcp_chain: %s", got)
+	}
+	press(a, terminal.KeyEscape, "a", "http", terminal.KeyEnter)
+	if got := at(); got != "port" {
+		t.Fatalf("a adding http: %s", got)
+	}
+}
+
+// The status shows the first problem whole, by its part and key, not by its
+// path, on as many rows as it takes
+func TestTheProblemShowsWhole(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, []string{"http"}))
+	sink := compose.Node{Role: "sink", ID: "http"}
+	for key, value := range map[string]string{"port": "8080", "viewer_page": "true"} {
+		if err := a.comp.Set(0, sink, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.check()
+	for _, w := range []int{60, 87, 146} {
+		screen := strings.Join(text(render(a, w, 30), w), "\n")
+		if !strings.Contains(screen, "sink http · viewer_page: only") || !strings.Contains(screen, "at /") || strings.Contains(screen, "pipelines[0]") {
+			t.Errorf("%d columns:\n%s", w, screen)
+		}
+	}
+}
+
+// Enter on a row that adds acts as a does: an empty column's slot, the
+// filters stage with none, the inspector's last filter row
+func TestEnterOnAnAddRowAdds(t *testing.T) {
+	a := mono(pipeline(t, nil, []string{"null"}))
+	if press(a, terminal.KeyEnter); a.dialog == nil {
+		t.Fatal("Enter on the empty sources column")
+	}
+	press(a, "null", terminal.KeyEnter, terminal.KeyEscape, terminal.KeyRight, terminal.KeyDown, terminal.KeyEnter, "exc", terminal.KeyEnter)
+	if f := a.pipeline().Flow.Filters; len(f) != 1 || f[0].Type != "exclude" {
+		t.Fatalf("Enter on filters: %+v", f)
+	}
+	lines := a.lines()
+	a.insp.cursor = len(lines) - 1
+	press(a, terminal.KeyEnter, terminal.KeyEnter)
+	if f := a.pipeline().Flow.Filters; len(f) != 2 {
+		t.Fatalf("Enter on the add row: %+v", f)
+	}
+}
+
+// c changes a source's or sink's type in its place and opens it; on a filter
+// or the format it goes to the type row
+func TestChangeTypeKeepsThePlace(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, []string{"null", "file"}))
+	a.col = sinksCol
+	press(a, "c", "tcp", terminal.KeyEnter)
+	sinks := a.pipeline().PluginSinks
+	if sinks[0].Type != "tcp" || sinks[0].ID != "tcp" || sinks[1].Type != "file" || !a.inspect || a.lines()[a.insp.cursor].key.Name != "port" {
+		t.Fatalf("%+v, cursor on %+v", sinks, a.lines()[a.insp.cursor])
+	}
+	press(a, terminal.KeyEscape)
+	a.choose(compose.Node{Role: "format"})
+	if press(a, "c"); !a.inspect || a.lines()[a.insp.cursor].key.Name != "type" {
+		t.Fatalf("c on format: %+v", a.lines()[a.insp.cursor])
+	}
+}
+
+// The pipeline bar, above the parts, switches pipelines, adds one under a free
+// name, renames one under a name no other has, and deletes one, asking first
+// when it has parts
+func TestThePipelineBarAddsRenamesDeletes(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, []string{"null"}))
+	press(a, "k", "a", "empty", terminal.KeyEnter, "k", "a", "empty", terminal.KeyEnter)
+	names := func() (out []string) {
+		for _, p := range a.comp.Pipelines {
+			out = append(out, p.Name)
+		}
+		return out
+	}
+	if got := names(); !slices.Equal(got, []string{"p", "default", "default_2"}) || a.pi != 2 {
+		t.Fatalf("added %q, showing %d", got, a.pi)
+	}
+	press(a, "k", terminal.KeyEnter, terminal.KeyCtrlU, "p", terminal.KeyEnter)
+	if _, open := a.dialog.(*form); !open {
+		t.Fatalf("renamed to a name another has: %q", names())
+	}
+	press(a, terminal.KeyCtrlU, "x", terminal.KeyEnter, "h", "h", "d")
+	if got := names(); !slices.Equal(got, []string{"p", "default", "x"}) || a.dialog == nil {
+		t.Fatalf("deleted without asking: %q", got)
+	}
+	press(a, "y", "l", "d")
+	if got := names(); !slices.Equal(got, []string{"default"}) || a.dialog != nil {
+		t.Fatalf("%q %T", got, a.dialog)
 	}
 }

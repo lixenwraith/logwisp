@@ -111,8 +111,8 @@ name = "app"                       # required, unique across pipelines
 
 # --- flow: everything between sources and sinks ---
 [pipelines.flow.rate_limit]
-rate                 = 1000.0
-burst                = 2000.0
+entries_per_second   = 1000.0
+burst_entries        = 2000.0
 policy               = "drop"
 max_entry_size_bytes = 65536
 
@@ -168,19 +168,19 @@ Every stage is optional:
 
 Options, each as type and default:
 
-- `rate` (float, `0`): entries per second; `<= 0` disables the limiter
-  entirely.
-- `burst` (float, `rate`): token bucket capacity.
+- `entries_per_second` (float, `0`): `<= 0` disables the limiter entirely.
+- `burst_entries` (float, `entries_per_second`): token bucket capacity.
 - `policy` (string, `pass`): `pass` allows everything through, `drop` discards
   over-limit entries.
 - `max_entry_size_bytes` (int, `0`): per-entry byte cap; `0` = unlimited.
 
 Two behaviours are easy to trip over:
 
-- The limiter is constructed only when `rate > 0`. With `rate = 0`,
+- The limiter is constructed only when `entries_per_second > 0`. With `0`,
   `max_entry_size_bytes` is never enforced.
 - `policy = "pass"` short-circuits the whole check, including the size cap.
-  To enforce a size cap you need `rate > 0` **and** `policy = "drop"`.
+  To enforce a size cap you need `entries_per_second > 0` **and**
+  `policy = "drop"`.
 
 #### Heartbeat
 
@@ -258,7 +258,7 @@ Startup validation is intentionally split.
   "pipelines[0].plugin_sinks[0].confg"`. A misspelled table path would otherwise
   drop the whole table it heads. A top-level `config_file` is ignored
 - pipeline [specs](cli.md#pipelines): syntax, and unknown flow-stage keys such
-  as `--rate-limit rate=1,polcy=drop`
+  as `--rate-limit entries_per_second=1,polcy=drop`
 - at least one pipeline
 - unique, non-empty pipeline names
 - at least one source and one sink per pipeline

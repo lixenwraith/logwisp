@@ -3,7 +3,7 @@
 ```
 lw [options] [< input]
 lw -c|--config FILE [options]
-lw -p|--preset NAME[,KEY=VALUE...] [options]
+lw -p|--preset NAME[:KEY=VALUE,...] [options]
 lw -t|--check [options]
 lw --dump [options]
 lw -T|--tui [options]
@@ -45,7 +45,7 @@ first argument.
   tail`, `lw -t FILE`) are usage errors, named on stderr.
 - lw's multiword options join words with `-` (`--rate-limit`,
   `--password-file`); configuration keys, spec keys and preset keys keep
-  TOML's `_` and `.` (`--status_reporter`, `--sink http,tls.cert_file=F`,
+  TOML's `_` and `.` (`--status_reporter`, `--sink http:tls.cert_file=F`,
   `lw preset edge --password_file F`).
 - The commands also take a long option after one dash (`-user NAME`).
 
@@ -121,14 +121,15 @@ pipelines and the built-in default; every other key keeps its precedence.
 - stdin has one reader, so the whole configuration holds at most one console
   source: `pipeline "b": a console source already reads stdin in pipeline "a"`
 
-A SPEC is a comma-separated list:
+A SPEC is `TYPE:key=value,...`, or `key=value,...` without a TYPE:
 
-- source, sink, filter and format specs start with a TYPE
+- source, sink, filter and format specs start with a TYPE, which ends at the
+  first `:`; a TYPE alone (`--sink null`, `--format txt`) takes the defaults
   - the plugin type: [Sources](sources.md), [Sinks](sinks.md)
   - `include` or `exclude`: [Filters](filters.md)
   - `json`, `txt` or `raw`: [Formatters](formatters.md)
 - rate-limit and heartbeat specs have no TYPE
-- the rest are `key=value` pairs with the TOML keys of the plugin's `config`
+- the pairs are comma-separated, with the TOML keys of the plugin's `config`
   table or of the [flow stage](configuration.md#flow-stages)
   - a dotted key reaches a nested table: `tls.cert_file=...`, `auth.type=scram`
   - a repeated key makes a list: `patterns=ERROR,patterns=WARN`
@@ -136,7 +137,8 @@ A SPEC is a comma-separated list:
     is one regex, `auth.allow=a,auth.allow=b` two entries
   - values convert to the option's type: `port=8080`, `raw=true`
 - `\` escapes `,`, `=` and `\` in a value; any other backslash stays, so regex
-  escapes such as `\d` pass unchanged
+  escapes such as `\d` pass unchanged; a `:` in a value needs no escape
+  (`host=::1`, `listen=127.0.0.1:8080`)
 - `id=NAME` names a source or sink; the default is its TYPE, then `TYPE_2`,
   `TYPE_3`, ...
 - naming a stage turns it on: `--rate-limit` defaults `policy` to `drop`,
@@ -145,8 +147,9 @@ A SPEC is a comma-separated list:
 Errors name the flag and the offending part, and nothing starts:
 
 ```
---sink http,port: missing "="
---rate-limit rate=100,polcy=drop: unknown key "polcy"
+--sink http:port: missing "="
+--rate-limit entries_per_second=100,polcy=drop: unknown key "polcy"
+--source file,directory=/x: TYPE ends at ':', as in file:directory=/x
 ```
 
 A misspelled plugin key fails when the plugin is built, before any listener
@@ -155,35 +158,39 @@ opens: `failed to create sink http: ... unknown key "tls.enabeld"`.
 ```bash
 # tail a directory, serve it over SSE on every interface; a browser at
 # http://HOST:8080/ shows it
-lw --source 'file,directory=/var/log/app,pattern=*.log' \
-   --sink http,host=0.0.0.0,port=8080
+lw --source 'file:directory=/var/log/app,pattern=*.log' \
+   --sink http:host=0.0.0.0,port=8080
 
 # errors and warnings as JSON, over TLS with SCRAM logins
-lw --source file,directory=/var/log/app \
-   --filter include,patterns=ERROR,patterns=WARN --format json \
-   --sink "http,port=8443,auth.type=scram,auth.credentials_file=/etc/logwisp/users.toml,\
+lw --source file:directory=/var/log/app \
+   --filter include:patterns=ERROR,patterns=WARN --format json \
+   --sink "http:port=8443,auth.type=scram,auth.credentials_file=/etc/logwisp/users.toml,\
 tls.enabled=true,tls.cert_file=/etc/logwisp/server.crt,tls.key_file=/etc/logwisp/server.key"
 
 # two pipelines: app writes stdout, relay a file
-lw --pipeline app --source file,directory=/var/log/app \
-   --pipeline relay --source tcp_chain,port=9000 \
-   --sink file,directory=/var/log/relay,name=relay
+lw --pipeline app --source file:directory=/var/log/app \
+   --pipeline relay --source tcp_chain:port=9000 \
+   --sink file:directory=/var/log/relay,name=relay
 ```
 
 Pipelines over stdin and stdout are under [Usage Patterns](#usage-patterns).
 
 ## Presets
 
-`--preset NAME,key=value,...` takes the [SPEC](#pipelines) syntax. A list
-key (`hosts`, `proxy`, `allow`, `deny`) takes several values, repeated
-(`hosts=a,hosts=b`) or `,`-separated; any other key takes one.
+`--preset NAME:key=value,...` takes the [SPEC](#pipelines) syntax. A list
+key (`hosts`, `proxy`, `allow`, `deny`) takes several values: repeated
+(`hosts=a,hosts=b`) or `\,`-separated in a SPEC, `,`-separated in `lw preset`
+flags and the TUI; any other key takes one.
 `lw preset NAME [--key value ...]` prints the pipeline a preset expands to,
 ready for a configuration file; its flags are the keys, spelled as in the SPEC
 (`--password_file`), and `-u` is `--user`;
 `lw preset NAME -h` lists its keys and defaults, `lw preset` the presets. An
 unknown key fails and lists the valid ones. A `path` is a file, a directory
 (its files) or a glob; a preset that takes one reads stdin without it, and
-`from` (`end`, or `start`) is where reading a file starts.
+`from` (`end`, or `start`) is where reading a file starts. `user` names one
+SCRAM user, an edge's login or a listener's only user in place of `users`;
+`password_file` holds its password and defaults to `/dev/tty`, which asks
+([password sources](security.md#one-user-without-a-credentials-file)).
 
 - `pipe`: stdin to stdout, the built-in default
   - `format` (`raw`)
@@ -196,41 +203,49 @@ unknown key fails and lists the valid ones. A `path` is a file, a directory
   - `tls`: `off` (default), `self` (a self-signed certificate made at
     startup), `issuer` (one signed by `issuer_cert` and `issuer_key`), or
     `files` (`cert` and `key`); `hosts` adds names to a made certificate
-  - without `users` the viewer needs no login, over plain http too
+  - without `user` or `users` the viewer needs no login, over plain http too
   - `allow` and `deny`: addresses or CIDRs, the sink's
     [acl](security.md#the-acl-block)
-  - `users`: a credentials file; readers then log in with SCRAM, and browsers
-    need `proxy` and `viewer=true`: the login page and viewer behind the
-    TLS-terminating proxies `proxy` names, since a browser cannot bind its
-    login to the TLS channel
+  - `users` (a credentials file) or `user`: readers then log in with SCRAM,
+    which needs `tls` or `proxy`; browsers need `proxy` and `viewer=true`: the
+    login page and viewer behind the TLS-terminating proxies `proxy` names,
+    since a browser cannot bind its login to the TLS channel
 - `edge`: forward to an aggregator over TLS (`tcp_chain`, or `http_chain`
   with `transport=http`)
   - `to` (required), `path`, `from`, `transport` (`tcp`), `node`
   - verify the aggregator by `ca` (a CA file; default: system roots) or `pin`
     (its `tls.pin_sha256`), and `server_name`
-  - authenticate by `user` and `password_file` (SCRAM), or a client `cert` and
-    `key` (mTLS): without either the preset refuses to run
+  - authenticate by `user` (SCRAM), or a client `cert` and `key` (mTLS):
+    without either the preset refuses to run
 - `aggregator`: receive from edges over TLS, to stdout or files
   - `listen` (`0.0.0.0:9000`), `transport` (`tcp`), `format` (`json`)
   - `tls`: `self` (default), `issuer` or `files`, as for `serve`; never `off`
-  - authenticate by `users` (SCRAM) or `client_ca` (mTLS): one is required
+  - authenticate by `users` or `user` (SCRAM), or `client_ca` (mTLS): one is
+    required
   - `allow` and `deny`, as for `serve`
   - `out`: a directory for `aggregate*.log` files; default stdout
 
 ```bash
 # follow a directory, level names in color on a terminal
-lw --preset tail,path=/var/log/app
+lw --preset tail:path=/var/log/app
 
 # serve it to a browser at http://127.0.0.1:8080/
-lw --preset serve,path=/var/log/app
+lw --preset serve:path=/var/log/app
 
 # serve it over HTTPS, self-signed, to SCRAM users; keep the result as a file
-lw --preset serve,path=/var/log/app,tls=self,users=/etc/logwisp/users.toml --dump > serve.toml
+lw --preset serve:path=/var/log/app,tls=self,users=/etc/logwisp/users.toml --dump > serve.toml
 
 # an aggregator with a certificate made at startup, and an edge pinning it
-lw --preset aggregator,users=/etc/logwisp/users.toml,out=/var/log/edges
-lw --preset edge,path=/var/log/app,to=agg.example.org:9000,pin=sha256//BASE64,\
+lw --preset aggregator:users=/etc/logwisp/users.toml,out=/var/log/edges
+lw --preset edge:path=/var/log/app,to=agg.example.org:9000,pin=sha256//BASE64,\
 user=edge-01,password_file=/etc/logwisp/edge-01.pass
+
+# a temporary pipe, nothing on disk: Enter at the receiver's prompt draws the
+# password, typed at the sender's; or both read it from a descriptor
+lw -p aggregator:listen=0.0.0.0:9000,user=pipe,format=raw,allow=SENDER/32
+cmd | lw -p edge:to=RECEIVER:9000,pin=sha256//BASE64,user=pipe
+cmd | lw -p edge:to=RECEIVER:9000,pin=sha256//BASE64,user=pipe,\
+password_file=/dev/fd/3 3< <(pass show lw/pipe)
 ```
 
 A self-signed aggregator logs its pin at startup (`pin_sha256`, a warning, so
@@ -278,9 +293,9 @@ A container needs no configuration file:
 ```bash
 docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
   -e LOGWISP_PIPELINE=app \
-  -e LOGWISP_SOURCE='file,directory=/logs,pattern=*.log' \
-  -e LOGWISP_FILTER='exclude,patterns=DEBUG' \
-  -e LOGWISP_SINK='http,host=0.0.0.0,port=8080' \
+  -e LOGWISP_SOURCE='file:directory=/logs,pattern=*.log' \
+  -e LOGWISP_FILTER='exclude:patterns=DEBUG' \
+  -e LOGWISP_SINK='http:host=0.0.0.0,port=8080' \
   -e LOGWISP_SINK_1=console \
   -e LOGWISP_LOGGING_LEVEL=info \
   logwisp
@@ -382,13 +397,13 @@ sink gives its clients or its downstream its `write_timeout_ms`
 lw < app.log > copy.log
 
 # errors and warnings only
-tail -F app.log | lw --filter include,patterns=ERROR,patterns=WARN
+tail -F app.log | lw --filter include:patterns=ERROR,patterns=WARN
 
 # stdin as a live SSE stream; the http and tcp sinks bind 0.0.0.0 by default
-journalctl -f | lw --sink http,host=127.0.0.1,port=8080
+journalctl -f | lw --sink http:host=127.0.0.1,port=8080
 
 # a directory's files to one file, through stdout
-lw --source file,directory=/var/log/app,pattern='*.log' > all.log
+lw --source file:directory=/var/log/app,pattern='*.log' > all.log
 ```
 
 A console sink never drops: when its reader is slow, the pipeline waits, and
@@ -411,7 +426,7 @@ prints `configuration ok: N pipeline(s)` and exits 0, or the error and exits 1
 
 ```bash
 lw --check -c /etc/logwisp/logwisp.toml
-lw --check --source file,directory=/var/log/app --sink http,port=8080
+lw --check --source file:directory=/var/log/app --sink http:port=8080
 ```
 
 **Production**
@@ -443,21 +458,30 @@ WebAssembly.
   pipeline flags, `LOGWISP_SOURCE`, a discovered file); with none but the
   built-in pipe, the preset menu (or `empty`). A pasted `lw` command line
   replaces the pipelines, in the preset menu too.
-- Screen: SOURCES, FLOW and SINKS side by side from 64 columns, stacked
-  below; each source and sink a tinted bar with its type, whether it listens
-  or dials, and a summary; the four flow stages in their order in a dashed
-  box, the ones off dimmed. The inspector, the chosen part's options, sits
-  below the canvas, and beside it from 110 columns.
-- Keys: arrows or `hjkl` move; Enter inspects, then edits a value (empty
-  returns it to its default); Tab sets it and goes to the next; Esc back; `a` adds a source,
-  sink or filter; `d` deletes, or returns a value to its default; Space turns
-  a flow stage or a switch on or off; `J`/`K` move a filter; `[` `]` switch
-  pipelines; `p` presets; `c` shows the first problem; `o` output; `?` keys;
-  `q` quits.
-- Output, `o`: run the pipelines with the other options given (so `--check`
-  and `--dump` apply to them, and reloads keep them), or print one of the
-  command line, the environment variables (one pipeline) and the file's
-  pipelines on standard output once the screen closes.
+- Screen: the pipeline bar on top; SOURCES, FLOW and SINKS side by side
+  from 64 columns, stacked below; each source and sink a tinted bar with its
+  type, whether it listens or dials, and a summary; the four flow stages in
+  their order in a dashed box, the ones off dimmed. The inspector, the
+  chosen part's options with radio buttons for few choices, sits below the
+  canvas, and beside it from 110 columns. Narrow panes stack labels, wrap
+  text and scroll dialogs; the status line wraps to three rows.
+- Keys: arrows or `hjkl` move; Enter inspects a part, opening on its first
+  required key, then edits a value (empty returns it to its default), opens
+  a list's choices or adds on an add row; in a value, Enter sets it, and Tab
+  or Up/Down set it and move. Left/Right step a choice or set a switch;
+  Space flips it; Esc goes back. `a` adds a source, sink or filter; `c`
+  changes a source's or sink's type in its place; `d` deletes, or returns a
+  value to its default; Space turns a flow stage on or off; `J`/`K` move a
+  filter; `[` `]` switch pipelines; `p` presets; `!` shows the first
+  problem; `r` runs; `o` output; `?` keys; `q` quits.
+- Pipelines: Up from a column's top row reaches the bar, where `[` `]` or
+  Left/Right switch, `a` adds one (empty or from a preset), Enter renames and
+  `d` deletes, asking first when it has parts.
+- Output, `o`, each picked by its letter: `r` runs the pipelines with the
+  other options given (so `--check` and `--dump` apply to them, and reloads
+  keep them), or `c`, `e` and `f` print the command line, the environment
+  variables (one pipeline) or the file's pipelines on standard output once
+  the screen closes.
 - The screen draws on the controlling terminal: `lw -T > pipelines.toml` and
   `cmd | lw -T` keep standard input and output as data. lw never writes the
   file it starts from, but the shell empties a redirect's target before lw
@@ -476,9 +500,9 @@ them as a viewer. See
 ```
 lw auth add-user    --credentials FILE -u NAME [--password-file FILE] [--generate]
 lw auth remove-user --credentials FILE -u NAME
-lw auth token       --url https://HOST:PORT[/PATH] -u NAME --password-file FILE
+lw auth token       --url https://HOST:PORT[/PATH] -u NAME [--password-file FILE]
                     [--unbound] [TLS flags]
-lw auth stream      --addr HOST:PORT -u NAME --password-file FILE [TLS flags]
+lw auth stream      --addr HOST:PORT -u NAME [--password-file FILE] [TLS flags]
 ```
 
 `-u` is short for `--user`.
@@ -496,7 +520,7 @@ success, `1` on failure and `2` on a usage error.
 **`add-user`** creates the credentials file, with a fresh `decoy_key`, when it
 does not exist or is empty (create it empty first to choose its owner). The
 password comes from `--password-file` when that file exists (at least 8 bytes;
-one trailing line break is trimmed). Otherwise a random
+one trailing line break is trimmed; `/dev/tty` asks). Otherwise a random
 26-character password (130 bits) is generated and written to `--password-file`,
 or printed once to stdout when there is none. Replacing an existing user's
 password needs an existing `--password-file` or `--generate`, so a mistyped path
@@ -512,11 +536,13 @@ Neither touches a running LogWisp: send `SIGHUP`, since `auto_reload` does not
 watch the credentials file.
 
 **`token`** and **`stream`** build the same TLS and SCRAM client as a chain
-sink. TLS flags: `--ca-file` (default: system roots) or `--pin-sha256` (the
-`tls.pin_sha256` a self-signed listener logs), `--server-name` (default: the
-host), and `--cert-file` / `--key-file` for a listener with `tls.client_auth`.
-There is no flag to skip verification: an unverified server could relay the
-login. Redirects are not followed. `--unbound` logs in to an `http` sink behind
+sink. `--password-file` defaults to `/dev/tty`: the password is asked without
+echo; a file, `/dev/fd/N` or a pipe is read as by a
+[plugin](security.md#one-user-without-a-credentials-file). TLS flags:
+`--ca-file` (default: system roots) or `--pin-sha256` (the `tls.pin_sha256` a
+self-signed listener logs), `--server-name` (default: the host), and
+`--cert-file` / `--key-file` for a listener with `tls.client_auth`. There is no
+flag to skip verification: an unverified server could relay the login. Redirects are not followed. `--unbound` logs in to an `http` sink behind
 a TLS-terminating proxy (`auth.trusted_proxies`), still pinning the proxy's
 certificate across the two requests; only then may `--url` carry the path the
 proxy mounts LogWisp at. `stream` exits `0` on `SIGINT` or `SIGTERM`, and `1`
@@ -549,9 +575,8 @@ curl --cacert ca.crt -H @<(printf 'Authorization: Bearer %s\n' \
   "$(lw auth token --url https://HOST:PORT --user viewer \
      --password-file viewer.pass --ca-file ca.crt)") https://HOST:PORT/status
 
-# follow a tcp sink
-lw auth stream --addr HOST:PORT --user viewer --password-file viewer.pass \
-  --ca-file ca.crt
+# follow a tcp sink, asked for the password
+lw auth stream --addr HOST:PORT --user viewer --pin-sha256 sha256//BASE64
 ```
 
 ## `lw tls`

@@ -96,22 +96,22 @@ section "Rules"
 rejects() { ! lw --check --source null --sink "$1" >/dev/null 2>"$LOG/check.err" && grep -q -- "$2" "$LOG/check.err" && echo 1 || echo 0; }
 # warns SINK PATTERN: lw --check builds SINK and WARNs PATTERN
 warns() { lw --check --source null --sink "$1" 2>&1 >/dev/null | grep ' WARN ' | grep -q -- "$2" && echo 1 || echo 0; }
-check "an IPv4 entry on an IPv6 listener is refused" "$(rejects 'tcp,host=::1,port=15881,acl.allow=10.0.0.0/8' "not of the listener's family")"
-check "an acl on a dialer is refused" "$(rejects 'tcp_chain,host=127.0.0.1,port=15881,acl.deny=10.0.0.1' 'unknown key "acl"')"
-check "a CIDR with host bits warns, naming the network it matches" "$(warns 'tcp,host=127.0.0.1,port=15881,acl.allow=10.0.0.1/8' 'network 10.0.0.0/8')"
-check "a deny list alone on a wildcard listener warns" "$(warns 'tcp,port=15881,acl.deny=10.0.0.1' 'admits all that acl.deny does not list')"
-check "an allow entry of a whole family warns" "$(warns 'tcp,port=15881,acl.allow=0.0.0.0/0' 'admits every address of its family')"
+check "an IPv4 entry on an IPv6 listener is refused" "$(rejects 'tcp:host=::1,port=15881,acl.allow=10.0.0.0/8' "not of the listener's family")"
+check "an acl on a dialer is refused" "$(rejects 'tcp_chain:host=127.0.0.1,port=15881,acl.deny=10.0.0.1' 'unknown key "acl"')"
+check "a CIDR with host bits warns, naming the network it matches" "$(warns 'tcp:host=127.0.0.1,port=15881,acl.allow=10.0.0.1/8' 'network 10.0.0.0/8')"
+check "a deny list alone on a wildcard listener warns" "$(warns 'tcp:port=15881,acl.deny=10.0.0.1' 'admits all that acl.deny does not list')"
+check "an allow entry of a whole family warns" "$(warns 'tcp:port=15881,acl.allow=0.0.0.0/0' 'admits every address of its family')"
 check "a proxy_from entry reaching public addresses warns" \
-	"$(warns 'tcp,host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=203.0.113.0/24' 'proxy_from reaches public addresses')"
+	"$(warns 'tcp:host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=203.0.113.0/24' 'proxy_from reaches public addresses')"
 check "a request rate on a tcp listener is refused" \
-	"$(rejects 'tcp,host=127.0.0.1,port=15881,acl.requests_per_second_per_client=5' 'applies only to HTTP listeners')"
+	"$(rejects 'tcp:host=127.0.0.1,port=15881,acl.requests_per_second_per_client=5' 'applies only to HTTP listeners')"
 check "a connection cap behind trusted_proxies, which would count the proxy, is refused" \
-	"$(rejects "http,host=127.0.0.1,port=15881,auth.type=scram,auth.credentials_file=$RUN/users.toml,auth.trusted_proxies=127.0.0.1,acl.max_connections_per_client=2" 'behind trusted_proxies')"
+	"$(rejects "http:host=127.0.0.1,port=15881,auth.type=scram,auth.credentials_file=$RUN/users.toml,auth.trusted_proxies=127.0.0.1,acl.max_connections_per_client=2" 'behind trusted_proxies')"
 check "optional proxy_protocol warns that a headerless client passes as the proxy" \
-	"$(warns 'tcp,host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=127.0.0.1' 'passes as the proxy')"
+	"$(warns 'tcp:host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=127.0.0.1' 'passes as the proxy')"
 
 section "HTTP sink"
-spawn serve "$BIN" --preset "serve,path=$RUN/edge.log,listen=127.0.0.1:15881,allow=127.0.0.0/8,deny=127.0.0.2"
+spawn serve "$BIN" --preset "serve:path=$RUN/edge.log,listen=127.0.0.1:15881,allow=127.0.0.0/8,deny=127.0.0.2"
 wait_port 15881 || abort "the serve preset did not listen" serve
 check "a client the allow list names reads the status" "$(get http://127.0.0.1:15881/status | grep -q '"acl":"allow=1 deny=1"' && echo 1 || echo 0)"
 get --interface 127.0.0.2 -o /dev/null http://127.0.0.1:15881/status
@@ -127,7 +127,7 @@ section "TCP sink"
 # the lines of a finite input, once the clients had time to connect
 seq 1 20000 | sed 's/^/flush /' >"$RUN/flush.in"
 { wait_port 15882; sleep 1; cat "$RUN/flush.in"; } |
-	lw --sink "tcp,host=127.0.0.1,port=15882,acl.allow=127.0.0.1,buffer_size=20000,client_buffer_size=20000" 2>"$LOG/tcp.err" &
+	lw --sink "tcp:host=127.0.0.1,port=15882,acl.allow=127.0.0.1,buffer_size=20000,client_buffer_size=20000" 2>"$LOG/tcp.err" &
 fpid=$!
 wait_port 15882
 tcp_read 15882 15 >"$RUN/flush.out" &
@@ -141,7 +141,7 @@ check "one it denies gets nothing ($denied bytes) and is logged" \
 
 section "Behind an L7 proxy"
 # proxy mode over plaintext loopback: curl is the proxy, its headers name the client
-spawn web-proxied "$BIN" --source null --sink "http,host=127.0.0.1,port=15882,auth.type=scram,auth.credentials_file=$RUN/users.toml,auth.trusted_proxies=127.0.0.1,acl.deny=198.51.100.5,acl.deny=2001:db8::/32,acl.requests_per_second_per_client=1"
+spawn web-proxied "$BIN" --source null --sink "http:host=127.0.0.1,port=15882,auth.type=scram,auth.credentials_file=$RUN/users.toml,auth.trusted_proxies=127.0.0.1,acl.deny=198.51.100.5,acl.deny=2001:db8::/32,acl.requests_per_second_per_client=1"
 wait_port 15882 || abort "the proxy-mode http sink did not listen" web-proxied
 # as CLIENT [PATH [CURL ARGS]]: the status of a request forwarded for CLIENT,
 # GET /status by default; there 401 is past the acl, short of a login
@@ -162,9 +162,9 @@ section "Chain sources"
 # pin DAEMON: the pin_sha256 a self-signed listener logged
 pin() { wait_until 5 logged "$1" pin_sha256 && grep -o 'pin_sha256 "sha256//[^"]*"' "$LOG/$1.out" | head -1 | cut -d'"' -f2; }
 received() { cat "$RUN/out/$1"/aggregate*.log 2>/dev/null | grep -c 'edge line'; }
-edge() { spawn "$1" "$BIN" --preset "edge,path=$RUN/edge.log,from=start,to=$2,transport=$3,pin=$4,user=edge-01,password_file=$RUN/edge-01.pass"; }
-spawn agg-allow "$BIN" --preset "aggregator,listen=127.0.0.1:15884,allow=127.0.0.1,users=$RUN/users.toml,out=$RUN/out/allow"
-spawn agg-deny "$BIN" --preset "aggregator,listen=127.0.0.1:15885,transport=http,deny=127.0.0.0/8,users=$RUN/users.toml,out=$RUN/out/deny"
+edge() { spawn "$1" "$BIN" --preset "edge:path=$RUN/edge.log,from=start,to=$2,transport=$3,pin=$4,user=edge-01,password_file=$RUN/edge-01.pass"; }
+spawn agg-allow "$BIN" --preset "aggregator:listen=127.0.0.1:15884,allow=127.0.0.1,users=$RUN/users.toml,out=$RUN/out/allow"
+spawn agg-deny "$BIN" --preset "aggregator:listen=127.0.0.1:15885,transport=http,deny=127.0.0.0/8,users=$RUN/users.toml,out=$RUN/out/deny"
 wait_port 15884 && wait_port 15885 || abort "an aggregator did not listen" agg-allow
 edge edge-allow 127.0.0.1:15884 tcp "$(pin agg-allow)"
 edge edge-deny 127.0.0.1:15885 http "$(pin agg-deny)"
@@ -181,16 +181,16 @@ section "Behind a PROXY header"
 # connect from; each is up before a proxy shares its port on another address
 behind=acl.proxy_protocol=required,acl.proxy_from=127.0.0.1
 scram="tls.enabled=true,tls.self_signed=true,auth.type=scram,auth.credentials_file=$RUN/users.toml"
-spawn sink-behind "$BIN" --logging.level=info --source null --sink "http,host=127.0.0.1,port=15886,$scram,$behind,acl.deny=198.51.100.2"
-spawn tcp-capped "$BIN" --source null --sink "tcp,host=127.0.0.1,port=15889,$behind,acl.max_connections_per_client=2"
+spawn sink-behind "$BIN" --logging.level=info --source null --sink "http:host=127.0.0.1,port=15886,$scram,$behind,acl.deny=198.51.100.2"
+spawn tcp-capped "$BIN" --source null --sink "tcp:host=127.0.0.1,port=15889,$behind,acl.max_connections_per_client=2"
 for t in tcp http; do
 	spawn "agg-$t-behind" "$BIN" --logging.level=info \
-		--source "${t}_chain,host=127.0.0.1,port=$([[ $t == tcp ]] && echo 15888 || echo 15883),$scram,$behind" \
-		--sink "file,directory=$RUN/out/$t-behind,name=aggregate"
+		--source "${t}_chain:host=127.0.0.1,port=$([[ $t == tcp ]] && echo 15888 || echo 15883),$scram,$behind" \
+		--sink "file:directory=$RUN/out/$t-behind,name=aggregate"
 done
 # the tcp sink sends its input once the clients connected
 { wait_until 30 test -e "$RUN/feed"; seq 1 100 | sed 's/^/behind /'; } |
-	lw --sink "tcp,host=127.0.0.1,port=15887,$behind,acl.deny=198.51.100.2,acl.deny=127.0.0.6" 2>"$LOG/tcp-behind.out" &
+	lw --sink "tcp:host=127.0.0.1,port=15887,$behind,acl.deny=198.51.100.2,acl.deny=127.0.0.6" 2>"$LOG/tcp-behind.out" &
 fpid=$!
 for p in 15883 15886 15887 15888 15889; do wait_port $p || abort "a listener behind the proxy did not listen on $p" sink-behind; done
 spawn proxy "$RUN/proxy/proxy" 127.0.0.11:15886,127.0.0.1:15886,1,198.51.100.1 \

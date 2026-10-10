@@ -102,7 +102,9 @@ What exists:
   auth and acl tables, sources, sinks and presets, as one JSON document.
 - `github.com/lixenwraith/terminal` (pinned) and its `tui` package: regions,
   layout, boxes, List, Tree, TabBar, StatusBar, TextField, Form, Modal,
-  ConfirmDialog, scrolling, mouse. `github.com/lixenwraith/color`: RGB,
+  ConfirmDialog, scrolling, mouse; themed Radio, Field, TextInput,
+  OptionList and menus, Frame, Rule, Wires and Window, which `lw --tui`
+  draws with. `github.com/lixenwraith/color`: RGB,
   blending, RGBTo256, RGBTo16.
 
 Steps:
@@ -112,7 +114,9 @@ Steps:
 4. `lixenwraith/terminal` v0.2.0: done: 16 and no color, the terminal's
    default colors, `/dev/tty`, bracketed paste, themed form controls. Still
    optional, in `color`: export the 16 xterm reference shades (RGBTo16 maps
-   the site's hues badly, so the 16-color tier is chosen by hand).
+   the site's hues badly, so the 16-color tier is chosen by hand). v0.3.0:
+   radio buttons, narrow form fields and option lists, menus, frames, rules,
+   wires and windows, moved from `lw --tui`.
 5. `lw --tui`: done ([doc/cli.md](cli.md#lw---tui)).
 6. WebAssembly: done. `make wasm` builds `bin/lwconf.wasm`, version stamped,
    beside the toolchain's `wasm_exec.js`, and prints both checksums: about

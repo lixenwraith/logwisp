@@ -255,8 +255,9 @@ is what their certificates say, regardless of the `node` each edge configured.
 `test/mtls-chain-test.sh` builds exactly this shape against a throwaway PKI.
 
 To use passwords instead of client certificates, replace both `auth` blocks:
-`type = "scram"` with `username` and `password_file` on the edge, and with a
-`credentials_file` on the relay. `client_auth` and the edge's certificate become
+`type = "scram"` with `username` and `password_file` on the edge, and on the
+relay a `credentials_file`, or one `username` with its `password_file`.
+`client_auth` and the edge's certificate become
 optional, and entries are labelled with the username. See
 [Password Authentication](security.md#password-authentication-scram).
 

@@ -139,9 +139,10 @@ func TestNewValidation(t *testing.T) {
 		{"dialer skips verify", &config.AuthOptions{Type: MethodMTLS}, &tls.Config{InsecureSkipVerify: true}, config.Dialer, TCP, "insecure_skip_verify"},
 		{"mtls with a password", &config.AuthOptions{Type: MethodMTLS, PasswordFile: pw}, &tls.Config{}, config.Dialer, TCP, "password_file applies only"},
 		{"scram without tls", listener(config.AuthOptions{}), nil, config.Listener, TCP, "requires tls.enabled"},
-		{"scram without credentials", scram(config.AuthOptions{}), f.serverTLS, config.Listener, TCP, "requires credentials_file"},
-		{"scram with an allow list", listener(config.AuthOptions{Allow: []string{"edge-01"}}), f.serverTLS, config.Listener, TCP, "credentials file is the allow list"},
-		{"scram listener with a password", listener(config.AuthOptions{Username: "edge-01"}), f.serverTLS, config.Listener, TCP, "only to dialers"},
+		{"scram without users", scram(config.AuthOptions{}), f.serverTLS, config.Listener, TCP, "requires credentials_file, or username and password_file"},
+		{"scram with an allow list", listener(config.AuthOptions{Allow: []string{"edge-01"}}), f.serverTLS, config.Listener, TCP, "the users are the allow list"},
+		{"credentials and a user", listener(config.AuthOptions{Username: "edge-01"}), f.serverTLS, config.Listener, TCP, "not both"},
+		{"user without password_file", scram(config.AuthOptions{Username: "edge-01"}), f.serverTLS, config.Listener, TCP, "go together"},
 		{"scram certificate binding without client_auth", listener(config.AuthOptions{Identity: "cn"}), f.serverTLS, config.Listener, TCP, "requires tls.client_auth"},
 		{"token lifetime on tcp", listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, config.Listener, TCP, "only to HTTP listeners"},
 		{"token lifetime too short", listener(config.AuthOptions{TokenLifetimeMS: 900}), f.serverTLS, config.Listener, HTTP, "must be from 10000 to 86400000"},
@@ -176,8 +177,10 @@ func TestNewValidation(t *testing.T) {
 			}
 		}
 	}
-	if _, err := New(listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, nil, config.Listener, HTTP); err != nil {
-		t.Fatalf("scram listener rejected: %v", err)
+	for _, o := range []*config.AuthOptions{listener(config.AuthOptions{TokenLifetimeMS: 60000}), scram(config.AuthOptions{Username: "edge-01", PasswordFile: pw})} {
+		if _, err := New(o, f.serverTLS, nil, config.Listener, HTTP); err != nil {
+			t.Fatalf("scram listener rejected: %v", err)
+		}
 	}
 	// Behind proxies TLS ends at the proxy, so the hop may be plaintext
 	if _, err := New(listener(config.AuthOptions{TrustedProxies: proxies}), nil, nil, config.Listener, HTTP); err != nil {

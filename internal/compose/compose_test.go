@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"reflect"
@@ -64,7 +65,7 @@ func TestWrittenFormsStartTheSameComposition(t *testing.T) {
 	_, err = c.Add(0, "filters", "include")
 	must(err)
 	must(c.MoveFilter(0, 1, 0))
-	must(c.Set(0, Node{Role: "rate_limit"}, "rate", "100"))
+	must(c.Set(0, Node{Role: "rate_limit"}, "entries_per_second", "100"))
 	must(c.Set(0, Node{Role: "heartbeat"}, "interval_ms", "5000"))
 	must(c.Set(0, Node{Role: "heartbeat"}, "enabled", "true"))
 	must(c.AddPipeline("-b"))
@@ -188,5 +189,73 @@ func TestUnnamedPartsTakeFreeIDs(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("%v\n%s", err, line)
+	}
+}
+
+// Retype keeps the part's place and a chosen id, renames an automatic one,
+// and carries the options of the same name and kind only within a side
+func TestRetypeKeepsThePlace(t *testing.T) {
+	c := &Composition{}
+	if err := c.AddPipeline("p"); err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"tcp", "http", "tcp"} {
+		if _, err := c.Add(0, "sink", typ); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tcp2, chosen := Node{Role: "sink", ID: "tcp_2"}, Node{Role: "sink", ID: "web"}
+	c.Pipelines[0].PluginSinks[1].ID = chosen.ID
+	for _, err := range []error{c.Set(0, tcp2, "port", "9000"), c.Set(0, tcp2, "keep_alive", "false"), c.Set(0, chosen, "port", "80")} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := c.Retype(0, tcp2, "http")
+	if err != nil || got.ID != "http" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := c.Retype(0, chosen, "tcp_chain"); err != nil {
+		t.Fatal(err)
+	}
+	var parts []string
+	for _, s := range c.Pipelines[0].PluginSinks {
+		parts = append(parts, fmt.Sprintf("%s=%s %v", s.ID, s.Type, s.Config))
+	}
+	if want := []string{"tcp=tcp map[]", "web=tcp_chain map[]", "http=http map[port:9000]"}; !slices.Equal(parts, want) {
+		t.Fatalf("%q, want %q", parts, want)
+	}
+}
+
+// A pipeline takes a name no other has, renamed as when added
+func TestPipelineNamesAreUnique(t *testing.T) {
+	c := &Composition{}
+	for _, name := range []string{"a", "b"} {
+		if err := c.AddPipeline(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.AddPipeline("a") == nil || c.RenamePipeline(1, "a") == nil || c.RenamePipeline(1, "") == nil {
+		t.Fatal("took a name another pipeline has")
+	}
+	if err := c.RenamePipeline(1, "b"); err != nil || c.RenamePipeline(1, "c") != nil || c.Pipelines[1].Name != "c" {
+		t.Fatalf("%v, %+v", err, c.Pipelines)
+	}
+}
+
+// A stage an edit turns on does what its spec would: a rate limit drops what
+// passes its rate, a heartbeat beats
+func TestAStageTurnsOnAsItsSpecDoes(t *testing.T) {
+	c := &Composition{}
+	if err := c.AddPipeline("p"); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range []error{c.Set(0, Node{Role: "rate_limit"}, "entries_per_second", "5"), c.Set(0, Node{Role: "heartbeat"}, "interval_ms", "500")} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f := c.Pipelines[0].Flow; f.RateLimit.Policy != "drop" || !f.Heartbeat.Enabled {
+		t.Fatalf("%+v %+v", f.RateLimit, f.Heartbeat)
 	}
 }

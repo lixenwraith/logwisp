@@ -317,7 +317,7 @@ docker run -d --name logwisp \
 
   ```bash
   -e LOGWISP_PIPELINE=relay \
-  -e LOGWISP_SOURCE=tcp_chain,port=9000,tls.enabled=true,tls.cert_file=/run/secrets/tls.crt,tls.key_file=/run/secrets/tls.key,auth.type=scram,auth.credentials_file=/run/secrets/users.toml \
+  -e LOGWISP_SOURCE=tcp_chain:port=9000,tls.enabled=true,tls.cert_file=/run/secrets/tls.crt,tls.key_file=/run/secrets/tls.key,auth.type=scram,auth.credentials_file=/run/secrets/users.toml \
   -e LOGWISP_SINK=console
   ```
 

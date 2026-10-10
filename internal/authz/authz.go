@@ -448,7 +448,7 @@ func (p *Policy) Enabled() bool { return p != nil }
 func (p *Policy) NeedsLogin() bool { return p != nil && p.listener != nil }
 
 // Unrestricted reports whether an mtls policy admits any identity the CA
-// vouches for. Under scram the credentials file is the allow list.
+// vouches for. Under scram the users are the allow list.
 func (p *Policy) Unrestricted() bool {
 	return p != nil && p.method == MethodMTLS && len(p.allow) == 0 && len(p.patterns) == 0
 }

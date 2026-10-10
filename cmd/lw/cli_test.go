@@ -31,9 +31,9 @@ func TestCommandLineGrammar(t *testing.T) {
 	}{
 		{[]string{"-c", "a.toml", "--config=b.toml", "--quiet"}, invocation{load: config.Args{File: "b.toml", Overrides: []string{"--quiet"}}}},
 		{[]string{"-c=a.toml", "--config", "b.toml"}, invocation{load: config.Args{File: "b.toml"}}},
-		{[]string{"--source=null", "--sink", "http,port=1"},
-			invocation{load: config.Args{Specs: []config.Spec{{Flag: "source", Value: "null"}, {Flag: "sink", Value: "http,port=1"}}}}},
-		{[]string{"--preset", "tail,path=x", "--pipeline", "b"}, invocation{load: config.Args{Specs: []config.Spec{{Flag: "preset", Value: "tail,path=x"}, {Flag: "pipeline", Value: "b"}}}}},
+		{[]string{"--source=null", "--sink", "http:port=1"},
+			invocation{load: config.Args{Specs: []config.Spec{{Flag: "source", Value: "null"}, {Flag: "sink", Value: "http:port=1"}}}}},
+		{[]string{"--preset", "tail:path=x", "--pipeline", "b"}, invocation{load: config.Args{Specs: []config.Spec{{Flag: "preset", Value: "tail:path=x"}, {Flag: "pipeline", Value: "b"}}}}},
 		{[]string{"--color", "--color", "never", "--color=auto"}, invocation{load: config.Args{Overrides: []string{"--color=always", "--color=never", "--color=auto"}}}},
 		{[]string{"--quiet", "--"}, invocation{load: config.Args{Overrides: []string{"--quiet"}}}},
 		{[]string{"--quiet", "-h"}, invocation{help: true, load: config.Args{Overrides: []string{"--quiet"}}}},
@@ -41,9 +41,9 @@ func TestCommandLineGrammar(t *testing.T) {
 		{[]string{"help"}, invocation{help: true}},
 		{[]string{"-T", "-c", "a.toml"}, invocation{on: map[string]bool{"tui": true}, load: config.Args{File: "a.toml"}}},
 		{[]string{"tls", "ca", "-h"}, invocation{command: &commands[1], args: []string{"ca", "-h"}}},
-		{[]string{"-q", "-t", "-V", "-p", "tail,path=x", "-c=a.toml", "--logging.level", "debug", "--logging.file.retention_hours=-1", "--dump"},
+		{[]string{"-q", "-t", "-V", "-p", "tail:path=x", "-c=a.toml", "--logging.level", "debug", "--logging.file.retention_hours=-1", "--dump"},
 			invocation{on: map[string]bool{"check": true, "version": true, "dump": true},
-				load: config.Args{File: "a.toml", Specs: []config.Spec{{Flag: "preset", Value: "tail,path=x"}},
+				load: config.Args{File: "a.toml", Specs: []config.Spec{{Flag: "preset", Value: "tail:path=x"}},
 					Overrides: []string{"--quiet", "--logging.level=debug", "--logging.file.retention_hours=-1"}}}},
 	} {
 		got, err := parseCommandLine(c.argv)
@@ -173,8 +173,8 @@ func TestDumpReadsBack(t *testing.T) {
 	if err := os.WriteFile(empty, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"--color", "--preset", "serve,listen=127.0.0.1:15841,tls=self,hosts=a.example,hosts=b.example",
-		"--filter", `exclude,patterns=password=\S{8\,64}`, "--sink", "console", "--logging.level=debug"}
+	args := []string{"--color", "--preset", "serve:listen=127.0.0.1:15841,tls=self,hosts=a.example,hosts=b.example",
+		"--filter", `exclude:patterns=password=\S{8\,64}`, "--sink", "console", "--logging.level=debug"}
 	cfg := loadTestConfig(t, empty, args...)
 	var dump bytes.Buffer
 	if code := dumpConfig(loadTestConfig(t, empty, args...), &dump); code != 0 {
@@ -225,7 +225,7 @@ func TestEveryFormLoadsTheSamePipelines(t *testing.T) {
 	written := filepath.Join(dir, "written.toml")
 	if err := os.WriteFile(written, []byte(`[[pipelines]]
 name = "written"
-flow.rate_limit.rate = 5
+flow.rate_limit.entries_per_second = 5
 plugin_sources = [{id = "in", type = "null"}]
 plugin_sinks = [{id = "out", type = "http", config = {port = 15844, acl = {requests_per_second_per_client = 2}}}]
 `), 0o600); err != nil {
@@ -321,11 +321,11 @@ func TestEveryPresetBuilds(t *testing.T) {
 	}
 	pin := "sha256//" + strings.Repeat("A", 43) + "="
 	samples := map[string]string{
-		"pipe":       "pipe,format=txt",
-		"tail":       "tail,path=" + dir,
-		"serve":      "serve,path=" + filepath.Join(dir, "*.log") + ",listen=127.0.0.1:15841,tls=self,users=" + users + ",allow=127.0.0.0/8,deny=127.0.0.2",
-		"edge":       "edge,to=127.0.0.1:15842,transport=http,pin=" + pin + ",user=edge-01,password_file=" + pass,
-		"aggregator": "aggregator,listen=127.0.0.1:15843,users=" + users + ",out=" + filepath.Join(dir, "out") + ",allow=10.0.0.0/8,allow=127.0.0.1",
+		"pipe":       "pipe:format=txt",
+		"tail":       "tail:path=" + dir,
+		"serve":      "serve:path=" + filepath.Join(dir, "*.log") + ",listen=127.0.0.1:15841,tls=self,users=" + users + ",allow=127.0.0.0/8,deny=127.0.0.2",
+		"edge":       "edge:to=127.0.0.1:15842,transport=http,pin=" + pin + ",user=edge-01,password_file=" + pass,
+		"aggregator": "aggregator:listen=127.0.0.1:15843,user=edge-01,password_file=" + pass + ",out=" + filepath.Join(dir, "out") + ",allow=10.0.0.0/8,allow=127.0.0.1",
 	}
 	for _, p := range config.Presets() {
 		sample, ok := samples[p.Name]

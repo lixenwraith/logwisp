@@ -40,7 +40,7 @@ var commands = []command{
 	{"tls", "A CA and certificates for TLS and mTLS",
 		"Files are never overwritten; keys are written mode 0600.", tlsCommands},
 	{"preset", "Show the pipeline a preset makes, as TOML",
-		"lw --preset NAME,key=value runs one; flags here are its keys.", presetCommands()},
+		"lw --preset NAME:key=value runs one; flags here are its keys.", presetCommands()},
 	{"config", "Place the annotated default configuration",
 		"Files are never overwritten; lw --dump prints the effective configuration.", configCommands},
 }

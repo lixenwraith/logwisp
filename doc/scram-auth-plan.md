@@ -15,8 +15,10 @@ next to the existing certificate method, without weakening what mTLS gives.
 
 - Password authentication for chain links (`tcp_chain`, `http_chain`: sources
   verify, sinks present) and for viewers of the `tcp` and `http` sinks.
-- No password or password-equivalent on the wire, no KDF work on listeners, and
-  no credential relay through a TLS-terminating MITM.
+- No password or password-equivalent on the wire, no KDF work per login on
+  listeners, and no credential relay through a TLS-terminating MITM.
+- A temporary pipe needs no file: one listener user from a descriptor, a pipe
+  or the terminal, with a certificate made at startup.
 - Default stays `auth.type = "none"`; existing configurations are unaffected.
 - Config in TOML, credential management and viewer clients in a `lw auth`
   CLI.
@@ -66,7 +68,7 @@ curl by the CLI is unpinned.
 # listener (tcp_chain/http_chain source, tcp/http sink)
 [pipelines.plugin_sources.config.auth]
 type              = "scram"
-credentials_file  = "/etc/logwisp/users.toml"
+credentials_file  = "/etc/logwisp/users.toml"   # or username + password_file
 token_lifetime_ms = 900000          # http sink and http_chain source only
 node_binding      = "force"         # chain sources; binds to the username
 
@@ -81,12 +83,20 @@ Validation at construction:
 
 - `scram` requires TLS, except on an `http` sink in proxy mode; a dialer also
   forbids `insecure_skip_verify`.
-- Listeners require `credentials_file` and reject `allow`/`allow_patterns` (the
-  credentials file is the allow list), `username` and `password_file`. Use one
-  file per listener when listeners admit different users.
-- Dialers require `username` + `password_file` (1–1024 bytes after trimming one
-  line break), and reject `credentials_file`, `token_lifetime_ms`, `allow*` and
-  `identity` (server pinning stays an mTLS feature).
+- Listeners require `credentials_file`, or `username` and `password_file`
+  (one user, its verifier derived in memory at construction), not both, and
+  reject `allow`/`allow_patterns`: the users are the allow list. Use one file
+  per listener when listeners admit different users.
+- Dialers require `username` + `password_file`, and reject `credentials_file`,
+  `token_lifetime_ms`, `allow*` and `identity` (server pinning stays an mTLS
+  feature).
+- A password is 1–1024 bytes after trimming one line break, 8 or more on a
+  listener. A regular file is read at every construction; `/dev/fd/N` (the
+  inherited descriptor, then closed), a pipe, a FIFO or another device once, at
+  startup, and kept for reloads; a terminal is asked once, at startup, without
+  echo, and on a listener Enter alone generates a password shown only there.
+  The open file decides, not stat: FreeBSD stats `/dev/stdin` as a device
+  whatever it holds. No terminal fails closed.
 - `identity` on a listener requires `tls.client_auth` and **binds the certificate
   to the user**: the certificate's identity field must equal the SCRAM username,
   so a peer needs its own certificate and its own password (PostgreSQL's
@@ -207,8 +217,8 @@ closed.
 ```
 lw auth add-user    --credentials F --user U [--password-file P] [--generate]
 lw auth remove-user --credentials F --user U
-lw auth token  --url https://host:port[/path] --user U --password-file P [--unbound] [TLS flags]
-lw auth stream --addr host:port        --user U --password-file P [TLS flags]
+lw auth token  --url https://host:port[/path] --user U [--password-file P] [--unbound] [TLS flags]
+lw auth stream --addr host:port        --user U [--password-file P] [TLS flags]
 ```
 
 - `add-user` takes the password from `--password-file` when it exists (at least
@@ -224,7 +234,7 @@ lw auth stream --addr host:port        --user U --password-file P [TLS flags]
 - `token` prints a bearer token for curl (`-H @<(...)` keeps it out of argv);
   `stream` authenticates to a `tcp` sink and copies the stream to stdout until
   interrupted. `--url` takes a path only with `--unbound`, and redirects are not
-  followed.
+  followed. `--password-file` defaults to `/dev/tty`, which asks.
 - TLS flags: `--ca-file` or `--pin-sha256`, `--server-name`, `--cert-file`,
   `--key-file`. There is no insecure flag.
 - Exit status: 0 success, 1 failure, 2 usage error.
@@ -340,7 +350,11 @@ a challenge below its Argon2 floor; the HTTP exchange on a TLS test server
 (token accepted, garbage and foreign tokens `401`, forged final yields no token,
 a different certificate after the challenge refused before the proof is sent,
 renewal ahead of expiry); `Authorize` failing closed under SCRAM; password
-trimming; refused hellos freeing their slot; unbound logins pinned too. Proxy
+trimming; a one-user listener admitting its password, refusing another and an
+unknown user alike; a descriptor's password surviving a reload, closed and
+refused to a second user; a descriptor lw opened itself never read; refused
+hellos freeing their slot; unbound logins pinned too. In `tlsx`, terminals,
+pipes and descriptors never warned as world-readable. Proxy
 mode: trusted peers, https and the client hop; throttling on the forwarded
 client and IPv6 /64; an unbound browser login with the cookie's attributes, the
 cookie opening endpoints (beside Basic auth) until logout revokes it, cookie
@@ -371,7 +385,12 @@ viewer's own form, not a loop, its token kept out of storage and the URL; a
 profile blocking every cookie signing in on the viewer, its proofs asking for
 no cookie, streaming with a bearer, sign-out revoking the token, and a reload's
 `401` asking again; `token --unbound` and curl through the proxy; direct peers
-and plaintext-forwarded requests `403`. The existing scripts keep passing.
+and plaintext-forwarded requests `403`. `test/preset-test.sh --auto` (ports
+15897-15898): an aggregator and an edge given one password on `/dev/fd/3`
+deliver, another password is refused, both survive `SIGHUP` and deliver again,
+and the password is in no file, argv or environment; under `script(1)` a
+listener's generated password shows on its terminal and not in its log, and
+an edge and `lw auth token` log in with it. The existing scripts keep passing.
 
 ## Not Implemented
 

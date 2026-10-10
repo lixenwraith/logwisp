@@ -340,7 +340,7 @@ func TestFileStringIsOneListEntry(t *testing.T) {
 // its own; other sinks do not take the key.
 func TestTopLevelColorIsEachConsoleSinksDefault(t *testing.T) {
 	isolateConfig(t)
-	m, err := Load(Args{Specs: specs("sink", "console", "sink", "console,color=never", "sink", "null"), Overrides: []string{"--color=always"}})
+	m, err := Load(Args{Specs: specs("sink", "console", "sink", "console:color=never", "sink", "null"), Overrides: []string{"--color=always"}})
 	if err != nil {
 		t.Fatal(err)
 	}
