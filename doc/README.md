@@ -125,7 +125,7 @@ lw -c config.toml
 
 - **Operating systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
 - **Architecture**: amd64
-- **Go**: 1.27.1+ to build from source
+- **Go**: 1.27.2+ to build from source
 
 Network sources and sinks bind and dial IPv4 or IPv6, each keeping strictly to
 the family of its host ([Networking](networking.md#address-family)).

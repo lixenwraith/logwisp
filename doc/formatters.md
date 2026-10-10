@@ -21,7 +21,7 @@ Omitting `[pipelines.flow.format]` entirely selects `raw`.
 
 Each as type and default:
 
-- `type` (string, `raw`): `raw`, `txt` (alias `text`), or `json`.
+- `type` (string, `raw`): `raw`, `txt`, or `json`.
 - `sanitizer_policy` (string, derived from `type`): `raw`, `txt`, `json`, or
   `shell`.
 - `flags` (int64, `0`): bitmask override; `0` selects a per-type default.
@@ -122,9 +122,8 @@ Each policy, then what to use it with:
 - `shell`: strips shell metacharacters, whitespace, and control characters.
   - Data that will be passed to a command.
 
-When `sanitizer_policy` is omitted, the policy is derived from `type`: `json`
-for `json`, `txt` for `txt`/`text`, and `raw` for anything else — so the safe
-pairing is the default.
+When `sanitizer_policy` is omitted, it is the policy of the same name as
+`type`, so the safe pairing is the default.
 
 > `shell` strips dangerous characters but is **not** sufficient to make a string
 > safe for shell construction. Pass arguments through `exec` argv instead of

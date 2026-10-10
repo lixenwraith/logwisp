@@ -85,7 +85,7 @@ type HeartbeatConfig struct {
 
 // FormatConfig is how a pipeline writes its entries
 type FormatConfig struct {
-	Type            string `toml:"type" default:"raw" lw:"enum=raw|txt|text|json" help:"entry format; text is txt"`
+	Type            string `toml:"type" default:"raw" lw:"enum=raw|txt|json" help:"entry format"`
 	Flags           int64  `toml:"flags,omitempty" lw:"zero=by type" help:"formatter flags"`
 	TimestampFormat string `toml:"timestamp_format,omitempty" lw:"zero=RFC 3339" help:"Go time layout of timestamps"`
 	SanitizerPolicy string `toml:"sanitizer_policy,omitempty" lw:"enum=raw|json|txt|shell,zero=by type" help:"how control characters are escaped"`

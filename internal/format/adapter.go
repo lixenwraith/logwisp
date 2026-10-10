@@ -35,7 +35,7 @@ func NewFormatterAdapter(cfg *config.FormatConfig) (*FormatterAdapter, error) {
 		switch cfg.Type {
 		case "json":
 			s = sanitizer.New().Policy(sanitizer.PolicyJSON)
-		case "txt", "text":
+		case "txt":
 			s = sanitizer.New().Policy(sanitizer.PolicyTxt)
 		default:
 			s = sanitizer.New().Policy(sanitizer.PolicyRaw)
