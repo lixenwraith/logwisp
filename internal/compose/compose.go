@@ -32,9 +32,9 @@ type Composition struct {
 // by its key in the flow table: filters with an index, format, rate_limit or
 // heartbeat
 type Node struct {
-	Role  string
-	ID    string
-	Index int
+	Role  string `json:"role"`
+	ID    string `json:"id"`
+	Index int    `json:"index"`
 }
 
 // FromConfig starts from a loaded configuration's pipelines, its console sinks
@@ -100,8 +100,10 @@ func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 }
 
 // settle gives every flow stage its defaults, every plugin's options their
-// kinds and every source and sink an id; the rules are Validate's
+// kinds and every source and sink an id; the rules are Validate's. Its error
+// joins a plugin's each holding a value of the wrong kind, kept as given.
 func (c *Composition) settle() error {
+	var errs []error
 	for i := range c.Pipelines {
 		p := &c.Pipelines[i]
 		if p.Flow == nil {
@@ -122,17 +124,17 @@ func (c *Composition) settle() error {
 		for j, s := range p.PluginSources {
 			p.PluginSources[j].Config = orEmpty(s.Config)
 			if err := config.Coerce("source", s.Type, p.PluginSources[j].Config); err != nil {
-				return config.At(fmt.Sprintf("pipelines[%d].plugin_sources[%s].config", i, s.ID), err)
+				errs = append(errs, config.At(Node{Role: "source", ID: s.ID}.Path(i), err))
 			}
 		}
 		for j, s := range p.PluginSinks {
 			p.PluginSinks[j].Config = orEmpty(s.Config)
 			if err := config.Coerce("sink", s.Type, p.PluginSinks[j].Config); err != nil {
-				return config.At(fmt.Sprintf("pipelines[%d].plugin_sinks[%s].config", i, s.ID), err)
+				errs = append(errs, config.At(Node{Role: "sink", ID: s.ID}.Path(i), err))
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // name gives the parts a file left unnamed the ids their specs would get: the
@@ -340,6 +342,17 @@ func index(p *config.PipelineConfig, n Node) int {
 	return -1
 }
 
+// Path is the path of node n's options in pipeline pi, as Locate reads it
+func (n Node) Path(pi int) string {
+	switch n.Role {
+	case "source", "sink":
+		return fmt.Sprintf("pipelines[%d].plugin_%ss[%s].config", pi, n.Role, n.ID)
+	case "filters":
+		return fmt.Sprintf("pipelines[%d].flow.filters[%d]", pi, n.Index)
+	}
+	return fmt.Sprintf("pipelines[%d].flow.%s", pi, n.Role)
+}
+
 func (n Node) missing() error {
 	if n.Role == "filters" {
 		return fmt.Errorf("no filter %d", n.Index)
@@ -476,8 +489,68 @@ func (c *Composition) Options(pi int, n Node) (map[string]any, bool, error) {
 	return nil, false, n.missing()
 }
 
-// Validate applies every rule lw applies at load, naming the refused key's path
+// Validate applies every rule lw applies at load: its error joins every
+// problem, one a part, which Problems splits and Locate places
 func (c *Composition) Validate() error { return config.ValidatePipelines(c.Pipelines) }
+
+// Problems are the problems an error joins, in order
+func Problems(err error) []error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var out []error
+		for _, e := range joined.Unwrap() {
+			out = append(out, Problems(e)...)
+		}
+		return out
+	}
+	if err == nil {
+		return nil
+	}
+	return []error{err}
+}
+
+// Locate reads where a problem lies from its path: the pipeline, the node,
+// and the key in the node's options, a list's without its index; text is
+// what is wrong. ok is false for a problem no pipeline holds.
+func Locate(err error) (pi int, n Node, key, text string, ok bool) {
+	ke, _ := errors.AsType[*config.KeyError](err)
+	rest, found := "", false
+	if ke != nil {
+		rest, found = strings.CutPrefix(ke.Key, "pipelines[")
+	}
+	end := strings.IndexByte(rest, ']')
+	if !found || end < 0 {
+		return 0, n, "", err.Error(), false
+	}
+	if pi, err = strconv.Atoi(rest[:end]); err != nil {
+		return 0, n, "", ke.Error(), false
+	}
+	rest = strings.TrimPrefix(rest[end+1:], ".")
+	for role, list := range map[string]string{"source": "plugin_sources[", "sink": "plugin_sinks["} {
+		if after, ok := strings.CutPrefix(rest, list); ok {
+			id, more := cutID(after)
+			n.Role, n.ID, rest = role, id, strings.TrimPrefix(strings.TrimPrefix(more, "config"), ".")
+		}
+	}
+	if stage, ok := strings.CutPrefix(rest, "flow."); ok {
+		name, more, _ := strings.Cut(stage, ".")
+		name, index, _ := strings.Cut(name, "[")
+		n.Role, rest = name, more
+		n.Index, _ = strconv.Atoi(strings.TrimSuffix(index, "]"))
+	}
+	key, _, _ = strings.Cut(rest, "[")
+	return pi, n, key, ke.Err.Error(), true
+}
+
+// cutID cuts a plugin path at its id's ']', the first that ends the path or
+// starts its type or config: ids are free text, and keys hold list indexes
+func cutID(path string) (id, rest string) {
+	for i := range len(path) {
+		if after := path[i+1:]; path[i] == ']' && (after == "" || after == ".type" || after == ".config" || strings.HasPrefix(after, ".config.")) {
+			return path[:i], strings.TrimPrefix(after, ".")
+		}
+	}
+	return path, ""
+}
 
 // CommandLine writes the composition as an lw command line, a flag a line,
 // quoted for a POSIX shell
@@ -549,28 +622,77 @@ func (c *Composition) File() ([]byte, error) {
 	return toml.Marshal(map[string]any{"pipelines": c.Pipelines})
 }
 
-// Form is a way to write a composition, named for what it is: each loads back
-// to the same pipelines
+// Form is a way to write a composition, named for what it is, and to read it
+// back to the same pipelines
 type Form struct {
-	Name, Hint string
-	Write      func(*Composition) (string, error)
+	Name  string                                           `json:"name"`
+	Hint  string                                           `json:"hint"`
+	Write func(*Composition) (string, error)               `json:"-"`
+	Read  func(string, config.IsDir) (*Composition, error) `json:"-"`
 }
 
 var forms = []Form{
-	{"command", "lw's flags", (*Composition).CommandLine},
-	{"environment", "LOGWISP_ variables: one pipeline", (*Composition).Environment},
+	{"command", "lw's flags", (*Composition).CommandLine, FromCommandLine},
+	{"environment", "LOGWISP_ variables: one pipeline", (*Composition).Environment, FromEnvironment},
 	{"file", "a configuration file's pipelines", func(c *Composition) (string, error) {
 		data, err := c.File()
 		return string(data), err
-	}},
+	}, func(text string, _ config.IsDir) (*Composition, error) { return FromFile([]byte(text)) }},
 }
 
-// Forms are what a composition writes: lw --tui prints one, the website shows them
+// Forms are what a composition writes and reads: lw --tui prints one, the
+// website shows them and reads them pasted
 func Forms() []Form { return slices.Clone(forms) }
+
+// FromEnvironment starts from NAME='value' lines as an environment file holds
+// them, quoted as a POSIX shell reads them: '#' starts a comment line, a word
+// without '=', such as export, assigns nothing, and a later assignment wins
+func FromEnvironment(text string, isDir config.IsDir) (*Composition, error) {
+	vars := map[string]string{}
+	for line := range strings.Lines(text) {
+		if line = strings.TrimSpace(line); line == "" || line[0] == '#' {
+			continue
+		}
+		words, err := split(line)
+		if err != nil {
+			return nil, err
+		}
+		for _, w := range words {
+			if name, value, ok := strings.Cut(w, "="); ok {
+				vars[name] = value
+			}
+		}
+	}
+	var environ []string
+	for name, value := range vars {
+		environ = append(environ, name+"="+value)
+	}
+	pipelines, err := config.EnvPipelines(environ, isDir)
+	if err != nil {
+		return nil, err
+	}
+	c := &Composition{Pipelines: pipelines}
+	return c, c.settle()
+}
+
+// FromFile starts from a configuration file's pipelines, refusing a misspelled
+// key as lw does; its settings are the host's and its console sinks keep the
+// color they name
+func FromFile(data []byte) (*Composition, error) {
+	cfg, err := config.ParseFile(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.Pipelines) == 0 {
+		return nil, errors.New("no [[pipelines]]")
+	}
+	return FromConfig(&config.Config{Pipelines: cfg.Pipelines})
+}
 
 // FromJSON starts from pipelines as the website keeps them: a JSON list of
 // tables in a file's shape, a misspelled key refused as a file's is, a null
-// a value left unset
+// a value left unset. A value of the wrong kind returns the composition too,
+// which Validate names among the rest.
 func FromJSON(data []byte) (*Composition, error) {
 	var tables any
 	if err := json.Unmarshal(data, &tables); err != nil {
@@ -710,14 +832,14 @@ func copyPipeline(p config.PipelineConfig) config.PipelineConfig {
 // Schema is what lw --schema prints, and the website builds its catalogue
 // from. A setting's flag is --KEY, a pipeline flag's --FLAG.
 type Schema struct {
-	Version  string                  `json:"version"`
-	Settings []Setting               `json:"settings"`
-	Flags    []config.SpecFlag       `json:"pipeline_flags"`
-	Flow     []config.Stage          `json:"flow"`
-	Tables   map[string][]config.Key `json:"tables"`
-	Sources  []Plugin                `json:"sources"`
-	Sinks    []Plugin                `json:"sinks"`
-	Presets  []config.Preset         `json:"presets"`
+	Version  string            `json:"version"`
+	Settings []Setting         `json:"settings"`
+	Flags    []config.SpecFlag `json:"pipeline_flags"`
+	Flow     []config.Stage    `json:"flow"`
+	Sources  []Plugin          `json:"sources"`
+	Sinks    []Plugin          `json:"sinks"`
+	Presets  []config.Preset   `json:"presets"`
+	Forms    []Form            `json:"forms"`
 }
 
 // Setting is a settings key with its environment variable
@@ -737,12 +859,8 @@ func NewSchema() Schema {
 		Version: version.Short(),
 		Flags:   config.SpecFlags(),
 		Flow:    config.FlowStages(),
-		Tables: map[string][]config.Key{
-			"tls":  config.KeysOf[config.TLSOptions](),
-			"auth": config.KeysOf[config.AuthOptions](),
-			"acl":  config.KeysOf[config.ACLOptions](),
-		},
 		Presets: config.Presets(),
+		Forms:   Forms(),
 	}
 	for _, k := range config.SettingKeys() {
 		s.Settings = append(s.Settings, Setting{k, "LOGWISP_" + strings.ToUpper(strings.ReplaceAll(k.Name, ".", "_"))})

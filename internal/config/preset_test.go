@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -56,13 +57,56 @@ func TestPresetKeysAreChecked(t *testing.T) {
 		"edge:to=agg:9000":                 "it never sends unauthenticated",
 		"edge:to=agg:9000,password_file=p": "password_file needs user",
 		"edge:to=agg:9000,user=u,password_file=p,transport=udp": `transport "udp"`,
-		"aggregator:users=u,tls=off":                            "the aggregator always serves TLS",
+		"aggregator:users=u,tls=off":                            `tls "off" (valid: `,
 		"aggregator:user=u,users=f":                             "user or users, not both",
 		"aggregator":                                            "it never receives unauthenticated",
 	} {
 		_, err := Load(Args{Specs: specs("preset", spec)})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want %s", spec, err, want)
+		}
+	}
+}
+
+// A preset key that sets an option takes its choices and hint, a switch true
+// or false; a listener's tls offers off only where it may serve plain text
+func TestPresetKeysTakeTheirOptionsChoices(t *testing.T) {
+	param := func(preset, key string) PresetParam {
+		ps := Presets()
+		p := ps[slices.IndexFunc(ps, func(p Preset) bool { return p.Name == preset })]
+		return p.Params[slices.IndexFunc(p.Params, func(k PresetParam) bool { return k.Name == key })]
+	}
+	for _, c := range []struct {
+		preset, key string
+		table       reflect.Type
+		option      string
+	}{
+		{"tail", "from", reflect.TypeFor[FileSourceOptions](), "from"},
+		{"pipe", "format", reflect.TypeFor[FormatConfig](), "type"},
+		{"serve", "proxy", reflect.TypeFor[AuthOptions](), "trusted_proxies"},
+		{"aggregator", "users", reflect.TypeFor[AuthOptions](), "credentials_file"},
+	} {
+		opts := options(c.table)
+		o := opts[slices.IndexFunc(opts, func(o option) bool { return o.Name == c.option })]
+		if p := param(c.preset, c.key); !slices.Equal(p.Enum, o.Enum) || p.Hint != o.Hint || len(o.Enum) == 0 && o.Hint == "" {
+			t.Errorf("%s %s: enum %v hint %q, want %s's %v %q", c.preset, c.key, p.Enum, p.Hint, c.option, o.Enum, o.Hint)
+		}
+	}
+	var modes []string
+	for _, m := range tlsModes {
+		modes = append(modes, m.name)
+	}
+	for _, c := range []struct {
+		preset, key string
+		enum        []string
+	}{
+		{"serve", "viewer", []string{"true", "false"}},
+		{"edge", "transport", transports()},
+		{"serve", "tls", modes},
+		{"aggregator", "tls", slices.DeleteFunc(slices.Clone(modes), func(m string) bool { return m == "off" })},
+	} {
+		if p := param(c.preset, c.key); !slices.Equal(p.Enum, c.enum) {
+			t.Errorf("%s %s: enum %v, want %v", c.preset, c.key, p.Enum, c.enum)
 		}
 	}
 }
@@ -78,16 +122,19 @@ func TestPresetUserWithoutPasswordFileAsks(t *testing.T) {
 	}
 }
 
-// A preset path is what isDir answers, a directory named with brackets too;
-// without isDir, off the target host, it is a directory when it ends in '/',
-// a pattern when it holds a glob, and otherwise ErrPathKind asks
+// A preset path is what isDir answers, a directory named with brackets too,
+// and off the target host the user's answer, a single file too; without one
+// it is a directory when it ends in '/', a pattern when it holds a glob, and
+// otherwise ErrPathKind asks
 func TestPresetPathKind(t *testing.T) {
 	yes := func(string) (bool, error) { return true, nil }
+	file := Answers(map[string]bool{"/srv/app.log": false})
 	for _, c := range []struct {
 		path  string
 		isDir IsDir
 		want  string
-	}{{"/srv/app/", nil, "/srv/app/ *"}, {"/srv/app/*.log", nil, "/srv/app *.log"}, {"/srv/app[1]", yes, "/srv/app[1] *"}, {"/srv/app", nil, ""}} {
+	}{{"/srv/app/", nil, "/srv/app/ *"}, {"/srv/app/*.log", nil, "/srv/app *.log"}, {"/srv/app[1]", yes, "/srv/app[1] *"}, {"/srv/app", nil, ""},
+		{"/srv/app.log", file, "/srv app.log"}, {"/srv/app", file, ""}, {"/srv/app/", file, "/srv/app/ *"}} {
 		p, err := ExpandPreset("tail", map[string]string{"path": c.path}, c.isDir)
 		if c.want == "" {
 			if !errors.Is(err, ErrPathKind) {

@@ -24,26 +24,20 @@ import (
 
 // ValidateConfig checks a configuration without reading a file it names:
 // the settings, then each pipeline's flow stages, and its sources and sinks
-// decoded in full, naming the path of a refused key. lw --check opens them.
+// decoded in full. Its error joins every problem, one a part, each a
+// *KeyError naming the path of the refused key. lw --check opens the files.
 func ValidateConfig(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
-	if err := checkTags(reflect.ValueOf(cfg).Elem(), ""); err != nil {
-		return err
-	}
+	errs := []error{checkTags(reflect.ValueOf(cfg).Elem(), "")}
 	if l := cfg.Logging; l != nil {
-		if err := checkTags(reflect.ValueOf(l).Elem(), "logging."); err != nil {
-			return err
-		}
+		errs = append(errs, checkTags(reflect.ValueOf(l).Elem(), "logging."))
 		if l.Console != nil {
-			if err := checkTags(reflect.ValueOf(l.Console).Elem(), "logging.console."); err != nil {
-				return err
-			}
+			errs = append(errs, checkTags(reflect.ValueOf(l.Console).Elem(), "logging.console."))
 		}
 	}
-
-	return ValidatePipelines(cfg.Pipelines)
+	return errors.Join(append(errs, ValidatePipelines(cfg.Pipelines))...)
 }
 
 // ValidatePipelines is ValidateConfig's check of the pipelines
@@ -51,97 +45,101 @@ func ValidatePipelines(pipelines []PipelineConfig) error {
 	if len(pipelines) == 0 {
 		return fmt.Errorf("no pipelines configured")
 	}
-	// Reject duplicate pipeline names (service map is keyed by name)
-	names := make(map[string]struct{}, len(pipelines))
-	for i, p := range pipelines {
-		if _, dup := names[p.Name]; dup {
-			return fmt.Errorf("pipeline[%d]: duplicate name %q", i, p.Name)
-		}
-		names[p.Name] = struct{}{}
-	}
+	var errs []error
+	at := func(path string, err error) { errs = append(errs, At(path, err)) }
+	names := map[string]bool{}    // the service is keyed by name
 	single := map[string]string{} // role and type of a single-instance plugin: its pipeline
 	for i, p := range pipelines {
-		if err := lconfig.NonEmpty(p.Name); err != nil {
-			return fmt.Errorf("pipeline[%d].name: %w", i, err)
+		path := fmt.Sprintf("pipelines[%d]", i)
+		switch {
+		case strings.TrimSpace(p.Name) == "":
+			at(path+".name", errors.New("must be set"))
+		case names[p.Name]:
+			at(path+".name", fmt.Errorf("duplicate name %q", p.Name))
 		}
+		names[p.Name] = true
 		if len(p.PluginSources) == 0 {
-			return fmt.Errorf("pipeline[%d]: no sources defined", i)
+			at(path+".plugin_sources", errors.New("no sources defined"))
 		}
 		if len(p.PluginSinks) == 0 {
-			return fmt.Errorf("pipeline[%d]: no sinks defined", i)
+			at(path+".plugin_sinks", errors.New("no sinks defined"))
 		}
-		if err := checkFlow(p.Flow, fmt.Sprintf("pipelines[%d].flow", i)); err != nil {
-			return err
+		if err := checkFlow(p.Flow, path+".flow"); err != nil {
+			errs = append(errs, err)
 		}
 		ids := map[string]bool{}
-		check := func(role, list, id, typ string, m map[string]any) error {
-			path := fmt.Sprintf("pipelines[%d].%s[%s]", i, list, id)
+		check := func(role, list, id, typ string, m map[string]any) {
+			path := fmt.Sprintf("%s.%s[%s]", path, list, id)
 			plugin, ok := LookupPlugin(role, typ)
 			switch {
 			case ids[list+id]:
-				return fmt.Errorf("%s: duplicate id", path)
+				at(path, errors.New("duplicate id"))
 			case !ok:
-				return fmt.Errorf("%s.type: unknown %s type %q", path, role, typ)
+				at(path+".type", fmt.Errorf("unknown %s type %q", role, typ))
 			case plugin.Single && single[role+typ] != "":
-				return fmt.Errorf("pipeline %q: one %s %s may run, and pipeline %q has it", p.Name, typ, role, single[role+typ])
+				at(path, fmt.Errorf("one %s %s may run, and pipeline %q has it", typ, role, single[role+typ]))
+			default:
+				ids[list+id] = true
+				if plugin.Single {
+					single[role+typ] = p.Name
+				}
+				if _, err := decode(role, typ, m); err != nil {
+					at(path+".config", err)
+				}
 			}
-			ids[list+id] = true
-			if plugin.Single {
-				single[role+typ] = p.Name
-			}
-			if _, err := decode(role, typ, m); err != nil {
-				return At(path+".config", err)
-			}
-			return nil
 		}
 		for _, s := range p.PluginSources {
-			if err := check("source", "plugin_sources", s.ID, s.Type, s.Config); err != nil {
-				return err
-			}
+			check("source", "plugin_sources", s.ID, s.Type, s.Config)
 		}
 		for _, s := range p.PluginSinks {
-			if err := check("sink", "plugin_sinks", s.ID, s.Type, s.Config); err != nil {
-				return err
-			}
+			check("sink", "plugin_sinks", s.ID, s.Type, s.Config)
 		}
 	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
 // checkFlow settles copies of a pipeline's flow stages, which keep their
-// defaults for the dump
+// defaults for the dump: a problem a stage
 func checkFlow(f *FlowConfig, path string) error {
 	if f == nil {
 		return nil
 	}
-	stages := map[string]any{}
-	if f.Heartbeat != nil {
-		stages["heartbeat"] = new(*f.Heartbeat)
-	}
-	if f.RateLimit != nil {
-		stages["rate_limit"] = new(*f.RateLimit)
-	}
-	if f.Format != nil {
-		stages["format"] = new(*f.Format)
-	}
-	for i, filter := range f.Filters {
-		stages[fmt.Sprintf("filters[%d]", i)] = &filter
-	}
-	for _, key := range slices.Sorted(maps.Keys(stages)) {
-		if err := Settle(stages[key]); err != nil {
-			return At(path+"."+key, err)
+	var errs []error
+	settle := func(key string, stage any) {
+		if err := Settle(stage); err != nil {
+			errs = append(errs, At(path+"."+key, err))
 		}
 	}
-	return nil
+	if f.RateLimit != nil {
+		settle("rate_limit", new(*f.RateLimit))
+	}
+	for i, filter := range f.Filters {
+		settle(fmt.Sprintf("filters[%d]", i), &filter)
+	}
+	if f.Format != nil {
+		settle("format", new(*f.Format))
+	}
+	if f.Heartbeat != nil {
+		settle("heartbeat", new(*f.Heartbeat))
+	}
+	return errors.Join(errs...)
 }
 
-// At prefixes err with the path of the table it was found in
+// At addresses err to the path of the table it was found in
 func At(path string, err error) error {
 	if ke, ok := errors.AsType[*KeyError](err); ok {
-		return fmt.Errorf("%s.%s: %w", path, ke.Key, ke.Err)
+		return &KeyError{path + "." + ke.Key, ke.Err}
 	}
-	return fmt.Errorf("%s: %w", path, err)
+	return &KeyError{path, err}
+}
+
+// table addresses a rule between a table's keys, which its Check names by
+// a "tls: " prefix, to the table
+func table(key string, err error) error {
+	if _, ok := errors.AsType[*KeyError](err); err == nil || ok {
+		return err
+	}
+	return &KeyError{key, errors.New(strings.TrimPrefix(err.Error(), key+": "))}
 }
 
 // networked is the options of a plugin that listens or dials
@@ -175,12 +173,12 @@ func (p Plugin) checkNetwork(n networked) error {
 		return &KeyError{"host", err}
 	}
 	if err := t.Check(p.Side != Dialer); err != nil {
-		return err
+		return table("tls", err)
 	}
 	if err := acl.Check(host, p.HTTP, a != nil && len(a.TrustedProxies) > 0); err != nil {
-		return err
+		return table("acl", err)
 	}
-	return a.Check(p.Side, p.HTTP, t.State())
+	return table("auth", a.Check(p.Side, p.HTTP, t.State()))
 }
 
 // Check holds the rules between tls keys on a listener or a dialer; a table
@@ -311,9 +309,9 @@ func (o *AuthOptions) Check(side Side, http bool, t TLSState) error {
 		return errors.New("auth: username and password_file go together")
 	case o.CredentialsFile == "" && o.Username == "":
 		return fmt.Errorf("auth: type %q requires credentials_file, or username and password_file", "scram")
-	case o.TokenLifetimeMS > 0 && !http:
-		return errors.New("auth: token_lifetime_ms applies only to HTTP listeners")
-	case len(o.TrustedProxies) > 0 && (side != Listener || !http):
+	case !http && httpKey(o) != "":
+		return fmt.Errorf("auth: %s applies only to HTTP listeners", httpKey(o))
+	case len(o.TrustedProxies) > 0 && side != Listener:
 		return errors.New("auth: trusted_proxies applies only to the http sink")
 	case len(o.TrustedProxies) > 0 && o.Identity != "":
 		return errors.New("auth: identity binds a client certificate, which a TLS-terminating proxy does not pass on; drop it or trusted_proxies")
@@ -367,14 +365,13 @@ func (o *ACLOptions) Check(host string, http, proxied bool) error {
 		return err
 	}
 	header := o.ProxyProtocol == "optional" || o.ProxyProtocol == "required"
-	rps := o.RequestsPerSecondPerClient
 	switch {
 	case header && len(o.ProxyFrom) == 0:
 		return fmt.Errorf("acl: proxy_protocol %s needs proxy_from, the proxies that may send the header", o.ProxyProtocol)
 	case !header && len(o.ProxyFrom) > 0:
 		return errors.New("acl: proxy_from needs proxy_protocol optional or required")
-	case rps > 0 && !http:
-		return errors.New("acl: requests_per_second_per_client applies only to HTTP listeners")
+	case !http && httpKey(o) != "":
+		return fmt.Errorf("acl: %s applies only to HTTP listeners", httpKey(o))
 	case o.MaxConnectionsPerClient > 0 && proxied:
 		return errors.New("acl: max_connections_per_client counts connections, behind trusted_proxies the proxy's; cap clients at the proxy")
 	}
@@ -397,6 +394,17 @@ func (o *ACLOptions) Check(host string, http, proxied bool) error {
 		}
 	}
 	return nil
+}
+
+// httpKey names the first key of table v tagged http that is set
+func httpKey(v any) string {
+	rv := reflect.ValueOf(v).Elem()
+	for _, o := range options(rv.Type()) {
+		if o.HTTP && !rv.Field(o.index).IsZero() {
+			return o.Name
+		}
+	}
+	return ""
 }
 
 // ParsePrefix reads an address or CIDR of network's family ("tcp": either)
@@ -575,13 +583,33 @@ func checkFileKeys(path string) error {
 	if err != nil {
 		return err
 	}
-	root, err := toml.NewParser(data).Parse()
+	root, err := fileTable(data)
 	if err != nil {
 		return err
+	}
+	return checkKeys(root, reflect.TypeOf(Config{}), "")
+}
+
+// ParseFile reads a configuration file's text, refusing the keys lw refuses
+// there, and opens nothing it names
+func ParseFile(data []byte) (*Config, error) {
+	root, err := fileTable(data)
+	if err != nil {
+		return nil, err
+	}
+	cfg := &Config{}
+	return cfg, Scan(root, cfg)
+}
+
+// fileTable is a file's root table without the keys lw ignores there
+func fileTable(data []byte) (map[string]any, error) {
+	root, err := toml.NewParser(data).Parse()
+	if err != nil {
+		return nil, err
 	}
 	delete(root, "config_file") // runtime metadata, documented as ignored in the file
 	for _, key := range []string{"version", "check", "dump"} {
 		delete(root, key) // command-line switches, which earlier lw --dump output wrote
 	}
-	return checkKeys(root, reflect.TypeOf(Config{}), "")
+	return root, nil
 }

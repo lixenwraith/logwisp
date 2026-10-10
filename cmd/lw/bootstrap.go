@@ -62,7 +62,7 @@ func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Se
 	logger.Info("msg", "Starting configuration hot reload")
 
 	if err := config.ValidateConfig(newCfg); err != nil {
-		logger.Error("msg", "Invalid reload configuration, keeping old service running", "error", err)
+		logger.Error("msg", "Invalid reload configuration, keeping old service running", "error", oneLine(err))
 		return nil, nil, nil, err
 	}
 

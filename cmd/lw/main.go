@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"strings"
 	"syscall"
 
 	"github.com/lixenwraith/logwisp/internal/compose"
@@ -147,7 +148,7 @@ func main() {
 			next, err = manager.Snapshot()
 		}
 		if err != nil {
-			logger.Error("msg", "Failed to read reload configuration", "error", err, "action", "keeping current service")
+			logger.Error("msg", "Failed to read reload configuration", "error", oneLine(err), "action", "keeping current service")
 			return
 		}
 		// Watch events are hints and may be duplicated or concern startup-only
@@ -218,6 +219,10 @@ func readsStdin(cfg *config.Config) bool {
 	}
 	return false
 }
+
+// oneLine is an error for a log record, which is a line: the problems
+// validation joins, "; " between them
+func oneLine(err error) string { return strings.ReplaceAll(err.Error(), "\n", "; ") }
 
 // loadFailed reports a configuration that did not load and returns lw's exit
 // code: a named file that is missing is a usage error

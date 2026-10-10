@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,11 +36,12 @@ func TestEngineLinksNoHostCode(t *testing.T) {
 	}
 }
 
-// A pasted command line, its line ends LF or CRLF, and the website's JSON each
-// start the composition that wrote them: escaped and quoted values, nested
-// keys, lists, moved filters, stages whose flags' defaults differ from a
-// file's, a value starting with '-', JSON's numbers for integers
-func TestWrittenFormsStartTheSameComposition(t *testing.T) {
+// Every form a composition writes, its line ends LF or CRLF, and the
+// website's JSON read back to it: escaped and quoted values, nested keys,
+// lists, moved filters, stages whose flags' defaults differ from a file's, a
+// value starting with '-', JSON's numbers for integers. The environment holds
+// one pipeline, so each form is written from one or both.
+func TestWrittenFormsReadBack(t *testing.T) {
 	c := &Composition{}
 	must := func(err error) {
 		t.Helper()
@@ -68,24 +70,81 @@ func TestWrittenFormsStartTheSameComposition(t *testing.T) {
 	must(c.Set(0, Node{Role: "rate_limit"}, "entries_per_second", "100"))
 	must(c.Set(0, Node{Role: "heartbeat"}, "interval_ms", "5000"))
 	must(c.Set(0, Node{Role: "heartbeat"}, "enabled", "true"))
+	one := &Composition{Pipelines: slices.Clone(c.Pipelines)}
 	must(c.AddPipeline("-b"))
 	for _, role := range []string{"source", "sink"} {
 		_, err = c.Add(1, role, "null")
 		must(err)
 	}
 	must(c.Set(1, Node{Role: "heartbeat"}, "interval_ms", "2000"))
-	line, err := c.CommandLine()
-	must(err)
-	for _, pasted := range []string{line, strings.ReplaceAll(line, "\n", "\r\n")} {
-		got, err := FromCommandLine(pasted, nil)
-		if err != nil || !reflect.DeepEqual(got, c) {
-			t.Fatalf("%q\n got %+v %v\nwant %+v", pasted, got, err, c)
+	for _, f := range Forms() {
+		written := 0
+		for _, c := range []*Composition{c, one} {
+			text, err := f.Write(c)
+			if err != nil {
+				continue
+			}
+			written++
+			for _, pasted := range []string{text, strings.ReplaceAll(text, "\n", "\r\n")} {
+				if got, err := f.Read(pasted, nil); err != nil || !reflect.DeepEqual(got, c) {
+					t.Fatalf("%s %q\n got %+v %v\nwant %+v", f.Name, pasted, got, err, c)
+				}
+			}
+		}
+		if written == 0 {
+			t.Errorf("%s wrote neither composition", f.Name)
 		}
 	}
 	data, err := c.JSON()
 	must(err)
 	if got, err := FromJSON(data); err != nil || !reflect.DeepEqual(got, c) {
 		t.Fatalf("%s\n got %+v %v\nwant %+v", data, got, err, c)
+	}
+}
+
+// Pasted environment text reads as a shell runs it: a comment line assigns
+// nothing, export is no assignment, and a later assignment wins
+func TestPastedEnvironmentReadsAsAShellRunsIt(t *testing.T) {
+	c, err := FromEnvironment("export LOGWISP_SOURCE='null'\n# LOGWISP_SOURCE='tcp_chain'\n\nLOGWISP_SINK='tcp:port=1'\nLOGWISP_SINK='null'\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Pipelines[0]
+	if len(c.Pipelines) != 1 || len(p.PluginSources) != 1 || p.PluginSources[0].Type != "null" || len(p.PluginSinks) != 1 || p.PluginSinks[0].Type != "null" {
+		t.Fatalf("pipelines %+v", c.Pipelines)
+	}
+}
+
+// Locate places a problem by its path: a plugin's key, a key of its table, a
+// rule between its table's keys, a list entry, the plugin itself under an id
+// holding ']', a filter's list entry, a stage and the pipeline; and nothing
+// outside one
+func TestLocatePlacesAProblem(t *testing.T) {
+	sink := func(id string) Node { return Node{Role: "sink", ID: id} }
+	for path, want := range map[string]struct {
+		pi  int
+		n   Node
+		key string
+	}{
+		"pipelines[1].plugin_sinks[out].config.port":            {1, sink("out"), "port"},
+		"pipelines[0].plugin_sinks[out].config.tls.min_version": {0, sink("out"), "tls.min_version"},
+		"pipelines[0].plugin_sinks[out].config.tls":             {0, sink("out"), "tls"},
+		"pipelines[0].plugin_sinks[out].config.acl.allow[1]":    {0, sink("out"), "acl.allow"},
+		"pipelines[0].plugin_sinks[a]b].config":                 {0, sink("a]b"), ""},
+		"pipelines[0].plugin_sources[in].type":                  {0, Node{Role: "source", ID: "in"}, "type"},
+		"pipelines[0].flow.filters[2].patterns[1]":              {0, Node{Role: "filters", Index: 2}, "patterns"},
+		"pipelines[0].flow.rate_limit.policy":                   {0, Node{Role: "rate_limit"}, "policy"},
+		"pipelines[3].name":                                     {3, Node{}, "name"},
+	} {
+		pi, n, key, text, ok := Locate(fmt.Errorf("checked: %w", &config.KeyError{Key: path, Err: errors.New("wrong")}))
+		if !ok || pi != want.pi || n != want.n || key != want.key || text != "wrong" {
+			t.Errorf("%s: %d %+v %q %q %v", path, pi, n, key, text, ok)
+		}
+	}
+	for _, err := range []error{errors.New("no pipelines configured"), &config.KeyError{Key: "color", Err: errors.New("wrong")}} {
+		if _, _, _, text, ok := Locate(err); ok || text != err.Error() {
+			t.Errorf("%v: placed, text %q", err, text)
+		}
 	}
 }
 
@@ -105,12 +164,17 @@ func TestANullInJSONIsUnset(t *testing.T) {
 	}
 }
 
-// The website's JSON refuses a misspelled key as a file does, at any depth
-func TestAMisspelledJSONKeyIsRefused(t *testing.T) {
+// The website's JSON and a pasted file refuse a misspelled key as lw does,
+// at any depth
+func TestAMisspelledKeyIsRefused(t *testing.T) {
 	for _, data := range []string{`[{"name":"p","plugin_source":[]}]`, `[{"name":"p","flow":{"rate_limt":{}}}]`} {
 		if _, err := FromJSON([]byte(data)); err == nil || !strings.Contains(err.Error(), "unknown key") {
 			t.Errorf("%s: %v", data, err)
 		}
+	}
+	file := "[[pipelines]]\nname = \"p\"\nnmae = \"q\"\n[[pipelines.plugin_sources]]\ntype = \"null\"\n"
+	if _, err := FromFile([]byte(file)); err == nil || !strings.Contains(err.Error(), `unknown key "pipelines[0].nmae"`) {
+		t.Errorf("file: %v", err)
 	}
 }
 

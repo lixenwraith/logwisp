@@ -89,17 +89,18 @@ What exists:
   on the option structs, one catalogue row per plugin type, `Decode` (every
   constructor decodes through it and keeps only I/O), `Coerce` for typed
   command-line values, and a `ValidateConfig` that decodes every plugin
-  offline and names the refused key's path.
+  offline and names the first problem of each part by its key's path.
 - `internal/config` already compiles for `GOOS=js`; it links no net/http,
   crypto/tls or terminal code.
 - The engine, `internal/compose`: starts empty, from a preset (whose path
-  `config.IsDir` resolves, nil off the host), a loaded configuration or a
-  pasted command line; adds, removes and moves sources, sinks and filters,
-  sets and unsets keys, validates; writes a command line, environment
-  variables or a file, each loading back to the same pipelines. Its test
-  fails when it links TLS, HTTP, process, signal or terminal code.
-- `lw --schema`: settings, pipeline flags, flow stages in order, the tls,
-  auth and acl tables, sources, sinks and presets, as one JSON document.
+  `config.IsDir` resolves, from answers off the host), a loaded
+  configuration or pasted text of any form; adds, removes and moves sources,
+  sinks and filters, sets and unsets keys, validates; writes a command line,
+  environment variables or a file, each reading back to the same pipelines.
+  Its test fails when it links TLS, HTTP, process, signal or terminal code.
+- `lw --schema`: settings, pipeline flags, flow stages in order with what
+  turns each on, sources and sinks with their tables' keys of their side,
+  presets and forms, as one JSON document.
 - `github.com/lixenwraith/terminal` (pinned) and its `tui` package: regions,
   layout, boxes, List, Tree, TabBar, StatusBar, TextField, Form, Modal,
   ConfirmDialog, scrolling, mouse; themed Radio, Field, TextInput,
@@ -118,21 +119,46 @@ Steps:
    radio buttons, narrow form fields and option lists, menus, frames, rules,
    wires and windows, moved from `lw --tui`.
 5. `lw --tui`: done ([doc/cli.md](cli.md#lw---tui)).
-6. WebAssembly: done. `make wasm` builds `bin/lwconf.wasm`, version stamped,
-   beside the toolchain's `wasm_exec.js`, and prints both checksums: about
-   6.9 MB, 1.9 MB gzipped. `wasm_exec.js` uses no eval, so the page needs only
-   `'wasm-unsafe-eval'` in its `script-src`. The page runs the module with
-   `new Go().run(instance)`, then calls `globalThis.lwconf`; each call takes
-   strings and returns a JSON object, `{"value": ...}` or `{"error": "..."}`:
+6. WebAssembly: done. `make wasm` writes `bin/lwconf/`, which a site drops
+   in whole:
+   - `lwconf.wasm`, version stamped: 7.1 MB, 1.9 MB at gzip -9.
+   - `wasm_exec.js`, the toolchain's, which uses no eval: the page needs only
+     `'wasm-unsafe-eval'` in its `script-src`.
+   - `lwconf.js`, one dependency-free ES module that knows the calls and
+     shapes, never a key: `load({execURL, execSRI, wasmURL, wasmSRI})`
+     fetches both by their integrity and resolves to the engine;
+     `fields(schema, role, type)` is a node's form rows, a table's a group;
+     `value`, `at` and `group` read a node's value and sort problems by node.
+   - `schema.json`, equal to `schema()`, and `lwconf.json`, the manifest:
+     version, commit, Go version and each file's sha256.
+
+   The engine's calls take strings (`lwconf.js` writes objects as JSON) and
+   answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key"}`,
+   as far as the engine places the refusal:
    - `schema()`: what `lw --schema` prints.
-   - `preset(name, values)`: a preset's pipelines; `values` is a JSON object
-     of strings, and a directory path ends in `/`.
-   - `parse(line)`: a pasted command line's pipelines.
-   - `validate(pipelines)`: the pipelines settled (defaults, kinds, ids), or
-     the first problem by its key path.
-   - `emit(pipelines, form)`: `command`, `environment` or `file`.
+   - `preset(name, values, dirs)`: a preset's pipelines; `values` maps a key
+     to a string, a list key to strings.
+   - `parse(text, form, dirs)`: the pipelines of a form's pasted text.
+   - `validate(pipelines)`: `{pipelines, problems}`, the pipelines settled
+     (defaults, kinds, ids) and the first problem of each part (a value of
+     the wrong kind too) as `{path, pipeline, node, key, text}`.
+   - `emit(pipelines, form)`: the text of `command`, `environment` or `file`.
+   - `edit(pipelines, op)`: `{pipelines, node}`, the node left chosen. `op` is
+     `{op, pipeline, ...}`: `add_pipeline` and `rename_pipeline` (`name`),
+     `remove_pipeline`, `add` (`role`, `type`), `retype` (`node`, `type`),
+     `remove` (`node`), `move_filter` (`from`, `to`), `set` (`node`, `key`,
+     `values`), `unset` (`node`, `key`).
+   - `dirs` answers whether a path a preset names is a directory,
+     `{"/var/log/app.log": false}`; unanswered, a path ending in `/` is one,
+     one with a glob a pattern, and any other is refused at `path`.
    - Pipelines are a JSON list in the file's shape (`name`, `flow`,
-     `plugin_sources`, `plugin_sinks`); a misspelled key is refused.
+     `plugin_sources`, `plugin_sinks`); a misspelled key is refused. A node
+     is `{role, id, index}`: a source's or sink's id, a filter's index.
 
 Still to verify: a scripted session on a pseudo-terminal for Run and each
 output.
+
+Still to derive: `AuthOptions.Check` alone limits `auth.node_binding` to chain
+sources and `auth.trusted_proxies` to the http sink, so the schema lists both
+on every listener; a side tag naming those sides would filter them as `http`
+filters HTTP's keys.

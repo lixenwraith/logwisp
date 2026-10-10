@@ -100,15 +100,16 @@ lw --check -c candidate.toml
 ```
 
 Before a reload, check the edited file this way: a failed reload keeps the
-running service, but `--check` says why without touching it. Failures name the
-pipeline and the offending key:
+running service, but `--check` says why without touching it. It prints the
+first problem of each setting, flow stage, source, sink and pipeline, a line
+each named by its key's path; once none is left, the files they name are
+opened as a start opens them:
 
+```text
+Error: Failed to load config: invalid configuration:
+pipelines[0].plugin_sources[in].config.directory: must be set
+pipelines[0].plugin_sinks[out].config.port: must be from 1 to 65535, got 70000
 ```
-ERROR msg="Failed to create pipeline" pipeline=app error="failed to create sink out: port: must be 1-65535, got 0"
-```
-
-Remember that most validation lives in plugin constructors, so a config only
-proves itself when the pipeline is actually built.
 
 ## Monitoring
 

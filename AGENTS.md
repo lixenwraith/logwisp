@@ -80,10 +80,11 @@ change touches.
   refuses unknown keys at any depth; they keep only I/O. Rules that read
   nothing belong in a `Check` method, so `ValidateConfig` sees them offline.
 - `internal/compose` is the engine `lw --tui` and the website's WebAssembly
-  share: it edits pipelines and writes the command line, environment and file
-  forms, each loading back to the same pipelines; it reads no file and links
+  share: it edits pipelines, writes the command line, environment and file
+  forms and reads each back to the same pipelines; it reads no file and links
   no TLS, HTTP or terminal code (its test runs `go list -deps`). `cmd/lwconf`
-  hands it to the page as WebAssembly (`make wasm`; `node --test` there).
+  hands it to a page: `make wasm` writes the drop-in `bin/lwconf/`, which
+  `lwconf.js` loads and calls (`node --test` there).
 - `cmd/lw/cli.go` owns the command line: lw's own flags, and the commands
   table whose groups (`auth`, `tls`, `preset`, `config`) share one flag
   mechanism; `config.Load` takes the parsed `config.Args`. Presets are rows of

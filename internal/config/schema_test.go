@@ -3,6 +3,7 @@ package config
 import (
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -79,7 +80,8 @@ func TestCoerceGivesTheDeclaredKinds(t *testing.T) {
 }
 
 // ValidateConfig decodes every plugin and flow stage without opening a file,
-// and names the path of what it refuses
+// and names the path of what it refuses: a rule between a table's keys by
+// the table's
 func TestValidateConfigNamesThePath(t *testing.T) {
 	valid := func() *Config {
 		return &Config{Color: "auto", Pipelines: []PipelineConfig{{
@@ -97,8 +99,12 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 		"pipelines[0].plugin_sinks[out].config.port: must be from 1 to 65535, got 70000": func(c *Config) {
 			c.Pipelines[0].PluginSinks[0].Config["port"] = int64(70000)
 		},
-		"pipelines[0].plugin_sinks[out].config: tls: client_auth requires client_ca_file": func(c *Config) {
+		"pipelines[0].plugin_sinks[out].config.tls: client_auth requires client_ca_file": func(c *Config) {
 			c.Pipelines[0].PluginSinks[0].Config["tls"].(map[string]any)["client_auth"] = true
+		},
+		"pipelines[0].plugin_sinks[out].config.acl: requests_per_second_per_client applies only to HTTP listeners": func(c *Config) {
+			c.Pipelines[0].PluginSinks[0].Type = "tcp"
+			c.Pipelines[0].PluginSinks[0].Config["acl"] = map[string]any{"requests_per_second_per_client": 2.5}
 		},
 		"pipelines[0].plugin_sinks[out]: duplicate id": func(c *Config) {
 			c.Pipelines[0].PluginSinks = append(c.Pipelines[0].PluginSinks, PluginSinkConfig{ID: "out", Type: "null"})
@@ -109,7 +115,7 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 		"pipelines[0].plugin_sinks[out].config.port: not an integer": func(c *Config) {
 			c.Pipelines[0].PluginSinks[0].Config["port"] = "http"
 		},
-		`pipelines[0].plugin_sinks[up].config: auth: type "mtls" cannot be used with tls.insecure_skip_verify`: func(c *Config) {
+		`pipelines[0].plugin_sinks[up].config.auth: type "mtls" cannot be used with tls.insecure_skip_verify`: func(c *Config) {
 			c.Pipelines[0].PluginSinks[0] = PluginSinkConfig{ID: "up", Type: "tcp_chain", Config: map[string]any{"host": "h", "port": int64(1),
 				"tls": map[string]any{"enabled": true, "insecure_skip_verify": true}, "auth": map[string]any{"type": "mtls"}}}
 		},
@@ -130,6 +136,55 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 		change(c)
 		if err := ValidateConfig(c); err == nil || err.Error() != want {
 			t.Errorf("err = %v, want %s", err, want)
+		}
+	}
+}
+
+// A configuration that does not load names every problem, a line each, each
+// part's first: the settings, each flow stage, each plugin, each pipeline
+func TestLoadReportsEveryProblemALine(t *testing.T) {
+	isolateConfig(t)
+	_, err := Load(Args{Overrides: []string{"--color=bogus"}, Specs: specs("pipeline", "a", "source", "file",
+		"sink", "tcp:port=70000", "rate-limit", "policy=bogus", "filter", "include:patterns=(",
+		"pipeline", "a", "sink", "null")})
+	want := strings.Join([]string{"invalid configuration:",
+		`color: must be one of auto, always, never, got "bogus"`,
+		`pipelines[0].flow.rate_limit.policy: must be one of pass, drop, got "bogus"`,
+		"pipelines[0].flow.filters[0].patterns[0]: \"(\": error parsing regexp: missing closing ): `(`",
+		"pipelines[0].plugin_sources[file].config.directory: must be set",
+		"pipelines[0].plugin_sinks[tcp].config.port: must be from 1 to 65535, got 70000",
+		`pipelines[1].name: duplicate name "a"`,
+	}, "\n")
+	if err == nil || err.Error() != want {
+		t.Fatalf("got\n%v\nwant\n%s", err, want)
+	}
+}
+
+// A plugin lists the table keys that apply to it: those of its side, a chain
+// source's being a listener's, and the HTTP ones only when it speaks HTTP
+func TestTableKeysFollowThePlugin(t *testing.T) {
+	has := func(role, typ, path string) bool {
+		p, _ := LookupPlugin(role, typ)
+		keys := p.Keys()
+		for part := range strings.SplitSeq(path, ".") {
+			i := slices.IndexFunc(keys, func(k Key) bool { return k.Name == part })
+			if i < 0 {
+				return false
+			}
+			keys = keys[i].Keys
+		}
+		return true
+	}
+	for path, want := range map[string]bool{
+		"sink tcp_chain tls.pin_sha256": true, "sink tcp_chain tls.self_signed": false,
+		"source tcp_chain tls.self_signed": true, "source tcp_chain tls.pin_sha256": false,
+		"source tcp_chain auth.node_binding": true, "sink tcp_chain auth.credentials_file": false,
+		"sink tcp acl.requests_per_second_per_client": false, "sink tcp auth.token_lifetime_ms": false,
+		"sink http acl.requests_per_second_per_client": true, "sink http auth.trusted_proxies": true,
+	} {
+		f := strings.Fields(path)
+		if has(f[0], f[1], f[2]) != want {
+			t.Errorf("%s: listed %v, want %v", path, !want, want)
 		}
 	}
 }
