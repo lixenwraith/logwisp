@@ -20,6 +20,9 @@ jobs:
       - run: GOOS=freebsd GOARCH=amd64 go build -o /tmp/lw-freebsd ./cmd/lw
       - run: node --test
         working-directory: internal/sink/http/web
+      # make wasm builds the engine for the page, then node runs its calls
+      - run: node --test
+        working-directory: cmd/lwconf
   # The end-to-end scripts on a host with an IPv6 loopback and playwright's
   # Chromium; the docker run needs root, so it skips
   e2e:

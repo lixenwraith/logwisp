@@ -90,7 +90,7 @@ func ValidatePipelines(pipelines []PipelineConfig) error {
 				single[role+typ] = p.Name
 			}
 			if _, err := decode(role, typ, m); err != nil {
-				return at(path+".config", err)
+				return At(path+".config", err)
 			}
 			return nil
 		}
@@ -130,14 +130,14 @@ func checkFlow(f *FlowConfig, path string) error {
 	}
 	for _, key := range slices.Sorted(maps.Keys(stages)) {
 		if err := Settle(stages[key]); err != nil {
-			return at(path+"."+key, err)
+			return At(path+"."+key, err)
 		}
 	}
 	return nil
 }
 
-// at prefixes err with the path of the table it was found in
-func at(path string, err error) error {
+// At prefixes err with the path of the table it was found in
+func At(path string, err error) error {
 	if ke, ok := errors.AsType[*KeyError](err); ok {
 		return fmt.Errorf("%s.%s: %w", path, ke.Key, ke.Err)
 	}

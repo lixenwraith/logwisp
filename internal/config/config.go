@@ -133,7 +133,7 @@ const (
 type FilterConfig struct {
 	Type     FilterType  `toml:"type" default:"include" lw:"enum=include|exclude" help:"pass only matching entries, or drop them"`
 	Logic    FilterLogic `toml:"logic" default:"or" lw:"enum=or|and" help:"match any pattern, or all"`
-	Patterns []string    `toml:"patterns" lw:"hint=regex" help:"RE2 patterns"`
+	Patterns []string    `toml:"patterns,omitempty" lw:"hint=regex" help:"RE2 patterns"`
 }
 
 // --- Sources ---

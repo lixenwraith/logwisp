@@ -69,7 +69,7 @@ DEB_MAINTAINER ?= Maintainer <maintainer@example.org>
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-go build release dev test verify e2e image image-check install uninstall deb arch completion clean version
+.PHONY: help check-go build release dev wasm test verify e2e image image-check install uninstall deb arch completion clean version
 
 help:
 	@echo "Usage: make <target> [VARIABLE=value ...]"
@@ -78,12 +78,14 @@ help:
 	@echo "  build        Build $(BIN_DIR)/$(BINARY) with version metadata"
 	@echo "  release      Build it static, stripped and trimmed (CGO_ENABLED=0)"
 	@echo "  dev          Build it with the race detector"
+	@echo "  wasm         Build $(BIN_DIR)/lwconf.wasm, the engine for the website, beside its"
+	@echo "               loader wasm_exec.js, and print both checksums"
 	@echo "  version      Print the version metadata a build embeds"
 	@echo "  completion   Regenerate $(PKG_DIR)/completion from lw's command tables"
 	@echo "  clean        Remove $(BIN_DIR)/"
 	@echo "Check:"
 	@echo "  test         Run the Go tests"
-	@echo "  verify       vet, gofmt, tests, linux and freebsd cross builds, web client tests"
+	@echo "  verify       vet, gofmt, tests, linux, freebsd and wasm cross builds, node tests"
 	@echo "  e2e          Build, then run each of $(E2E) with --auto and report"
 	@echo "Container:"
 	@echo "  image        Build $(IMAGE):$(IMAGE_TAG) with $(CONTAINER_ENGINE) (scratch, static, UID 65532)"
@@ -120,6 +122,13 @@ release: check-go
 dev: check-go
 	$(GO) build -race $(GO_BUILDFLAGS) -ldflags "$(VERSION_LDFLAGS) $(GO_LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(SRC)
 
+# The page loads the toolchain's own loader, which uses no eval: its CSP needs
+# only 'wasm-unsafe-eval'
+wasm: check-go
+	GOOS=js GOARCH=wasm $(GO) build -trimpath $(GO_BUILDFLAGS) -ldflags "-s -w $(VERSION_LDFLAGS) $(GO_LDFLAGS)" -o $(BIN_DIR)/lwconf.wasm ./cmd/lwconf
+	install -m 0644 "$$($(GO) env GOROOT)/lib/wasm/wasm_exec.js" $(BIN_DIR)/wasm_exec.js
+	@cd $(BIN_DIR) && { sha256sum lwconf.wasm wasm_exec.js 2>/dev/null || sha256 -r lwconf.wasm wasm_exec.js; }
+
 test: check-go
 	$(GO) test ./...
 
@@ -146,10 +155,11 @@ verify: test
 		echo "cross build $$target"; \
 		CGO_ENABLED=0 GOOS=$${target%/*} GOARCH=$${target#*/} $(GO) build -o /dev/null $(SRC) || exit 1; \
 	done
+	@echo "cross build js/wasm"; GOOS=js GOARCH=wasm $(GO) build -o /dev/null ./cmd/lwconf
 	@if command -v node >/dev/null 2>&1; then \
-		cd $(WEB_DIR) && node --test; \
+		(cd $(WEB_DIR) && node --test) && cd cmd/lwconf && node --test; \
 	else \
-		echo "node not found: web client tests skipped"; \
+		echo "node not found: web client and lwconf tests skipped"; \
 	fi
 
 # A script exits 0 (passed), 77 (skipped: the host lacks what it tests) or
