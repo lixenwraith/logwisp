@@ -1,6 +1,6 @@
 # Builder pin and go.mod directive are the same patch release deliberately;
 # an older builder reports the mismatch only after downloading the module graph.
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.2
 
 # The builder runs natively and cross-compiles, so foreign platforms need no emulation.
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:${GO_VERSION}-alpine AS build

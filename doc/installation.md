@@ -4,7 +4,7 @@
 
 - Operating systems: Linux (kernel 6.10+), FreeBSD (14.0+)
 - Architecture: amd64; arm64 builds but is untested
-- To build: Go 1.27.1 or newer (FreeBSD: the `go127` package), and GNU make
+- To build: Go 1.27.2 or newer (FreeBSD: the `go127` package), and GNU make
   or BSD make
 - For `make e2e`: bash 5+, coreutils, curl, openssl and go (the proxy test
   builds its reverse proxy). Optional, else those checks SKIP: node with
