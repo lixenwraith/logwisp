@@ -7,7 +7,7 @@ Running, monitoring, and maintaining LogWisp.
 ```bash
 # a filter: stdin to stdout, exits 0 at the end of input
 lw < app.log > copy.log
-tail -F app.log | lw --filter include,patterns=ERROR
+tail -F app.log | lw --filter include:patterns=ERROR
 
 # a service: the file's pipelines, until SIGINT or SIGTERM
 lw -c /etc/logwisp/logwisp.toml
@@ -249,16 +249,16 @@ client_buffer_size = 1024
 
 ```toml
 [pipelines.flow.rate_limit]
-rate                 = 1000.0
-burst                = 2000.0
+entries_per_second   = 1000.0
+burst_entries        = 2000.0
 policy               = "drop"
 max_entry_size_bytes = 65536
 ```
 
 Two behaviours to keep in mind: the limiter does not exist at all when
-`rate <= 0`, and `policy = "pass"` short-circuits the size cap as well as the
-rate check. Enforcing `max_entry_size_bytes` therefore requires `rate > 0` and
-`policy = "drop"`.
+`entries_per_second <= 0`, and `policy = "pass"` short-circuits the size cap as
+well as the rate check. Enforcing `max_entry_size_bytes` therefore requires
+`entries_per_second > 0` and `policy = "drop"`.
 
 ### Formatting
 

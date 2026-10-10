@@ -93,10 +93,9 @@ var specKinds = []specKind{
 		Fill(&format)
 		return []string{typedSpec(&format)}
 	}},
-	// Naming a stage turns it on: the file defaults (pass, disabled) would not.
 	{"rate-limit", false, false, false, func(p *PipelineConfig, _ string, opts map[string]any, _ IsDir) error {
-		p.Flow.RateLimit = &RateLimitConfig{Policy: "drop"}
-		return Scan(opts, p.Flow.RateLimit)
+		p.Flow.RateLimit = &RateLimitConfig{}
+		return Scan(StageOn("rate_limit", opts), p.Flow.RateLimit)
 	}, func(p *PipelineConfig) []string {
 		if p.Flow.RateLimit == nil {
 			return nil
@@ -106,8 +105,8 @@ var specKinds = []specKind{
 		return []string{formatSpec("", Values(&rate))}
 	}},
 	{"heartbeat", false, false, false, func(p *PipelineConfig, _ string, opts map[string]any, _ IsDir) error {
-		p.Flow.Heartbeat = &HeartbeatConfig{Enabled: true}
-		return Scan(opts, p.Flow.Heartbeat)
+		p.Flow.Heartbeat = &HeartbeatConfig{}
+		return Scan(StageOn("heartbeat", opts), p.Flow.Heartbeat)
 	}, func(p *PipelineConfig) []string {
 		if p.Flow.Heartbeat == nil {
 			return nil
@@ -125,6 +124,18 @@ type pipelineSpec struct {
 	name  string // "--sink" or "LOGWISP_SINK_2", for errors
 	kind  *specKind
 	value string
+}
+
+// stageOn are the values naming a flow stage sets, in a spec or an engine
+// edit: the file's defaults (pass, disabled) would leave it doing nothing
+var stageOn = map[string]map[string]any{"rate_limit": {"policy": "drop"}, "heartbeat": {"enabled": true}}
+
+// StageOn returns opts over the values that turn a flow stage on
+func StageOn(stage string, opts map[string]any) map[string]any {
+	on := map[string]any{}
+	maps.Copy(on, stageOn[stage])
+	maps.Copy(on, opts)
+	return on
 }
 
 // Spec is one pipeline flag: its name without dashes, and its value.
@@ -282,13 +293,10 @@ func typedSpec(stage any) string {
 	return formatSpec(typ, m)
 }
 
-// formatSpec writes [TYPE,]key=value,...: tables as dotted keys, lists as a
-// repeated key
+// formatSpec writes TYPE[:key=value,...] or key=value,...: tables as dotted
+// keys, lists as a repeated key
 func formatSpec(typ string, tables ...map[string]any) string {
 	var parts []string
-	if typ != "" {
-		parts = append(parts, escape(typ))
-	}
 	var add func(prefix string, m map[string]any)
 	add = func(prefix string, m map[string]any) {
 		for _, k := range slices.Sorted(maps.Keys(m)) {
@@ -307,7 +315,11 @@ func formatSpec(typ string, tables ...map[string]any) string {
 	for _, m := range tables {
 		add("", m)
 	}
-	return strings.Join(parts, ",")
+	opts := strings.Join(parts, ",")
+	if typ == "" || opts == "" {
+		return typ + opts
+	}
+	return typ + ":" + opts
 }
 
 func text(v any) string {
@@ -365,16 +377,20 @@ func useStdio(p *PipelineConfig) {
 	}
 }
 
-// parseSpec reads [TYPE,]key=value,...: dotted keys nest, a repeated key makes
-// a list, and a backslash escapes ',', '=' and '\'. Errors name the part.
+// parseSpec reads TYPE[:key=value,...] or key=value,...: TYPE ends at the
+// first ':', dotted keys nest, a repeated key makes a list, and a backslash
+// escapes ',', '=' and '\'. Errors name the part.
 func parseSpec(spec string, typed bool) (typ string, opts map[string]any, err error) {
 	rest, more := spec, true
 	if typed {
-		typ, rest, more = cutUnescaped(spec, ',')
-		if _, _, eq := cutUnescaped(typ, '='); typ == "" || eq {
+		typ, rest, _ = strings.Cut(spec, ":")
+		more = rest != ""
+		if head, _, comma := cutUnescaped(typ, ','); comma && !strings.Contains(head, "=") {
+			return "", nil, fmt.Errorf("%s: TYPE ends at ':', as in %s:%s", spec, head, spec[len(head)+1:])
+		}
+		if typ == "" || strings.ContainsAny(typ, "=,\\") {
 			return "", nil, fmt.Errorf("%s: missing TYPE", spec)
 		}
-		typ = unescape(typ)
 	}
 	opts = map[string]any{}
 	for more {
@@ -390,7 +406,7 @@ func parseSpec(spec string, typed bool) (typ string, opts map[string]any, err er
 			err = SetOption(opts, key, unescape(value))
 		}
 		if err != nil {
-			return "", nil, fmt.Errorf("%s: %w", strings.TrimPrefix(typ+","+part, ","), err)
+			return "", nil, fmt.Errorf("%s: %w", strings.TrimPrefix(typ+":"+part, ":"), err)
 		}
 	}
 	return typ, opts, nil

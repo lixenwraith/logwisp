@@ -35,12 +35,12 @@ var authCommands = []subcommand{
 	{"remove-user", "--credentials FILE -u NAME",
 		"Remove a user from a credentials file",
 		[]string{"credentials", "user"}, defineRemoveUser},
-	{"token", "--url https://HOST:PORT -u NAME --password-file FILE [--unbound] [TLS flags]",
+	{"token", "--url https://HOST:PORT -u NAME [--password-file FILE] [--unbound] [TLS flags]",
 		"Log in to an http sink or http_chain source and print a bearer token",
-		[]string{"url", "user", "password-file"}, defineToken},
-	{"stream", "--addr HOST:PORT -u NAME --password-file FILE [TLS flags]",
+		[]string{"url", "user"}, defineToken},
+	{"stream", "--addr HOST:PORT -u NAME [--password-file FILE] [TLS flags]",
 		"Log in to a tcp sink and copy its stream to stdout until interrupted",
-		[]string{"addr", "user", "password-file"}, defineStream},
+		[]string{"addr", "user"}, defineStream},
 }
 
 func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
@@ -62,7 +62,7 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 
 		var password string
 		if *passwordFile != "" && !*generate {
-			password, err = authz.ReadPassword(*passwordFile)
+			password, err = authz.ReadPassword(*passwordFile, *user, false)
 			switch {
 			case err == nil && len(password) < 8:
 				return fmt.Errorf("the password in %s is shorter than 8 bytes", *passwordFile)
@@ -155,7 +155,7 @@ func defineRemoveUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	rawURL := fs.String("url", "", "listener `URL`, https://HOST:PORT or https://[IPV6]:PORT (with --unbound, a proxy's mount URL may carry a path)")
 	user := fs.String("user", "", "user `name`")
-	passwordFile := fs.String("password-file", "", "`file` holding the password")
+	passwordFile := fs.String("password-file", "/dev/tty", "`file` holding the password; a terminal asks")
 	unbound := fs.Bool("unbound", false, "log in without channel binding, to an http sink behind a TLS-terminating proxy (auth.trusted_proxies)")
 	tlsOpts := tlsFlags(fs)
 	return func(stdout, _ io.Writer) error {
@@ -205,7 +205,7 @@ func defineToken(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	addr := fs.String("addr", "", "tcp sink address, `HOST:PORT` or [IPV6]:PORT")
 	user := fs.String("user", "", "user `name`")
-	passwordFile := fs.String("password-file", "", "`file` holding the password")
+	passwordFile := fs.String("password-file", "/dev/tty", "`file` holding the password; a terminal asks")
 	tlsOpts := tlsFlags(fs)
 	return func(stdout, _ io.Writer) error {
 		host, _, err := net.SplitHostPort(*addr)

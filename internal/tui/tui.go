@@ -7,6 +7,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/lixenwraith/logwisp/internal/compose"
@@ -85,11 +86,12 @@ type app struct {
 	th      ui.Theme
 	font    font
 	tables  map[string][]config.Key
-	pi      int    // the pipeline shown
-	col     int    // the chosen column
-	row     [3]int // the chosen node of each column
-	scroll  int    // the canvas's first row
-	inspect bool   // keys go to the inspector
+	pi      int               // the pipeline shown
+	col     int               // the chosen column
+	row     [3]int            // the chosen node of each column
+	scroll  ui.ViewportScroll // the canvas's rows
+	bar     bool              // keys go to the pipeline bar
+	inspect bool              // keys go to the inspector
 	insp    inspector
 	dialog  dialog // takes every key while open
 	status  string // the last edit's refusal
@@ -217,6 +219,8 @@ func (a *app) handle(ev terminal.Event) {
 	case ev.Type == terminal.EventPaste:
 		a.paste(ev.Text)
 	case ev.Type != terminal.EventKey:
+	case a.bar:
+		a.barKey(ev)
 	case !a.inspect:
 		a.canvasKey(ev)
 	case !a.inspectKey(ev):
@@ -238,13 +242,17 @@ func (a *app) canvasKey(ev terminal.Event) {
 		a.col = min(2, a.col+1)
 	case is(ev, terminal.KeyTab, ""):
 		a.col = (a.col + 1) % 3
+	case is(ev, terminal.KeyUp, "k") && a.row[a.col] == 0:
+		a.bar = true
 	case is(ev, terminal.KeyUp, "k"):
-		a.row[a.col] = max(0, a.row[a.col]-1)
+		a.row[a.col]--
 	case is(ev, terminal.KeyDown, "j"):
 		a.row[a.col]++
 		a.node()
-	case is(ev, terminal.KeyEnter, "") && ok:
-		a.inspect, a.insp.cursor = true, 0
+	case is(ev, terminal.KeyEnter, "") && (!ok || n.Role == "filters" && len(a.pipeline().Flow.Filters) == 0):
+		a.dialog = a.addMenu() // an empty column, or no filters, as a
+	case is(ev, terminal.KeyEnter, ""):
+		a.inspectFirst(n)
 	case is(ev, terminal.KeyNone, "a"):
 		a.dialog = a.addMenu()
 	case is(ev, terminal.KeyNone, "d") && ok && n.Role == "filters":
@@ -269,8 +277,12 @@ func (a *app) globalKey(ev terminal.Event) {
 		a.dialog = a.outputMenu()
 	case is(ev, terminal.KeyNone, "?"):
 		a.dialog = help(a.font)
-	case is(ev, terminal.KeyNone, "c"):
+	case is(ev, terminal.KeyNone, "!"):
 		a.showProblem()
+	case is(ev, terminal.KeyNone, "c"):
+		a.changeType()
+	case is(ev, terminal.KeyNone, "r"):
+		a.run()
 	case is(ev, terminal.KeyNone, "]") && n > 0:
 		a.pi, a.row, a.inspect = (a.pi+1)%n, [3]int{}, false
 	case is(ev, terminal.KeyNone, "[") && n > 0:
@@ -278,6 +290,76 @@ func (a *app) globalKey(ev terminal.Event) {
 	case is(ev, terminal.KeyCtrlC, "q"):
 		a.quit()
 	}
+}
+
+// barKey takes the keys on the pipeline bar: switch, add, rename, delete
+func (a *app) barKey(ev terminal.Event) {
+	n := len(a.comp.Pipelines)
+	switch p := a.pipeline(); {
+	case is(ev, terminal.KeyLeft, "h["):
+		a.pi, a.row = (a.pi+n-1)%n, [3]int{}
+	case is(ev, terminal.KeyRight, "l]"):
+		a.pi, a.row = (a.pi+1)%n, [3]int{}
+	case is(ev, terminal.KeyDown, "j") || is(ev, terminal.KeyEscape, ""):
+		a.bar = false
+	case is(ev, terminal.KeyNone, "a"):
+		a.dialog = a.pipelineMenu("Add a pipeline", (*app).append)
+	case is(ev, terminal.KeyEnter, ""):
+		f := &form{title: "Rename pipeline " + p.Name, params: []config.PresetParam{{Name: "name", Required: true, Help: "a name no other pipeline has"}},
+			apply: func(a *app, v map[string]string) error {
+				err := a.comp.RenamePipeline(a.pi, v["name"])
+				if err == nil {
+					a.edit(nil)
+				}
+				return err
+			}}
+		f.fill(map[string]string{"name": p.Name})
+		a.dialog = f
+	case is(ev, terminal.KeyNone, "d"):
+		remove := func(a *app) {
+			a.edit(a.comp.RemovePipeline(a.pi))
+			a.pi, a.row, a.insp.open = max(0, a.pi-1), [3]int{}, map[string]bool{} // folds are keyed by index
+			if len(a.comp.Pipelines) == 0 {
+				a.bar, a.dialog = false, a.presetMenu()
+			}
+		}
+		if len(p.PluginSources)+len(p.PluginSinks) == 0 {
+			remove(a)
+			return
+		}
+		a.dialog = &confirm{question: "Delete pipeline " + p.Name + "?", yes: remove}
+	default:
+		a.globalKey(ev)
+	}
+}
+
+// changeType offers a source or sink the other types of its role; a filter
+// or the format changes type on its type row
+func (a *app) changeType() {
+	n, ok := a.node()
+	if l := a.lines(); a.inspect && ok && len(l) > 0 {
+		n = l[min(a.insp.cursor, len(l)-1)].node
+	}
+	switch {
+	case !ok || n.Role == "filters" && !a.inspect:
+		a.note = "c changes the type of a source, sink, filter or format"
+	case n.Role == "source" || n.Role == "sink":
+		a.dialog = a.typeMenu(n)
+	case n.Role == "filters" && n.Index < len(a.pipeline().Flow.Filters), n.Role == "format":
+		a.choose(n)
+		a.inspectAt(func(l line) bool { return l.node == n && l.key.Name == "type" })
+	default:
+		a.note = "c changes the type of a source, sink, filter or format"
+	}
+}
+
+// run leaves to start the pipelines, once they are valid
+func (a *app) run() {
+	if a.problem != nil {
+		a.status = "not valid yet: ! shows the problem"
+		return
+	}
+	a.result, a.done = Result{Exit: Start, Pipelines: a.comp.Pipelines}, true
 }
 
 // switchStage turns a flow stage on with its defaults, or off; a stage with
@@ -308,7 +390,8 @@ func slicesHasKey(keys []config.Key, name string) bool {
 	return false
 }
 
-// paste starts over from a pasted command line
+// paste starts over from a pasted command line, asking first when there are
+// edited pipelines to lose
 func (a *app) paste(text string) {
 	c, err := compose.FromCommandLine(text, config.HostIsDir)
 	if err != nil {
@@ -320,7 +403,7 @@ func (a *app) paste(text string) {
 		a.note = fmt.Sprintf("pasted %d pipeline(s)", len(c.Pipelines))
 		a.check()
 	}
-	if !a.changed {
+	if !a.changed || len(a.comp.Pipelines) == 0 {
 		replace(a)
 		return
 	}
@@ -341,18 +424,25 @@ func (a *app) showProblem() {
 		a.note = "the pipelines are valid"
 		return
 	}
-	if pi, n, key, ok := locate(a.problem); ok && pi < len(a.comp.Pipelines) {
+	if pi, n, key, _, ok := locate(a.problem); ok && pi < len(a.comp.Pipelines) {
 		a.pi = pi
 		a.choose(n)
-		a.inspect = true
-		a.insp.cursor = 0
-		for i, l := range a.lines() {
-			if l.node == n && l.key.Name == key {
-				a.insp.cursor = i
-			}
-		}
+		a.inspectAt(func(l line) bool { return l.node == n && l.key.Name == key })
 	}
-	a.dialog = &notice{title: "Problem", lines: ui.WrapText(a.problem.Error(), 60)}
+	a.dialog = textNotice("Problem", a.problem.Error())
+}
+
+// inspectFirst opens the inspector on a node's first required key, or on a
+// filter's group
+func (a *app) inspectFirst(n compose.Node) {
+	a.inspectAt(func(l line) bool { return l.node == n && (l.key.Required || l.key.Name == "") })
+}
+
+// inspectAt opens the inspector, which takes the keys from the bar, on the
+// first line at holds for, or on its top
+func (a *app) inspectAt(at func(line) bool) {
+	a.inspect, a.bar = true, false
+	a.insp.cursor = max(0, slices.IndexFunc(a.lines(), at))
 }
 
 // choose puts the canvas cursor on a node, a filter on the filters stage
@@ -374,13 +464,12 @@ func (a *app) choose(n compose.Node) {
 // it from 110 columns or below it, a status row, and any dialog over them
 func (a *app) draw(r ui.Region) {
 	r.FillStyle(a.th.Text)
+	status, style := a.bottom(r.W)
 	if len(a.comp.Pipelines) > 0 {
 		a.pi = min(a.pi, len(a.comp.Pipelines)-1)
 		a.node() // a delete can leave the row past its column's end
-		p := a.pipeline()
-		title := fmt.Sprintf("LogWisp  pipeline %s  %d of %d", p.Name, a.pi+1, len(a.comp.Pipelines))
-		r.TextStyled(1, 0, ui.Truncate(title, r.W-2), a.th.Accent)
-		body := r.Sub(0, 1, r.W, r.H-2)
+		a.drawBar(r.Sub(0, 0, r.W, 1))
+		body := r.Sub(0, 1, r.W, r.H-1-len(status))
 		if r.W >= 110 {
 			iw := min(60, r.W*2/5)
 			a.drawCanvas(body.Sub(0, 0, r.W-iw-1, body.H))
@@ -391,9 +480,53 @@ func (a *app) draw(r ui.Region) {
 			a.drawInspector(body.Sub(0, ch+1, r.W, body.H-ch-1))
 		}
 	}
-	a.drawStatus(r.Sub(0, r.H-1, r.W, 1))
+	for i, l := range status {
+		r.TextStyled(1, r.H-len(status)+i, l, style)
+	}
+	if a.status == "" && a.note == "" && a.problem == nil {
+		keys := a.hints(r.W)
+		r.TextStyled(r.W-ui.RuneLen(keys)-1, r.H-1, keys, a.th.Muted)
+	}
 	if a.dialog != nil {
 		a.dialog.draw(a, r)
+	}
+}
+
+// drawBar draws the title row: the pipelines by name, the one shown marked,
+// or it and its place when they do not fit; with the keys, the bar's verbs
+func (a *app) drawBar(r ui.Region) {
+	th, f := a.th, a.font
+	if a.bar {
+		r.TextStyled(0, 0, string(f.Focus), th.Accent)
+		hint := "a add  " + f.enter + " rename  d delete"
+		if r.W >= 60 {
+			r.TextStyled(r.W-ui.RuneLen(hint)-1, 0, hint, th.Muted)
+			r = r.Sub(0, 0, r.W-ui.RuneLen(hint)-2, 1)
+		}
+	}
+	r.TextStyled(2, 0, "LogWisp", th.Accent)
+	names, w := a.comp.Pipelines, 11
+	for _, p := range names {
+		w += ui.RuneLen(p.Name) + 4
+	}
+	if w > r.W {
+		names = names[a.pi : a.pi+1]
+	}
+	x := 11
+	for _, p := range names {
+		mark, style := f.Off, th.Muted
+		if p.Name == a.pipeline().Name {
+			mark, style = f.On, th.Text
+			if a.bar {
+				style = th.Text.On(th.Selected)
+			}
+		}
+		label := ui.Truncate(string(mark)+" "+p.Name, max(0, r.W-x))
+		r.TextStyled(x, 0, label, style)
+		x += ui.RuneLen(label) + 2
+	}
+	if len(names) < len(a.comp.Pipelines) {
+		r.TextStyled(x, 0, fmt.Sprintf("%d/%d", a.pi+1, len(a.comp.Pipelines)), th.Muted)
 	}
 }
 
@@ -405,23 +538,45 @@ func (a *app) paint(cells []terminal.Cell, w, h int) {
 	}
 }
 
-// drawStatus shows an edit's refusal, a note, or whether the pipelines are
-// valid, and the keys
-func (a *app) drawStatus(r ui.Region) {
+// bottom is the status rows, wrapped to three at most: an edit's refusal, a
+// note, the first problem by its part, or the keys while all is valid
+func (a *app) bottom(w int) ([]string, ui.Style) {
 	th, f := a.th, a.font
-	text, style := f.valid+" valid", th.Accent
+	text, style := "", th.Error
 	switch {
 	case a.status != "":
-		text, style = a.status, th.Error
+		text = a.status
 	case a.note != "":
 		text, style = a.note, th.Muted
 	case a.problem != nil:
-		text, style = f.invalid+" "+a.problem.Error(), th.Error
+		pi, n, key, msg, _ := locate(a.problem)
+		if where := a.where(pi, n, key); where != "" {
+			msg = where + ": " + msg
+		}
+		text = f.invalid + " " + msg
+	default:
+		return []string{f.valid + " valid"}, th.Accent
 	}
-	keys := "a add  d delete  " + f.space + " on/off  J/K move  p preset  o output  ? help"
-	if ui.RuneLen(keys)+24 > r.W {
+	return clip(ui.WrapText(text, w-2), 3), style
+}
+
+// hints are the status row's keys, shown while nothing else needs the row
+func (a *app) hints(w int) string {
+	keys := "a add  d delete  " + a.font.space + " on/off  J/K move  p preset  o output  ? help"
+	if ui.RuneLen(keys)+12 > w {
 		keys = "? help"
 	}
-	r.TextStyled(1, 0, ui.Truncate(text, r.W-ui.RuneLen(keys)-4), style)
-	r.TextStyled(r.W-ui.RuneLen(keys)-1, 0, keys, th.Muted)
+	return keys
+}
+
+// clip keeps n lines, the last cut short when more follow
+func clip(lines []string, n int) []string {
+	if len(lines) > n {
+		if n < 1 {
+			return nil
+		}
+		lines = lines[:n]
+		lines[n-1] = ui.Truncate(lines[n-1]+"…", ui.RuneLen(lines[n-1]))
+	}
+	return lines
 }

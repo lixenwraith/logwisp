@@ -63,7 +63,7 @@ func TestAddUserCreatesPrivateFilesWithAMatchingVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	password, err := authz.ReadPassword(pass)
+	password, err := authz.ReadPassword(pass, "edge-01", false)
 	if err != nil {
 		t.Fatal(err)
 	}

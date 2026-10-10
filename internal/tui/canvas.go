@@ -10,7 +10,6 @@ import (
 	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/config"
 
-	"github.com/lixenwraith/terminal"
 	ui "github.com/lixenwraith/terminal/tui"
 )
 
@@ -92,22 +91,9 @@ func (a *app) layout(w int) layout {
 func (a *app) drawCanvas(r ui.Region) {
 	l := a.layout(r.W)
 	chosen := l.nodes[a.col][min(a.row[a.col], len(l.nodes[a.col])-1)]
-	if chosen.y < a.scroll {
-		a.scroll = chosen.y
-	}
-	if tall := 2 - a.col%2; chosen.y+tall > a.scroll+r.H {
-		a.scroll = chosen.y + tall - r.H
-	}
-	a.scroll = max(0, min(a.scroll, l.h-r.H))
-
-	// Drawn whole off screen, then the rows in view copied
-	cells := make([]terminal.Cell, r.W*l.h)
-	full := ui.NewRegion(cells, r.W, 0, 0, r.W, l.h)
-	full.FillStyle(a.th.Text)
-	a.drawParts(full, l)
-	for y := range min(r.H, l.h-a.scroll) {
-		copy(r.Cells[(r.Y+y)*r.TotalW+r.X:][:r.W], cells[(a.scroll+y)*r.W:][:r.W])
-	}
+	a.scroll.SetDimensions(l.h, r.H)
+	a.scroll.EnsureRange(chosen.y, 2-a.col%2)
+	r.Window(l.h, &a.scroll, a.th.Text, func(full ui.Region) { a.drawParts(full, l) })
 }
 
 func (a *app) drawParts(r ui.Region, l layout) {
@@ -118,7 +104,7 @@ func (a *app) drawParts(r ui.Region, l layout) {
 		r.TextStyled(t.x, t.y, string(f.dot)+" "+c.title, tints[col].On(th.Text))
 	}
 	a.drawBox(r, l)
-	g := wires{w: r.W, arms: make([]uint8, r.W*l.h)}
+	g := ui.NewWires(r.W, l.h)
 	for _, col := range []int{sourcesCol, sinksCol} {
 		nodes := a.nodes(col)
 		for i, s := range l.nodes[col] {
@@ -130,7 +116,7 @@ func (a *app) drawParts(r ui.Region, l layout) {
 			a.drawNode(r, s, nodes[i], tints[col], chosen)
 		}
 		if l.wide && len(nodes) > 0 {
-			g.join(l, col)
+			join(g, l, col)
 		}
 	}
 	if !l.wide {
@@ -139,11 +125,7 @@ func (a *app) drawParts(r ui.Region, l layout) {
 		}
 		return
 	}
-	for i, arms := range g.arms {
-		if arms != 0 {
-			r.TextStyled(i%r.W, i/r.W, string(f.wire[arms]), th.Border)
-		}
-	}
+	r.DrawWires(g, f.Line, th.Border)
 	if len(a.nodes(sourcesCol)) > 0 {
 		r.TextStyled(l.box.x-1, l.entry, string(f.arrow), th.Border)
 	}
@@ -152,30 +134,9 @@ func (a *app) drawParts(r ui.Region, l layout) {
 	}
 }
 
-// wires are the canvas's cells by the arms they have: up 1, right 2, down 4,
-// left 8, so every junction draws from what meets there
-type wires struct {
-	w    int
-	arms []uint8
-}
-
-func (g wires) h(y, x0, x1 int) {
-	for x := x0; x < x1; x++ {
-		g.arms[y*g.w+x] |= 2
-		g.arms[y*g.w+x+1] |= 8
-	}
-}
-
-func (g wires) v(x, y0, y1 int) {
-	for y := y0; y < y1; y++ {
-		g.arms[y*g.w+x] |= 4
-		g.arms[(y+1)*g.w+x] |= 1
-	}
-}
-
 // join wires a column's nodes to a trunk beside the flow box, and the trunk
 // to the box's side
-func (g wires) join(l layout, col int) {
+func join(g ui.Wires, l layout, col int) {
 	ys := []int{l.entry}
 	if col == sinksCol {
 		ys[0] = l.exit
@@ -186,18 +147,18 @@ func (g wires) join(l layout, col int) {
 	if col == sourcesCol {
 		trunk := l.box.x - gutter + 1
 		for _, s := range l.nodes[col] {
-			g.h(s.y, trunk-1, trunk)
+			g.H(s.y, trunk-1, trunk)
 		}
-		g.v(trunk, slices.Min(ys), slices.Max(ys))
-		g.h(l.entry, trunk, l.box.x-1)
+		g.V(trunk, slices.Min(ys), slices.Max(ys))
+		g.H(l.entry, trunk, l.box.x-1)
 		return
 	}
 	right := l.box.x + l.box.w
 	trunk := right + 2
-	g.h(l.exit, right, trunk)
-	g.v(trunk, slices.Min(ys), slices.Max(ys))
+	g.H(l.exit, right, trunk)
+	g.V(trunk, slices.Min(ys), slices.Max(ys))
 	for _, s := range l.nodes[col] {
-		g.h(s.y, trunk, s.x-1)
+		g.H(s.y, trunk, s.x-1)
 	}
 }
 
@@ -245,14 +206,7 @@ func (a *app) drawEmpty(r ui.Region, s spot, role string, chosen bool) {
 func (a *app) drawBox(r ui.Region, l layout) {
 	th, f := a.th, a.font
 	b := l.box
-	edge := []rune(f.box)
-	across := strings.Repeat(string(edge[4]), max(0, b.w-2))
-	r.TextStyled(b.x, b.y, string(edge[0])+across+string(edge[1]), th.Border)
-	r.TextStyled(b.x, b.y+l.boxH-1, string(edge[2])+across+string(edge[3]), th.Border)
-	for y := b.y + 1; y < b.y+l.boxH-1; y++ {
-		r.TextStyled(b.x, y, string(edge[5]), th.Border)
-		r.TextStyled(b.x+b.w-1, y, string(edge[5]), th.Border)
-	}
+	r.Sub(b.x, b.y, b.w, l.boxH).BoxStyle(f.box, th.Border)
 	for i, n := range a.nodes(flowCol) {
 		s := l.nodes[flowCol][i]
 		chosen := a.col == flowCol && a.row[flowCol] == i
@@ -345,11 +299,14 @@ func show(v any) string {
 // key, as config's key paths write them
 var problemPath = regexp.MustCompile(`^pipelines?\[(\d+)\](?:\.(plugin_sources|plugin_sinks)\[([^\]]*)\](?:\.config\.?([\w.]*))?|\.flow\.(\w+)(?:\[(\d+)\])?\.?([\w.]*))?`)
 
-func locate(err error) (pi int, n compose.Node, key string, ok bool) {
-	m := problemPath.FindStringSubmatch(err.Error())
-	if m == nil {
-		return 0, n, "", false
+// locate reads a problem's part, and its text past the path
+func locate(err error) (pi int, n compose.Node, key, text string, ok bool) {
+	at := problemPath.FindStringSubmatchIndex(err.Error())
+	if at == nil {
+		return 0, n, "", err.Error(), false
 	}
+	m := problemPath.FindStringSubmatch(err.Error())
+	text = strings.TrimPrefix(err.Error()[at[1]:], ": ")
 	pi, _ = strconv.Atoi(m[1])
 	switch {
 	case m[2] != "":
@@ -362,7 +319,7 @@ func locate(err error) (pi int, n compose.Node, key string, ok bool) {
 		}
 		key = m[7]
 	}
-	return pi, n, key, true
+	return pi, n, key, text, true
 }
 
 // faulty reports whether the first problem names this node, or a filter
@@ -371,6 +328,28 @@ func (a *app) faulty(n compose.Node) bool {
 	if a.problem == nil {
 		return false
 	}
-	pi, m, _, ok := locate(a.problem)
+	pi, m, _, _, ok := locate(a.problem)
 	return ok && pi == a.pi && m.Role == n.Role && m.ID == n.ID
+}
+
+// where names a problem's part as the screen shows it: its pipeline when
+// another is shown, the part, and its key
+func (a *app) where(pi int, n compose.Node, key string) string {
+	var out []string
+	if pi != a.pi && pi < len(a.comp.Pipelines) {
+		out = append(out, "pipeline "+a.comp.Pipelines[pi].Name)
+	}
+	switch n.Role {
+	case "":
+	case "source", "sink":
+		out = append(out, n.Role+" "+n.ID)
+	case "filters":
+		out = append(out, fmt.Sprintf("filter %d", n.Index+1))
+	default:
+		out = append(out, n.Role)
+	}
+	if key != "" {
+		out = append(out, key)
+	}
+	return strings.Join(out, " · ")
 }

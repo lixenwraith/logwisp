@@ -181,10 +181,31 @@ func (c *Composition) pipeline(i int) (*config.PipelineConfig, error) {
 
 // AddPipeline appends an empty pipeline under a name no other has
 func (c *Composition) AddPipeline(name string) error {
-	if name == "" || slices.ContainsFunc(c.Pipelines, func(p config.PipelineConfig) bool { return p.Name == name }) {
-		return fmt.Errorf("pipeline %q: a name no other pipeline has", name)
+	if err := c.free(name, -1); err != nil {
+		return err
 	}
 	c.Pipelines = append(c.Pipelines, config.PipelineConfig{Name: name, Flow: &config.FlowConfig{}})
+	return nil
+}
+
+// RenamePipeline gives pipeline i a name no other has
+func (c *Composition) RenamePipeline(i int, name string) error {
+	p, err := c.pipeline(i)
+	if err == nil {
+		err = c.free(name, i)
+	}
+	if err != nil {
+		return err
+	}
+	p.Name = name
+	return nil
+}
+
+// free refuses a name that is empty or held by a pipeline other than i
+func (c *Composition) free(name string, i int) error {
+	if j := slices.IndexFunc(c.Pipelines, func(p config.PipelineConfig) bool { return p.Name == name }); name == "" || j >= 0 && j != i {
+		return fmt.Errorf("pipeline %q: a name no other pipeline has", name)
+	}
 	return nil
 }
 
@@ -231,6 +252,52 @@ func (c *Composition) Add(pi int, role, typ string) (Node, error) {
 		p.PluginSinks = append(p.PluginSinks, config.PluginSinkConfig{ID: n.ID, Type: typ, Config: map[string]any{}})
 	}
 	return n, nil
+}
+
+// Retype gives a source or sink another type of its role, in its place: a
+// chosen id stays and an automatic one follows the type. Options of the same
+// name and kind carry over to a type on the same network side, where they
+// mean the same; across sides host, port, tls and auth do not.
+func (c *Composition) Retype(pi int, n Node, typ string) (Node, error) {
+	p, err := c.pipeline(pi)
+	if err != nil {
+		return Node{}, err
+	}
+	to, ok := config.LookupPlugin(n.Role, typ)
+	if !ok {
+		return Node{}, fmt.Errorf("unknown %s type %q", n.Role, typ)
+	}
+	var id, old *string
+	var opts *map[string]any
+	var ids []string
+	switch i := index(p, n); {
+	case i >= 0 && n.Role == "source":
+		id, old, opts = &p.PluginSources[i].ID, &p.PluginSources[i].Type, &p.PluginSources[i].Config
+		for _, s := range p.PluginSources {
+			ids = append(ids, s.ID)
+		}
+	case i >= 0 && n.Role == "sink":
+		id, old, opts = &p.PluginSinks[i].ID, &p.PluginSinks[i].Type, &p.PluginSinks[i].Config
+		for _, s := range p.PluginSinks {
+			ids = append(ids, s.ID)
+		}
+	default:
+		return Node{}, n.missing()
+	}
+	from, _ := config.LookupPlugin(n.Role, *old)
+	kept := map[string]any{}
+	for _, k := range from.Keys() {
+		same := func(t config.Key) bool { return t.Name == k.Name && t.Kind == k.Kind }
+		if v, set := (*opts)[k.Name]; set && from.Side == to.Side && slices.ContainsFunc(to.Keys(), same) {
+			kept[k.Name] = v
+		}
+	}
+	suffix, auto := strings.CutPrefix(*id, *old)
+	if n, err := strconv.Atoi(strings.TrimPrefix(suffix, "_")); auto && (suffix == "" || suffix[0] == '_' && err == nil && n > 1) {
+		*id = config.FreeID(typ, slices.DeleteFunc(ids, func(s string) bool { return s == *id }))
+	}
+	*old, *opts = typ, kept
+	return Node{Role: n.Role, ID: *id}, nil
 }
 
 // Remove deletes a source, sink or filter, or turns a flow stage off
@@ -353,22 +420,22 @@ func (c *Composition) edit(pi int, n Node, change func(map[string]any) error) er
 		return plugin(p.PluginSinks[i].Type, &p.PluginSinks[i].Config)
 	case n.Role == "filters":
 		filter := &p.Flow.Filters[i]
-		if err := editStage(reflect.ValueOf(&filter).Elem(), change); err != nil {
+		if err := editStage(reflect.ValueOf(&filter).Elem(), "", change); err != nil {
 			return err
 		}
 		p.Flow.Filters[i] = *filter
 		return nil
 	}
 	if stage, ok := stages(p.Flow)[n.Role]; ok {
-		return editStage(stage, change)
+		return editStage(stage, n.Role, change)
 	}
 	return n.missing()
 }
 
 // editStage edits a stage's keys as a spec sets them; the table they scan into
-// replaces the stage, which turns on
-func editStage(stage reflect.Value, change func(map[string]any) error) error {
-	m := map[string]any{}
+// replaces the stage, which turns on as a spec turns it on
+func editStage(stage reflect.Value, key string, change func(map[string]any) error) error {
+	m := config.StageOn(key, nil)
 	if !stage.IsNil() {
 		m = config.Values(stage.Interface())
 	}

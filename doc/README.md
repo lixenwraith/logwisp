@@ -90,7 +90,7 @@ stdout:
 
 ```bash
 lw < app.log > copy.log
-tail -F app.log | lw --filter include,patterns=ERROR,patterns=WARN
+tail -F app.log | lw --filter include:patterns=ERROR,patterns=WARN
 ```
 
 As a service, a file holds the pipelines:

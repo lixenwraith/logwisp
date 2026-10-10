@@ -11,7 +11,7 @@ import (
 // sinks add to its own, a later format replaces its own.
 func TestPresetStartsAndNamesItsPipeline(t *testing.T) {
 	isolateConfig(t)
-	got := loadPipelines(t, "preset", "tail,path=/var/log/app.log", "sink", "null", "format", "json",
+	got := loadPipelines(t, "preset", "tail:path=/var/log/app.log", "sink", "null", "format", "json",
 		"pipeline", "mine", "preset", "pipe")
 	want := []PipelineConfig{{
 		Name:          "tail",
@@ -40,27 +40,41 @@ func TestPresetStartsAndNamesItsPipeline(t *testing.T) {
 func TestPresetKeysAreChecked(t *testing.T) {
 	isolateConfig(t)
 	for spec, want := range map[string]string{
-		"nope":                         `no preset "nope" (valid: pipe, tail, serve, edge, aggregator)`,
-		"tail,path=x,colour=1":         `preset tail has no key "colour" (valid: path, from, format)`,
-		"tail":                         "preset tail needs path",
-		"tail,path=x,format.type=json": "preset keys do not nest",
-		"tail,path=x,path=y":           `key "path" takes one value`,
-		"serve,listen=8080":            `listen "8080": want HOST:PORT`,
-		"serve,tls=self,cert=c":        "cert does not apply to tls=self",
-		"serve,tls=files,cert=c":       "tls=files needs key",
-		"serve,viewer=yes":             `viewer "yes"`,
-		"serve,proxy=127.0.0.1":        "proxy needs users",
-		"serve,viewer=true":            "viewer=true needs proxy",
-		"edge,to=agg:9000":             "it never sends unauthenticated",
-		"edge,to=agg:9000,user=u":      "user and password_file go together",
-		"edge,to=agg:9000,user=u,password_file=p,transport=udp": `transport "udp"`,
-		"aggregator,users=u,tls=off":                            "the aggregator always serves TLS",
+		"nope":                             `no preset "nope" (valid: pipe, tail, serve, edge, aggregator)`,
+		"tail:path=x,colour=1":             `preset tail has no key "colour" (valid: path, from, format)`,
+		"tail":                             "preset tail needs path",
+		"tail:path=x,format.type=json":     "preset keys do not nest",
+		"tail:path=x,path=y":               `key "path" takes one value`,
+		"serve:listen=8080":                `listen "8080": want HOST:PORT`,
+		"serve:tls=self,cert=c":            "cert does not apply to tls=self",
+		"serve:tls=files,cert=c":           "tls=files needs key",
+		"serve:viewer=yes":                 `viewer "yes"`,
+		"serve:proxy=127.0.0.1":            "proxy needs user or users",
+		"serve:viewer=true":                "viewer=true needs proxy",
+		"serve:user=u":                     "user and users need tls (self, issuer or files), or proxy",
+		"serve:tls=self,user=u,users=f":    "user or users, not both",
+		"edge:to=agg:9000":                 "it never sends unauthenticated",
+		"edge:to=agg:9000,password_file=p": "password_file needs user",
+		"edge:to=agg:9000,user=u,password_file=p,transport=udp": `transport "udp"`,
+		"aggregator:users=u,tls=off":                            "the aggregator always serves TLS",
+		"aggregator:user=u,users=f":                             "user or users, not both",
 		"aggregator":                                            "it never receives unauthenticated",
 	} {
 		_, err := Load(Args{Specs: specs("preset", spec)})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want %s", spec, err, want)
 		}
+	}
+}
+
+// A preset user without password_file is asked for on the terminal
+func TestPresetUserWithoutPasswordFileAsks(t *testing.T) {
+	p, err := ExpandPreset("edge", map[string]string{"to": "agg:9000", "user": "u"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth := p.PluginSinks[0].Config["auth"].(map[string]any); auth["password_file"] != "/dev/tty" {
+		t.Fatalf("auth = %v, want password_file /dev/tty", auth)
 	}
 }
 

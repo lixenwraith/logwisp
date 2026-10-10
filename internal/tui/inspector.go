@@ -21,13 +21,19 @@ type inspector struct {
 	field          *ui.TextFieldState // the value being typed, nil while none
 }
 
-// line is one inspector row: a key, a group that folds, or a list's element
+// line is one inspector row: a key, a group that folds, a list's element, or
+// the row that adds an element or a filter
 type line struct {
 	node  compose.Node
-	key   config.Key // its Name is the dotted path in the node's options
+	key   config.Key // its Name is the dotted path in the node's options, "" on a filter's rows
 	depth int
 	group string // a group's title, "" for a value
 	item  int    // a list element's index, the list's length on the row that adds one; -1 elsewhere
+}
+
+// adds reports whether a row adds: a list's last row, or the filters'
+func (a *app) adds(l line) bool {
+	return l.item >= 0 && (l.key.Name == "" || l.item == len(a.items(l.node, l.key.Name)))
 }
 
 func (a *app) foldKey(n compose.Node, path string) string {
@@ -44,14 +50,15 @@ func (a *app) lines() []line {
 		return a.keyLines(nil, n, a.keys(n), "", 0)
 	}
 	var out []line
-	for i, f := range a.pipeline().Flow.Filters {
+	filters := a.pipeline().Flow.Filters
+	for i, f := range filters {
 		fn := compose.Node{Role: "filters", Index: i}
 		out = append(out, line{node: fn, group: fmt.Sprintf("%d %s", i+1, f.Type), item: -1})
 		if a.insp.open[a.foldKey(n, strconv.Itoa(i))] {
 			out = a.keyLines(out, fn, a.keys(n), "", 1)
 		}
 	}
-	return out
+	return append(out, line{node: compose.Node{Role: "filters", Index: len(filters)}, item: len(filters)})
 }
 
 func (a *app) keyLines(out []line, n compose.Node, keys []config.Key, prefix string, depth int) []line {
@@ -120,31 +127,31 @@ func (a *app) drawInspector(r ui.Region) {
 	if a.inspect {
 		hint = f.enter + " edit  esc back"
 	}
-	r.TextStyled(0, 0, strings.Repeat(string(f.rule), r.W), th.Border)
-	r.TextStyled(2, 0, " "+ui.Truncate(title, r.W-ui.RuneLen(hint)-10)+" ", th.Text)
-	r.TextStyled(r.W-ui.RuneLen(hint)-3, 0, " "+hint+" ", th.Muted)
+	r.Rule(0, title, hint, th)
 	lines := a.lines()
 	switch {
 	case !ok:
 		r.TextStyled(2, 2, "a adds a "+columns[a.col].role, th.Muted)
-		return
-	case len(lines) == 0 && n.Role == "filters":
-		r.TextStyled(2, 2, "no filters: a adds one", th.Muted)
 		return
 	case len(lines) == 0:
 		r.TextStyled(2, 2, "no options", th.Muted)
 		return
 	}
 	a.insp.cursor = max(0, min(a.insp.cursor, len(lines)-1))
-	rows := r.H - 2
+	var help []string
+	style := th.Muted
+	if a.inspect {
+		var text string
+		text, style = a.help(lines[a.insp.cursor])
+		help = clip(ui.WrapText(text, r.W-4), 2)
+	}
+	rows := r.H - 1 - len(help)
 	cols, perCol := 1, rows
 	if half := (len(lines) + 1) / 2; r.W >= 80 && half <= rows {
 		cols, perCol = 2, half
 	}
-	if cols == 1 {
-		a.insp.scroll = max(0, min(a.insp.scroll, a.insp.cursor, len(lines)-rows))
-		a.insp.scroll = max(a.insp.scroll, a.insp.cursor-rows+1)
-	} else {
+	a.insp.scroll = ui.AdjustScroll(a.insp.cursor, ui.ClampScroll(a.insp.scroll, rows, len(lines)), rows, len(lines))
+	if cols == 2 {
 		a.insp.scroll = 0
 	}
 	colW, labelW := r.W/cols, 0
@@ -157,9 +164,8 @@ func (a *app) drawInspector(r ui.Region) {
 		row := r.Sub(at/perCol*colW, 1+at%perCol, colW-1, 1)
 		a.drawLine(row, lines[i], labelW, a.inspect && i == a.insp.cursor)
 	}
-	if a.inspect && rows > 0 {
-		help, style := a.help(lines[a.insp.cursor])
-		r.TextStyled(2, r.H-1, ui.Truncate(help, r.W-4), style)
+	for i, h := range help {
+		r.TextStyled(2, r.H-len(help)+i, h, style)
 	}
 }
 
@@ -177,12 +183,15 @@ func (a *app) nodeTitle(n compose.Node) string {
 // help is the focused row's problem, or its key's help and default
 func (a *app) help(l line) (string, ui.Style) {
 	if a.problem != nil {
-		if pi, n, key, ok := locate(a.problem); ok && pi == a.pi && n == l.node && key == l.key.Name {
-			return a.problem.Error(), a.th.Error
+		if pi, n, key, text, ok := locate(a.problem); ok && pi == a.pi && n == l.node && key == l.key.Name {
+			return text, a.th.Error
 		}
 	}
-	if l.group != "" && l.key.Name == "" {
-		return "J and K move this filter; d deletes it", a.th.Muted
+	switch {
+	case l.group != "" && l.key.Name == "":
+		return "J and K move this filter; c changes its type; d deletes it", a.th.Muted
+	case a.adds(l) && l.key.Name == "":
+		return "adds a filter: include passes only the entries that match, exclude drops them", a.th.Muted
 	}
 	help := l.key.Help
 	if d := placeholder(l.key); d != "" && l.group == "" {
@@ -217,12 +226,12 @@ func (a *app) drawLine(r ui.Region, l line, labelW int, focused bool) {
 	switch {
 	case focused && a.insp.field != nil:
 		v.TextInput(a.insp.field, placeholder(k), true, th)
-	case l.item == len(items):
+	case a.adds(l):
 		v.TextStyled(0, 0, "+ add", th.Muted)
 	case l.item >= 0:
 		v.TextStyled(0, 0, ui.Truncate(items[l.item], v.W), th.Text)
 	case len(k.Enum) > 0:
-		v.Choice(0, 0, k.Enum, choice(k, cur), th)
+		v.Radio(0, 0, k.Enum, choice(k, cur), th)
 	case k.Kind == "bool":
 		v.Toggle(0, 0, cur == true || cur == nil && k.Default == "true", th)
 	case cur == nil:
@@ -289,7 +298,8 @@ func (a *app) inspectKey(ev terminal.Event) bool {
 	k := l.key
 	cur := a.value(l.node, k.Name)
 	focus := ui.Focus{Index: a.insp.cursor, Len: len(lines)}
-	toggle := is(ev, terminal.KeyEnter, " ") || is(ev, terminal.KeySpace, "")
+	enter, space := is(ev, terminal.KeyEnter, ""), is(ev, terminal.KeySpace, " ")
+	left, right := is(ev, terminal.KeyLeft, "h"), is(ev, terminal.KeyRight, "l")
 	switch {
 	case focus.HandleKey(ev.Key, ev.Modifiers):
 		a.insp.cursor = focus.Index
@@ -297,31 +307,35 @@ func (a *app) inspectKey(ev terminal.Event) bool {
 		a.insp.cursor = max(0, a.insp.cursor-1)
 	case is(ev, terminal.KeyDown, "j"):
 		a.insp.cursor = min(len(lines)-1, a.insp.cursor+1)
-	case l.group != "" && (toggle || is(ev, terminal.KeyRight, "l") || is(ev, terminal.KeyLeft, "h")):
+	case a.adds(l) && k.Name == "" && enter:
+		a.dialog = a.addMenu()
+	case l.group != "" && (enter || space || left || right):
 		fold := a.foldKey(l.node, k.Name)
 		if k.Name == "" {
 			fold = a.foldKey(compose.Node{Role: "filters"}, strconv.Itoa(l.node.Index))
 		}
-		a.insp.open[fold] = toggle && !a.insp.open[fold] || is(ev, terminal.KeyRight, "l")
-	case l.group != "" && l.key.Name == "" && is(ev, terminal.KeyNone, "JK"):
+		a.insp.open[fold] = (enter || space) && !a.insp.open[fold] || right
+	case l.group != "" && k.Name == "" && is(ev, terminal.KeyNone, "JK"):
 		a.moveFilter(l.node.Index, map[rune]int{'J': 1, 'K': -1}[ev.Rune])
 	case is(ev, terminal.KeyNone, "d"):
 		a.clear(l)
-	case len(k.Enum) > 0 && l.item < 0 && (toggle || is(ev, terminal.KeyLeft, "h") || is(ev, terminal.KeyRight, "l")):
+	case len(k.Enum) > 0 && l.item < 0 && enter:
+		a.dialog = a.enumMenu(l, cur)
+	case len(k.Enum) > 0 && l.item < 0 && (space || left || right):
 		i := choice(k, cur)
 		switch next, moved := ui.StepChoice(ev.Key, ev.Rune, i, len(k.Enum)); {
 		case moved:
 			i = next
-		case !toggle:
+		case !space:
 			return true // an arrow at either end
 		default:
 			i = (i + 1) % len(k.Enum)
 		}
 		a.edit(a.comp.Set(a.pi, l.node, k.Name, k.Enum[i]))
-	case k.Kind == "bool" && l.item < 0 && toggle:
+	case k.Kind == "bool" && l.item < 0 && (enter || space || left || right):
 		on := cur == true || cur == nil && k.Default == "true"
-		a.edit(a.comp.Set(a.pi, l.node, k.Name, strconv.FormatBool(!on)))
-	case is(ev, terminal.KeyEnter, ""):
+		a.edit(a.comp.Set(a.pi, l.node, k.Name, strconv.FormatBool(right || !left && !on)))
+	case enter:
 		text := show(cmp.Or(cur, any("")))
 		if items := a.items(l.node, k.Name); l.item >= 0 {
 			text = ""
@@ -337,13 +351,14 @@ func (a *app) inspectKey(ev terminal.Event) bool {
 	return true
 }
 
-// typeKey edits the value being typed: Enter sets it, Tab sets it and moves
-// on, Esc drops it
+// typeKey edits the value being typed: Enter sets it, Tab and the arrows up
+// and down set it and move on, Esc drops it
 func (a *app) typeKey(ev terminal.Event, l line) {
+	up, down := is(ev, terminal.KeyUp, ""), is(ev, terminal.KeyDown, "")
 	switch {
 	case is(ev, terminal.KeyEscape, ""):
 		a.insp.field = nil
-	case is(ev, terminal.KeyEnter, "") || is(ev, terminal.KeyTab, "") || is(ev, terminal.KeyBacktab, ""):
+	case is(ev, terminal.KeyEnter, "") || is(ev, terminal.KeyTab, "") || is(ev, terminal.KeyBacktab, "") || up || down:
 		value := a.insp.field.Value()
 		if a.commit(l, value) {
 			a.insp.field = nil
@@ -351,7 +366,12 @@ func (a *app) typeKey(ev terminal.Event, l line) {
 				a.insp.cursor++ // stays on the row that adds one
 			}
 			focus := ui.Focus{Index: a.insp.cursor, Len: len(a.lines())}
-			if focus.HandleKey(ev.Key, ev.Modifiers) {
+			switch {
+			case up:
+				a.insp.cursor = max(0, a.insp.cursor-1)
+			case down:
+				a.insp.cursor = min(focus.Len-1, a.insp.cursor+1)
+			case focus.HandleKey(ev.Key, ev.Modifiers):
 				a.insp.cursor = focus.Index
 			}
 		}
@@ -390,6 +410,7 @@ func (a *app) commit(l line, value string) bool {
 // value, which returns to its default
 func (a *app) clear(l line) {
 	switch {
+	case a.adds(l):
 	case l.group != "" && l.key.Name == "":
 		a.edit(a.comp.Remove(a.pi, l.node))
 	case l.item >= 0:

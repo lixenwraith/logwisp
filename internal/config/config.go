@@ -103,8 +103,8 @@ const (
 
 // RateLimitConfig defines the configuration for pipeline-level rate limiting
 type RateLimitConfig struct {
-	Rate              float64 `toml:"rate" lw:"min=0,zero=off" help:"entries a second"`
-	Burst             float64 `toml:"burst" lw:"min=0,zero=the rate" help:"entries at once"`
+	EntriesPerSecond  float64 `toml:"entries_per_second" lw:"min=0,zero=off" help:"entries a second the limit lets through"`
+	BurstEntries      float64 `toml:"burst_entries" lw:"min=0,zero=one second's worth" help:"entries let through at once before the rate applies"`
 	Policy            string  `toml:"policy" default:"pass" lw:"enum=pass|drop" help:"drop entries over the rate, or pass them"`
 	MaxEntrySizeBytes int64   `toml:"max_entry_size_bytes" lw:"min=0,zero=unlimited" help:"drop larger entries"`
 }
@@ -262,8 +262,8 @@ type HTTPSinkOptions struct {
 	WriteTimeoutMS   int64        `toml:"write_timeout_ms" lw:"min=0,zero=none" help:"milliseconds an event write may take"`
 	MaxConnections   int64        `toml:"max_connections" lw:"min=0,zero=unlimited" help:"clients at once"`
 	ReplayLines      int64        `toml:"replay_lines" lw:"min=0,zero=none" help:"recent entries a new stream gets first"`
-	LoginPage        bool         `toml:"login_page" help:"serve the login page; scram behind auth.trusted_proxies"`
-	ViewerPage       bool         `toml:"viewer_page" help:"serve the viewer to users logged in; needs login_page"`
+	LoginPage        bool         `toml:"login_page" help:"scram behind auth.trusted_proxies only: a login page at /auth/login"`
+	ViewerPage       bool         `toml:"viewer_page" help:"scram behind auth.trusted_proxies only: the viewer after a login; without scram it is always at /"`
 	Auth             *AuthOptions `toml:"auth"`
 	ACL              *ACLOptions  `toml:"acl"`
 }
@@ -307,9 +307,9 @@ type HTTPChainSinkOptions struct {
 
 // AuthOptions selects how a network plugin authenticates its peer. It sits
 // beside `tls`: TLS answers "is this channel private", auth answers "may this
-// peer do this". Listeners verify (mtls: certificate identity; scram: password
-// via credentials_file); dialers prove themselves (scram) or pin the server
-// (mtls). AuthOptions.Check holds the rules of each side.
+// peer do this". Listeners verify (mtls: certificate identity; scram: the
+// credentials_file's users, or one username and password_file); dialers prove
+// themselves (scram) or pin the server (mtls). Check holds each side's rules.
 type AuthOptions struct {
 	Type            string   `toml:"type" default:"none" lw:"enum=none|mtls|scram" help:"how peers authenticate"`
 	Identity        string   `toml:"identity" lw:"enum=cn|san_dns|san_uri|san_email,zero=cn under mtls; no binding under scram" help:"certificate field naming the peer; under scram it must equal the user"`
@@ -321,8 +321,8 @@ type AuthOptions struct {
 	// leaves room for renewal ahead of expiry
 	TokenLifetimeMS int64    `toml:"token_lifetime_ms" lw:"listener,min=10000,max=86400000,zero=15 minutes" help:"scram on HTTP: bearer token lifetime"`
 	TrustedProxies  []string `toml:"trusted_proxies" lw:"listener,hint=cidr" help:"scram on the http sink: proxies ending the browsers' TLS; logins are then unbound"`
-	Username        string   `toml:"username" lw:"dialer" help:"scram: the user this dialer logs in as"`
-	PasswordFile    string   `toml:"password_file" lw:"dialer,hint=file" help:"scram: file holding the user's password"`
+	Username        string   `toml:"username" help:"scram: the user a dialer logs in as, or a listener's one user"`
+	PasswordFile    string   `toml:"password_file" lw:"hint=file" help:"scram: file holding the password; /dev/fd/N or a pipe is read once, /dev/tty asks"`
 }
 
 // ACLOptions is a listener's address rules, entries being addresses or CIDRs:

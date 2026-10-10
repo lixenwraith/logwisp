@@ -66,9 +66,9 @@ _lw() {
 			words='--format --from --path --help -h' ;;
 		serve)
 			case $prev in
-			--allow|-allow|--cert|-cert|--deny|-deny|--format|-format|--from|-from|--hosts|-hosts|--issuer_cert|-issuer_cert|--issuer_key|-issuer_key|--key|-key|--listen|-listen|--path|-path|--proxy|-proxy|--tls|-tls|--users|-users|--viewer|-viewer) COMPREPLY=(); return ;;
+			--allow|-allow|--cert|-cert|--deny|-deny|--format|-format|--from|-from|--hosts|-hosts|--issuer_cert|-issuer_cert|--issuer_key|-issuer_key|--key|-key|--listen|-listen|--password_file|-password_file|--path|-path|--proxy|-proxy|--tls|-tls|--user|-user|-u|--users|-users|--viewer|-viewer) COMPREPLY=(); return ;;
 			esac
-			words='--allow --cert --deny --format --from --hosts --issuer_cert --issuer_key --key --listen --path --proxy --tls --users --viewer --help -h' ;;
+			words='--allow --cert --deny --format --from --hosts --issuer_cert --issuer_key --key --listen --password_file --path --proxy --tls --user -u --users --viewer --help -h' ;;
 		edge)
 			case $prev in
 			--ca|-ca|--cert|-cert|--from|-from|--key|-key|--node|-node|--password_file|-password_file|--path|-path|--pin|-pin|--server_name|-server_name|--to|-to|--transport|-transport|--user|-user|-u) COMPREPLY=(); return ;;
@@ -76,9 +76,9 @@ _lw() {
 			words='--ca --cert --from --key --node --password_file --path --pin --server_name --to --transport --user -u --help -h' ;;
 		aggregator)
 			case $prev in
-			--allow|-allow|--cert|-cert|--client_ca|-client_ca|--deny|-deny|--format|-format|--hosts|-hosts|--issuer_cert|-issuer_cert|--issuer_key|-issuer_key|--key|-key|--listen|-listen|--out|-out|--tls|-tls|--transport|-transport|--users|-users) COMPREPLY=(); return ;;
+			--allow|-allow|--cert|-cert|--client_ca|-client_ca|--deny|-deny|--format|-format|--hosts|-hosts|--issuer_cert|-issuer_cert|--issuer_key|-issuer_key|--key|-key|--listen|-listen|--out|-out|--password_file|-password_file|--tls|-tls|--transport|-transport|--user|-user|-u|--users|-users) COMPREPLY=(); return ;;
 			esac
-			words='--allow --cert --client_ca --deny --format --hosts --issuer_cert --issuer_key --key --listen --out --tls --transport --users --help -h' ;;
+			words='--allow --cert --client_ca --deny --format --hosts --issuer_cert --issuer_key --key --listen --out --password_file --tls --transport --user -u --users --help -h' ;;
 		esac ;;
 	config:2) words='init' ;;
 	config:*)

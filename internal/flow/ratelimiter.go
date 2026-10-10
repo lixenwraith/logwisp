@@ -27,12 +27,12 @@ func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimite
 	if err := config.Settle(&cfg); err != nil {
 		return nil, err
 	}
-	if cfg.Rate == 0 {
+	if cfg.EntriesPerSecond == 0 {
 		return nil, nil // off
 	}
-	burst := cfg.Burst
+	burst := cfg.BurstEntries
 	if burst == 0 {
-		burst = cfg.Rate
+		burst = cfg.EntriesPerSecond
 	}
 	policy := config.PolicyPass
 	if cfg.Policy == "drop" {
@@ -40,7 +40,7 @@ func NewRateLimiter(cfg config.RateLimitConfig, logger *log.Logger) (*RateLimite
 	}
 
 	l := &RateLimiter{
-		bucket:            tokenbucket.New(burst, cfg.Rate),
+		bucket:            tokenbucket.New(burst, cfg.EntriesPerSecond),
 		policy:            policy,
 		logger:            logger,
 		maxEntrySizeBytes: cfg.MaxEntrySizeBytes,
@@ -85,8 +85,8 @@ func (l *RateLimiter) GetStats() map[string]any {
 
 	stats := map[string]any{
 		"enabled":               true,
-		"rate":                  l.bucket.Rate(),
-		"burst":                 l.bucket.Capacity(),
+		"entries_per_second":    l.bucket.Rate(),
+		"burst_entries":         l.bucket.Capacity(),
 		"dropped_total":         l.droppedCount.Load(),
 		"dropped_by_size_total": l.droppedBySizeCount.Load(),
 		"policy":                policyString(l.policy),

@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// Preset is a pipeline built from a few keys: --preset NAME,key=value starts
+// Preset is a pipeline built from a few keys: --preset NAME:key=value starts
 // a pipeline with it. Later flags add sources, sinks and filters, or replace
 // its format, rate limit and heartbeat.
 type Preset struct {
@@ -64,6 +64,10 @@ var (
 		{Name: "deny", List: true, Help: "addresses or CIDRs refused, allow or not; ',' between them"},
 	}
 	transportParam = PresetParam{Name: "transport", Default: "tcp", Help: "tcp|http: tcp_chain or http_chain"}
+	userParams     = []PresetParam{
+		{Name: "user", Help: "SCRAM user: an edge's login, or a listener's only user in place of users"},
+		{Name: "password_file", Help: "file holding user's password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks"},
+	}
 )
 
 var presets = []Preset{
@@ -88,8 +92,9 @@ var presets = []Preset{
 			{Name: "listen", Default: "127.0.0.1:8080", Help: "HOST:PORT; [IPV6]:PORT"},
 			{Name: "tls", Default: "off", Help: "off|self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files"},
 			{Name: "users", Help: "credentials file (lw auth add-user): readers log in with SCRAM"},
+		}, userParams, []PresetParam{
 			{Name: "proxy", List: true, Help: "addresses or CIDRs of the TLS-terminating proxies browsers come through; ',' between them"},
-			{Name: "viewer", Default: "false", Help: "true: the login page and viewer for users, behind proxy; without users the viewer is always on"},
+			{Name: "viewer", Default: "false", Help: "true: the login page and viewer, behind proxy; without user or users the viewer is always on"},
 		}, aclParams, tlsParams),
 		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
 			sources, err := pathOrStdin(v, isDir)
@@ -101,14 +106,18 @@ var presets = []Preset{
 			if err != nil {
 				return err
 			}
-			if v["users"] != "" {
-				sink["auth"] = map[string]any{"type": "scram", "credentials_file": v["users"]}
+			auth, err := scramAuth(v)
+			switch {
+			case err != nil:
+				return err
+			case auth != nil && v["tls"] == "off" && v["proxy"] == "":
+				return fmt.Errorf("user and users need tls (self, issuer or files), or proxy")
+			case auth != nil:
+				sink["auth"] = auth
+			case v["proxy"] != "":
+				return fmt.Errorf("proxy needs user or users: browsers log in with SCRAM")
 			}
 			if v["proxy"] != "" {
-				auth, ok := sink["auth"].(map[string]any)
-				if !ok {
-					return fmt.Errorf("proxy needs users: browsers log in with SCRAM")
-				}
 				auth["trusted_proxies"] = list(v["proxy"])
 			}
 			switch v["viewer"] {
@@ -127,18 +136,17 @@ var presets = []Preset{
 			return nil
 		}},
 	{"edge", "Forward files or standard input to an aggregator over TLS, authenticated",
-		[]PresetParam{pathParam, fromParam,
+		slices.Concat([]PresetParam{pathParam, fromParam,
 			{Name: "to", Required: true, Help: "the aggregator's HOST:PORT; [IPV6]:PORT"},
 			transportParam,
 			{Name: "ca", Help: "CA file that verifies the aggregator; default: system roots"},
 			{Name: "pin", Help: "sha256//BASE64 of the aggregator's key, which it logs with tls=self"},
 			{Name: "server_name", Help: "name the aggregator's certificate carries; default: to's host"},
-			{Name: "user", Help: "SCRAM user (lw auth add-user on the aggregator)"},
-			{Name: "password_file", Help: "file holding the SCRAM password"},
+		}, userParams, []PresetParam{
 			{Name: "cert", Help: "client certificate file, for an aggregator with client_ca"},
 			{Name: "key", Help: "client key file"},
 			{Name: "node", Help: "origin label; default: this host's name"},
-		},
+		}),
 		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
 			sources, err := pathOrStdin(v, isDir)
 			if err != nil {
@@ -159,16 +167,15 @@ var presets = []Preset{
 					tls[option] = v[key]
 				}
 			}
-			var auth map[string]any
+			auth, err := scramAuth(v)
 			switch {
-			case v["user"] != "" && v["password_file"] != "":
-				auth = map[string]any{"type": "scram", "username": v["user"], "password_file": v["password_file"]}
-			case v["user"] != "" || v["password_file"] != "":
-				return fmt.Errorf("user and password_file go together")
+			case err != nil:
+				return err
+			case auth != nil:
 			case v["cert"] != "" && v["key"] != "":
 				auth = map[string]any{"type": "mtls"}
 			default:
-				return fmt.Errorf("edge needs user and password_file, or cert and key: it never sends unauthenticated")
+				return fmt.Errorf("edge needs user, or cert and key: it never sends unauthenticated")
 			}
 			sink := map[string]any{"host": host, "port": port, "tls": tls, "auth": auth}
 			if v["node"] != "" {
@@ -183,6 +190,7 @@ var presets = []Preset{
 			transportParam,
 			{Name: "tls", Default: "self", Help: "self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files"},
 			{Name: "users", Help: "credentials file (lw auth add-user): edges log in with SCRAM"},
+		}, userParams, []PresetParam{
 			{Name: "client_ca", Help: "CA file that verifies edge certificates (mTLS)"},
 			{Name: "out", Help: "directory for the received entries; default: standard output"},
 			formatParam("json"),
@@ -203,13 +211,16 @@ var presets = []Preset{
 				tls := src["tls"].(map[string]any)
 				tls["client_auth"], tls["client_ca_file"] = true, v["client_ca"]
 			}
+			auth, err := scramAuth(v)
 			switch {
-			case v["users"] != "":
-				src["auth"] = map[string]any{"type": "scram", "credentials_file": v["users"]}
+			case err != nil:
+				return err
+			case auth != nil:
+				src["auth"] = auth
 			case v["client_ca"] != "":
 				src["auth"] = map[string]any{"type": "mtls"}
 			default:
-				return fmt.Errorf("aggregator needs users or client_ca: it never receives unauthenticated")
+				return fmt.Errorf("aggregator needs user, users or client_ca: it never receives unauthenticated")
 			}
 			p.PluginSources = append(p.PluginSources, PluginSourceConfig{ID: "edges", Type: typ, Config: src})
 			p.PluginSinks = pipeDefault("").PluginSinks
@@ -354,6 +365,22 @@ func listener(v map[string]string, def string) (map[string]any, error) {
 	}
 	opts["tls"] = tls
 	return opts, nil
+}
+
+// scramAuth is the scram table of user, whose password the terminal asks for
+// unless password_file names it, or of a listener's users file; nil without
+func scramAuth(v map[string]string) (map[string]any, error) {
+	switch {
+	case v["user"] != "" && v["users"] != "":
+		return nil, fmt.Errorf("user or users, not both")
+	case v["user"] != "":
+		return map[string]any{"type": "scram", "username": v["user"], "password_file": cmp.Or(v["password_file"], "/dev/tty")}, nil
+	case v["password_file"] != "":
+		return nil, fmt.Errorf("password_file needs user")
+	case v["users"] != "":
+		return map[string]any{"type": "scram", "credentials_file": v["users"]}, nil
+	}
+	return nil, nil
 }
 
 func splitAddr(key, addr string) (string, int64, error) {

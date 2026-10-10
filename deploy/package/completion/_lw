@@ -31,7 +31,7 @@ auth:*)
 		'--ca-file=[CA file that verifies the server (default: system roots)]:value:_default' \
 		'--cert-file=[client certificate file, for listeners with tls.client_auth]:value:_default' \
 		'--key-file=[client key file]:value:_default' \
-		'--password-file=[file holding the password]:value:_default' \
+		'--password-file=[file holding the password; a terminal asks]:value:_default' \
 		'--pin-sha256=[sha256//BASE64 pin of the server key, in place of --ca-file (a self_signed listener logs it)]:value:_default' \
 		'--server-name=[name the server certificate must carry (default: the host)]:value:_default' \
 		'--unbound[log in without channel binding, to an http sink behind a TLS-terminating proxy (auth.trusted_proxies)]' \
@@ -43,7 +43,7 @@ auth:*)
 		'--ca-file=[CA file that verifies the server (default: system roots)]:value:_default' \
 		'--cert-file=[client certificate file, for listeners with tls.client_auth]:value:_default' \
 		'--key-file=[client key file]:value:_default' \
-		'--password-file=[file holding the password]:value:_default' \
+		'--password-file=[file holding the password; a terminal asks]:value:_default' \
 		'--pin-sha256=[sha256//BASE64 pin of the server key, in place of --ca-file (a self_signed listener logs it)]:value:_default' \
 		'--server-name=[name the server certificate must carry (default: the host)]:value:_default' \
 		'(-u --user)'{-u=,--user=}'[user name]:value:_default' \
@@ -112,11 +112,13 @@ preset:*)
 		'--issuer_key=[CA key file, for tls=issuer]:value:_default' \
 		'--key=[key file, for tls=files]:value:_default' \
 		'--listen=[HOST:PORT; [IPV6\]:PORT]:value:_default' \
+		'--password_file=[file holding user'\''s password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks]:value:_default' \
 		'--path=[file, directory (its files) or glob to follow; default: standard input]:value:_default' \
 		'--proxy=[addresses or CIDRs of the TLS-terminating proxies browsers come through; '\'','\'' between them]:value:_default' \
 		'--tls=[off|self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files]:value:_default' \
+		'(-u --user)'{-u=,--user=}'[SCRAM user: an edge'\''s login, or a listener'\''s only user in place of users]:value:_default' \
 		'--users=[credentials file (lw auth add-user): readers log in with SCRAM]:value:_default' \
-		'--viewer=[true: the login page and viewer for users, behind proxy; without users the viewer is always on]:value:_default' \
+		'--viewer=[true: the login page and viewer, behind proxy; without user or users the viewer is always on]:value:_default' \
 		'(-h --help)'{-h,--help}'[print the flags]' ;;
 	edge) _arguments -S \
 		'--ca=[CA file that verifies the aggregator; default: system roots]:value:_default' \
@@ -124,13 +126,13 @@ preset:*)
 		'--from=[start|end: where reading a file starts]:value:_default' \
 		'--key=[client key file]:value:_default' \
 		'--node=[origin label; default: this host'\''s name]:value:_default' \
-		'--password_file=[file holding the SCRAM password]:value:_default' \
+		'--password_file=[file holding user'\''s password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks]:value:_default' \
 		'--path=[file, directory (its files) or glob to follow; default: standard input]:value:_default' \
 		'--pin=[sha256//BASE64 of the aggregator'\''s key, which it logs with tls=self]:value:_default' \
 		'--server_name=[name the aggregator'\''s certificate carries; default: to'\''s host]:value:_default' \
 		'--to=[the aggregator'\''s HOST:PORT; [IPV6\]:PORT]:value:_default' \
 		'--transport=[tcp|http: tcp_chain or http_chain]:value:_default' \
-		'(-u --user)'{-u=,--user=}'[SCRAM user (lw auth add-user on the aggregator)]:value:_default' \
+		'(-u --user)'{-u=,--user=}'[SCRAM user: an edge'\''s login, or a listener'\''s only user in place of users]:value:_default' \
 		'(-h --help)'{-h,--help}'[print the flags]' ;;
 	aggregator) _arguments -S \
 		'--allow=[addresses or CIDRs that may connect, of listen'\''s family (either behind proxy=); default: all; '\'','\'' between them]:value:_default' \
@@ -144,8 +146,10 @@ preset:*)
 		'--key=[key file, for tls=files]:value:_default' \
 		'--listen=[HOST:PORT; [IPV6\]:PORT; [::\] for IPv6 only]:value:_default' \
 		'--out=[directory for the received entries; default: standard output]:value:_default' \
+		'--password_file=[file holding user'\''s password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks]:value:_default' \
 		'--tls=[self|issuer|files: a certificate made at startup (self-signed or from issuer_*), or files]:value:_default' \
 		'--transport=[tcp|http: tcp_chain or http_chain]:value:_default' \
+		'(-u --user)'{-u=,--user=}'[SCRAM user: an edge'\''s login, or a listener'\''s only user in place of users]:value:_default' \
 		'--users=[credentials file (lw auth add-user): edges log in with SCRAM]:value:_default' \
 		'(-h --help)'{-h,--help}'[print the flags]' ;;
 	esac

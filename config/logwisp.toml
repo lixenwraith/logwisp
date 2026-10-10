@@ -64,10 +64,10 @@ name = "default"
 ###============================================================================
 
 ## policy="pass" short-circuits the size check too: enforcing a size cap needs
-## rate > 0 AND policy = "drop".
+## entries_per_second > 0 AND policy = "drop".
 # [pipelines.flow.rate_limit]
-# rate = 0.0                            # Entries/second (0 = limiter disabled)
-# burst = 0.0                           # Burst capacity (defaults to rate)
+# entries_per_second = 0.0              # 0 = limiter disabled
+# burst_entries = 0.0                   # Bucket capacity (0 = entries_per_second)
 # policy = "pass"                       # pass|drop
 # max_entry_size_bytes = 0              # 0 = unlimited
 
@@ -131,7 +131,8 @@ name = "default"
 ### On the http sink the block gates stream_path AND status_path.
 ### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
 ###   mtls  authorizes the client certificate; REQUIRES tls.client_auth.
-###   scram admits the users in credentials_file (`lw auth add-user`).
+###   scram admits the users in credentials_file (`lw auth add-user`), or
+###         the one username whose password is in password_file.
 ### Dialers    (tcp_chain/http_chain sinks):
 ###   mtls  pins the server identity.
 ###   scram logs in as username with the password in password_file.
@@ -153,8 +154,10 @@ name = "default"
 ###                      Overrides trust_node. See doc/security.md.
 ### credentials_file = ""   scram listeners: verifiers; read at (re)load, not watched
 ### token_lifetime_ms = 0   scram, http sink and http_chain source: 10 s to 24 h, 0 = 15 minutes
-### username = ""           scram dialers
-### password_file = ""      scram dialers: one trailing line break is trimmed
+### username = ""           scram dialers, or a listener's one user
+### password_file = ""      scram, with username: one trailing line break is
+###                         trimmed; /dev/fd/N or a pipe is read once and kept
+###                         for reloads, /dev/tty asks once
 ### trusted_proxies = []    scram http sink: TLS-terminating reverse proxies
 ###                         (addresses or CIDRs); browsers log in through them
 ###============================================================================

@@ -55,14 +55,14 @@ var looks = map[terminal.ColorMode]look{
 		Source: ui.MonoTheme.Text, Flow: ui.MonoTheme.Text, Sink: ui.MonoTheme.Text},
 }
 
-// font is the marks one character set draws: the widgets' and the canvas's
+// font is the marks one character set draws: the widgets' and the canvas's;
+// Glyphs.Line draws frames, rules and wires
 type font struct {
 	ui.Glyphs
-	wire        []rune // a wire cell by its arms: up 1, right 2, down 4, left 8
-	box         []rune // the flow box: top left, top right, bottom left, bottom right, across, down
-	arrow, down rune   // into the flow box and a sink; between stacked parts
-	bar, barOn  rune   // a node, and the chosen node
-	dot, rule   rune   // before a column's title; the inspector's rule
+	box         ui.LineType // the flow box
+	arrow, down rune        // into the flow box and a sink; between stacked parts
+	bar, barOn  rune        // a node, and the chosen node
+	dot         rune        // before a column's title
 	valid       string
 	invalid     string
 	enter       string
@@ -85,13 +85,13 @@ func (f font) fold(r rune) rune {
 
 // fonts: Unicode, a text console's CP437, and ASCII outside UTF-8
 var (
-	unicodeFont = font{Glyphs: ui.GlyphsUnicode, wire: []rune(" │─└││┌├─┘─┴┐┤┬┼"), box: []rune("╭╮╰╯╌╎"),
-		arrow: '►', down: '▼', bar: '▌', barOn: '█', dot: '●', rule: '─', valid: "✓", invalid: "✗", enter: "⏎", space: "␣"}
-	cp437Font = font{Glyphs: ui.GlyphsCP437, wire: []rune(" │─└││┌├─┘─┴┐┤┬┼"), box: []rune("┌┐└┘─│"),
-		arrow: '►', down: '▼', bar: '▌', barOn: '█', dot: '•', rule: '─', valid: "√", invalid: "x", enter: "enter", space: "space",
+	unicodeFont = font{Glyphs: ui.GlyphsUnicode, box: ui.LineDashed,
+		arrow: '►', down: '▼', bar: '▌', barOn: '█', dot: '●', valid: "✓", invalid: "✗", enter: "⏎", space: "␣"}
+	cp437Font = font{Glyphs: ui.GlyphsCP437, box: ui.LineSingle,
+		arrow: '►', down: '▼', bar: '▌', barOn: '█', dot: '•', valid: "√", invalid: "x", enter: "enter", space: "space",
 		folds: map[rune]rune{'…': '.'}}
-	asciiFont = font{Glyphs: ui.GlyphsASCII, wire: []rune(" |-+||++-+-+++++"), box: []rune("++++-|"),
-		arrow: '>', down: 'v', bar: '|', barOn: '#', dot: '*', rule: '-', valid: "ok", invalid: "x", enter: "enter", space: "space",
+	asciiFont = font{Glyphs: ui.GlyphsASCII, box: ui.LineASCII,
+		arrow: '>', down: 'v', bar: '|', barOn: '#', dot: '*', valid: "ok", invalid: "x", enter: "enter", space: "space",
 		folds: map[rune]rune{'…': '.', '·': '-'}, ascii: true}
 )
 

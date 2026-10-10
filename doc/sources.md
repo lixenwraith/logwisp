@@ -227,7 +227,8 @@ Options, each as type and default:
   [Security](security.md#the-acl-block).
 
 For passwords instead of certificates, the `auth` block takes `type = "scram"`
-and a `credentials_file`, and `client_auth` becomes optional; see
+and a `credentials_file`, or one `username` with its `password_file`, and
+`client_auth` becomes optional; see
 [Password Authentication](security.md#password-authentication-scram).
 
 **Behaviour**

@@ -342,17 +342,20 @@ Set the pipeline's formatter, rate limit and heartbeat.
 .Pp
 A source, sink, filter or format
 .Ar spec
-is a type followed by comma-separated
+is a type, then a colon and comma-separated
 .Ar key Ns = Ns Ar value
-pairs; a rate limit or heartbeat
+pairs; the first
+.Ql \&:
+ends the type, and a type alone takes the defaults.
+A rate limit or heartbeat
 .Ar spec
 has the pairs only:
 .Bd -literal -offset indent
-\-\-source file,directory=/var/log/app,pattern=*.log
-\-\-sink http,host=127.0.0.1,port=8080,id=web
-\-\-filter include,patterns=ERROR,patterns=WARN
+\-\-source file:directory=/var/log/app,pattern=*.log
+\-\-sink http:host=127.0.0.1,port=8080,id=web
+\-\-filter include:patterns=ERROR,patterns=WARN
 \-\-format json
-\-\-rate\-limit rate=100,burst=200,policy=drop
+\-\-rate\-limit entries_per_second=100,burst_entries=200,policy=drop
 .Ed
 .Pp
 Keys are dotted paths into the plugin's options, such as
@@ -366,6 +369,8 @@ and
 inside a value; quote such a
 .Ar spec
 so the shell keeps the backslash.
+A colon in a value needs no escape, as in
+.Cm host=::1 .
 .Cm id= Ns Ar name
 names a source or sink; the default is its type, then
 .Ar type Ns _2 ,
@@ -377,7 +382,7 @@ ignore the pipeline variables in
 .Sx ENVIRONMENT .
 .Ss Presets
 A preset builds a common pipeline from a few keys:
-.Fl \-preset Ar name Ns Op , Ns Ar key Ns = Ns Ar value ... ,
+.Fl \-preset Ar name Ns Op : Ns Ar key Ns = Ns Ar value ... ,
 in the syntax of the other specifications;
 .Nm
 .Cm preset Ar name Op Fl \- Ns Ar key Ar value ...
@@ -392,6 +397,16 @@ A
 .Ar path
 is a file, a directory, whose files are followed, or a glob; without one, a
 preset that takes it reads standard input.
+.Cm user
+names one SCRAM user, an edge's login or a listener's only user in place of
+.Cm users ;
+.Cm password_file
+holds its password, read once at startup when it is
+.Pa /dev/fd/ Ns Ar N
+or a pipe, and defaults to
+.Pa /dev/tty ,
+which asks at startup; on a listener, Enter alone generates a password and
+shows it there.
 .Bl -tag -width Ds
 .It Cm pipe Op Cm format
 Standard input to standard output, the pipeline
@@ -400,7 +415,7 @@ runs without a configuration.
 .It Cm tail path Op Cm from , format
 Follow files to standard output, like
 .Ql tail \-F .
-.It Cm serve Oo Cm path , listen , format , tls , users , proxy , viewer , allow , deny Oc
+.It Cm serve Oo Cm path , listen , format , tls , users , user , password_file , proxy , viewer , allow , deny Oc
 Serve a live HTTP stream on
 .Cm listen
 .Pq default Li 127.0.0.1:8080 ,
@@ -416,9 +431,13 @@ or
 .Cm files
 .Pq Cm cert No and Cm key ;
 .Cm users
-names a credentials file, so readers log in with SCRAM.
-A browser at the root gets a live viewer; with
-.Cm users ,
+names a credentials file, or
+.Cm user
+one user, so readers log in with SCRAM, which needs
+.Cm tls
+or
+.Cm proxy .
+A browser at the root gets a live viewer; with a user,
 only behind a TLS-terminating proxy named by
 .Cm proxy ,
 with
@@ -437,14 +456,12 @@ or, with
 .Cm transport=http ,
 .Cm http_chain .
 It refuses to run without credentials:
-.Cm user
-and
-.Cm password_file ,
+.Cm user ,
 or a client
 .Cm cert
 and
 .Cm key .
-.It Cm aggregator Oo Cm listen , transport , tls , users , client_ca , out , format , allow , deny Oc
+.It Cm aggregator Oo Cm listen , transport , tls , users , user , password_file , client_ca , out , format , allow , deny Oc
 Receive from edges on
 .Cm listen
 .Pq default Li 0.0.0.0:9000
@@ -452,7 +469,9 @@ over TLS, never off
 .Pq default Cm tls=self ,
 authenticated by the
 .Cm users
-credentials file or the client certificates
+credentials file, the one
+.Cm user ,
+or the client certificates
 .Cm client_ca
 vouches for, and write to standard output or to files in
 .Cm out ;
@@ -534,7 +553,7 @@ one keeps its owner and mode.
 .It Cm remove-user Fl \-credentials Ar file Fl u Ar name
 Remove a user.
 The last user cannot be removed.
-.It Cm token Fl \-url Ar https://host:port Fl u Ar name Fl \-password\-file Ar file Oo Ar tls-flags Oc Op Fl \-unbound
+.It Cm token Fl \-url Ar https://host:port Fl u Ar name Oo Fl \-password\-file Ar file Oc Oo Ar tls-flags Oc Op Fl \-unbound
 Log in to an
 .Cm http
 sink or
@@ -544,11 +563,20 @@ source and print a bearer token.
 logs in without channel binding, to an
 .Cm http
 sink behind a TLS-terminating proxy; the URL may then carry the proxy's path.
-.It Cm stream Fl \-addr Ar host:port Fl u Ar name Fl \-password\-file Ar file Op Ar tls-flags
+.It Cm stream Fl \-addr Ar host:port Fl u Ar name Oo Fl \-password\-file Ar file Oc Op Ar tls-flags
 Log in to a
 .Cm tcp
 sink and copy its stream to standard output until interrupted.
 .El
+.Pp
+For
+.Cm token
+and
+.Cm stream ,
+.Fl \-password\-file
+defaults to
+.Pa /dev/tty ,
+where the password is asked without echo.
 .Pp
 The
 .Ar tls-flags
@@ -627,7 +655,8 @@ is looked for.
 .Pp
 Secrets never go in the environment: TLS keys, credentials files and
 password files are named by path
-.Pq Cm tls.key_file , auth.credentials_file , auth.password_file .
+.Pq Cm tls.key_file , auth.credentials_file , auth.password_file ,
+or asked on the terminal.
 .Sh FILES
 Without
 .Fl c
@@ -728,7 +757,7 @@ $ lw < app.log > copy.log
 .Pp
 Follow a log and keep only errors and warnings:
 .Bd -literal -offset indent
-$ tail \-F app.log | lw \-\-filter include,patterns=ERROR,patterns=WARN
+$ tail \-F app.log | lw \-\-filter include:patterns=ERROR,patterns=WARN
 .Ed
 .Pp
 Prefix each line with the time, the level found in it and the source:
@@ -743,7 +772,7 @@ sink listens on every address by default, and read it from another terminal
 as server-sent events; a client gets the lines that arrive while it is
 connected:
 .Bd -literal -offset indent
-$ journalctl \-f | lw \-\-sink http,host=127.0.0.1,port=8080
+$ journalctl \-f | lw \-\-sink http:host=127.0.0.1,port=8080
 $ curl \-N http://127.0.0.1:8080/stream
 .Ed
 .Pp
@@ -753,19 +782,19 @@ file in a directory, as
 .Ql tail \-F
 does, and write the new lines unparsed to one file:
 .Bd -literal -offset indent
-$ lw \-\-source 'file,directory=/var/log/app,pattern=*.log,raw=true' \e
+$ lw \-\-source 'file:directory=/var/log/app,pattern=*.log,raw=true' \e
     > all.log
 .Ed
 .Pp
 Follow every file in a directory, with the level names in color on a
 terminal:
 .Bd -literal -offset indent
-$ lw \-\-preset tail,path=/var/log/app
+$ lw \-\-preset tail:path=/var/log/app
 .Ed
 .Pp
 Print the configuration a set of options makes, to keep as a file:
 .Bd -literal -offset indent
-$ lw \-\-preset serve,path=/var/log/app,tls=self \-\-dump > serve.toml
+$ lw \-\-preset serve:path=/var/log/app,tls=self \-\-dump > serve.toml
 .Ed
 .Pp
 Ship a directory from an edge to an aggregator: on the aggregator, create
@@ -777,11 +806,20 @@ and the password file to the edge; then run both:
 # lw tls cert \-\-ca-dir /etc/logwisp/pki \-\-name agg.example.org \-\-server
 # lw auth add-user \-\-credentials /etc/logwisp/users.toml \e
     \-\-user edge-01 \-\-password-file /root/edge-01.pass
-agg# lw \-\-preset aggregator,tls=files,users=/etc/logwisp/users.toml,\e
+agg# lw \-\-preset aggregator:tls=files,users=/etc/logwisp/users.toml,\e
 cert=/etc/logwisp/pki/agg.example.org.crt,\e
 key=/etc/logwisp/pki/agg.example.org.key,out=/var/log/edges
-edge# lw \-\-preset edge,path=/var/log/app,to=agg.example.org:9000,\e
+edge# lw \-\-preset edge:path=/var/log/app,to=agg.example.org:9000,\e
 ca=/etc/logwisp/pki/ca.crt,user=edge-01,password_file=/root/edge-01.pass
+.Ed
+.Pp
+A temporary pipe with nothing on disk: the receiver makes a self-signed
+certificate, logs its pin, and generates the password when Enter alone
+answers its prompt; the sender pins the certificate and is asked for the
+password:
+.Bd -literal -offset indent
+recv$ lw \-p aggregator:listen=0.0.0.0:9000,user=pipe,format=raw
+send$ cmd | lw \-p edge:to=RECEIVER:9000,pin=sha256//BASE64,user=pipe
 .Ed
 .Pp
 Write the annotated configuration to the file
