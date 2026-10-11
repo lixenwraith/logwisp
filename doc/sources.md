@@ -29,7 +29,9 @@ from              = "end"
 
 Options, each as type and default:
 
-- `directory` (string, required): directory to scan; not recursive.
+- `directory` (string, required): directory to scan; not recursive. A leading
+  `~/`, here as in every file or directory option, is the home directory; a
+  relative path starts at lw's working directory; a missing one is waited for.
 - `pattern` (string, `*`): glob over filenames; `*` and `?` only.
 - `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
   An open file is polled every 100 ms whatever this is.
@@ -91,7 +93,7 @@ built-in `pipe` pipeline, and of every spec pipeline given no `--source`.
 
 ```toml
 [[pipelines.plugin_sources]]
-id   = "stdin"
+id   = "console"
 type = "console"
 [pipelines.plugin_sources.config]
 buffer_size = 1000

@@ -209,13 +209,14 @@ func defaults() *Config {
 	}
 }
 
-// pipeDefault is a filter in the Unix sense: stdin to stdout, line for line
+// pipeDefault is a filter in the Unix sense: stdin to stdout, line for line.
+// Its parts take the ids lw gives their type, so a retyped part follows it.
 func pipeDefault(name string) PipelineConfig {
 	return PipelineConfig{
 		Name:          name,
 		Flow:          &FlowConfig{Format: &FormatConfig{Type: "raw"}},
-		PluginSources: []PluginSourceConfig{{ID: "stdin", Type: "console", Config: map[string]any{}}},
-		PluginSinks:   []PluginSinkConfig{{ID: "stdout", Type: "console", Config: map[string]any{}}},
+		PluginSources: []PluginSourceConfig{{ID: FreeID("console", nil), Type: "console", Config: map[string]any{}}},
+		PluginSinks:   []PluginSinkConfig{{ID: FreeID("console", nil), Type: "console", Config: map[string]any{}}},
 	}
 }
 

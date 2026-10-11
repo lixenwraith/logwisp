@@ -465,7 +465,7 @@ func (a *app) inspectAt(at func(line) bool) {
 // choose puts the canvas cursor on a node, a filter on the filters stage
 func (a *app) choose(n compose.Node) {
 	if n.Role == "filters" {
-		a.insp.open[a.foldKey(compose.Node{Role: "filters"}, fmt.Sprint(n.Index))] = true
+		a.insp.open[a.foldKey(n, "")] = true
 		n = compose.Node{Role: "filters"}
 	}
 	for col := range columns {

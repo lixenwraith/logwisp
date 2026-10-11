@@ -188,7 +188,7 @@ func TestARowCountsAllItHolds(t *testing.T) {
 // The canvas cursor picks the point and v the verdicts at it: a source's
 // entries, what reaches a stage or a filter, passes it or it drops, the
 // heartbeats, what the sinks got and what the flow dropped on the way; lw's
-// own log shows from info up at every point, and whole at its own
+// own log shows from warn up at every point, and whole at its own
 func TestThePointAndModePickTheRows(t *testing.T) {
 	c := pipeline(t, []string{"null", "null"}, []string{"null"})
 	for _, typ := range []string{"include", "exclude"} {
@@ -209,7 +209,7 @@ func TestThePointAndModePickTheRows(t *testing.T) {
 	for _, r := range []core.Tapped{
 		tapped("p", s1, "", 0, "a"), tapped("p", s2, "", 0, "b"), tapped("p", s1, "rate_limit", 0, "c"),
 		tapped("p", s1, "filters", 0, "d"), tapped("p", s2, "filters", 1, "e"), tapped("p", s1, "format", 0, "f"),
-		tapped("p", "", "", 0, "g"), tapped("q", s1, "", 0, "h"), lw("INFO", "i"), lw("DEBUG", "j"),
+		tapped("p", "", "", 0, "g"), tapped("q", s1, "", 0, "h"), lw("WARN", "i"), lw("INFO", "j"),
 	} {
 		a.view.take(r)
 	}
@@ -360,10 +360,12 @@ func TestTheDetailSitsBesideFrom160(t *testing.T) {
 	}
 }
 
-// The detail shows the entry whole: its verdict, the layout logline found,
-// its fields, and the payload as the sinks receive it
+// The detail shows the entry whole: where it came from by its source's type,
+// its id when another, and its tag, what the flow did with it, the layout
+// logline found, its fields, and the payload as the sinks receive it
 func TestTheDetailShowsTheEntryWhole(t *testing.T) {
 	c := pipeline(t, []string{"null"}, []string{"null"})
+	c.Pipelines[0].PluginSources[0].ID = "in"
 	if _, err := c.Add(0, "filters", "exclude"); err != nil {
 		t.Fatal(err)
 	}
@@ -372,17 +374,20 @@ func TestTheDetailShowsTheEntryWhole(t *testing.T) {
 	}
 	a := watching(c, looks[terminal.ColorModeNone])
 	line := `{"time":"2026-10-10T12:00:00Z","level":"WARN","sub":"fsm","fields":{"msg":"transition","state":"idle"}}`
-	a.view.take(tapped("p", "null", "", 0, line))
+	a.view.take(tapped("p", "in", "", 0, line))
 	press(a, terminal.KeyEnter)
 	screen := strings.Join(text(render(a, 170, 30), 170), "\n")
-	for _, want := range []string{"verdict  passed every stage", "layout   json, message in fields.msg", "state    idle", "as sinks receive it", line[:50]} {
+	for _, want := range []string{"from     pipeline p · null source in · fsm", "flow     passed every stage", "layout   json, message in fields.msg",
+		"state    idle", "as sinks receive it", line[:50]} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("no %q\n%s", want, screen)
 		}
 	}
+	c.Pipelines[0].PluginSources[0].ID = "null"
 	a.view.take(tapped("p", "null", "filters", 0, "slow tick"))
-	if screen := strings.Join(text(render(a, 170, 30), 170), "\n"); !strings.Contains(screen, "dropped by filter 1, exclude slow") || strings.Contains(screen, "as sinks receive it") {
-		t.Errorf("a dropped row\n%s", screen)
+	if screen := strings.Join(text(render(a, 170, 30), 170), "\n"); a.origin(a.view.focused()) != "pipeline p · null source" ||
+		!strings.Contains(screen, "flow     dropped by filter 1 (exclude slow)") || strings.Contains(screen, "as sinks receive it") {
+		t.Errorf("a dropped row from a source whose id is its type\n%s", screen)
 	}
 }
 
@@ -422,7 +427,7 @@ func TestANarrowViewDropsColumns(t *testing.T) {
 		w    int
 		want string
 	}{{100, stamp + ".000 WARN  app.log hello world"}, {60, stamp + ".000 W app.log hello world"},
-		{45, stamp + " W hello world"}, {30, "▸  W hello world"}, {20, "▸  hello world"}} {
+		{45, stamp + " W hello world"}, {30, "▸W hello world"}, {20, "▸hello world"}} {
 		if row := text(render(a, c.w, 24), c.w)[2]; !strings.Contains(row, c.want) {
 			t.Errorf("%d columns: %q, want %q", c.w, row, c.want)
 		}
@@ -531,20 +536,120 @@ func TestARerunMarksTheRows(t *testing.T) {
 	}
 }
 
-// i inspects the filter that dropped the focused row, which the view then
-// looks at
-func TestIInspectsTheFilterThatDropped(t *testing.T) {
+// e edits the filter that dropped the focused row, from the rows or the
+// row full screen, and the view then looks at it
+func TestEEditsTheStageThatDropped(t *testing.T) {
 	c := pipeline(t, []string{"null"}, []string{"null"})
 	for _, typ := range []string{"include", "exclude"} {
 		if _, err := c.Add(0, "filters", typ); err != nil {
 			t.Fatal(err)
 		}
 	}
-	a := watching(c, looks[terminal.ColorModeNone])
-	a.view.take(tapped("p", "null", "filters", 1, "dropped"))
+	for _, keys := range []string{"e", "ie"} {
+		a := watching(c, looks[terminal.ColorModeNone])
+		a.view.take(tapped("p", "null", "filters", 1, "dropped"))
+		press(a, keys)
+		if l := a.lines()[a.insp.cursor]; a.dialog != nil || a.viewing || !a.inspect || l.node != (compose.Node{Role: "filters", Index: 1}) || a.point().name != "filter 2" {
+			t.Fatalf("%s: viewing %v, inspecting %v on %+v, at %s", keys, a.viewing, a.inspect, l.node, a.point().name)
+		}
+	}
+}
+
+// i shows the focused entry over the whole screen, every detail line, which
+// j k g G scroll; Esc, i or q goes back to the rows, q quitting nothing. On no
+// row or a rule across the rows it shows nothing.
+func TestIShowsTheRowFullScreen(t *testing.T) {
+	a := watching(pipeline(t, []string{"null"}, []string{"null"}), looks[terminal.ColorModeNone])
+	for _, rule := range []string{"", "rerun 10:00:00"} {
+		if rule != "" {
+			a.view.mark(rule)
+		}
+		if press(a, "i"); a.dialog != nil {
+			t.Fatalf("i on %q: %T", rule, a.dialog)
+		}
+	}
+	fields := ""
+	for i := range 40 {
+		fields += fmt.Sprintf(`,"k%02d":%d`, i, i)
+	}
+	a.view.take(tapped("p", "null", "", 0, `{"msg":"hello"`+fields+`}`))
+	screen := func() string { return strings.Join(text(render(a, 80, 24), 80), "\n") }
 	press(a, "i")
-	if l := a.lines()[a.insp.cursor]; a.viewing || !a.inspect || l.node != (compose.Node{Role: "filters", Index: 1}) || a.point().name != "filter 2" {
-		t.Fatalf("viewing %v, inspecting %v on %+v, at %s", a.viewing, a.inspect, l.node, a.point().name)
+	if s := screen(); !strings.Contains(s, "─ entry ─") || !strings.Contains(s, "message  hello") || strings.Contains(s, "following") || strings.Contains(s, "t back") ||
+		strings.Contains(s, "k39") || !strings.Contains(s, "j k: 1-22 of ") {
+		t.Fatalf("full screen:\n%s", s)
+	}
+	if press(a, "G"); !strings.Contains(screen(), "k39") {
+		t.Fatalf("G:\n%s", screen())
+	}
+	if press(a, "g", "j"); !strings.Contains(screen(), "j k: 2-23 of ") {
+		t.Fatalf("g j:\n%s", screen())
+	}
+	for _, back := range []any{terminal.KeyEscape, "i", "q"} {
+		press(a, back)
+		if a.dialog != nil || !a.viewing || a.done {
+			t.Fatalf("%v: dialog %T, viewing %v, done %v", back, a.dialog, a.viewing, a.done)
+		}
+		press(a, "i")
+	}
+}
+
+// Rows give the flow's drops no mark: where the view shows all, the rows the
+// flow dropped are muted, which the rule says where some can show (not at the
+// sinks); a mono screen shows them dim
+func TestDroppedRowsAreMutedInAll(t *testing.T) {
+	a := watching(pipeline(t, []string{"null"}, []string{"null"}), looks[terminal.ColorModeNone])
+	for _, r := range []core.Tapped{tapped("p", "null", "", 0, "kept"), tapped("p", "null", "filters", 0, "gone"), tapped("p", "null", "filters", 0, "newest")} {
+		a.view.take(r)
+	}
+	a.choose(compose.Node{Role: "source", ID: "null"})
+	for mode, want := range map[int]string{modeAll: "source null · all it reads, dropped dimmed", modeDropped: "source null · dropped"} {
+		a.view.mode = mode
+		cells := render(a, 80, 24)
+		rows := text(cells, 80)
+		attr := func(msg string) terminal.Attr {
+			y := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, msg) })
+			if y < 0 || !strings.HasPrefix(string([]rune(rows[y])[1:]), time.Unix(1, 0).Format("15:04:05")) {
+				t.Fatalf("%s: no %q at column 1\n%s", verdicts[mode], msg, strings.Join(rows, "\n"))
+			}
+			return cells[y*80+ui.RuneLen(rows[y][:strings.Index(rows[y], msg)])].Attrs
+		}
+		if dim := attr("gone")&terminal.AttrDim != 0; !strings.Contains(rows[1], want) || dim != (mode == modeAll) || mode == modeAll && attr("kept")&terminal.AttrDim != 0 {
+			t.Errorf("%s: dropped row dim %v\n%s", verdicts[mode], dim, strings.Join(rows, "\n"))
+		}
+	}
+	a.view.mode = modeAll
+	if a.choose(compose.Node{Role: "sink", ID: "null"}); !strings.Contains(text(render(a, 80, 24), 80)[1], "sinks · all they got ─") {
+		t.Errorf("at the sinks: %q", text(render(a, 80, 24), 80)[1])
+	}
+}
+
+// The rule keeps its hint, following or paused, where the title would push it
+// off: the title drops its note that the dropped are dimmed, then what all
+// holds, then its end
+func TestTheRuleKeepsItsHint(t *testing.T) {
+	c := pipeline(t, []string{"null"}, []string{"null"})
+	if err := c.AddPipeline("q"); err != nil {
+		t.Fatal(err)
+	}
+	a := watching(c, looks[terminal.ColorModeNone])
+	for _, msg := range []string{"tick 1", "tick 2"} {
+		a.view.take(tapped("p", "null", "", 0, `{"level":"WARN","msg":"`+msg+`"}`))
+	}
+	a.choose(compose.Node{Role: "source", ID: "null"})
+	press(a, "3", "/", "tick", terminal.KeyEnter, "k")
+	rule := func(w int) string { return text(render(a, w, 30), w)[1] }
+	if wide := rule(120); !strings.Contains(wide, "p · source null · all it reads, dropped dimmed · INFO up · /tick ─") {
+		t.Fatalf("120 columns: %q", wide)
+	}
+	if narrow := rule(78); !strings.Contains(narrow, "p · source null · all it reads · INFO up · /tick ─") || !strings.Contains(narrow, "paused · 1 newer") {
+		t.Errorf("78 columns: %q", narrow)
+	}
+	if narrower := rule(70); !strings.Contains(narrower, "p · source null · all · INFO up · /tick ─") || !strings.Contains(narrower, "paused · 1 newer") {
+		t.Errorf("70 columns: %q", narrower)
+	}
+	if narrowest := rule(40); !strings.Contains(narrowest, "p · source null…") || !strings.Contains(narrowest, "paused · 1 newer") {
+		t.Errorf("40 columns: %q", narrowest)
 	}
 }
 

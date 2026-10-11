@@ -1,13 +1,15 @@
 // Package logline reads a log line of any shape (vif records, LogWisp's json,
-// lw's own log, pino, zap, slog, docker, journald, ECS, GCP, plain text) into
-// one set of roles, and names the runes a terminal would act on. It links no
-// terminal code, so a viewer, a sink and the configuration page can share it.
+// lw's own log, pino, zap, slog, logfmt, docker, journald, ECS, GCP, plain
+// text) into one set of roles, and names the runes a terminal would act on. It
+// links no terminal code, so a viewer, a sink and the configuration page can
+// share it.
 package logline
 
 import (
 	"bytes"
 	"encoding/hex"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -70,8 +72,8 @@ type member struct {
 }
 
 // Read finds e's roles in its message, a JSON record (also one inside such a
-// record's message) or text with a leading RFC3339 stamp, and in its fields;
-// a role the line does not name is the entry's.
+// record's message) or text, and in its fields; a role the line does not name
+// is the entry's.
 func Read(e core.LogEntry) Line {
 	l, at, ok := record(strings.TrimSpace(e.Message), "")
 	if ok {
@@ -79,12 +81,7 @@ func Read(e core.LogEntry) Line {
 			l = merge(l, in)
 		}
 	} else {
-		l = Line{Message: e.Message, Layout: "text"}
-		if stamp, rest, ok := strings.Cut(e.Message, " "); ok {
-			if at, ok := readStamp(stamp); ok {
-				l.Time, l.Stamp, l.Message, l.Layout = at, stamp, strings.TrimLeft(rest, " "), "text, stamped"
-			}
-		}
+		l = text(e.Message)
 	}
 	if f := strings.TrimSpace(string(e.Fields)); f != "" {
 		_, kind, _ := scanValue(f, 0)
@@ -135,19 +132,7 @@ func record(s, in string) (l Line, at string, ok bool) {
 		}
 	}
 
-	if m := find(ms, roleTime); m != nil {
-		l.Stamp = unquote(m.val, m.kind)
-		l.Time, _ = readTime(l.Stamp)
-	}
-	if m := find(ms, roleLevel); m != nil {
-		l.Level = level(m.key, unquote(m.val, m.kind))
-	}
-	if m := find(ms, roleTag); m != nil {
-		l.Tag = unquote(m.val, m.kind)
-	}
-	if m := find(ms, roleMsg); m != nil {
-		l.Message, at = unquote(m.val, m.kind), m.key
-	} else if msg >= 0 {
+	if at = l.take(ms); at == "" && msg >= 0 {
 		ms[msg].used = true
 		l.Message, at = unquote(ms[msg].val, kStr), envAt
 	}
@@ -160,12 +145,69 @@ func record(s, in string) (l Line, at string, ok bool) {
 	if !whole {
 		l.Layout += ", cut short"
 	}
-	if at != "" {
-		l.Layout += ", message in " + at
-	} else {
-		l.Layout += ", no message"
-	}
+	l.Layout += messageIn(at)
 	return l, at, true
+}
+
+// text reads a line that is no JSON record: a leading RFC3339 stamp, then a
+// word naming a level; the rest is the message, or a record's roles when it
+// is logfmt pairs, a level or a message among them (slog's text handler)
+func text(s string) Line {
+	l, layout := Line{Message: s}, ""
+	if stamp, rest, ok := strings.Cut(s, " "); ok {
+		if at, ok := readStamp(stamp); ok {
+			l.Time, l.Stamp, l.Message, layout = at, stamp, strings.TrimLeft(rest, " "), ", stamped"
+			word, rest, _ := strings.Cut(l.Message, " ")
+			if lv, i, j := core.LevelWord(word, ""); lv != "" && i == 0 && j == len(word) {
+				l.Level, l.Message, layout = lv, strings.TrimLeft(rest, " "), layout+", level word"
+			}
+		}
+	}
+	var ms []member
+	named := false
+	pairs := eachPair(l.Message, func(k, v string) {
+		ms = append(ms, member{key: k, val: v, kind: kText})
+		named = named || slices.Contains(roles[roleLevel], k) || slices.Contains(roles[roleMsg], k)
+	})
+	if !pairs || !named {
+		l.Layout = "text" + layout
+		return l
+	}
+	l.Message = ""
+	at := l.take(ms)
+	l.Fields = appendFields(nil, ms)
+	l.Layout = "logfmt" + layout + messageIn(at)
+	return l
+}
+
+// take sets the roles ms names and returns the message's key, "" for none; a
+// stamp or level read off the line's start stays, the member a field
+func (l *Line) take(ms []member) (at string) {
+	if l.Stamp == "" {
+		if m := find(ms, roleTime); m != nil {
+			l.Stamp = unquote(m.val, m.kind)
+			l.Time, _ = readTime(l.Stamp)
+		}
+	}
+	if l.Level == "" {
+		if m := find(ms, roleLevel); m != nil {
+			l.Level = level(m.key, unquote(m.val, m.kind))
+		}
+	}
+	if m := find(ms, roleTag); m != nil {
+		l.Tag = unquote(m.val, m.kind)
+	}
+	if m := find(ms, roleMsg); m != nil {
+		l.Message, at = unquote(m.val, m.kind), m.key
+	}
+	return at
+}
+
+func messageIn(at string) string {
+	if at == "" {
+		return ", no message"
+	}
+	return ", message in " + at
 }
 
 // envelope appends the leaves of envelope name's value v; msg indexes its
@@ -248,7 +290,7 @@ func find(ms []member, r int) *member {
 	for _, key := range roles[r] {
 		for i := range ms {
 			m := &ms[i]
-			if m.key == key && !m.env && !m.used && (m.kind == kStr || m.kind == kNum) {
+			if m.key == key && !m.env && !m.used && (m.kind == kStr || m.kind == kNum || m.kind == kText) {
 				m.used = true
 				return m
 			}

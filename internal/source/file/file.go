@@ -44,6 +44,7 @@ type FileSource struct {
 	// already reported, touched only by monitorLoop.
 	own        []os.FileInfo
 	ownSkipped map[string]bool
+	scanErr    string // the last scan's error, "" once it read; monitorLoop's
 
 	// Application
 	subscribers []chan core.LogEntry
@@ -138,7 +139,7 @@ func (fs *FileSource) Start() error {
 	go fs.monitorLoop()
 
 	fs.logger.Info("msg", "File source started",
-		"component", "File_source",
+		"component", "file_source",
 		"path", fs.config.Directory,
 		"pattern", fs.config.Pattern,
 		"check_interval_ms", fs.config.CheckIntervalMS)
@@ -227,12 +228,8 @@ func (fs *FileSource) monitorLoop() {
 // checkTargets finds matching files and ensures watchers are running for them.
 func (fs *FileSource) checkTargets() {
 	files, err := fs.scanFile()
+	fs.noteScan(err)
 	if err != nil {
-		fs.logger.Warn("msg", "Failed to scan file",
-			"component", "file_source",
-			"path", fs.config.Directory,
-			"pattern", fs.config.Pattern,
-			"error", err)
 		return
 	}
 
@@ -241,6 +238,32 @@ func (fs *FileSource) checkTargets() {
 	}
 
 	fs.cleanupWatchers()
+}
+
+// noteScan logs when the directory cannot be read and when it can again, not
+// every check: a missing one at info, as it may yet be made
+func (fs *FileSource) noteScan(err error) {
+	switch {
+	case !changed(&fs.scanErr, err):
+	case err == nil:
+		fs.logger.Info("msg", "Directory readable", "component", "file_source", "instance_id", fs.id, "directory", fs.config.Directory)
+	case errors.Is(err, os.ErrNotExist):
+		fs.logger.Info("msg", "Waiting for directory", "component", "file_source", "instance_id", fs.id, "directory", fs.config.Directory)
+	default:
+		fs.logger.Warn("msg", "Cannot read directory", "component", "file_source", "instance_id", fs.id, "directory", fs.config.Directory, "error", err)
+	}
+}
+
+// changed reports whether err differs from the last check's, kept in last
+// ("" for none), so a failure is logged as it starts or changes
+func changed(last *string, err error) bool {
+	text := ""
+	if err != nil {
+		text = err.Error()
+	}
+	was := *last
+	*last = text
+	return text != was
 }
 
 // ensureWatcher creates and starts a new file watcher if one doesn't exist for the given path.
@@ -269,16 +292,9 @@ func (fs *FileSource) ensureWatcher(path string) {
 	go func() {
 		defer fs.wg.Done()
 		if err := w.watch(fs.ctx); err != nil {
-			if errors.Is(err, context.Canceled) {
-				fs.logger.Debug("msg", "Watcher cancelled",
-					"component", "file_source",
-					"path", path)
-			} else {
-				fs.logger.Error("msg", "Watcher failed",
-					"component", "file_source",
-					"path", path,
-					"error", err)
-			}
+			fs.logger.Debug("msg", "Watcher cancelled",
+				"component", "file_source",
+				"path", path)
 		}
 
 		fs.removeWatcher(path, w)
