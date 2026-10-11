@@ -49,11 +49,8 @@ it copies standard input to standard output line by line and exits 0 at the
 end of input.
 This built-in pipeline,
 .Dq pipe ,
-joins the console source
-.Dq stdin
-to the console sink
-.Dq stdout
-in the raw format, without a filter or rate limit; a configuration file that
+joins a console source to a console sink in the raw format, without a filter
+or rate limit; a configuration file that
 defines no pipelines runs it too.
 Each line is written with one newline, whether it ended in a newline, a
 carriage return and newline, or nothing; blank lines are skipped, and a line
@@ -170,9 +167,14 @@ On the screen,
 runs them in place, for real: listeners bind, dialers connect, file sinks
 write.
 A live view then shows each entry with its fate, passed or the flow stage
-that dropped it, and the log of
-.Nm ;
-a console sink writing to the terminal runs as a null sink there, and a
+that dropped it (dropped ones dimmed when all show), and the log of
+.Nm
+from warnings up;
+.Ic i
+shows an entry full screen and
+.Ic e
+edits the stage that dropped it.
+A console sink writing to the terminal runs as a null sink there, and a
 console source needs piped input.
 The screen draws on the controlling terminal, so standard input and output
 stay data:
@@ -330,10 +332,8 @@ the configuration file.
 They then replace the file's pipelines and the built-in default; every other
 key keeps its usual precedence.
 A reload rereads the file but keeps these pipelines.
-A pipeline without a source reads standard input with the console source
-.Dq stdin ;
-one without a sink writes standard output with the console sink
-.Dq stdout .
+A pipeline without a source reads standard input with a console source;
+one without a sink writes standard output with a console sink.
 Standard input has one reader: a second console source anywhere in the
 configuration fails validation.
 .Bl -tag -width Ds
@@ -417,11 +417,12 @@ is
 A
 .Cm path
 is a file, a directory, whose files are followed, or a glob, and this host
-decides which: an existing directory is followed whole, any other path is a
-file name or glob in its directory; for a directory not here, as in a
+decides which: an existing directory, or a path ending in a slash, is
+followed whole, any other path is a file name or glob in its directory; for a
+directory not here, as in a
 .Fl \-dump
 for another host, write
-.Ql dir/* .
+.Ql dir/ .
 Without one,
 .Cm serve
 and

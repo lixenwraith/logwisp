@@ -3,6 +3,7 @@ package tui
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -28,14 +29,12 @@ type line struct {
 	key   config.Key // its Name is the dotted path in the node's options, "" on a filter's rows
 	depth int
 	group string // a group's title, "" for a value
-	item  int    // a list element's index, the list's length on the row that adds one; -1 elsewhere
+	item  int    // a list element's index, the list's length on the row adding to it; -1 elsewhere
+	add   bool   // the row that adds an element or a filter
 }
 
-// adds reports whether a row adds: a list's last row, or the filters'
-func (a *app) adds(l line) bool {
-	return l.item >= 0 && (l.key.Name == "" || l.item == len(a.items(l.node, l.key.Name)))
-}
-
+// foldKey names a group's fold; a filter's folds share its prefix, path ""
+// its own
 func (a *app) foldKey(n compose.Node, path string) string {
 	return fmt.Sprintf("%d/%s/%s/%d/%s", a.pi, n.Role, n.ID, n.Index, path)
 }
@@ -54,11 +53,11 @@ func (a *app) lines() []line {
 	for i, f := range filters {
 		fn := compose.Node{Role: "filters", Index: i}
 		out = append(out, line{node: fn, group: fmt.Sprintf("%d %s", i+1, f.Type), item: -1})
-		if a.insp.open[a.foldKey(n, strconv.Itoa(i))] {
+		if a.insp.open[a.foldKey(fn, "")] {
 			out = a.keyLines(out, fn, a.keys(n), "", 1)
 		}
 	}
-	return append(out, line{node: compose.Node{Role: "filters", Index: len(filters)}, item: len(filters)})
+	return append(out, line{node: compose.Node{Role: "filters", Index: len(filters)}, item: -1, add: true})
 }
 
 func (a *app) keyLines(out []line, n compose.Node, keys []config.Key, prefix string, depth int) []line {
@@ -76,7 +75,7 @@ func (a *app) keyLines(out []line, n compose.Node, keys []config.Key, prefix str
 			if a.insp.open[a.foldKey(n, k.Name)] {
 				items := a.items(n, k.Name)
 				for i := range len(items) + 1 {
-					out = append(out, line{node: n, key: k, depth: depth + 1, item: i})
+					out = append(out, line{node: n, key: k, depth: depth + 1, item: i, add: i == len(items)})
 				}
 			}
 		default:
@@ -145,28 +144,46 @@ func (a *app) drawInspector(r ui.Region) {
 		help = clip(ui.WrapText(text, r.W-4), 2)
 	}
 	rows := r.H - 1 - len(help)
-	cols, perCol := 1, rows
-	if half := (len(lines) + 1) / 2; r.W >= 80 && half <= rows {
-		cols, perCol = 2, half
+	cols, perCol, second := 1, rows, 0
+	if r.W >= 80 {
+		second = split(lines, rows)
 	}
 	a.insp.scroll = ui.AdjustScroll(a.insp.cursor, ui.ClampScroll(a.insp.scroll, rows, len(lines)), rows, len(lines))
-	if cols == 2 {
-		a.insp.scroll = 0
+	if second > 0 {
+		cols, perCol, a.insp.scroll = 2, max(second, len(lines)-second), 0
 	}
 	colW, labelW := r.W/cols, 0
 	for _, l := range lines {
 		labelW = max(labelW, 2*l.depth+ui.RuneLen(label(l))+2)
 	}
 	labelW = min(labelW, colW/2)
-	for i := a.insp.scroll; i < len(lines) && i-a.insp.scroll < perCol*cols; i++ {
-		at := i - a.insp.scroll
-		row := r.Sub(at/perCol*colW, 1+at%perCol, colW-1, 1)
-		a.drawLine(row, lines[i], labelW, a.inspect && i == a.insp.cursor)
+	for i := a.insp.scroll; i < len(lines); i++ {
+		x, y := 0, i-a.insp.scroll
+		if second > 0 && i >= second {
+			x, y = colW, i-second
+		}
+		if y >= rows {
+			break
+		}
+		a.drawLine(r.Sub(x, 1+y, colW-1, 1), lines[i], labelW, a.inspect && i == a.insp.cursor)
 	}
 	under := min(r.H-len(help), 2+min(perCol, len(lines)-a.insp.scroll)) // two rows under the last key
 	for i, h := range help {
 		r.TextStyled(2, under+i, h, style)
 	}
+}
+
+// split is the first row of a second column, the shorter the taller column
+// the better, 0 for one: a column holds rows at most and starts on a top row,
+// not inside an unfolded group nor on the row adding to what precedes it
+func split(lines []line, rows int) int {
+	best, tall := 0, rows
+	for i := 1; i < len(lines); i++ {
+		if h := max(i, len(lines)-i); lines[i].depth == 0 && !lines[i].add && h <= tall {
+			best, tall = i, h
+		}
+	}
+	return best
 }
 
 func (a *app) nodeTitle(n compose.Node) string {
@@ -180,29 +197,34 @@ func (a *app) nodeTitle(n compose.Node) string {
 	return n.Role + " · flow"
 }
 
-// help is the focused row's first problem, or its key's help and default
+// help is the focused row's first problem, or its key's help and what
+// unset means, or what d or Enter does on a list's row
 func (a *app) help(l line) (string, ui.Style) {
 	for _, p := range compose.Problems(a.problem) {
 		if pi, n, key, text, ok := compose.Locate(p); ok && pi == a.pi && n == l.node && key == l.key.Name {
 			return text, a.th.Error
 		}
 	}
-	switch {
-	case l.group != "" && l.key.Name == "":
-		return "J and K move this filter; c changes its type; d deletes it", a.th.Muted
-	case a.adds(l) && l.key.Name == "":
-		return "adds a filter: include passes only the entries that match, exclude drops them", a.th.Muted
-	}
 	help := l.key.Help
-	if d := placeholder(l.key); d != "" && l.group == "" {
+	switch d := placeholder(l.key); {
+	case l.group != "" && l.key.Name == "":
+		help = "J and K move this filter; c changes its type; d deletes it"
+	case l.add && l.key.Name == "":
+		help = "adds a filter: include passes only the entries that match, exclude drops them"
+	case l.add:
+		help += "; " + a.font.enter + " adds one"
+	case l.item >= 0:
+		help += "; d deletes it"
+	case (l.key.Default != "" || l.key.Zero != "") && l.group == "": // a hint is a kind, not what unset means
 		help += "; unset: " + d
 	}
 	return help, a.th.Muted
 }
 
-// label is a row's name: its key's last part, or a list element's number
+// label is a row's name: its key's last part, or a list element's number,
+// which the row adding one shows while one is typed
 func label(l line) string {
-	if l.item >= 0 {
+	if l.item >= 0 && l.key.Name != "" {
 		return strconv.Itoa(l.item + 1)
 	}
 	return l.key.Name[strings.LastIndex(l.key.Name, ".")+1:]
@@ -212,22 +234,29 @@ func (a *app) drawLine(r ui.Region, l line, labelW int, focused bool) {
 	th := a.th
 	r = r.Sub(2*l.depth, 0, r.W-2*l.depth, 1)
 	k := l.key
-	if l.group != "" {
-		open := a.insp.open[a.foldKey(l.node, k.Name)]
+	typing := focused && a.insp.field != nil
+	switch {
+	case l.group != "":
+		r.Group(0, l.group, a.groupSummary(l), a.insp.open[a.foldKey(l.node, k.Name)], focused, th)
+		return
+	case l.add && !typing: // where its list's labels or the filters' titles start, no number
+		text, style := "+ add", th.Muted
 		if k.Name == "" {
-			open = a.insp.open[a.foldKey(compose.Node{Role: "filters"}, strconv.Itoa(l.node.Index))]
+			text += " filter"
 		}
-		r.Group(0, l.group, a.groupSummary(l), open, focused, th)
+		if focused {
+			style = th.Text
+			r.TextStyled(0, 0, string(th.Glyphs.Focus), th.Accent)
+		}
+		r.TextStyled(2, 0, text, style)
 		return
 	}
 	v, _ := r.Field(0, labelW-2*l.depth, ui.Field{Label: label(l), Required: k.Required && l.item < 0}, focused, th)
 	items := a.items(l.node, k.Name)
 	cur := a.value(l.node, k.Name)
 	switch {
-	case focused && a.insp.field != nil:
+	case typing:
 		v.TextInput(a.insp.field, placeholder(k), true, th)
-	case a.adds(l):
-		v.TextStyled(0, 0, "+ add", th.Muted)
 	case l.item >= 0:
 		v.TextStyled(0, 0, ui.Truncate(items[l.item], v.W), th.Text)
 	case len(k.Enum) > 0:
@@ -307,13 +336,10 @@ func (a *app) inspectKey(ev terminal.Event) bool {
 		a.insp.cursor = max(0, a.insp.cursor-1)
 	case is(ev, terminal.KeyDown, "j"):
 		a.insp.cursor = min(len(lines)-1, a.insp.cursor+1)
-	case a.adds(l) && k.Name == "" && enter:
+	case l.add && k.Name == "" && enter:
 		a.dialog = a.addMenu()
 	case l.group != "" && (enter || space || left || right):
 		fold := a.foldKey(l.node, k.Name)
-		if k.Name == "" {
-			fold = a.foldKey(compose.Node{Role: "filters"}, strconv.Itoa(l.node.Index))
-		}
 		a.insp.open[fold] = (enter || space) && !a.insp.open[fold] || right
 	case l.group != "" && k.Name == "" && is(ev, terminal.KeyNone, "JK"):
 		a.moveFilter(l.node.Index, map[rune]int{'J': 1, 'K': -1}[ev.Rune])
@@ -337,10 +363,10 @@ func (a *app) inspectKey(ev terminal.Event) bool {
 		a.edit(a.comp.Set(a.pi, l.node, k.Name, strconv.FormatBool(right || !left && !on)))
 	case enter:
 		text := show(cmp.Or(cur, any("")))
-		if items := a.items(l.node, k.Name); l.item >= 0 {
+		if l.item >= 0 {
 			text = ""
-			if l.item < len(items) {
-				text = items[l.item]
+			if !l.add {
+				text = a.items(l.node, k.Name)[l.item]
 			}
 		}
 		a.insp.field = ui.NewTextFieldState(text)
@@ -362,7 +388,7 @@ func (a *app) typeKey(ev terminal.Event, l line) {
 		value := a.insp.field.Value()
 		if a.commit(l, value) {
 			a.insp.field = nil
-			if l.item >= 0 && l.item == len(a.items(l.node, l.key.Name))-1 && value != "" {
+			if l.add && value != "" {
 				a.insp.cursor++ // stays on the row that adds one
 			}
 			focus := ui.Focus{Index: a.insp.cursor, Len: len(a.lines())}
@@ -391,9 +417,9 @@ func (a *app) commit(l line, value string) bool {
 	}
 	items := a.items(l.node, k.Name)
 	switch {
-	case l.item == len(items) && value == "":
+	case l.add && value == "":
 		return true
-	case l.item == len(items):
+	case l.add:
 		items = append(items, value)
 	case value == "":
 		items = append(items[:l.item], items[l.item+1:]...)
@@ -410,7 +436,7 @@ func (a *app) commit(l line, value string) bool {
 // value, which returns to its default
 func (a *app) clear(l line) {
 	switch {
-	case a.adds(l):
+	case l.add:
 	case l.group != "" && l.key.Name == "":
 		a.edit(a.comp.Remove(a.pi, l.node))
 	case l.item >= 0:
@@ -420,14 +446,25 @@ func (a *app) clear(l line) {
 	}
 }
 
-// moveFilter moves a filter by one, its fold and the cursor with it
+// moveFilter moves a filter by one, its folds and the cursor with it
 func (a *app) moveFilter(i, by int) {
-	stage := compose.Node{Role: "filters"}
 	if i+by < 0 || i+by >= len(a.pipeline().Flow.Filters) || !a.edit(a.comp.MoveFilter(a.pi, i, i+by)) {
 		return // nothing moves past either end, as j and k stop there
 	}
-	from, to := a.foldKey(stage, strconv.Itoa(i)), a.foldKey(stage, strconv.Itoa(i+by))
-	a.insp.open[from], a.insp.open[to] = a.insp.open[to], a.insp.open[from]
+	from, to := a.foldKey(compose.Node{Role: "filters", Index: i}, ""), a.foldKey(compose.Node{Role: "filters", Index: i + by}, "")
+	moved := map[string]bool{}
+	for k, open := range a.insp.open {
+		switch {
+		case strings.HasPrefix(k, from):
+			moved[to+k[len(from):]] = open
+		case strings.HasPrefix(k, to):
+			moved[from+k[len(to):]] = open
+		default:
+			continue
+		}
+		delete(a.insp.open, k)
+	}
+	maps.Copy(a.insp.open, moved)
 	for j, l := range a.lines() {
 		if l.group != "" && l.key.Name == "" && l.node.Index == i+by {
 			a.insp.cursor = j

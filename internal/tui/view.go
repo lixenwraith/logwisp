@@ -106,21 +106,21 @@ const (
 // point is where on a pipeline the view looks, as the canvas cursor picks
 // it: the verdicts reaching it rank from reach, those it drops from lo to
 // hi; a source's and the heartbeat's take only their own entries. own is
-// lw's own log alone, which s picks.
+// lw's own log alone, which s picks. all says what mode all shows.
 type point struct {
-	pipe, name string
-	one, own   bool
-	source     string
-	reach      int
-	lo, hi     int
+	pipe, name, all string
+	one, own        bool
+	source          string
+	reach           int
+	lo, hi          int
 }
 
 // lwShown is the lowest level of lw's own log a pipeline's point shows, so
-// its debug records do not bury the entries
-var lwShown = slices.IndexFunc(core.Levels, func(l core.Level) bool { return l.Level == "INFO" })
+// its startup records do not bury the entries
+var lwShown = slices.IndexFunc(core.Levels, func(l core.Level) bool { return l.Level == "WARN" })
 
 // shows reports whether the point in mode shows r: lw's own log shows from
-// info up at every point and whole at its own, which names no pipeline; a
+// warn up at every point and whole at its own, which names no pipeline; a
 // heartbeat only at the sinks' and its own
 func (p point) shows(r *row, mode int) bool {
 	switch {
@@ -151,7 +151,7 @@ func (p point) needsDrops(mode int) bool {
 // point is where the canvas cursor looks: a source, a flow stage or the
 // filter the inspector is on, the heartbeat, or the sinks
 func (a *app) point() point {
-	p := point{name: "sinks", reach: passed, hi: passed - 1}
+	p := point{name: "sinks", all: "all they got", reach: passed, hi: passed - 1}
 	switch {
 	case a.view.own:
 		return point{name: "lw's own log", own: true, reach: passed, lo: passed, hi: passed - 1}
@@ -163,17 +163,17 @@ func (a *app) point() point {
 	if l := a.lines(); a.inspect && ok && n.Role == "filters" && len(l) > 0 {
 		if m := l[min(a.insp.cursor, len(l)-1)].node; m.Index < len(a.pipeline().Flow.Filters) {
 			r := rank("filters", m.Index)
-			return point{pipe: p.pipe, name: fmt.Sprintf("filter %d", m.Index+1), reach: r, lo: r, hi: r}
+			return point{pipe: p.pipe, name: fmt.Sprintf("filter %d", m.Index+1), all: "all that reaches it", reach: r, lo: r, hi: r}
 		}
 	}
 	switch {
 	case !ok || n.Role == "sink":
 	case n.Role == "source":
-		p.name, p.one, p.source, p.reach = "source "+n.ID, true, n.ID, 0
+		p.name, p.all, p.one, p.source, p.reach = "source "+n.ID, "all it reads", true, n.ID, 0
 	case n.Role == "heartbeat":
-		p.name, p.one, p.lo, p.hi = "heartbeat", true, 1, 0
+		p.name, p.all, p.one, p.lo, p.hi = "heartbeat", "all it sends", true, 1, 0
 	default:
-		p.name, p.reach, p.lo, p.hi = n.Role, rank(n.Role, 0), rank(n.Role, 0), rank(n.Role, 1<<16-1)
+		p.name, p.all, p.reach, p.lo, p.hi = n.Role, "all that reaches it", rank(n.Role, 0), rank(n.Role, 0), rank(n.Role, 1<<16-1)
 	}
 	return p
 }
@@ -223,6 +223,9 @@ func (r *row) own() int {
 	l.Fields = fields
 	return n
 }
+
+// dropped reports whether the flow dropped the row
+func (r *row) dropped() bool { return r.stage != "" }
 
 // mark draws a rule across the rows, which every filter shows
 func (v *view) mark(text string) { v.add(row{mark: text, level: -1, size: rowBytes}) }
@@ -315,6 +318,14 @@ func (v *view) focused() *row {
 	return &v.rows[v.shown[v.cursor]-v.rows[0].seq]
 }
 
+// focusedEntry is the cursor's row when it is an entry, nil on a rule or none
+func (v *view) focusedEntry() *row {
+	if w := v.focused(); w != nil && w.mark == "" {
+		return w
+	}
+	return nil
+}
+
 func (v *view) clear() {
 	v.rows, v.shown, v.bytes, v.cursor, v.scroll, v.paused = nil, nil, 0, 0, 0, false
 }
@@ -379,8 +390,10 @@ func (a *app) viewKey(ev terminal.Event) {
 		a.dialog = a.pointMenu()
 	case is(ev, terminal.KeyNone, "c"):
 		v.clear()
-	case is(ev, terminal.KeyNone, "i"):
-		a.inspectDrop()
+	case is(ev, terminal.KeyNone, "i") && v.focusedEntry() != nil:
+		a.dialog = &entry{row: *v.focusedEntry()}
+	case is(ev, terminal.KeyNone, "e"):
+		a.editDrop(v.focusedEntry())
 	case is(ev, terminal.KeyEscape, "") && v.detail:
 		v.detail = false
 	case is(ev, terminal.KeyEscape, "t"):
@@ -412,18 +425,17 @@ func (a *app) promptKey(ev terminal.Event) {
 	}
 }
 
-// inspectDrop opens the inspector on the stage that dropped the focused row
-func (a *app) inspectDrop() {
-	w := a.view.focused()
+// editDrop opens the inspector on the stage that dropped w
+func (a *app) editDrop(w *row) {
 	pi := -1
 	if w != nil {
-		pi = slices.IndexFunc(a.comp.Pipelines, func(p config.PipelineConfig) bool { return p.Name == w.pipe })
+		pi = a.pipeIndex(w.pipe)
 	}
 	switch {
 	case w == nil || pi < 0:
-		a.note = "i inspects the stage that dropped an entry"
+		a.note = "e edits the stage that dropped an entry"
 		return
-	case w.stage == "":
+	case !w.dropped():
 		a.note = "it passed every stage"
 		return
 	}
@@ -434,6 +446,11 @@ func (a *app) inspectDrop() {
 	a.pi, a.viewing = pi, false
 	a.choose(n)
 	a.inspectAt(func(l line) bool { return l.node == n })
+}
+
+// pipeIndex is the pipeline named name, -1 when none is
+func (a *app) pipeIndex(name string) int {
+	return slices.IndexFunc(a.comp.Pipelines, func(p config.PipelineConfig) bool { return p.Name == name })
 }
 
 // pointMenu picks where the view looks, moving the canvas cursor there, or
@@ -488,24 +505,41 @@ func (a *app) pointMenu() dialog {
 func (a *app) drawView(r ui.Region) {
 	v, th := &a.view, a.th
 	v.settle()
-	title := v.built.at.name
-	if !v.built.at.own {
+	at := v.built.at
+	title, more, dimmed, rest := at.name, "", "", ""
+	switch {
+	case at.own:
+	case v.mode == modeAll:
+		title, more = title+" · all", strings.TrimPrefix(at.all, "all")
+		if at.needsDrops(modeAll) {
+			dimmed = ", dropped dimmed"
+		}
+	default:
 		title += " · " + verdicts[v.mode]
 	}
-	if len(a.comp.Pipelines) > 1 && v.built.at.pipe != "" {
-		title = v.built.at.pipe + " · " + title
+	if len(a.comp.Pipelines) > 1 && at.pipe != "" {
+		title = at.pipe + " · " + title
 	}
 	if v.floor > 0 {
-		title += " · " + core.Levels[v.floor-1].Level + " up"
+		rest += " · " + core.Levels[v.floor-1].Level + " up"
 	}
 	if v.pat.src != "" {
-		title += " · /" + v.pat.src
+		rest += " · /" + v.pat.src
 	}
 	hint := fmt.Sprintf("following · %d rows", len(v.shown))
 	if v.paused {
 		hint = fmt.Sprintf("paused · %d newer", len(v.shown)-1-v.cursor)
 	}
-	r.Rule(0, a.font.flat(title, r.W), hint, th)
+	// The hint keeps its room, the rule padding title and hint by 8 cells: the
+	// title gives up saying the dropped are dimmed, then what all holds, then
+	// its end
+	room, text := r.W-ui.RuneLen(hint)-8, title+more+dimmed+rest
+	for _, shorter := range []string{title + more + rest, title + rest} {
+		if ui.RuneLen(text) > room {
+			text = shorter
+		}
+	}
+	r.Rule(0, a.font.flat(text, room), hint, th)
 	if a.viewing {
 		r.TextStyled(0, 0, string(th.Glyphs.Focus), th.Accent)
 	}
@@ -563,17 +597,25 @@ func (v *view) widths(w int) (tw, lw, gw int) {
 	return tw, lw, gw
 }
 
-// drawRow draws a row: the cursor's pointer, a mark when the flow dropped
-// it, its time, level and tag, then its message and, muted, its fields. On
-// the cursor row each role keeps its color on the bar, but for a reverse
-// bar, which ui.Style.On draws in one style.
+// drawRow draws a row: the cursor's pointer, its time, level and tag, then
+// its message and, muted, its fields; all muted when the flow dropped it and
+// the view shows all. On the cursor row each role keeps its color on the
+// bar, but for a reverse bar, which ui.Style.On draws in one style.
 func (a *app) drawRow(r ui.Region, w *row, tw, lw, gw int, cursor bool) {
 	th, f := a.th, a.font
-	on := func(s ui.Style) ui.Style { return s }
+	dim := a.view.mode == modeAll && w.dropped()
+	on := func(s ui.Style) ui.Style {
+		if dim {
+			s = th.Muted
+		}
+		if cursor {
+			s = s.On(th.Selected)
+		}
+		return s
+	}
 	if cursor {
 		r.FillStyle(th.Text.On(th.Selected))
-		on = func(s ui.Style) ui.Style { return s.On(th.Selected) }
-		r.TextStyled(0, 0, string(th.Glyphs.Pointer), on(th.Accent))
+		r.TextStyled(0, 0, string(th.Glyphs.Pointer), th.Accent.On(th.Selected))
 	}
 	if w.mark != "" {
 		dash := "─"
@@ -584,10 +626,7 @@ func (a *app) drawRow(r ui.Region, w *row, tw, lw, gw int, cursor bool) {
 		r.TextStyled(2, 0, text+strings.Repeat(dash, max(0, r.W-2-ui.RuneLen(text))), on(th.Border))
 		return
 	}
-	if w.rank != passed {
-		r.TextStyled(1, 0, string([]rune(f.invalid)[0]), on(th.Error))
-	}
-	x := 3 // a space after the mark, so it is not read as the time's first letter
+	x := 1
 	if tw > 0 {
 		r.TextStyled(x, 0, w.at.Local().Format("15:04:05.000")[:tw], on(th.Muted))
 		x += tw + 1
@@ -617,30 +656,37 @@ type dline struct {
 	style     ui.Style
 }
 
-// drawDetail draws the focused row whole, scrolled by J and K
+// drawDetail draws the focused entry whole, scrolled by J and K
 func (a *app) drawDetail(r ui.Region) {
-	v, th := &a.view, a.th
-	w := v.focused()
+	v := &a.view
+	w := v.focusedEntry()
 	hint := "J K scroll"
-	if w != nil && w.pipe != "" && w.stage != "" {
-		hint = "i inspects it  " + hint
+	switch {
+	case w != nil && w.dropped():
+		hint = "i full screen  e edit its stage  " + hint
+	case w != nil:
+		hint = "i full screen  " + hint
 	}
-	r.Rule(0, "detail", hint, th)
-	if w == nil {
-		return
-	}
-	lines := a.details(w, r.W-2)
-	v.dscroll = max(0, min(v.dscroll, len(lines)-(r.H-1)))
-	for y := 1; y < r.H && v.dscroll+y-1 < len(lines); y++ {
-		l := lines[v.dscroll+y-1]
-		r.TextStyled(1, y, l.key, th.Muted)
-		r.TextStyled(2+ui.RuneLen(l.key), y, l.text, l.style)
+	r.Rule(0, "detail", hint, a.th)
+	if w != nil {
+		v.dscroll = a.drawLines(r.Sub(0, 1, r.W, r.H-1), a.details(w, r.W-2), v.dscroll)
 	}
 }
 
+// drawLines draws detail lines from top, kept in range, which it returns
+func (a *app) drawLines(r ui.Region, lines []dline, top int) int {
+	top = max(0, min(top, len(lines)-r.H))
+	for y := 0; y < r.H && top+y < len(lines); y++ {
+		l := lines[top+y]
+		r.TextStyled(1, y, l.key, a.th.Muted)
+		r.TextStyled(2+ui.RuneLen(l.key), y, l.text, l.style)
+	}
+	return top
+}
+
 // details are a row's detail lines w wide: its time, level, origin and
-// verdict, the layout logline found, its message and fields, then its
-// payload as the sinks receive it; what a cell cannot show is an escape
+// flow, the layout logline found, its message and fields, then its payload
+// as the sinks receive it; what a cell cannot show is an escape
 func (a *app) details(w *row, width int) []dline {
 	th := a.th
 	var out []dline
@@ -659,7 +705,7 @@ func (a *app) details(w *row, width int) []dline {
 	put("level", 8, w.Level, th.Text)
 	put("from", 8, a.origin(w), th.Text)
 	if w.pipe != "" {
-		put("verdict", 8, a.verdict(w), th.Text)
+		put("flow", 8, a.verdict(w), th.Text)
 	}
 	put("layout", 8, w.Layout, th.Muted)
 	put("message", 8, w.Message, th.Text)
@@ -677,18 +723,32 @@ func (a *app) details(w *row, width int) []dline {
 	return out
 }
 
-// origin names where a row came from: lw's own log, or a pipeline's source
-// or heartbeat, and the tag the line names when it is another
+// origin names where a row came from: lw's own log, or a pipeline's
+// heartbeat or source, by the type it has now and its id when that is
+// another, then the tag the line names when it is not the source's id
 func (a *app) origin(w *row) string {
 	switch {
 	case w.pipe == "":
 		return "lw's own log"
 	case w.source == "":
 		return "pipeline " + w.pipe + " · heartbeat"
-	case w.Tag != w.source:
-		return "pipeline " + w.pipe + " · source " + w.source + " · " + w.Tag
 	}
-	return "pipeline " + w.pipe + " · source " + w.source
+	from := "source " + w.source
+	if pi := a.pipeIndex(w.pipe); pi >= 0 {
+		for _, s := range a.comp.Pipelines[pi].PluginSources {
+			switch {
+			case s.ID != w.source:
+			case s.ID == s.Type:
+				from = s.Type + " source"
+			default:
+				from = s.Type + " source " + s.ID
+			}
+		}
+	}
+	if w.Tag != "" && w.Tag != w.source {
+		from += " · " + w.Tag
+	}
+	return "pipeline " + w.pipe + " · " + from
 }
 
 // verdict says what the flow did with a row: passed, or the stage, and for a
@@ -699,9 +759,9 @@ func (a *app) verdict(w *row) string {
 		return "passed every stage"
 	case "filters":
 		text := fmt.Sprintf("dropped by filter %d", w.index+1)
-		if pi := slices.IndexFunc(a.comp.Pipelines, func(p config.PipelineConfig) bool { return p.Name == w.pipe }); pi >= 0 {
+		if pi := a.pipeIndex(w.pipe); pi >= 0 {
 			if fs := a.comp.Pipelines[pi].Flow.Filters; w.index < len(fs) {
-				text += ", " + string(fs[w.index].Type) + " " + strings.Join(fs[w.index].Patterns, " | ")
+				text += " (" + string(fs[w.index].Type) + " " + strings.Join(fs[w.index].Patterns, " | ") + ")"
 			}
 		}
 		return text

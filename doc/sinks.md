@@ -22,7 +22,7 @@ Writes formatted payloads to stdout or stderr. It is the sink of the built-in
 
 ```toml
 [[pipelines.plugin_sinks]]
-id   = "stdout"
+id   = "console"
 type = "console"
 [pipelines.plugin_sinks.config]
 target      = "stdout"

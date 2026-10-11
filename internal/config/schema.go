@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -234,7 +235,8 @@ func settingKeys(v reflect.Value, prefix string) []Key {
 
 // Decode reads a plugin's config map into its options: unknown keys, kinds,
 // the defaults, the tag rules, the tls, auth and acl rules of its side, then the
-// options' own Check. It reads no file.
+// options' own Check; a leading ~ in a path is the home directory. It reads no
+// file.
 func Decode[T any](role, typ string, m map[string]any) (*T, error) {
 	v, err := decode(role, typ, m)
 	if err != nil {
@@ -263,6 +265,7 @@ func decode(role, typ string, m map[string]any) (any, error) {
 	if err := Settle(v.Interface()); err != nil {
 		return nil, err
 	}
+	expandPaths(v.Elem())
 	if n, ok := v.Interface().(networked); ok {
 		if err := p.checkNetwork(n); err != nil {
 			return nil, err
@@ -286,6 +289,32 @@ func Settle(v any) error {
 
 // Fill gives a table its defaults and checks nothing: Settle's first step
 func Fill(v any) { settle(reflect.ValueOf(v).Elem()) }
+
+// expandPaths reads ~ (ExpandHome) in the dir and file keys of a table, its
+// tables' too, where lw reads them; the forms keep ~ as typed
+func expandPaths(v reflect.Value) {
+	for _, o := range options(v.Type()) {
+		switch f := v.Field(o.index); {
+		case f.Kind() == reflect.Pointer && !f.IsNil() && f.Elem().Kind() == reflect.Struct:
+			expandPaths(f.Elem())
+		case o.Hint == "dir" || o.Hint == "file":
+			f.SetString(ExpandHome(f.String()))
+		}
+	}
+}
+
+// ExpandHome reads a leading ~ or ~/ as the home directory; ~user, and a
+// host without a home directory (js/wasm), keep the path as it is
+func ExpandHome(path string) string {
+	rest, ok := strings.CutPrefix(path, "~")
+	if !ok || rest != "" && !os.IsPathSeparator(rest[0]) {
+		return path
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return home + rest
+	}
+	return path
+}
 
 // preset sets every default before decoding, so a switch that defaults on
 // stays on unless set off; it does so in the tables m sets

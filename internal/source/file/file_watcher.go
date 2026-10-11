@@ -47,6 +47,7 @@ type fileWatcher struct {
 	entriesRead  atomic.Uint64
 	lastReadTime atomic.Value // time.Time
 	logger       *log.Logger
+	failed       string // the last check's error, "" for none; watch's
 }
 
 // newFileWatcher creates a new watcher for a specific file path.
@@ -67,16 +68,19 @@ func newFileWatcher(directory string, raw, fromStart bool, callback func(core.Lo
 	return w
 }
 
-// watch starts the main monitoring loop for the file
+// watch follows the file until ctx ends or stop: it finds where to start,
+// again each check until the file opens, then reads what the file gains
 func (w *fileWatcher) watch(ctx context.Context) error {
-	if err := w.initPosition(); err != nil {
-		return fmt.Errorf("initPosition failed: %w", err)
-	}
-
 	ticker := time.NewTicker(core.FileWatcherPollInterval)
 	defer ticker.Stop()
 
+	check := w.initPosition
 	for {
+		err := check()
+		if err == nil {
+			check = w.checkFile
+		}
+		w.note(err)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -84,11 +88,15 @@ func (w *fileWatcher) watch(ctx context.Context) error {
 			if w.isStopped() {
 				return nil
 			}
-			if err := w.checkFile(); err != nil {
-				// Log error but continue watching
-				w.logger.Warn("msg", "checkFile error", "error", err)
-			}
 		}
+	}
+}
+
+// note logs a check's failure as it starts or changes, not every check; the
+// watcher goes on
+func (w *fileWatcher) note(err error) {
+	if changed(&w.failed, err) && err != nil {
+		w.logger.Warn("msg", "Cannot read file", "component", "file_watcher", "path", w.directory, "error", err)
 	}
 }
 
@@ -127,20 +135,12 @@ func (w *fileWatcher) checkFile() error {
 			// File doesn't exist yet, keep watching
 			return nil
 		}
-		w.logger.Error("msg", "Failed to open file for checking",
-			"component", "file_watcher",
-			"directory", w.directory,
-			"error", err)
 		return err
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		w.logger.Error("msg", "Failed to stat file",
-			"component", "file_watcher",
-			"directory", w.directory,
-			"error", err)
 		return err
 	}
 
@@ -269,11 +269,6 @@ func (w *fileWatcher) checkFile() error {
 		}
 
 		if err := scanner.Err(); err != nil {
-			w.logger.Error("msg", "Scanner error while reading file",
-				"component", "file_watcher",
-				"directory", w.directory,
-				"position", startPos,
-				"error", err)
 			return err
 		}
 

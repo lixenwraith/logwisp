@@ -129,10 +129,10 @@ keeps its [precedence](configuration.md#configuration-precedence).
   replace its format
 - `--source SPEC`, `--sink SPEC` and `--filter SPEC` add a stage, repeatable
 - `--format SPEC`, `--rate-limit SPEC` and `--heartbeat SPEC`, once per pipeline
-- a pipeline without `--source` reads stdin (console source `stdin`), one
-  without `--sink` writes stdout (console sink `stdout`)
+- a pipeline without `--source` reads stdin with a console source, one
+  without `--sink` writes stdout with a console sink
 - stdin has one reader, so the whole configuration holds at most one console
-  source: `pipelines[1].plugin_sources[stdin]: one console source may run,
+  source: `pipelines[1].plugin_sources[console]: one console source may run,
   and pipeline "a" has it`
 
 A SPEC is `TYPE:key=value,...`, or `key=value,...` without a TYPE:
@@ -202,9 +202,9 @@ defaults, `lw preset -h` the presets. An unknown key fails and lists the valid
 ones.
 
 - `path`: a file, a directory (its files) or a glob, and this host decides
-  which: an existing directory is followed whole, any other path is a file
-  name or glob in its directory; for a directory not here, as in a `--dump`
-  for another host, write `DIR/*`. Without one, `serve` and `edge` read stdin
+  which: an existing directory, or a path ending in `/`, is followed whole,
+  any other path is a file name or glob in its directory; for a directory
+  not here, as in a `--dump` for another host, write `DIR/`. Without one, `serve` and `edge` read stdin
 - `from` (`end`, or `start`): where reading a file starts
 - `user`: one SCRAM user, an edge's login or a listener's only user in place
   of `users`; `password_file` holds its password and defaults to `/dev/tty`,
@@ -350,8 +350,8 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
 ## Built-in Defaults
 
 Without a configuration file and without pipeline flags or variables, lw runs
-one built-in pipeline, `pipe`: console source `stdin`, `raw` format, console
-sink `stdout`, no filter, no rate limit. lw is then a Unix filter, like `cat`:
+one built-in pipeline, `pipe`: a console source, `raw` format, a console
+sink, no filter, no rate limit. lw is then a Unix filter, like `cat`:
 
 ```bash
 lw < app.log > copy.log
@@ -509,26 +509,30 @@ WebAssembly; `t` runs them under the screen and shows what flows.
   - The canvas cursor picks its point, so the view opens on the first
     source: a source shows its entries, a flow stage (or the filter the
     inspector is on) what reaches it, the heartbeat its own, the sinks (or
-    no part) what they got. `v` switches between all, what passed and what
-    was dropped there, with no restart. lw's own log shows from info up at
-    every point; `s` also offers it alone, debug too.
+    no part) what they got. `v` switches between all (what the flow dropped
+    dimmed), what passed and what was dropped there, with no restart; the
+    title says which. lw's own log shows from warn up at every point; `s`
+    also offers it alone, debug too.
   - A row is the entry's time, level, tag, message and fields, read from any
     line shape: LogWisp's json, lw's own log, vif records, pino, zap, slog,
-    docker, journald, ECS, GCP, or text after an RFC3339 stamp. A narrow
-    screen drops columns; a dropped entry is marked; a rune a terminal would
-    act on or draw wider than a cell shows as a placeholder.
+    docker, journald, ECS, GCP, logfmt, or text after an RFC3339 stamp and
+    a level name. A narrow screen drops columns; a rune a terminal would act
+    on or draw wider than a cell shows as a placeholder.
   - Keys: arrows or `jk` move (up pauses, down onto the newest follows),
     PgUp/PgDn; `g` or Home the oldest, `G`, End or `f` the newest; Enter the
-    row's detail, `J`/`K` scroll it; `/` only rows matching a pattern,
+    row's detail, `J`/`K` scroll it; `i` the row full screen, scrolled by
+    `jk`, PgUp/PgDn, `g` and `G`, closed by Esc, `i` or `q`; `e`, there too,
+    edits the stage that dropped the row; `/` only rows matching a pattern,
     ignoring case when it is all lower case (clearing it, or a level, keeps
     the focused row in place, paused there unless it is the newest); `1`-`5`
-    trace to error and up, `0` all; `s` chooses the point; `i` inspects the
-    stage that dropped the row; `c` clears; `q`, Ctrl-C, `?`, `r`, `o`, `[`
-    and `]` act as on the diagram.
+    trace to error and up, `0` all; `s` chooses the point; `c` clears; `q`,
+    Ctrl-C, `?`, `r`, `o`, `[` and `]` act as on the diagram.
   - The detail, beside the rows from 160 columns and under them otherwise:
-    time and the stamp as written, level, origin, the verdict with a
-    filter's patterns, the layout read, message, fields, and the payload as
-    the sinks receive it, with escapes for what a cell cannot show.
+    time and the stamp as written, level, origin (the source's type, and its
+    id when another), the flow (passed every stage, or the stage that
+    dropped it with a filter's patterns), the layout read, message, fields,
+    and the payload as the sinks receive it, with escapes for what a cell
+    cannot show.
   - It keeps 32 MiB of rows, each entry's message, fields and payload cut to
     16 KiB, and redraws at most every 100 ms while entries flow, at once on
     a key, never when idle. A closed standard output or error fails the

@@ -172,12 +172,13 @@ func TestSpecPipelinesReplaceFilePipelines(t *testing.T) {
 }
 
 // A spec pipeline without a source reads stdin and one without a sink writes
-// stdout, as a filter does; two pipelines cannot both read stdin.
+// stdout, as a filter does, each part under its type's own id; two pipelines
+// cannot both read stdin.
 func TestSpecPipelinesDefaultToStdio(t *testing.T) {
 	isolateConfig(t)
 	got := loadPipelines(t, "filter", "include:patterns=ERROR")
-	if p := got[0]; len(p.PluginSources) != 1 || p.PluginSources[0].Type != "console" || p.PluginSources[0].ID != "stdin" ||
-		len(p.PluginSinks) != 1 || p.PluginSinks[0].Type != "console" || p.PluginSinks[0].ID != "stdout" {
+	if p := got[0]; len(p.PluginSources) != 1 || p.PluginSources[0].Type != "console" || p.PluginSources[0].ID != "console" ||
+		len(p.PluginSinks) != 1 || p.PluginSinks[0].Type != "console" || p.PluginSinks[0].ID != "console" {
 		t.Fatalf("pipeline: %+v", p)
 	}
 	_, err := Load(Args{Specs: specs("pipeline", "a", "sink", "null", "pipeline", "b", "sink", "null")})

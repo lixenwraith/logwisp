@@ -1,7 +1,9 @@
 package file
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,6 +39,89 @@ func TestFileSourceSkipsItsOwnOutput(t *testing.T) {
 	if err != nil || len(files) != 1 || filepath.Base(files[0]) != "app.log" {
 		t.Fatalf("scanFile = %v, %v; want app.log alone", files, err)
 	}
+}
+
+// A directory the source cannot read is logged when that starts and when it
+// ends, not on every check: a missing one at info, as it may yet be made,
+// any other failure at warn
+func TestUnreadableDirectoryIsLoggedOncePerChange(t *testing.T) {
+	logger, out := txtLogger(t)
+	dir := filepath.Join(t.TempDir(), "logs")
+	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*"}, watchers: map[string]*fileWatcher{}, logger: logger}
+	checksAfter := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			source.checkTargets()
+		}
+	}
+	checksAfter(nil)
+	checksAfter(os.Mkdir(dir, 0o700))
+	checksAfter(errors.Join(os.Remove(dir), os.WriteFile(dir, nil, 0o600)))
+	if err := logger.Flush(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	lines := slices.Collect(strings.Lines(out.String()))
+	want := [][2]string{{"INFO", "Waiting for directory"}, {"INFO", "Directory readable"}, {"WARN", "Cannot read directory"}}
+	for i, w := range want {
+		if len(lines) != len(want) || !strings.Contains(lines[i], " "+w[0]+" ") || !strings.Contains(lines[i], w[1]) {
+			t.Fatalf("logged:\n%swant %v", out.String(), want)
+		}
+	}
+}
+
+// A file the source cannot open, from its watcher's start or later, is logged
+// as that starts, not on every check, and read once it opens: the watcher goes
+// on
+func TestUnreadableFileIsLoggedOnceAndWaitedFor(t *testing.T) {
+	logger, out := txtLogger(t)
+	dir := filepath.Join(t.TempDir(), "logs")
+	block := func() error { return errors.Join(os.RemoveAll(dir), os.WriteFile(dir, nil, 0o600)) } // logs/a.log cannot open
+	read := make(chan string, 10)
+	w := newFileWatcher(filepath.Join(dir, "a.log"), true, true, func(e core.LogEntry) { read <- e.Message }, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	if err := block(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { done <- w.watch(ctx) }()
+	time.Sleep(4 * core.FileWatcherPollInterval)
+	if err := errors.Join(os.Remove(dir), os.Mkdir(dir, 0o700), os.WriteFile(filepath.Join(dir, "a.log"), []byte("first\n"), 0o600)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-read:
+	case <-time.After(time.Second):
+		t.Fatal("not read once it opened")
+	}
+	if err := block(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(4 * core.FileWatcherPollInterval)
+	cancel()
+	<-done
+	if err := logger.Flush(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(out.String(), "\n") != 2 || strings.Count(out.String(), " WARN ") != 2 || strings.Count(out.String(), "Cannot read file") != 2 {
+		t.Fatalf("logged:\n%swant Cannot read file twice", out.String())
+	}
+}
+
+// txtLogger logs txt lines into the buffer it returns, read after Flush
+func txtLogger(t *testing.T) (*log.Logger, *bytes.Buffer) {
+	t.Helper()
+	out := &bytes.Buffer{}
+	logger := log.NewLogger()
+	logger.SetConsoleWriter(out)
+	cfg := log.DefaultConfig()
+	cfg.Format = "txt"
+	if err := logger.ApplyConfig(cfg); err != nil || logger.Start() != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logger.Shutdown() })
+	return logger, out
 }
 
 func TestStoppedWatcherReturnsNormally(t *testing.T) {

@@ -2,6 +2,7 @@ package config
 
 import (
 	"math"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -197,5 +198,36 @@ func TestTableKeysFollowThePlugin(t *testing.T) {
 		if has(f[0], f[1], f[2]) != want {
 			t.Errorf("%s: listed %v, want %v", path, !want, want)
 		}
+	}
+}
+
+// A leading ~ or ~/ in a dir or file key is the home directory where lw reads
+// it, in a plugin's options, its tables too, while the configuration keeps it
+// as typed, the settings' too (lw's log reads it at startup); ~user, other
+// keys and a host without a home directory keep it
+func TestTildeIsHomeInPathKeys(t *testing.T) {
+	isolateConfig(t)
+	home := os.Getenv("HOME")
+	src, err := Decode[FileSourceOptions]("source", "file", map[string]any{"directory": "~/logs", "pattern": "~*"})
+	if err != nil || src.Directory != home+"/logs" || src.Pattern != "~*" {
+		t.Fatalf("file source: %+v %v", src, err)
+	}
+	tls := map[string]any{"enabled": true, "ca_file": "~", "cert_file": "~/c", "key_file": "~other/k"}
+	sink, err := Decode[TCPChainSinkOptions]("sink", "tcp_chain", map[string]any{"host": "h", "port": int64(1), "tls": tls})
+	if err != nil || sink.TLS.CAFile != home || sink.TLS.CertFile != home+"/c" || sink.TLS.KeyFile != "~other/k" {
+		t.Fatalf("tls table: %+v %v", sink.TLS, err)
+	}
+	m, err := Load(Args{Overrides: []string{"--logging.file.directory=~/lw"}, Specs: specs("source", "file:directory=~/logs")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	cfg, err := m.Snapshot()
+	if err != nil || cfg.Logging.File.Directory != "~/lw" || cfg.Pipelines[0].PluginSources[0].Config["directory"] != "~/logs" {
+		t.Fatalf("as typed: %+v %v %v", cfg.Logging.File, cfg.Pipelines, err)
+	}
+	t.Setenv("HOME", "")
+	if src, err := Decode[FileSourceOptions]("source", "file", map[string]any{"directory": "~/logs"}); err != nil || src.Directory != "~/logs" {
+		t.Fatalf("without a home directory: %+v %v", src, err)
 	}
 }
