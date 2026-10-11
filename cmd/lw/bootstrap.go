@@ -24,6 +24,7 @@ import (
 
 	"github.com/lixenwraith/logwisp/internal/authz"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
 	"github.com/lixenwraith/logwisp/internal/service"
 	"github.com/lixenwraith/logwisp/internal/version"
 
@@ -34,7 +35,7 @@ import (
 
 // bootstrapInitial handles initial service startup with status reporter
 func bootstrapInitial(ctx context.Context, cfg *config.Config) (*service.Service, context.CancelFunc, error) {
-	svc, err := bootstrapService(ctx, cfg)
+	svc, err := bootstrapService(ctx, cfg, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to bootstrap service: %w", err)
 	}
@@ -57,8 +58,9 @@ func bootstrapInitial(ctx context.Context, cfg *config.Config) (*service.Service
 // no pipeline runs until a later reload succeeds.
 var errServiceStopped = errors.New("old service stopped, new one failed to start")
 
-// handleReload orchestrates the entire hot-reload process including status reporter lifecycle
-func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Service, statusCancel context.CancelFunc) (*service.Service, *config.Config, context.CancelFunc, error) {
+// handleReload orchestrates the entire hot-reload process including status
+// reporter lifecycle; tap is the screen's, nil for none
+func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Service, statusCancel context.CancelFunc, tap *core.Tap) (*service.Service, *config.Config, context.CancelFunc, error) {
 	logger.Info("msg", "Starting configuration hot reload")
 
 	if err := config.ValidateConfig(newCfg); err != nil {
@@ -68,13 +70,12 @@ func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Se
 
 	// Bootstrap a new service to ensure it's valid before touching the old one
 	logger.Debug("msg", "Bootstrapping new service with updated config")
-	newService, err := bootstrapService(ctx, newCfg)
+	newService, err := bootstrapService(ctx, newCfg, tap)
 	if err != nil {
 		logger.Error("msg", "Failed to bootstrap new service, keeping old service running", "error", err)
 		return nil, nil, nil, err
 	}
 
-	// Gracefully shut down the old service
 	if statusCancel != nil {
 		statusCancel()
 	}
@@ -83,14 +84,12 @@ func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Se
 		oldSvc.Shutdown()
 	}
 
-	// Start the new service
 	if err := newService.Start(); err != nil {
 		newService.Shutdown()
 		logger.Error("msg", "Failed to start new service pipelines after reload. The application may be in a non-functional state.", "error", err)
 		return nil, nil, nil, fmt.Errorf("%w: %w", errServiceStopped, err)
 	}
 
-	// Manage status reporter lifecycle
 	var newStatusCancel context.CancelFunc
 	if newCfg.StatusReporter {
 		newStatusCancel = startStatusReporter(ctx, newService)
@@ -100,9 +99,9 @@ func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Se
 	return newService, newCfg, newStatusCancel, nil
 }
 
-// bootstrapService creates and initializes the main log transport service and its pipelines
-func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service, error) {
-	// Create service with logger dependency injection
+// bootstrapService builds the service and its pipelines, which offer what
+// their flows decide to tap from their first entry; nil for none
+func bootstrapService(ctx context.Context, cfg *config.Config, tap *core.Tap) (*service.Service, error) {
 	svc, err := service.NewService(ctx, cfg, logger)
 	if err != nil {
 		logger.Error("msg", "Failed to initialize service",
@@ -110,6 +109,7 @@ func bootstrapService(ctx context.Context, cfg *config.Config) (*service.Service
 		)
 		return nil, err
 	}
+	svc.SetTap(tap)
 
 	logger.Info("msg", "LogWisp started",
 		"version", version.Short(),
@@ -149,27 +149,23 @@ func dumpConfig(cfg *config.Config, w io.Writer) int {
 	return 0
 }
 
-// initializeLogger sets up the global logger based on the application's configuration
 func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 	logCfg := log.DefaultConfig()
 
 	if cfg.Quiet {
-		// In quiet mode, disable ALL logging output
 		logCfg.Level = 255 // A level that disables all output
 		logCfg.EnableFile = false
 		logCfg.EnableConsole = false
 		return logger.ApplyConfig(logCfg)
 	}
 
-	// Determine log level
 	levelValue, err := log.Level(cfg.Logging.Level)
 	if err != nil {
 		return fmt.Errorf("invalid log level: %w", err)
 	}
 	logCfg.Level = levelValue
 
-	// Configure log format
 	if cfg.Logging.Format != "" {
 		logCfg.Format = cfg.Logging.Format
 	}
@@ -177,7 +173,6 @@ func initializeLogger(cfg *config.Config) error {
 		logCfg.Sanitization = sanitizer.PolicyPreset(cfg.Logging.Sanitization)
 	}
 
-	// Configure based on output mode
 	switch cfg.Logging.Output {
 	case "none":
 		logCfg.EnableFile = false
@@ -210,7 +205,6 @@ func initializeLogger(cfg *config.Config) error {
 	return logger.ApplyConfig(logCfg)
 }
 
-// configureFileLogging sets up file-based logging parameters from the configuration
 func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	if cfg.Logging.File != nil {
 		logCfg.Directory = cfg.Logging.File.Directory

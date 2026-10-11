@@ -1,4 +1,4 @@
-.Dd October 5, 2026
+.Dd October 10, 2026
 .Dt LW 1
 .Os
 .Sh NAME
@@ -163,6 +163,15 @@ and
 .Fl \-dump
 also do, or print them as a command line, environment variables or a
 configuration file's pipelines.
+On the screen,
+.Ic t
+runs them in place, for real: listeners bind, dialers connect, file sinks
+write.
+A live view then shows each entry with its fate, passed or the flow stage
+that dropped it, and the log of
+.Nm ;
+a console sink writing to the terminal runs as a null sink there, and a
+console source needs piped input.
 The screen draws on the controlling terminal, so standard input and output
 stay data:
 .Ql lw \-T > pipelines.toml .
@@ -756,6 +765,16 @@ Before the service runs,
 is ignored, as under
 .Xr nohup 1 .
 .El
+.Pp
+On the
+.Fl \-tui
+screen,
+.Dv SIGTERM
+and
+.Dv SIGHUP
+close it, stopping what it runs, and
+.Nm
+exits 0.
 .Sh EXAMPLES
 Copy a file line by line:
 .Bd -literal -offset indent

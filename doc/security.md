@@ -745,6 +745,8 @@ edge. `password_file` is read by what it names, on either side:
     forwarded, and stderr is often a file.
   - With no terminal (systemd, cron) the plugin fails. `lw ... &` stops on
     `SIGTTIN` at the prompt.
+  - Under `lw --tui`'s `t`, the screen asks in a masked dialog instead; a
+    generated password stays shown until a key closes it.
 
 Trade-offs:
 
@@ -1094,4 +1096,5 @@ The `raw` format passes control characters through. A console sink writing to
 a terminal escapes them itself (`escape = "auto"`), so a log line cannot move
 the cursor, retitle the window, write the clipboard (OSC 52) or reorder text
 with bidi controls; pipes and files get the bytes unchanged. See
-[Sinks](sinks.md#console).
+[Sinks](sinks.md#console). `lw --tui`'s live view applies the same rule to
+everything it draws.

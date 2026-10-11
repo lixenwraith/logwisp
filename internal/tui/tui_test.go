@@ -8,6 +8,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/config"
 
+	"github.com/lixenwraith/color"
 	"github.com/lixenwraith/terminal"
 	ui "github.com/lixenwraith/terminal/tui"
 )
@@ -80,19 +81,20 @@ func focusKey(t *testing.T, a *app, name string) line {
 }
 
 // Each wire glyph's arms meet the cells beside it, whatever the count of
-// sources and sinks and the width, and every source and sink is wired to
-// the flow box's arrow
+// sources and sinks and the width, and every source is wired from past its
+// text to the flow box's arrow, and from the box to an arrow into each sink
 func TestWiresJoinWhereTheyMeet(t *testing.T) {
 	arms := map[rune]uint8{'│': 5, '─': 10, '└': 3, '┌': 6, '├': 7, '┘': 9, '┴': 11, '┐': 12, '┤': 13, '┬': 14, '┼': 15, '►': 10}
 	steps := map[uint8][2]int{1: {0, -1}, 2: {1, 0}, 4: {0, 1}, 8: {-1, 0}}
 	opposite := map[uint8]uint8{1: 4, 2: 8, 4: 1, 8: 2}
 	for n := range 16 {
 		sources, sinks := slices.Repeat([]string{"null"}, n%4), slices.Repeat([]string{"null"}, n/4)
-		for _, w := range []int{64, 80, 109, 130} {
+		for _, screen := range []int{64, 80, 109, 130, 160, 240} {
 			a := mono(pipeline(t, sources, sinks))
-			l := a.layout(w)
+			l := a.layout(screen)
+			w := l.w
 			cells := make([]terminal.Cell, w*l.h)
-			a.drawCanvas(ui.NewRegion(cells, w, 0, 0, w, l.h))
+			a.drawCanvas(ui.NewRegion(cells, w, 0, 0, w, l.h), l)
 			glyph := func(x, y int) rune {
 				if x < 0 || x >= w || y < 0 || y >= l.h {
 					return ' '
@@ -124,13 +126,13 @@ func TestWiresJoinWhereTheyMeet(t *testing.T) {
 			walk(l.box.x-1, l.entry)
 			walk(l.box.x+l.box.w+1, l.exit)
 			for i := range sources {
-				if s := l.nodes[sourcesCol][i]; !reached[[2]int{s.x + s.w, s.y}] {
-					t.Errorf("%d sources, %d sinks, %d columns: source %d not wired", len(sources), len(sinks), w, i)
+				if s := l.nodes[sourcesCol][i]; !reached[[2]int{s.x + s.end + 1, s.y}] {
+					t.Errorf("%d sources, %d sinks, %d columns: source %d not wired from its text", len(sources), len(sinks), w, i)
 				}
 			}
 			for i := range sinks {
-				if s := l.nodes[sinksCol][i]; !reached[[2]int{s.x - 1, s.y}] {
-					t.Errorf("%d sources, %d sinks, %d columns: sink %d not wired", len(sources), len(sinks), w, i)
+				if s := l.nodes[sinksCol][i]; !reached[[2]int{s.x - 1, s.y}] || glyph(s.x-1, s.y) != '►' {
+					t.Errorf("%d sources, %d sinks, %d columns: sink %d not wired by an arrow", len(sources), len(sinks), w, i)
 				}
 			}
 		}
@@ -138,10 +140,17 @@ func TestWiresJoinWhereTheyMeet(t *testing.T) {
 }
 
 // The parts stack under 64 columns; from 64 they sit side by side with the
-// inspector below, and from 110 the inspector sits beside them
+// inspector below, split as ever, and from 110 the inspector sits beside
+// them, taking what they leave up to 100 columns
 func TestLayoutFollowsTheWidth(t *testing.T) {
 	a := mono(pipeline(t, []string{"null"}, []string{"null"}))
-	for w, want := range map[int]string{63: "stacked", 64: "below", 109: "below", 110: "beside"} {
+	for w, box := range map[int]int{64: 18, 80: 24, 109: 30} {
+		if l := a.layout(w); l.box.w != box || l.nodes[sourcesCol][0].x != 0 || l.wire != gutter {
+			t.Errorf("%d columns: the box %d wide, the sources from %d, wires %d", w, l.box.w, l.nodes[sourcesCol][0].x, l.wire)
+		}
+	}
+	beside := map[int]int{110: 44, 240: 100} // the inspector's width
+	for w, want := range map[int]string{63: "stacked", 64: "below", 109: "below", 110: "beside", 240: "beside"} {
 		rows := text(render(a, w, 40), w)
 		at := func(s string) (int, int) {
 			for y, r := range rows {
@@ -163,9 +172,91 @@ func TestLayoutFollowsTheWidth(t *testing.T) {
 		case ruleX != 0 || ruleY <= flowY:
 			got = "lost"
 		}
-		if got != want {
-			t.Errorf("%d columns: %s, want %s\n%s", w, got, want, strings.Join(rows, "\n"))
+		if got != want || got == "beside" && w-ruleX != beside[w] {
+			t.Errorf("%d columns: %s, want %s, inspector %d wide\n%s", w, got, want, w-ruleX, strings.Join(rows, "\n"))
 		}
+	}
+}
+
+// From 110 columns the parts take the widths their content asks, nothing cut
+// short and a source's wire after its last word, with at most 16 columns of
+// wire a side, and sit centred
+func TestWideCanvasSizesToItsContent(t *testing.T) {
+	c := pipeline(t, []string{"file", "http_chain"}, []string{"null"})
+	if err := c.Set(0, compose.Node{Role: "source", ID: "file"}, "directory", "/var/log/app/nginx"); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []int{160, 240, 320} {
+		a := mono(c)
+		l := a.layout(w)
+		src, sink := l.nodes[sourcesCol][0], l.nodes[sinksCol][0]
+		wire, left, right := l.box.x-src.x-src.w, src.x, l.w-sink.x-sink.w
+		var canvas []string
+		for _, row := range text(render(a, w, 40), w)[1 : 1+l.h] {
+			canvas = append(canvas, string([]rune(row)[:l.w]))
+		}
+		if screen := strings.Join(canvas, "\n"); strings.Contains(screen, "…") || !strings.Contains(screen, "http_chain  listens ─") || wire > 16 || left-right > 1 || right-left > 1 {
+			t.Errorf("%d columns: wire %d, margins %d and %d\n%s", w, wire, left, right, screen)
+		}
+	}
+}
+
+// Beside the inspector a source or sink lists its options set, a row each and
+// four at most, or "defaults"; below it, their values in a line
+func TestNodesListTheirOptionsBesideTheInspector(t *testing.T) {
+	c := pipeline(t, []string{"file"}, []string{"null"})
+	for k, v := range map[string]string{"directory": "/srv", "pattern": "*.log", "check_interval_ms": "50", "from": "end", "raw": "true"} {
+		if err := c.Set(0, compose.Node{Role: "source", ID: "file"}, k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := mono(c)
+	for _, tc := range []struct {
+		w, rows int
+		show    []string
+	}{
+		{240, 5, []string{"█ directory ", "▌ defaults"}},
+		{100, 2, []string{"/srv  *.log"}},
+	} {
+		rows := text(render(a, tc.w, 30), tc.w)
+		x, blocks := a.layout(tc.w).nodes[sourcesCol][0].x, 0
+		for _, row := range rows {
+			if []rune(row)[x] == a.font.barOn {
+				blocks++
+			}
+		}
+		screen := strings.Join(rows, "\n")
+		for _, want := range tc.show {
+			if blocks != tc.rows || !strings.Contains(screen, want) {
+				t.Errorf("%d columns: %d rows, want %d and %q\n%s", tc.w, blocks, tc.rows, want, screen)
+			}
+		}
+	}
+}
+
+// The inspector's help sits two rows under its last key, not at the foot
+func TestInspectorHelpSitsUnderItsKeys(t *testing.T) {
+	a, w := mono(pipeline(t, []string{"file"}, []string{"null"})), 240
+	press(a, terminal.KeyEnter)
+	var rows []string
+	for _, row := range text(render(a, w, 67), w) {
+		rows = append(rows, string([]rune(row)[a.layout(w).w+1:]))
+	}
+	help, _ := a.help(a.lines()[a.insp.cursor])
+	y := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, help) })
+	if y < 3 || strings.TrimSpace(rows[y-1]) != "" || strings.TrimSpace(rows[y-2]) == "" {
+		t.Errorf("help on row %d\n%s", y, strings.Join(rows[:20], "\n"))
+	}
+}
+
+// Hints follow their text, three columns on, not the screen's far edge: the
+// keys after the status, the bar's verbs after the pipelines
+func TestHintsFollowTheirText(t *testing.T) {
+	a, w := mono(pipeline(t, []string{"null"}, []string{"null"})), 320
+	foot := text(render(a, w, 24), w)[23]
+	press(a, terminal.KeyUp)
+	if top := text(render(a, w, 24), w)[0]; !strings.HasPrefix(foot, " "+a.font.valid+" valid   a add") || !strings.Contains(top, "● p   a add") {
+		t.Errorf("%q\n%q", top, foot)
 	}
 }
 
@@ -181,7 +272,7 @@ func TestSelectionChangesAGlyph(t *testing.T) {
 		l := a.layout(80)
 		at := func(col, row int) rune {
 			cells := make([]terminal.Cell, 80*l.h)
-			a.drawCanvas(ui.NewRegion(cells, 80, 0, 0, 80, l.h))
+			a.drawCanvas(ui.NewRegion(cells, 80, 0, 0, 80, l.h), l)
 			s := l.nodes[col][row]
 			return cells[s.y*80+s.x].Rune
 		}
@@ -448,6 +539,72 @@ func TestOnlyFullColorPaintsTheBackground(t *testing.T) {
 	}
 }
 
+// The cursor row is one background under every role, or one reverse bar
+// without color: each cell of the chosen part's rows, but its tint block,
+// takes the Selected style, and a source's bar ends where its leader starts
+func TestTheCursorRowIsOneBackground(t *testing.T) {
+	c := pipeline(t, []string{"file"}, []string{"null"})
+	if err := c.Set(0, compose.Node{Role: "source", ID: "file"}, "directory", "/srv"); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []terminal.ColorMode{terminal.ColorModeNone, terminal.ColorMode16, terminal.ColorModeTrueColor} {
+		a := newApp(c, looks[mode], unicodeFont)
+		bar := func(cell terminal.Cell) bool {
+			if mode == terminal.ColorModeNone {
+				return cell.Attrs&terminal.AttrReverse != 0
+			}
+			return cell.Bg == a.th.Selected.Bg && cell.Attrs&(terminal.AttrBgColor|terminal.AttrReverse) == a.th.Selected.Attr&terminal.AttrBgColor
+		}
+		for _, w := range []int{80, 240} {
+			for _, at := range [][2]int{{sourcesCol, 0}, {flowCol, 1}} {
+				a.col, a.row[at[0]] = at[0], at[1]
+				cells, s := render(a, w, 30), a.layout(w).nodes[at[0]][at[1]]
+				for y := 1 + s.y; y < 1+s.y+s.h; y++ {
+					end := s.x + s.w
+					if at[0] == sourcesCol && y == 1+s.y {
+						end = s.x + s.end + 1
+					}
+					for x := s.x + 1; x < s.x+s.w; x++ {
+						if cell := cells[y*w+x]; bar(cell) != (x < end) {
+							t.Fatalf("mode %v, %d columns: %q at %d,%d is %+v", mode, w, cell.Rune, x, y, cell)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// The chosen part's tint block keeps its color on the cursor bar in every
+// tier: drawn in its tint, never reversed
+func TestTheChosenBlockKeepsItsTint(t *testing.T) {
+	c := pipeline(t, []string{"null"}, []string{"null"})
+	if err := c.Set(0, compose.Node{Role: "format"}, "type", "txt"); err != nil {
+		t.Fatal(err)
+	}
+	for mode, l := range looks {
+		a := newApp(c, l, unicodeFont)
+		for col, tint := range []ui.Style{l.Source, l.Flow, l.Sink} {
+			a.col, a.row[flowCol] = col, 2
+			cells, s := render(a, 80, 24), a.layout(80).nodes[col][a.row[col]]
+			if cell := cells[(1+s.y)*80+s.x]; cell.Rune != a.font.barOn || cell.Fg != tint.Fg || cell.Attrs&(terminal.AttrFgColor|terminal.AttrReverse) != tint.Attr&terminal.AttrFgColor {
+				t.Errorf("mode %v, column %d: %+v", mode, col, cell)
+			}
+		}
+	}
+}
+
+// 256 colors keep the site look's panel, edited field and cursor bar apart
+func TestSiteShadesStayApartIn256Colors(t *testing.T) {
+	l, shades := looks[terminal.ColorMode256], map[uint8]bool{}
+	for _, c := range []color.RGB{l.Text.Bg, l.Input.Bg, l.Selected.Bg} {
+		shades[terminal.RGBTo256(c)] = true
+	}
+	if len(shades) != 3 {
+		t.Errorf("%v", shades)
+	}
+}
+
 // ASCII outside a UTF-8 locale, CP437 on a text console, else Unicode
 func TestFontFollowsTheLocale(t *testing.T) {
 	for _, c := range []struct {
@@ -596,12 +753,26 @@ func TestConfirmAnswersOnEnter(t *testing.T) {
 	}
 }
 
-// The canvas scrolls to keep the chosen part in view, its bar solid
+// The canvas scrolls to keep the chosen part in view, its bar solid on every
+// row it takes
 func TestCanvasKeepsTheChosenInView(t *testing.T) {
 	a := mono(pipeline(t, []string{"null"}, slices.Repeat([]string{"null"}, 8)))
 	a.col, a.row[sinksCol] = sinksCol, 7
 	if screen := strings.Join(text(render(a, 80, 24), 80), "\n"); !strings.ContainsRune(screen, a.font.barOn) {
 		t.Fatalf("the eighth sink is out of view:\n%s", screen)
+	}
+	c := pipeline(t, slices.Repeat([]string{"file"}, 4), []string{"null"})
+	a = mono(c)
+	for _, n := range a.nodes(sourcesCol) {
+		for k, v := range map[string]string{"directory": "/srv", "pattern": "*.log", "check_interval_ms": "50"} {
+			if err := c.Set(0, n, k, v); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a.row[sourcesCol] = 3
+	if screen := strings.Join(text(render(a, 240, 14), 240), "\n"); strings.Count(screen, string(a.font.barOn)) != 4 {
+		t.Fatalf("the fourth source is not whole in view:\n%s", screen)
 	}
 }
 

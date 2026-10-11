@@ -27,8 +27,8 @@ streams, or downstream LogWisp nodes.
   certificate-based authorization
 - [Password Authentication](scram-auth-plan.md): design and rationale for
   Argon2id-SCRAM authentication; mTLS hardening
-- [CLI](cli.md): flags, signals, exit codes, `lw auth`; also the `lw(1)`
-  manual, [`lw.1`](lw.1)
+- [CLI](cli.md): flags, signals, exit codes, `lw --tui`, `lw auth`; also
+  the `lw(1)` manual, [`lw.1`](lw.1)
 - [Operations](operations.md): running, monitoring, tuning, troubleshooting
 - [To Do](todo.md): planned work: packaging, `lw --tui` and its shared configuration engine
 

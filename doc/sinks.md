@@ -122,7 +122,8 @@ id   = "discard"
 type = "null"
 ```
 
-No options. The input queue is fixed at 1000.
+No options. The input queue is fixed at 1000; a full one makes the pipeline
+wait, which costs nothing as it empties at once, rather than count a drop.
 
 ---
 

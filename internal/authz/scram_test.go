@@ -29,6 +29,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/testutil"
 
 	"github.com/lixenwraith/auth"
+	"golang.org/x/term"
 )
 
 func TestMain(m *testing.M) {
@@ -686,6 +687,43 @@ func TestOnceReadSourcesAreReadAtStartupOnly(t *testing.T) {
 	}
 	if pw, err := ReadPassword(path, "early", false); err != nil || pw != "pipe-secret" {
 		t.Fatalf("a reload of the early user: %q, %v", pw, err)
+	}
+}
+
+// While a host's screen owns the terminal its asker answers in the prompt's
+// place, once per user, like the terminal (a pty master is a terminal).
+func TestAskerAnswersForTheTerminal(t *testing.T) {
+	probe, err := os.Open("/dev/ptmx")
+	if err != nil {
+		t.Skip("no pseudo-terminal:", err)
+	}
+	isTerminal := term.IsTerminal(int(probe.Fd()))
+	probe.Close()
+	if !isTerminal {
+		t.Skip("/dev/ptmx is no terminal here")
+	}
+	var asked []string
+	SetAsker(func(user string, generate bool) ([]byte, error) {
+		asked = append(asked, fmt.Sprintf("%s %v", user, generate))
+		return []byte("screen-secret"), nil
+	})
+	t.Cleanup(func() { SetAsker(nil); readOnce.Lock(); clear(readOnce.m); readOnce.Unlock() })
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, user := range []string{"edge", "edge", "aggregator"} {
+			if pw, err := ReadPassword("/dev/ptmx", user, true); err != nil || pw != "screen-secret" {
+				t.Errorf("%s: %q, %v", user, pw, err)
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the terminal was asked, not the asker")
+	}
+	if fmt.Sprint(asked) != "[edge true aggregator true]" {
+		t.Errorf("asked %v", asked)
 	}
 }
 

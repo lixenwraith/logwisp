@@ -53,7 +53,6 @@ func main() {
 		}
 	}
 
-	// --- 1. Initial setup ---
 	// Emulates nohup
 	signal.Ignore(syscall.SIGHUP)
 
@@ -100,7 +99,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// --- 2. Bootstrap initial service ---
 	svc, statusReporterCancel, err := bootstrapInitial(ctx, cfg)
 	if err != nil {
 		logger.Error("msg", "Failed to initialize service", "error", err)
@@ -112,7 +110,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "lw: reading standard input; Ctrl-D ends it (lw --help for usage)")
 	}
 
-	// --- 3. Setup signals and shutdown ---
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
 
@@ -156,7 +153,7 @@ func main() {
 		if !fromDisk && cfg.StatusReporter == next.StatusReporter && reflect.DeepEqual(cfg.Pipelines, next.Pipelines) {
 			return
 		}
-		newSvc, newCfg, newStatusCancel, err := handleReload(ctx, next, svc, statusReporterCancel)
+		newSvc, newCfg, newStatusCancel, err := handleReload(ctx, next, svc, statusReporterCancel, nil)
 		switch {
 		case err == nil:
 			svc, cfg, statusReporterCancel = newSvc, newCfg, newStatusCancel
@@ -166,7 +163,6 @@ func main() {
 		}
 	}
 
-	// --- 4. Main Application Event Loop ---
 	logger.Info("msg", "Application started, waiting for signals or config changes")
 	for {
 		select {
@@ -176,13 +172,13 @@ func main() {
 				reload(true)
 			} else {
 				logger.Info("msg", "Shutdown signal received", "signal", sig)
-				cancel() // Trigger service shutdown via context
+				cancel()
 			}
 
 		case event, ok := <-configChanges:
 			if !ok {
 				logger.Warn("msg", "Configuration watch channel closed, disabling auto-reload")
-				configChanges = nil // Stop selecting on this channel
+				configChanges = nil
 				continue
 			}
 			if collectConfigChanges(event, configChanges) {
@@ -194,7 +190,7 @@ func main() {
 			return
 
 		case <-ctx.Done():
-			return // Exit the loop and trigger deferred shutdown
+			return
 		}
 	}
 }
@@ -236,8 +232,9 @@ func loadFailed(err error) int {
 }
 
 // composeOnScreen is lw --tui: it starts from the pipelines lw would load, or
-// the preset menu in place of the built-in pipe, then prints a form and exits,
-// or leaves inv to run the pipelines composed in place of the loaded ones
+// the preset menu in place of the built-in pipe, may run them on screen, then
+// prints a form and exits, or leaves inv to run the pipelines composed in
+// place of the loaded ones
 func composeOnScreen(inv *invocation) (code int, exit bool) {
 	fail := func(err error) (int, bool) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -257,7 +254,9 @@ func composeOnScreen(inv *invocation) (code int, exit bool) {
 	if err != nil {
 		return fail(err)
 	}
-	res, err := tui.Run(start, cfg.Color)
+	runner := &screenRunner{load: inv.load}
+	res, err := tui.Run(start, cfg.Color, runner)
+	runner.close()
 	switch {
 	case err != nil:
 		return fail(err)

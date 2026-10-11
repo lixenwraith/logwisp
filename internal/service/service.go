@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/core"
 	"github.com/lixenwraith/logwisp/internal/pipeline"
 
 	"github.com/lixenwraith/log"
@@ -25,7 +26,6 @@ type Service struct {
 	done         chan struct{} // closed when every pipeline has finished
 }
 
-// NewService creates a new, empty service
 func NewService(ctx context.Context, cfg *config.Config, logger *log.Logger) (*Service, error) {
 	serviceCtx, cancel := context.WithCancel(ctx)
 	svc := &Service{
@@ -37,12 +37,10 @@ func NewService(ctx context.Context, cfg *config.Config, logger *log.Logger) (*S
 	}
 
 	var errs error
-	// Initialize pipelines
 	for _, pipelineCfg := range cfg.Pipelines {
 		pipelineName := pipelineCfg.Name
 		logger.Info("msg", "Initializing pipeline", "pipeline", pipelineName)
 
-		// Create the pipeline
 		if pl, err := pipeline.NewPipeline(&pipelineCfg, logger); err != nil {
 			logger.Error("msg", "Failed to create pipeline",
 				"pipeline", pipelineCfg.Name,
@@ -63,13 +61,12 @@ func NewService(ctx context.Context, cfg *config.Config, logger *log.Logger) (*S
 	return svc, nil
 }
 
-// Start starts all or specific pipelines
+// Start starts the named pipelines, or all of them without names
 func (svc *Service) Start(names ...string) error {
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
 
 	var errs error
-	// If no names are provided, start all pipelines
 	if len(names) == 0 {
 		svc.logger.Info("msg", "Starting all pipelines")
 		for name, p := range svc.pipelines {
@@ -78,7 +75,6 @@ func (svc *Service) Start(names ...string) error {
 			}
 		}
 	} else {
-		// Start only the specified pipelines
 		svc.logger.Info("msg", "Starting specified pipelines", "pipelines", names)
 		for _, name := range names {
 			if p, exists := svc.pipelines[name]; exists {
@@ -108,18 +104,26 @@ func (svc *Service) Start(names ...string) error {
 	return errs
 }
 
+// SetTap gives every pipeline the viewer's tap; nil takes it away
+func (svc *Service) SetTap(t *core.Tap) {
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	for _, p := range svc.pipelines {
+		p.SetTap(t)
+	}
+}
+
 // Done is closed once every pipeline has finished: all their sources reached
 // the end of their input (stdin), or the service shut down.
 func (svc *Service) Done() <-chan struct{} { return svc.done }
 
-// Stop stops all or specific pipeline
+// Stop stops the named pipelines, or all of them without names
 func (svc *Service) Stop(names ...string) error {
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
 
 	var errs error
 
-	// If no names are provided, stop all pipelines
 	if len(names) == 0 {
 		svc.logger.Info("msg", "Stopping all pipelines")
 		for name, p := range svc.pipelines {
@@ -128,7 +132,6 @@ func (svc *Service) Stop(names ...string) error {
 			}
 		}
 	} else {
-		// Stop only the specified pipelines
 		svc.logger.Info("msg", "Stopping specified pipelines", "pipelines", names)
 		for _, name := range names {
 			if p, exists := svc.pipelines[name]; exists {
@@ -146,7 +149,6 @@ func (svc *Service) Stop(names ...string) error {
 	return errs
 }
 
-// GetPipeline returns a pipeline by its name
 func (svc *Service) GetPipeline(name string) (*pipeline.Pipeline, error) {
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
@@ -158,7 +160,6 @@ func (svc *Service) GetPipeline(name string) (*pipeline.Pipeline, error) {
 	return pipeline, nil
 }
 
-// ListPipelines returns the names of all currently managed pipelines
 func (svc *Service) ListPipelines() []string {
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
@@ -170,7 +171,6 @@ func (svc *Service) ListPipelines() []string {
 	return names
 }
 
-// RemovePipeline stops and removes a pipeline from the service
 func (svc *Service) RemovePipeline(name string) error {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
@@ -191,7 +191,7 @@ func (svc *Service) RemovePipeline(name string) error {
 	return nil
 }
 
-// Shutdown gracefully stops all pipelines managed by the service
+// Shutdown stops every pipeline for good, concurrently
 func (svc *Service) Shutdown() {
 	svc.shutdownOnce.Do(svc.shutdown)
 }
@@ -206,7 +206,6 @@ func (svc *Service) shutdown() {
 	}
 	svc.mu.Unlock()
 
-	// Stop all pipelines concurrently
 	var wg sync.WaitGroup
 	for _, pl := range pipelines {
 		wg.Add(1)
@@ -223,7 +222,6 @@ func (svc *Service) shutdown() {
 	svc.logger.Info("msg", "Service shutdown complete")
 }
 
-// GetGlobalStats returns statistics for all pipelines
 func (svc *Service) GetGlobalStats() map[string]any {
 	svc.mu.RLock()
 	defer svc.mu.RUnlock()
