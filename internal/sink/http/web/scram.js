@@ -16,9 +16,10 @@ const encoder = new TextEncoder();
 
 /**
  * Logs in to the logwisp http sink mounted at base (a URL ending in "/"), per
- * logwisp's doc/scram-auth-plan.md; it resolves only once the server has proved
- * it holds this user's verifier. The session is an HttpOnly cookie, or with
- * session "token" the returned token. onProgress(fraction) follows Argon2.
+ * logwisp's doc/security.md (Password authentication) and doc/chaining.md
+ * (Wire protocol); it resolves only once the server has proved it holds this
+ * user's verifier. The session is an HttpOnly cookie, or with session "token"
+ * the returned token. onProgress(fraction) follows Argon2.
  */
 export async function login(base, username, password, { onProgress, session = "cookie" } = {}) {
   if (session !== "cookie" && session !== "token") {

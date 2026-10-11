@@ -5,7 +5,7 @@ for what its flags leave open, prints a plan with the equivalent non-interactive
 command, then writes the files, runs `lw --check` on them (the node's binary or
 image, with its mounts) and starts the node. `--dry-run` stops at printing;
 `--yes` never asks and fails on a missing required value. It creates no
-certificates: see [Security](security.md#enabling-mtls).
+certificates: `lw tls` makes them ([CLI](cli.md#lw-tls)).
 
 ## Roles
 
@@ -123,14 +123,15 @@ needs `--force`.
 Application jails run an edge each; a `logs` jail aggregates. Every jail runs
 already, and the `logs` jail has an address the others reach (`AGG_ADDR`).
 
-1. Certificates: a CA, and a server certificate for `logs` naming `AGG_ADDR`
-   ([Security](security.md#enabling-mtls)).
+1. Certificates: `lw tls ca --dir PKI`, then
+   `lw tls cert --ca-dir PKI --name logs --hosts AGG_ADDR --server`, which
+   writes `PKI/logs.crt` and `PKI/logs.key` ([CLI](cli.md#lw-tls)).
 2. The aggregator, from the host:
 
    ```sh
    deploy/lw-deploy.sh --yes --runtime native --jail logs --role aggregator \
      --file-dir /var/log/logwisp --http-port 8080 \
-     --tls --cert-file logs.crt --key-file logs.key \
+     --tls --cert-file PKI/logs.crt --key-file PKI/logs.key \
      --auth scram --add-user web1 --add-user db1 \
      --sink-auth scram --add-viewer ops
    ```
@@ -142,13 +143,13 @@ already, and the `logs` jail has an address the others reach (`AGG_ADDR`).
    ```sh
    deploy/lw-deploy.sh --yes --runtime native --jail web1 --role edge \
      --log-dir /var/log/nginx --aggregator AGG_ADDR \
-     --tls --ca-file ca.crt --auth scram --password-file ~/logwisp-secrets/web1.pass
+     --tls --ca-file PKI/ca.crt --auth scram --password-file ~/logwisp-secrets/web1.pass
    ```
 
 4. Check: `jexec logs service logwisp status`, the files in the `logs` jail's
    `/var/log/logwisp`, and `https://AGG_ADDR:8080/status` with a token from
    `lw auth token --url https://AGG_ADDR:8080 --user ops --password-file
-   ~/logwisp-secrets/ops.pass --ca-file ca.crt` ([CLI](cli.md#lw-auth)).
+   ~/logwisp-secrets/ops.pass --ca-file PKI/ca.crt` ([CLI](cli.md#lw-auth)).
 
 Variants:
 
@@ -187,7 +188,7 @@ every key.
 - `acl` on the listeners: address rules, PROXY headers, per-client limits
 - mtls identities other than the certificate CN; `node_binding` other than
   `force`
-- creating certificates
+- creating certificates (`lw tls`)
 - several native instances on one host: use one per host or jail
 
 ## Testing the script

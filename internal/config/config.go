@@ -15,7 +15,6 @@ type Config struct {
 	// Selected file path is runtime metadata, never a configurable override.
 	ConfigFile string `toml:"-"`
 
-	// Existing fields
 	Logging   *LogConfig       `toml:"logging"`
 	Pipelines []PipelineConfig `toml:"pipelines"`
 }
@@ -79,15 +78,15 @@ type HeartbeatConfig struct {
 	Enabled          bool   `toml:"enabled" help:"send heartbeats"`
 	IntervalMS       int64  `toml:"interval_ms" default:"1000" lw:"min=100" help:"milliseconds between heartbeats"`
 	IncludeTimestamp bool   `toml:"include_timestamp" help:"stamp each heartbeat with its time"`
-	IncludeStats     bool   `toml:"include_stats" help:"add the pipeline's counters"`
-	Format           string `toml:"format" default:"txt" lw:"enum=txt|json|raw" help:"heartbeat format"`
+	IncludeStats     bool   `toml:"include_stats" help:"add type, beat_count and, from the second beat, the measured interval_ms"`
+	Format           string `toml:"format" default:"txt" lw:"enum=txt|json|raw" help:"no effect: heartbeats use the flow's format"`
 }
 
 // FormatConfig is how a pipeline writes its entries
 type FormatConfig struct {
 	Type            string `toml:"type" default:"raw" lw:"enum=raw|txt|json" help:"entry format"`
 	Flags           int64  `toml:"flags,omitempty" lw:"zero=by type" help:"formatter flags"`
-	TimestampFormat string `toml:"timestamp_format,omitempty" lw:"zero=RFC 3339" help:"Go time layout of timestamps"`
+	TimestampFormat string `toml:"timestamp_format,omitempty" lw:"zero=RFC 3339 with nanoseconds" help:"Go time layout of timestamps"`
 	SanitizerPolicy string `toml:"sanitizer_policy,omitempty" lw:"enum=raw|json|txt|shell,zero=by type" help:"how control characters are escaped"`
 }
 
@@ -143,7 +142,7 @@ type PluginSourceConfig struct {
 	ID         string         `toml:"id"`
 	Type       string         `toml:"type"`
 	Config     map[string]any `toml:"config"`
-	ConfigFile string         `toml:"config_file,omitempty"` // TODO: support for include/source mechanism for nested config
+	ConfigFile string         `toml:"config_file,omitempty"` // accepted, never read
 }
 
 // NullSourceOptions defines settings for a null source (no configuration needed)
@@ -152,10 +151,10 @@ type NullSourceOptions struct{}
 // RandomSourceOptions defines settings for a random log generator source
 type RandomSourceOptions struct {
 	IntervalMS int64  `toml:"interval_ms" default:"500" lw:"min=1" help:"milliseconds between entries"`
-	JitterMS   int64  `toml:"jitter_ms" lw:"min=0,zero=none" help:"random milliseconds added to the interval, at most the interval"`
+	JitterMS   int64  `toml:"jitter_ms" lw:"min=0,zero=none" help:"milliseconds the interval varies by, half each way; at most the interval"`
 	Format     string `toml:"format" default:"txt" lw:"enum=raw|txt|json" help:"entry format"`
-	Length     int64  `toml:"length" default:"20" lw:"min=1" help:"message characters"`
-	Special    bool   `toml:"special" help:"mix in control characters"`
+	Length     int64  `toml:"length" default:"20" lw:"min=1" help:"bytes of random text"`
+	Special    bool   `toml:"special" help:"mix in control and non-ASCII bytes"`
 }
 
 // FileSourceOptions defines settings for a file-based source
@@ -209,7 +208,7 @@ type PluginSinkConfig struct {
 	ID         string         `toml:"id"`
 	Type       string         `toml:"type"`
 	Config     map[string]any `toml:"config"`
-	ConfigFile string         `toml:"config_file,omitempty"` // TODO: support for include/source mechanism for nested config
+	ConfigFile string         `toml:"config_file,omitempty"` // accepted, never read
 }
 
 // NullSinkOptions defines settings for a null sink (no configuration needed)
@@ -230,7 +229,7 @@ type FileSinkOptions struct {
 	MaxSizeMB       int64   `toml:"max_size_mb" default:"100" lw:"min=1" help:"size at which a file rotates"`
 	MaxTotalSizeMB  int64   `toml:"max_total_size_mb" default:"1000" lw:"min=1" help:"size of all files, beyond which the oldest go"`
 	MinDiskFreeMB   int64   `toml:"min_disk_free_mb" lw:"zero=none" help:"free space kept on the disk; negative means 100"`
-	RetentionHours  float64 `toml:"retention_hours" default:"168" lw:"min=0" help:"hours a file is kept"`
+	RetentionHours  float64 `toml:"retention_hours" default:"168" lw:"min=0,zero=kept" help:"hours a .log file is kept; 0 keeps them"`
 	BufferSize      int64   `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
 	FlushIntervalMs int64   `toml:"flush_interval_ms" default:"100" lw:"min=1" help:"milliseconds between flushes"`
 }

@@ -249,6 +249,16 @@ func TestInspectorHelpSitsUnderItsKeys(t *testing.T) {
 	}
 }
 
+// An unset key shows its default, what zero means when it has none, or the
+// kind of value it takes
+func TestAnUnsetKeyShowsItsDefaultFirst(t *testing.T) {
+	for want, k := range map[string]config.Key{"168": {Default: "168", Zero: "kept"}, "(off)": {Zero: "off"}, "dir": {Hint: "dir"}} {
+		if got := placeholder(k); got != want {
+			t.Errorf("%+v shows %q, want %q", k, got, want)
+		}
+	}
+}
+
 // Hints follow their text, three columns on, not the screen's far edge: the
 // keys after the status, the bar's verbs after the pipelines
 func TestHintsFollowTheirText(t *testing.T) {

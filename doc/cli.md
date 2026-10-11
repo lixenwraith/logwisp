@@ -33,11 +33,13 @@ first argument.
   one-letter short form that stands for it in every command that has it:
   - `-c` `--config`, `-p` `--preset`, `-q` `--quiet`, `-t` `--check`,
     `-T` `--tui`, `-V` `--version`, `-h` `--help`
-  - `-u` `--user` in `lw auth` and `lw preset edge`
+  - `-u` `--user` in `lw auth` and in `lw preset serve`, `edge` and
+    `aggregator`
 - A value follows as the next argument or after `=` (`-c FILE`, `-c=FILE`,
   `--config FILE`, `--config=FILE`); a value that starts with `-` follows `=`,
   and `--` ends the options.
-- A switch (`--check`, `--quiet`, any boolean key) takes no separate value:
+- `--check`, `--dump`, `--tui`, `--version` and `--schema` take no value
+  (`--check=false` is a usage error); a boolean key takes one only after `=`:
   `--quiet=false`, not `--quiet false`.
 - Short options do not combine (`-q -t`, not `-qt`) or take an attached value
   (`-cFILE`).
@@ -75,8 +77,8 @@ pipelines have [their own flags](#pipelines):
   - a key: its kind, default, rules and help; a table (`tls`, `auth`, `acl`)
     holds its own keys, those of the plugin's side (listener or dialer),
     HTTP's only on a plugin that speaks HTTP. Every listener lists
-    `auth.node_binding` and `auth.trusted_proxies`, which validation admits
-    only on chain sources and on the http sink
+    `auth.node_binding`, which only chain sources use, and every HTTP
+    listener `auth.trusted_proxies`, which only the `http` sink admits
   - a flow stage: its keys, and `on`, the values that turn it on
   - a preset key: its default and help, and the choices (`enum`) and `hint`
     of the option it sets
@@ -116,19 +118,22 @@ destination is derived from `--logging.output`.
 ### Pipelines
 
 Pipeline flags define whole pipelines. They replace the configuration file's
-pipelines and the built-in default; every other key keeps its precedence.
+pipelines and the built-in default, and a reload keeps them; every other key
+keeps its [precedence](configuration.md#configuration-precedence).
 
-- `--pipeline NAME` starts a pipeline; specs before the first one go to a
-  pipeline named `cli`, or after the preset that starts them
-- `-p SPEC`, `--preset SPEC` starts a pipeline with a [preset](#presets);
-  later flags add sources, sinks and filters to it, or replace its format,
-  rate limit and heartbeat
+- `--pipeline NAME` starts a pipeline named NAME; specs before the first one
+  go to one pipeline, named after its preset, else `cli`
+- `-p SPEC`, `--preset SPEC` begins the pipeline with a [preset](#presets),
+  as its first spec; a second preset needs its own `--pipeline NAME`. Later
+  flags add sources, sinks and filters, set a rate limit and heartbeat, or
+  replace its format
 - `--source SPEC`, `--sink SPEC` and `--filter SPEC` add a stage, repeatable
 - `--format SPEC`, `--rate-limit SPEC` and `--heartbeat SPEC`, once per pipeline
 - a pipeline without `--source` reads stdin (console source `stdin`), one
   without `--sink` writes stdout (console sink `stdout`)
 - stdin has one reader, so the whole configuration holds at most one console
-  source: `pipeline "b": a console source already reads stdin in pipeline "a"`
+  source: `pipelines[1].plugin_sources[stdin]: one console source may run,
+  and pipeline "a" has it`
 
 A SPEC is `TYPE:key=value,...`, or `key=value,...` without a TYPE:
 
@@ -161,8 +166,8 @@ Errors name the flag and the offending part, and nothing starts:
 --source file,directory=/x: TYPE ends at ':', as in file:directory=/x
 ```
 
-A misspelled plugin key fails when the plugin is built, before any listener
-opens: `failed to create sink http: ... unknown key "tls.enabeld"`.
+A misspelled plugin key fails validation, before anything is built or opened:
+`pipelines[0].plugin_sinks[http].config: unknown key "tls.enabeld"`.
 
 ```bash
 # tail a directory, serve it over SSE on every interface; a browser at
@@ -189,17 +194,23 @@ Pipelines over stdin and stdout are under [Usage Patterns](#usage-patterns).
 `--preset NAME:key=value,...` takes the [SPEC](#pipelines) syntax. A list
 key (`hosts`, `proxy`, `allow`, `deny`) takes several values: repeated
 (`hosts=a,hosts=b`) or `\,`-separated in a SPEC, `,`-separated in `lw preset`
-flags and the TUI; any other key takes one.
-`lw preset NAME [--key value ...]` prints the pipeline a preset expands to,
-ready for a configuration file; its flags are the keys, spelled as in the SPEC
-(`--password_file`), and `-u` is `--user`;
-`lw preset NAME -h` lists its keys and defaults, `lw preset` the presets. An
-unknown key fails and lists the valid ones. A `path` is a file, a directory
-(its files) or a glob; a preset that takes one reads stdin without it, and
-`from` (`end`, or `start`) is where reading a file starts. `user` names one
-SCRAM user, an edge's login or a listener's only user in place of `users`;
-`password_file` holds its password and defaults to `/dev/tty`, which asks
-([password sources](security.md#one-user-without-a-credentials-file)).
+flags (a repeated flag keeps only its last value) and the TUI; any other key
+takes one. `lw preset NAME [--key value ...]` prints the pipeline a preset
+expands to, ready for a configuration file; its flags are the keys, spelled as
+in the SPEC (`--password_file`). `lw preset NAME -h` lists its keys and
+defaults, `lw preset -h` the presets. An unknown key fails and lists the valid
+ones.
+
+- `path`: a file, a directory (its files) or a glob, and this host decides
+  which: an existing directory is followed whole, any other path is a file
+  name or glob in its directory; for a directory not here, as in a `--dump`
+  for another host, write `DIR/*`. Without one, `serve` and `edge` read stdin
+- `from` (`end`, or `start`): where reading a file starts
+- `user`: one SCRAM user, an edge's login or a listener's only user in place
+  of `users`; `password_file` holds its password and defaults to `/dev/tty`,
+  which asks ([password sources](security.md#one-user-without-a-credentials-file))
+
+The presets, each with its keys:
 
 - `pipe`: stdin to stdout, the built-in default
   - `format` (`raw`)
@@ -242,7 +253,7 @@ lw --preset tail:path=/var/log/app
 lw --preset serve:path=/var/log/app
 
 # serve it over HTTPS, self-signed, to SCRAM users; keep the result as a file
-lw --preset serve:path=/var/log/app,tls=self,users=/etc/logwisp/users.toml --dump > serve.toml
+lw --preset 'serve:path=/var/log/app/*,tls=self,users=/etc/logwisp/users.toml' --dump > serve.toml
 
 # an aggregator with a certificate made at startup, and an edge pinning it
 lw --preset aggregator:users=/etc/logwisp/users.toml,out=/var/log/edges
@@ -264,8 +275,10 @@ changes when lw restarts; a fleet signs with an issuer instead, and edges set
 
 ## Environment Variables
 
-Configuration paths map to environment variables by replacing `.` with `_`,
-uppercasing and adding `LOGWISP_`:
+Every setting is also a variable: its path with `.` as `_`, uppercased, after
+`LOGWISP_`. An empty variable, a setting's or a pipeline's, counts as unset.
+They rank below flags and above the file
+([precedence](configuration.md#configuration-precedence)).
 
 ```bash
 export LOGWISP_QUIET=true
@@ -273,10 +286,7 @@ export LOGWISP_LOGGING_LEVEL=debug
 export LOGWISP_LOGGING_FILE_DIRECTORY=/var/log/logwisp
 ```
 
-Bare names used by older versions are now ignored. Rename them to the prefixed
-forms when upgrading; see [Configuration](configuration.md#environment-variables).
-
-The path resolver reads these variables directly:
+The path resolver reads two more:
 
 - `LOGWISP_CONFIG_FILE`: the configuration file path, joined onto
   `LOGWISP_CONFIG_DIR` when both are set
@@ -290,14 +300,16 @@ Any pipeline flag on the command line makes LogWisp ignore all of them.
 
 - `LOGWISP_PIPELINE`: the pipeline's name, default the `LOGWISP_PRESET` name,
   else `cli`
-- `LOGWISP_PRESET`: the [preset](#presets) that starts it
+- `LOGWISP_PRESET`: the [preset](#presets) that begins it
 - `LOGWISP_SOURCE`, `LOGWISP_SINK`, `LOGWISP_FILTER`: one stage each
   - `LOGWISP_SOURCE_1` .. `LOGWISP_SOURCE_N` add more, after the unnumbered
     one in numeric order; likewise `LOGWISP_SINK_N` and `LOGWISP_FILTER_N`
 - `LOGWISP_FORMAT`, `LOGWISP_RATE_LIMIT`, `LOGWISP_HEARTBEAT`
-- an empty variable counts as unset
 
-A container needs no configuration file:
+A container needs no configuration file. Without one lw logs less
+([Built-in Defaults](#built-in-defaults)), so pass `LOGWISP_LOGGING_LEVEL=info`
+and `LOGWISP_STATUS_REPORTER=true`; the image sets neither, as a variable would
+override a mounted file's value:
 
 ```bash
 docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
@@ -306,44 +318,20 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
   -e LOGWISP_FILTER='exclude:patterns=DEBUG' \
   -e LOGWISP_SINK='http:host=0.0.0.0,port=8080' \
   -e LOGWISP_SINK_1=console \
-  -e LOGWISP_LOGGING_LEVEL=info \
-  logwisp
+  -e LOGWISP_LOGGING_LEVEL=info -e LOGWISP_STATUS_REPORTER=true \
+  logwisp:dev
 ```
-
-Without a file, lw logs at `warn` with no status reporter, so a container
-configured through the environment passes `LOGWISP_LOGGING_LEVEL=info` (and
-`LOGWISP_STATUS_REPORTER=true`) to keep the service defaults. The image does
-not set them: environment variables would override a mounted file's values.
-
-## Precedence
-
-- Pipelines
-  - pipeline flags, if any are given
-  - else pipeline variables, if any are set
-  - else the configuration file's `[[pipelines]]`
-  - else the built-in `pipe` ([Built-in Defaults](#built-in-defaults))
-- Every other key
-  1. command-line flags
-  2. environment variables
-  3. configuration file
-  4. built-in defaults; `logging.level` and `status_reporter` depend on
-     whether a file was found
-
-A reload rereads the file and keeps the command-line or environment pipelines.
 
 ## Signals
 
 - `SIGINT`, `SIGTERM`: graceful shutdown
-- `SIGHUP`, `SIGUSR1`: reload the configuration
+- `SIGHUP`, `SIGUSR1`: reload: the file is reread and the whole service
+  rebuilt; a configuration error leaves the running service untouched
+  ([Hot Reload](configuration.md#hot-reload))
+- `SIGHUP` before the signal handler is installed is ignored, so LogWisp
+  survives a terminal hang-up like `nohup`
 - On the `lw --tui` screen, `SIGTERM` and `SIGHUP` close it, stopping what
   `t` runs, and lw exits 0
-
-`SIGHUP` is ignored during startup, before the signal handler is installed, so
-LogWisp survives a terminal hang-up like `nohup`. Once running, it triggers a
-reload rather than terminating.
-
-Reload rebuilds the whole service. A configuration error leaves the running
-service untouched; see [Configuration](configuration.md#hot-reload).
 
 ## Exit Codes
 
@@ -353,14 +341,11 @@ service untouched; see [Configuration](configuration.md#hot-reload).
   included, and a bad value on the command line), a logger init failure, a
   service bootstrap failure
 - `2`: a usage error (an unknown option, a word no option takes, a missing
-  value or `-c` path), or an explicitly requested configuration file that is
-  not found
+  value or `-c` path), or a configuration file named by `-c`, `--config=` or
+  a `LOGWISP_CONFIG_*` variable that does not exist
+  ([File Location](configuration.md#file-location))
 - killed by `SIGPIPE` (shell status `141`): the reader of stdout went away, as
   in `lw | head`; `cat` ends the same way
-
-A missing file is exit code 2 only when it was named explicitly (`-c`,
-`--config=`, or the `LOGWISP_CONFIG_*` variables). A missing discovered default
-is not an error, and LogWisp starts on built-in defaults.
 
 ## Built-in Defaults
 
@@ -417,9 +402,6 @@ journalctl -f | lw --sink http:host=127.0.0.1,port=8080
 lw --source file:directory=/var/log/app,pattern='*.log' > all.log
 ```
 
-A console sink never drops: when its reader is slow, the pipeline waits, and
-so does the reading of stdin.
-
 **Development**
 
 ```bash
@@ -439,7 +421,7 @@ exits 1 (2 when a named file is missing, see [Exit Codes](#exit-codes)):
 
 ```bash
 lw --check -c /etc/logwisp/logwisp.toml
-lw --check --source file:directory=/var/log/app --sink http:port=8080
+lw --check --source file --sink tcp:port=70000
 ```
 
 ```text
@@ -490,11 +472,13 @@ WebAssembly; `t` runs them under the screen and shows what flows.
   required key, then edits a value (empty returns it to its default), opens
   a list's choices or adds on an add row; in a value, Enter sets it, and Tab
   or Up/Down set it and move. Left/Right step a choice or set a switch;
-  Space flips it; Esc goes back. `a` adds a source, sink or filter; `c`
-  changes a source's or sink's type in its place; `d` deletes, or returns a
-  value to its default; Space turns a flow stage on or off; `J`/`K` move a
-  filter; `[` `]` switch pipelines; `p` presets; `!` shows every problem,
-  moving to the first; `r` runs; `t` taps; `o` output; `?` keys; `q` quits.
+  Space flips it; Esc goes back; Tab moves to the next column. `a` adds a
+  source, sink or filter; `c` changes a source's or sink's type in its place,
+  and moves to a filter's (in the inspector) or the format's `type` row; `d`
+  deletes, or returns a value to its default; Space turns a flow stage on or
+  off; `J`/`K` move a filter; `[` `]` switch pipelines; `p` presets; `!` shows
+  every problem, moving to the first; `r` runs; `t` taps; `o` output; `?`
+  keys; `q` or Ctrl-C quits.
 - Pipelines: Up from a column's top row reaches the bar, where `[` `]` or
   Left/Right switch, `a` adds one (empty or from a preset), Enter renames and
   `d` deletes, asking first when it has parts.
@@ -520,7 +504,8 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     dropped by sinks, and missed by the screen: the view never slows a
     pipeline.
 - Live view: from 40 rows it sits under the diagram; shorter, it takes the
-  screen while it has the keys. `t` or Esc gives them back to the diagram.
+  screen while it has the keys. `t` or Esc gives them back to the diagram
+  (Esc first closes an open detail).
   - The canvas cursor picks its point, so the view opens on the first
     source: a source shows its entries, a flow stage (or the filter the
     inspector is on) what reaches it, the heartbeat its own, the sinks (or
@@ -533,13 +518,13 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     screen drops columns; a dropped entry is marked; a rune a terminal would
     act on or draw wider than a cell shows as a placeholder.
   - Keys: arrows or `jk` move (up pauses, down onto the newest follows),
-    PgUp/PgDn; `g` the oldest, `G` or `f` the newest; Enter the row's
-    detail, `J`/`K` scroll it; `/` only rows matching a pattern, ignoring
-    case when it is all lower case (clearing it, or a level, keeps the
-    focused row in place, paused there unless it is the newest); `1`-`5`
-    trace to error and up, `0` all; `s` chooses the point;
-    `i` inspects the stage that dropped the row; `c` clears; `q`, `?`, `r`,
-    `o`, `[` and `]` act as on the diagram.
+    PgUp/PgDn; `g` or Home the oldest, `G`, End or `f` the newest; Enter the
+    row's detail, `J`/`K` scroll it; `/` only rows matching a pattern,
+    ignoring case when it is all lower case (clearing it, or a level, keeps
+    the focused row in place, paused there unless it is the newest); `1`-`5`
+    trace to error and up, `0` all; `s` chooses the point; `i` inspects the
+    stage that dropped the row; `c` clears; `q`, Ctrl-C, `?`, `r`, `o`, `[`
+    and `]` act as on the diagram.
   - The detail, beside the rows from 160 columns and under them otherwise:
     time and the stamp as written, level, origin, the verdict with a
     filter's patterns, the layout read, message, fields, and the payload as
@@ -573,8 +558,6 @@ lw auth token       --url https://HOST:PORT[/PATH] -u NAME [--password-file FILE
                     [--unbound] [TLS flags]
 lw auth stream      --addr HOST:PORT -u NAME [--password-file FILE] [TLS flags]
 ```
-
-`-u` is short for `--user`.
 
 - `add-user`: adds a user, or replaces its password
 - `remove-user`: removes a user; refuses the last one
@@ -611,8 +594,9 @@ echo; a file, `/dev/fd/N` or a pipe is read as by a
 `--ca-file` (default: system roots) or `--pin-sha256` (the `tls.pin_sha256` a
 self-signed listener logs), `--server-name` (default: the host), and
 `--cert-file` / `--key-file` for a listener with `tls.client_auth`. There is no
-flag to skip verification: an unverified server could relay the login. Redirects are not followed. `--unbound` logs in to an `http` sink behind
-a TLS-terminating proxy (`auth.trusted_proxies`), still pinning the proxy's
+flag to skip verification: an unverified server could relay the login.
+Redirects are not followed. `--unbound` logs in to an `http` sink behind a
+TLS-terminating proxy (`auth.trusted_proxies`), still pinning the proxy's
 certificate across the two requests; only then may `--url` carry the path the
 proxy mounts LogWisp at. `stream` exits `0` on `SIGINT` or `SIGTERM`, and `1`
 when the server ends the stream (a reload or shutdown).
@@ -665,8 +649,8 @@ lw tls cert --ca-dir DIR --name NAME [--hosts NAME,...] [--server] [--client]
   `tls.issuer_cert_file` and `tls.issuer_key_file`.
 - `cert`: `NAME.crt` and `NAME.key`, in `--out` (default: `--ca-dir`).
   - `--server` for a listener: `--hosts` lists the DNS names and IP addresses
-    it carries, default `NAME` (`--host`, its earlier name, still works);
-    `--client` for a dialer presenting a certificate; both may be given.
+    it carries, default `NAME`; `--host` is an alias. `--client` for a dialer
+    presenting a certificate; one of the two is required, both may be given.
   - `NAME` is the subject CN, the identity `auth.type = "mtls"` matches.
   - Valid 397 days (the longest browsers accept), never past the CA. It prints
     the certificate's `pin_sha256`.
@@ -687,10 +671,12 @@ lw config init [--out FILE]
 `config/logwisp.toml`, every option with its default, to edit and run. It
 never replaces a file (remove one to replace it). Without `--out` it writes
 `~/.config/logwisp/logwisp.toml`, the file lw reads without `-c` unless a
-`LOGWISP_CONFIG_*` variable names another; with that file in place, lw
-without pipeline options runs its pipelines rather than filtering stdin.
-Any other path is run with `-c FILE`; lw prints which applies. `lw --dump` prints the
-effective configuration instead, flags and environment included.
+`LOGWISP_CONFIG_*` variable names another; any other path is run with
+`-c FILE`, and lw prints which applies. As shipped the file defines no
+pipeline, so lw still filters stdin, though its own log on stderr is at the
+file's default `info` rather than `warn`; once it defines `[[pipelines]]`, lw
+without pipeline options runs them instead. `lw --dump` prints the effective
+configuration, flags and environment included.
 
 ```bash
 lw config init

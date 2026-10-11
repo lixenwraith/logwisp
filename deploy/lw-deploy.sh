@@ -70,7 +70,7 @@ Outputs (aggregator, standalone)
   --tcp-port PORT         serve a plain TCP stream
   --format raw|txt|json   entry format (default txt)
 
-TLS (this script creates no certificates: doc/security.md#enabling-mtls)
+TLS (this script creates no certificates: lw tls makes them, doc/cli.md#lw-tls)
   --tls, --no-tls         TLS on every network link of the node
   --cert-file FILE        this node's certificate: listeners, and edges under mtls
   --key-file FILE         its private key
@@ -122,7 +122,7 @@ Not covered by this script; edit the generated configuration instead
 - proxy mode: browser logins through a TLS-terminating proxy (trusted_proxies)
 - acl on the listeners: address rules, PROXY headers, per-client limits
 - mtls identities other than the certificate CN; node_binding other than force
-- creating certificates: openssl or your PKI (doc/security.md#enabling-mtls)
+- creating certificates: lw tls, openssl or your PKI (doc/cli.md#lw-tls)
 - several native instances on one host: use one per host or jail
 EOF
 }
@@ -612,7 +612,7 @@ resolve() {
 	[ -z "$SINK_ALLOW" ] || _isa=mtls
 	[ -z "$ADD_VIEWERS" ] || _isa=scram
 	if [ "$TLS" = yes ]; then
-		[ "$INTERACTIVE" = 0 ] || note "Certificates come from openssl or your PKI: doc/security.md#enabling-mtls" >&2
+		[ "$INTERACTIVE" = 0 ] || note "Certificates come from lw tls, openssl or your PKI: doc/cli.md#lw-tls" >&2
 		if [ "$ROLE" = edge ]; then
 			ask_opt CA_FILE --ca-file "CA bundle verifying the aggregator (empty: the system roots)" v_file
 		else

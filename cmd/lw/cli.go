@@ -198,7 +198,7 @@ func parseCommandLine(argv []string) (inv invocation, err error) {
 	}
 	specFlags, settings := config.SpecFlags(), config.Settings()
 	unexpected := func(word string) error {
-		return fmt.Errorf("unexpected argument %q: lw takes options only (a configuration file is -c FILE, a switch's value follows '=')", word)
+		return fmt.Errorf("unexpected argument %q: lw takes options only (a configuration file is -c FILE, a boolean key's value follows '=')", word)
 	}
 	next := func(i *int) string {
 		if *i+1 < len(argv) && !strings.HasPrefix(argv[*i+1], "-") {
