@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -19,14 +21,14 @@ func TestPresetStartsAndNamesItsPipeline(t *testing.T) {
 		Flow:          &FlowConfig{Format: &FormatConfig{Type: "json"}},
 		PluginSources: []PluginSourceConfig{{ID: "file", Type: "file", Config: map[string]any{"directory": "/var/log", "pattern": "app.log", "from": "end"}}},
 		PluginSinks: []PluginSinkConfig{
-			{ID: "stdout", Type: "console", Config: map[string]any{"color": "auto"}},
+			{ID: "console", Type: "console", Config: map[string]any{"color": "auto"}},
 			{ID: "null", Type: "null", Config: map[string]any{}},
 		},
 	}, {
 		Name:          "mine",
 		Flow:          &FlowConfig{Format: &FormatConfig{Type: "raw"}},
-		PluginSources: []PluginSourceConfig{{ID: "stdin", Type: "console", Config: map[string]any{}}},
-		PluginSinks:   []PluginSinkConfig{{ID: "stdout", Type: "console", Config: map[string]any{"color": "auto"}}},
+		PluginSources: []PluginSourceConfig{{ID: "console", Type: "console", Config: map[string]any{}}},
+		PluginSinks:   []PluginSinkConfig{{ID: "console", Type: "console", Config: map[string]any{"color": "auto"}}},
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("pipelines:\n got %+v\nwant %+v", got, want)
@@ -122,11 +124,16 @@ func TestPresetUserWithoutPasswordFileAsks(t *testing.T) {
 	}
 }
 
-// A preset path is what isDir answers, a directory named with brackets too,
-// and off the target host the user's answer, a single file too; without one
-// it is a directory when it ends in '/', a pattern when it holds a glob, and
-// otherwise ErrPathKind asks
+// A preset path ending in '/' is a directory, there yet or not; any other is
+// what isDir answers, a directory named with brackets too: this host's,
+// reading ~ as home, or off it the user's answer, a single file too; without
+// one it is a pattern when it holds a glob, and otherwise ErrPathKind asks
 func TestPresetPathKind(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.Mkdir(filepath.Join(home, "logs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	yes := func(string) (bool, error) { return true, nil }
 	file := Answers(map[string]bool{"/srv/app.log": false})
 	for _, c := range []struct {
@@ -134,7 +141,8 @@ func TestPresetPathKind(t *testing.T) {
 		isDir IsDir
 		want  string
 	}{{"/srv/app/", nil, "/srv/app/ *"}, {"/srv/app/*.log", nil, "/srv/app *.log"}, {"/srv/app[1]", yes, "/srv/app[1] *"}, {"/srv/app", nil, ""},
-		{"/srv/app.log", file, "/srv app.log"}, {"/srv/app", file, ""}, {"/srv/app/", file, "/srv/app/ *"}} {
+		{"/srv/app.log", file, "/srv app.log"}, {"/srv/app", file, ""}, {"/srv/app/", file, "/srv/app/ *"},
+		{"~/logs", HostIsDir, "~/logs *"}, {home + "/later/", HostIsDir, home + "/later/ *"}} {
 		p, err := ExpandPreset("tail", map[string]string{"path": c.path}, c.isDir)
 		if c.want == "" {
 			if !errors.Is(err, ErrPathKind) {

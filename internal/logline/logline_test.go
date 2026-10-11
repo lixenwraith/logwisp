@@ -20,7 +20,8 @@ func arrived(line string) core.LogEntry {
 // Each writer's line yields its time, level, tag and message from where that
 // writer puts them, the rest as fields in its order; the want is "layout |
 // stamp=time | level | tag | message | fields". vif's, lw's and slog's lines
-// are their writers' output; the others follow their formats' documentation.
+// are their writers' output (lw's key=value line as its log library writes one
+// with FlagKV); the others follow their formats' documentation.
 func TestReadFindsTheRolesWhereTheirWriterPutsThem(t *testing.T) {
 	for _, c := range []struct {
 		in   core.LogEntry
@@ -65,6 +66,31 @@ func TestReadFindsTheRolesWhereTheirWriterPutsThem(t *testing.T) {
 			`json, message in msg | 2026-10-10T20:30:23.451515887Z=2026-10-10T20:30:23.451515887Z | INFO | app.log | "slog style" | user.id="7" user.name="a"`},
 		{arrived(`{"time":"2026-10-10T20:39:59.809016667Z","level":-4,"msg":"slog level as a number","attempt":2}`),
 			`json, message in msg | 2026-10-10T20:39:59.809016667Z=2026-10-10T20:39:59.809016667Z | DEBUG | app.log | "slog level as a number" | attempt="2"`},
+		// logfmt, slog's text handler and go-kit's: key=value pairs, a value
+		// quoted as Go quotes it
+		{arrived(`time=2026-10-11T05:23:21.410Z level=WARN msg="disk almost full" pct=91 disk.dev=/dev/sda1 err="open \"x\": denied"`),
+			`logfmt, message in msg | 2026-10-11T05:23:21.410Z=2026-10-11T05:23:21.41Z | WARN | app.log | "disk almost full" | pct="91" disk.dev="/dev/sda1" err="open \"x\": denied"`},
+		{arrived(`level=info ts=2026-10-10T12:00:00.000Z caller=main.go:12 listen=:8080`),
+			`logfmt, no message | 2026-10-10T12:00:00.000Z=2026-10-10T12:00:00Z | INFO | app.log | "" | caller="main.go:12" listen=":8080"`},
+		// lw's own log as text: the level word after the stamp is the level, taken
+		// off the message (the entry names none here); its pairs, once key=value,
+		// are a record's
+		{core.LogEntry{Source: "lw", Message: `2026-10-11T05:23:20.28585127Z INFO msg "Waiting for directory" component file_source instance_id file directory /home/me/.local/state/vif/log`},
+			`text, stamped, level word | 2026-10-11T05:23:20.28585127Z=2026-10-11T05:23:20.28585127Z | INFO | lw | "msg \"Waiting for directory\" component file_source instance_id file directory /home/me/.local/state/vif/log" | `},
+		{arrived(`2026-10-11T05:19:17.289770496Z INFO msg="Waiting for directory" component=file_source instance_id=file directory=/home/me/.local/state/vif/log`),
+			`logfmt, stamped, level word, message in msg | 2026-10-11T05:19:17.289770496Z=2026-10-11T05:19:17.289770496Z | INFO | file_source | "Waiting for directory" | instance_id="file" directory="/home/me/.local/state/vif/log"`},
+		// the line's start keeps its stamp and level word; pairs naming them are fields
+		{arrived(`2026-10-11T05:00:00Z WARN msg="request done" t=3 level=debug`),
+			`logfmt, stamped, level word, message in msg | 2026-10-11T05:00:00Z=2026-10-11T05:00:00Z | WARN | app.log | "request done" | t="3" level="debug"`},
+		// an '=' in text is text: pairs alone, a level or message among them, count
+		{arrived(`x=1 y=2 note="no level or message key"`),
+			`text | =- |  | app.log | "x=1 y=2 note=\"no level or message key\"" | `},
+		{arrived(`msg=not only pairs`),
+			`text | =- |  | app.log | "msg=not only pairs" | `},
+		{arrived(`level=INFO msg="clipped at an escape\`),
+			`text | =- | INFO | app.log | "level=INFO msg=\"clipped at an escape\\" | `},
+		{arrived(`2026-10-10T12:00:00Z DEBUG cache hit ratio=0.93`),
+			`text, stamped, level word | 2026-10-10T12:00:00Z=2026-10-10T12:00:00Z | DEBUG | app.log | "cache hit ratio=0.93" | `},
 		// docker's log ends in its newline; the level is the entry's
 		{arrived(`{"log":"docker line ERROR x\n","stream":"stderr","time":"2026-10-10T12:00:00.1Z"}`),
 			`json, message in log | 2026-10-10T12:00:00.1Z=2026-10-10T12:00:00.1Z | ERROR | app.log | "docker line ERROR x" | stream="stderr"`},
@@ -86,9 +112,12 @@ func TestReadFindsTheRolesWhereTheirWriterPutsThem(t *testing.T) {
 		{arrived(`{"msg":"deep","a":{"b":{"c":{"d":{"e":{"f":{"g":{"h":{"i":{"j":1}}}}}}}}}}`),
 			`json, message in msg | =- |  | app.log | "deep" | a.b.c.d.e.f.g.h.i="{\"j\":1}"`},
 		{arrived(`2026-10-10T12:00:00+02:00 ERROR db: connection refused`),
-			`text, stamped | 2026-10-10T12:00:00+02:00=2026-10-10T10:00:00Z | ERROR | app.log | "ERROR db: connection refused" | `},
-		{arrived(`2026-10-10T12:00:00.5 INFO a stamp without a zone is UTC`),
-			`text, stamped | 2026-10-10T12:00:00.5=2026-10-10T12:00:00.5Z | INFO | app.log | "INFO a stamp without a zone is UTC" | `},
+			`text, stamped, level word | 2026-10-10T12:00:00+02:00=2026-10-10T10:00:00Z | ERROR | app.log | "db: connection refused" | `},
+		{arrived(`2026-10-10T12:00:00.5 a stamp without a zone is UTC`),
+			`text, stamped | 2026-10-10T12:00:00.5=2026-10-10T12:00:00.5Z |  | app.log | "a stamp without a zone is UTC" | `},
+		// a level word is a whole word: one in brackets stays in the message
+		{arrived(`2026-10-10T12:00:00Z [WARN] disk almost full`),
+			`text, stamped | 2026-10-10T12:00:00Z=2026-10-10T12:00:00Z | WARN | app.log | "[WARN] disk almost full" | `},
 		// what only looks like a stamp is text: no day is invented
 		{arrived(`2026-13-45T99:99:99Z ERROR x`),
 			`text | =- | ERROR | app.log | "2026-13-45T99:99:99Z ERROR x" | `},

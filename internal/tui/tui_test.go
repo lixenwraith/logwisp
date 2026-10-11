@@ -373,6 +373,112 @@ func TestListElementsAreRows(t *testing.T) {
 	}
 }
 
+// A key's help says what unset means when that is a default or what zero
+// means, never the kind of value the key takes
+func TestHelpSaysWhatUnsetMeans(t *testing.T) {
+	c := pipeline(t, nil, []string{"null"})
+	n, err := c.Add(0, "source", "file")
+	if err == nil {
+		err = c.Set(0, n, "directory", "/srv/app")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := mono(c)
+	dir, _ := a.help(focusKey(t, a, "directory"))
+	pattern, _ := a.help(focusKey(t, a, "pattern"))
+	if strings.Contains(dir, "unset") || !strings.HasSuffix(pattern, "; unset: *") {
+		t.Errorf("directory %q, pattern %q", dir, pattern)
+	}
+}
+
+// filtered is an app inspecting a pipeline whose filters match patterns,
+// each a filter, the first with its patterns unfolded
+func filtered(t *testing.T, patterns ...string) *app {
+	t.Helper()
+	c := pipeline(t, []string{"null"}, []string{"null"})
+	for _, p := range patterns {
+		n, err := c.Add(0, "filters", "include")
+		if err == nil {
+			err = c.Set(0, n, "patterns", p)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := mono(c)
+	first := compose.Node{Role: "filters"}
+	a.choose(first)
+	a.insp.open[a.foldKey(first, "patterns")] = true
+	a.inspectAt(func(l line) bool { return l.item == 0 && !l.add })
+	return a
+}
+
+// inspectorRows are the inspector's rows on a screen w by h, under its rule
+func inspectorRows(a *app, w, h int) []string {
+	rows := text(render(a, w, h), w)
+	return rows[1+slices.IndexFunc(rows, func(r string) bool { return strings.HasPrefix(r, "── filters") }):]
+}
+
+// A list reads as one: its elements numbered at its labels' column, then
+// "+ add" there with no number, and the filters' "+ add filter" where their
+// titles start; an element's help says d deletes it, its add row's, focused
+// with its mark, that Enter adds one
+func TestAddRowsAreNotListElements(t *testing.T) {
+	a := filtered(t, "Event")
+	rows := inspectorRows(a, 78, 30)
+	at := func(s string) (int, string) { // where the first row holding s starts, past the focus mark, and its text
+		for _, r := range rows {
+			if strings.Contains(r, s) {
+				text := strings.TrimLeft(r, " "+string(a.th.Glyphs.Focus))
+				return ui.RuneLen(r) - ui.RuneLen(text), strings.TrimSpace(text)
+			}
+		}
+		return -1, ""
+	}
+	element, _ := at("Event")
+	add, addText := at("+ add")
+	title, _ := at("1 include")
+	addFilter, addFilterText := at("+ add filter")
+	screen := strings.Join(rows, "\n")
+	if add != element || addText != "+ add" || addFilter != title || addFilterText != "+ add filter" ||
+		!strings.Contains(screen, "RE2 patterns; d deletes it") || strings.Contains(screen, "unset:") {
+		t.Fatalf("element at %d, its add row at %d %q, filter at %d, its add row at %d %q\n%s", element, add, addText, title, addFilter, addFilterText, screen)
+	}
+	press(a, "j")
+	rows = inspectorRows(a, 78, 30)
+	focused := strings.TrimSpace(rows[slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "+ add") })])
+	if focused != string(a.th.Glyphs.Focus)+" + add" || !strings.Contains(strings.Join(rows, "\n"), "RE2 patterns; "+a.font.enter+" adds one") {
+		t.Fatalf("the add row focused: %q\n%s", focused, strings.Join(rows, "\n"))
+	}
+}
+
+// The inspector's two columns never part an unfolded group, nor a list or
+// the filters from the row adding to them, and hold no more rows than one
+// column would
+func TestTwoColumnsKeepGroupsWhole(t *testing.T) {
+	const w, h = 100, 30
+	right := func(rows []string) (out []string) {
+		for _, r := range rows {
+			if half := strings.TrimSpace(string([]rune(r)[w/2:])); half != "" {
+				out = append(out, half)
+			}
+		}
+		return out
+	}
+	a := filtered(t, "Event")
+	if got := right(inspectorRows(a, w, h)[:len(a.lines())]); len(got) > 0 {
+		t.Errorf("one filter, unfolded, split: %q", got)
+	}
+	a = filtered(t, "Event", "Start")
+	if got := right(inspectorRows(a, w, h)[:len(a.lines())]); len(got) != 2 || !strings.HasPrefix(got[0], "▸ 2 include") || got[1] != "+ add filter" {
+		t.Errorf("the second filter's column: %q", got)
+	}
+	if a.insp.cursor = len(a.lines()) - 1; !strings.Contains(strings.Join(inspectorRows(a, w, 16), "\n"), "+ add filter") {
+		t.Errorf("too short for two columns, the focused row went:\n%s", strings.Join(inspectorRows(a, w, 16), "\n"))
+	}
+}
+
 // Space turns a flow stage on with its defaults and off again; a stage with
 // an enabled key switches that
 func TestSpaceSwitchesAStage(t *testing.T) {
@@ -393,9 +499,10 @@ func TestSpaceSwitchesAStage(t *testing.T) {
 	}
 }
 
-// J and K move a filter, its fold and the cursor with it, and stop at
-// either end as j and k do
-func TestFiltersMoveWithTheirFold(t *testing.T) {
+// J and K move a filter, its folds and the cursor with it, the filter it
+// passes taking its place with its own folds, and stop at either end as j and
+// k do
+func TestFiltersMoveWithTheirFolds(t *testing.T) {
 	c := pipeline(t, []string{"null"}, []string{"null"})
 	for _, typ := range []string{"include", "exclude"} {
 		if _, err := c.Add(0, "filters", typ); err != nil {
@@ -403,11 +510,15 @@ func TestFiltersMoveWithTheirFold(t *testing.T) {
 		}
 	}
 	a := mono(c)
-	a.choose(compose.Node{Role: "filters", Index: 0})
+	first, second := compose.Node{Role: "filters", Index: 0}, compose.Node{Role: "filters", Index: 1}
+	a.choose(first)
+	a.insp.open[a.foldKey(first, "patterns")] = true
+	a.insp.open[a.foldKey(second, "")] = true
 	press(a, terminal.KeyEnter, "J", "J")
 	types := []config.FilterType{a.pipeline().Flow.Filters[0].Type, a.pipeline().Flow.Filters[1].Type}
 	l := a.lines()[a.insp.cursor]
-	if !slices.Equal(types, []config.FilterType{"exclude", "include"}) || l.node.Index != 1 || !a.insp.open[a.foldKey(compose.Node{Role: "filters"}, "1")] || a.status != "" {
+	moved := a.insp.open[a.foldKey(second, "")] && a.insp.open[a.foldKey(second, "patterns")] && a.insp.open[a.foldKey(first, "")] && !a.insp.open[a.foldKey(first, "patterns")]
+	if !slices.Equal(types, []config.FilterType{"exclude", "include"}) || l.node.Index != 1 || !moved || a.status != "" {
 		t.Fatalf("types %v, cursor on %+v, open %v, status %q", types, l, a.insp.open, a.status)
 	}
 }

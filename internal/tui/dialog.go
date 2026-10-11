@@ -436,35 +436,86 @@ func (n *notice) draw(a *app, r ui.Region) {
 		w = max(w, ui.RuneLen(l))
 	}
 	in := a.frame(r, min(w, inside(r.W)), len(lines), n.title)
-	rows := in.H
-	if len(lines) > in.H { // the last row says where the view is
-		rows = max(1, in.H-1)
-	}
-	n.view.SetDimensions(len(lines), rows)
+	rows := a.window(in, &n.view, len(lines))
 	for y := range min(rows, len(lines)-n.view.Offset) {
 		in.TextStyled(0, y, lines[n.view.Offset+y], a.th.Text)
-	}
-	if rows < in.H {
-		where := fmt.Sprintf("j k: %d-%d of %d", n.view.Offset+1, n.view.Offset+rows, len(lines))
-		in.TextStyled(0, rows, ui.Truncate(where, in.W), a.th.Muted)
 	}
 }
 
 func (n *notice) handle(a *app, ev terminal.Event) {
 	switch {
-	case ev.Type != terminal.EventKey:
-	case is(ev, terminal.KeyUp, "k"):
-		n.view.ScrollBy(-1)
-	case is(ev, terminal.KeyDown, "j"):
-		n.view.ScrollBy(1)
-	case is(ev, terminal.KeyPageUp, ""):
-		n.view.PageUp()
-	case is(ev, terminal.KeyPageDown, ""):
-		n.view.PageDown()
+	case ev.Type != terminal.EventKey, scroll(&n.view, ev):
 	default:
 		if a.dialog = nil; n.closed != nil {
 			n.closed(a)
 		}
+	}
+}
+
+// window sets v to n lines in r and returns the rows they take: all of r, or
+// all but its last, which says where v is when they do not fit
+func (a *app) window(r ui.Region, v *ui.ViewportScroll, n int) int {
+	rows := r.H
+	if n > r.H {
+		rows = max(1, r.H-1)
+	}
+	v.SetDimensions(n, rows)
+	if rows < r.H {
+		where := fmt.Sprintf("j k: %d-%d of %d", v.Offset+1, v.Offset+rows, n)
+		r.TextStyled(0, rows, ui.Truncate(where, r.W), a.th.Muted)
+	}
+	return rows
+}
+
+// scroll moves v on a key that scrolls, reporting whether ev was one
+func scroll(v *ui.ViewportScroll, ev terminal.Event) bool {
+	switch {
+	case is(ev, terminal.KeyUp, "k"):
+		v.ScrollBy(-1)
+	case is(ev, terminal.KeyDown, "j"):
+		v.ScrollBy(1)
+	case is(ev, terminal.KeyPageUp, ""):
+		v.PageUp()
+	case is(ev, terminal.KeyPageDown, ""):
+		v.PageDown()
+	case is(ev, terminal.KeyHome, "g"):
+		v.Home()
+	case is(ev, terminal.KeyEnd, "G"):
+		v.End()
+	default:
+		return false
+	}
+	return true
+}
+
+// entry shows a row of the live view over the whole screen, every detail
+// line, until Esc, i or q; e edits the stage that dropped it
+type entry struct {
+	row  row // a copy, which the ring's evictions leave whole
+	view ui.ViewportScroll
+}
+
+func (e *entry) draw(a *app, r ui.Region) {
+	r.FillStyle(a.th.Text)
+	hint := "esc back"
+	if e.row.dropped() {
+		hint = "e edit the stage that dropped it  " + hint
+	}
+	r.Rule(0, "entry", hint, a.th)
+	body := r.Sub(0, 1, r.W, r.H-1)
+	lines := a.details(&e.row, r.W-2)
+	rows := a.window(body.Sub(1, 0, body.W-1, body.H), &e.view, len(lines))
+	a.drawLines(body.Sub(0, 0, body.W, rows), lines, e.view.Offset)
+}
+
+func (e *entry) handle(a *app, ev terminal.Event) {
+	switch {
+	case ev.Type != terminal.EventKey, scroll(&e.view, ev):
+	case is(ev, terminal.KeyNone, "e"):
+		a.dialog = nil
+		a.editDrop(&e.row)
+	case is(ev, terminal.KeyEscape, "iq"), is(ev, terminal.KeyCtrlC, ""):
+		a.dialog = nil
 	}
 }
 
@@ -525,11 +576,12 @@ func help(f font, viewing bool) dialog {
 			{"arrows, jk", "move; up pauses following, down to the newest follows"},
 			{"g G", "the oldest row; the newest, following; f follows too"},
 			{f.enter, "the row's detail; J K scroll it"},
+			{"i", "the row full screen; esc, i or q back"},
 			{"/", "only the rows matching a pattern; lower case ignores case"},
 			{"1-5 0", "trace, debug, info, warn or error and up; all"},
-			{"v", "all that reaches the point, what passed it, what it dropped"},
+			{"v", "all that reaches the point, the dropped dimmed; what passed it; what it dropped"},
 			{"s", "look at a source, a flow stage, the sinks or lw's own log"},
-			{"i", "inspect the stage that dropped the row"},
+			{"e", "edit the stage that dropped the row"},
 			{"c", "clear the rows"},
 			{"t esc", "back to the diagram; the pipelines keep running"},
 			{"q", "stop the pipelines and quit"},

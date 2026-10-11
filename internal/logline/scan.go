@@ -1,8 +1,11 @@
 package logline
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strconv"
+)
 
-// JSON token kinds
+// JSON token kinds, and kText for a logfmt value, unquoted already
 const (
 	kNone byte = 0
 	kStr  byte = 's'
@@ -11,6 +14,7 @@ const (
 	kNull byte = 'z'
 	kObj  byte = 'o'
 	kArr  byte = 'a'
+	kText byte = 't'
 )
 
 func skipSpace(s string, i int) int {
@@ -177,8 +181,43 @@ func eachItem(s string, i int, fn func(val string, kind byte)) bool {
 	return false
 }
 
+// eachPair calls fn for each pair of a logfmt line, key=value with the value
+// bare or quoted as Go quotes it; it reports whether s is such pairs alone.
+func eachPair(s string, fn func(key, val string)) bool {
+	bare := func(i int) int {
+		for i < len(s) && s[i] > ' ' && s[i] != '=' && s[i] != '"' {
+			i++
+		}
+		return i
+	}
+	for i := skipSpace(s, 0); i < len(s); i = skipSpace(s, i) {
+		k := i
+		if i = bare(k); i == k || i == len(s) || s[i] != '=' {
+			return false
+		}
+		key, v := s[k:i], i+1
+		i = bare(v)
+		val := s[v:i]
+		if i == v && i < len(s) && s[i] == '"' {
+			var ok bool
+			var err error
+			if i, ok = scanString(s, v); !ok {
+				return false
+			}
+			if val, err = strconv.Unquote(s[v:i]); err != nil {
+				return false
+			}
+		}
+		if i < len(s) && s[i] > ' ' {
+			return false
+		}
+		fn(key, val)
+	}
+	return true
+}
+
 // unquote returns the content of a string token, decoding only when it holds
-// an escape; any other token is returned as its JSON.
+// an escape; any other token, a logfmt value too, is returned as it is.
 func unquote(tok string, kind byte) string {
 	if kind != kStr || len(tok) < 2 {
 		return tok

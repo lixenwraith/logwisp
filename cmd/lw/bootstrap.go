@@ -207,7 +207,7 @@ func initializeLogger(cfg *config.Config) error {
 
 func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	if cfg.Logging.File != nil {
-		logCfg.Directory = cfg.Logging.File.Directory
+		logCfg.Directory = config.ExpandHome(cfg.Logging.File.Directory)
 		logCfg.Name = cfg.Logging.File.Name
 		logCfg.MaxSizeKB = cfg.Logging.File.MaxSizeMB * 1000
 		logCfg.MaxTotalSizeKB = cfg.Logging.File.MaxTotalSizeMB * 1000

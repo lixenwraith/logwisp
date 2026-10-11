@@ -61,16 +61,17 @@ func mirror[T any](p PresetParam, key string) PresetParam {
 }
 
 // IsDir tells whether a preset's path is a directory, whose files it follows,
-// or a file pattern. Off the target host it is the user's Answers, or nil: a
-// path ending in '/' is then a directory, one with a glob a pattern, and any
-// other fails with ErrPathKind.
+// or a file pattern; a path ending in '/' is a directory without asking. Off
+// the target host it is the user's Answers, or nil: a path with a glob is then
+// a pattern, and any other fails with ErrPathKind.
 type IsDir func(path string) (bool, error)
 
 var ErrPathKind error = &KeyError{"path", errors.New("a directory or a file pattern?")}
 
-// HostIsDir asks this host: a path that does not exist is a pattern
+// HostIsDir asks this host, a leading ~ being the home directory: a path that
+// does not exist is a pattern
 func HostIsDir(path string) (bool, error) {
-	fi, err := os.Stat(path)
+	fi, err := os.Stat(ExpandHome(path))
 	return err == nil && fi.IsDir(), nil
 }
 
@@ -81,8 +82,8 @@ func Answers(dirs map[string]bool) IsDir {
 		if dir, ok := dirs[path]; ok {
 			return dir, nil
 		}
-		if dir := strings.HasSuffix(path, "/"); dir || strings.ContainsAny(path, `*?[\`) {
-			return dir, nil
+		if strings.ContainsAny(path, `*?[\`) {
+			return false, nil
 		}
 		return false, ErrPathKind
 	}
@@ -353,7 +354,10 @@ func pathOrStdin(v map[string]string, isDir IsDir) ([]PluginSourceConfig, error)
 	if isDir == nil {
 		isDir = Answers(nil)
 	}
-	dir, err := isDir(path)
+	dir, err := strings.HasSuffix(path, "/"), error(nil)
+	if !dir {
+		dir, err = isDir(path)
+	}
 	if err != nil {
 		return nil, err
 	}

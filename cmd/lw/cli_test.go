@@ -18,6 +18,8 @@ import (
 	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/testutil"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
+
+	"github.com/lixenwraith/log"
 )
 
 // lw's own flags: a short is its long flag, an unknown single-dash one fails,
@@ -188,6 +190,21 @@ func TestDumpReadsBack(t *testing.T) {
 	if !reflect.DeepEqual(again.Pipelines, cfg.Pipelines) || again.Color != "always" || again.Logging.Level != "debug" ||
 		strings.Count(dump.String(), "color = ") != 1 {
 		t.Fatalf("dump does not read back:\n%s\n got %+v\nwant %+v", dump.String(), again.Pipelines, cfg.Pipelines)
+	}
+}
+
+// lw's own log file goes under the home directory for a leading ~, which the
+// configuration keeps as typed
+func TestTheLogDirectoryReadsTildeAsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	empty := filepath.Join(home, "empty.toml")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logCfg := log.DefaultConfig()
+	if configureFileLogging(logCfg, loadTestConfig(t, empty, "--logging.file.directory=~/lw")); logCfg.Directory != home+"/lw" {
+		t.Fatalf("log directory %q", logCfg.Directory)
 	}
 }
 
