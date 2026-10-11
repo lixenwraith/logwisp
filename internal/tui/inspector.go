@@ -163,8 +163,9 @@ func (a *app) drawInspector(r ui.Region) {
 		row := r.Sub(at/perCol*colW, 1+at%perCol, colW-1, 1)
 		a.drawLine(row, lines[i], labelW, a.inspect && i == a.insp.cursor)
 	}
+	under := min(r.H-len(help), 2+min(perCol, len(lines)-a.insp.scroll)) // two rows under the last key
 	for i, h := range help {
-		r.TextStyled(2, r.H-len(help)+i, h, style)
+		r.TextStyled(2, under+i, h, style)
 	}
 }
 

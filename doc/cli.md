@@ -335,6 +335,8 @@ A reload rereads the file and keeps the command-line or environment pipelines.
 
 - `SIGINT`, `SIGTERM`: graceful shutdown
 - `SIGHUP`, `SIGUSR1`: reload the configuration
+- On the `lw --tui` screen, `SIGTERM` and `SIGHUP` close it, stopping what
+  `t` runs, and lw exits 0
 
 `SIGHUP` is ignored during startup, before the signal handler is installed, so
 LogWisp survives a terminal hang-up like `nohup`. Once running, it triggers a
@@ -469,7 +471,7 @@ kill -USR1 $(pidof lw)
 
 `lw --tui` (`-T`) composes pipelines on a full-screen terminal, drawn as the
 website's configurator draws them, with the engine the website runs as
-WebAssembly.
+WebAssembly; `t` runs them under the screen and shows what flows.
 
 - Start: the pipelines `lw` would run with the same options (`-c FILE`,
   pipeline flags, `LOGWISP_SOURCE`, a discovered file); with none but the
@@ -480,8 +482,10 @@ WebAssembly.
   type, whether it listens or dials, and a summary; the four flow stages in
   their order in a dashed box, the ones off dimmed. The inspector, the
   chosen part's options with radio buttons for few choices, sits below the
-  canvas, and beside it from 110 columns. Narrow panes stack labels, wrap
-  text and scroll dialogs; the status line wraps to three rows.
+  canvas, and beside it from 110 columns, where each part also lists up to
+  four options it sets; wide screens size the columns to their content and
+  centre them. Narrow panes stack labels, wrap text and scroll dialogs; the
+  status line wraps to three rows.
 - Keys: arrows or `hjkl` move; Enter inspects a part, opening on its first
   required key, then edits a value (empty returns it to its default), opens
   a list's choices or adds on an add row; in a value, Enter sets it, and Tab
@@ -490,23 +494,71 @@ WebAssembly.
   changes a source's or sink's type in its place; `d` deletes, or returns a
   value to its default; Space turns a flow stage on or off; `J`/`K` move a
   filter; `[` `]` switch pipelines; `p` presets; `!` shows every problem,
-  moving to the first; `r` runs; `o` output; `?` keys; `q` quits.
+  moving to the first; `r` runs; `t` taps; `o` output; `?` keys; `q` quits.
 - Pipelines: Up from a column's top row reaches the bar, where `[` `]` or
   Left/Right switch, `a` adds one (empty or from a preset), Enter renames and
   `d` deletes, asking first when it has parts.
 - Output, `o`, each picked by its letter: `r` runs the pipelines with the
   other options given (so `--check` and `--dump` apply to them, and reloads
-  keep them), or `c`, `e` and `f` print the command line, the environment
-  variables (one pipeline) or the file's pipelines on standard output once
-  the screen closes.
+  keep them), `t` taps them, or `c`, `e` and `f` print the command line, the
+  environment variables (one pipeline) or the file's pipelines on standard
+  output once the screen closes.
+- Tap, `t`: runs the pipelines in this process as `r` would, without the
+  status reporter, and opens the live view. It runs for real: listeners
+  bind, dialers connect and log in, file sinks write.
+  - The terminal stays the screen's: a console sink writing to it runs as a
+    null sink with its id, and the view shows what it would print; a console
+    source needs piped input (`cmd | lw -T`); lw's own log, when it writes to
+    the terminal, shows in the view as source `lw`; a password the terminal
+    would be asked for is asked in a masked dialog.
+  - Leaving the view keeps the pipelines running. `t` after an edit reruns
+    them as a reload does: when the new ones do not build, the earlier ones
+    keep running and the error chooses the part it names. `q` asks before it
+    stops them, `r` and `o`'s choices stop them first, and `SIGTERM` or
+    `SIGHUP` (an ssh session's end) stops them and closes the screen.
+  - The bar counts the shown pipeline's entries in, filtered by the flow,
+    dropped by sinks, and missed by the screen: the view never slows a
+    pipeline.
+- Live view: from 40 rows it sits under the diagram; shorter, it takes the
+  screen while it has the keys. `t` or Esc gives them back to the diagram.
+  - The canvas cursor picks its point, so the view opens on the first
+    source: a source shows its entries, a flow stage (or the filter the
+    inspector is on) what reaches it, the heartbeat its own, the sinks (or
+    no part) what they got. `v` switches between all, what passed and what
+    was dropped there, with no restart. lw's own log shows from info up at
+    every point; `s` also offers it alone, debug too.
+  - A row is the entry's time, level, tag, message and fields, read from any
+    line shape: LogWisp's json, lw's own log, vif records, pino, zap, slog,
+    docker, journald, ECS, GCP, or text after an RFC3339 stamp. A narrow
+    screen drops columns; a dropped entry is marked; a rune a terminal would
+    act on or draw wider than a cell shows as a placeholder.
+  - Keys: arrows or `jk` move (up pauses, down onto the newest follows),
+    PgUp/PgDn; `g` the oldest, `G` or `f` the newest; Enter the row's
+    detail, `J`/`K` scroll it; `/` only rows matching a pattern, ignoring
+    case when it is all lower case (clearing it, or a level, keeps the
+    focused row in place, paused there unless it is the newest); `1`-`5`
+    trace to error and up, `0` all; `s` chooses the point;
+    `i` inspects the stage that dropped the row; `c` clears; `q`, `?`, `r`,
+    `o`, `[` and `]` act as on the diagram.
+  - The detail, beside the rows from 160 columns and under them otherwise:
+    time and the stamp as written, level, origin, the verdict with a
+    filter's patterns, the layout read, message, fields, and the payload as
+    the sinks receive it, with escapes for what a cell cannot show.
+  - It keeps 32 MiB of rows, each entry's message, fields and payload cut to
+    16 KiB, and redraws at most every 100 ms while entries flow, at once on
+    a key, never when idle. A closed standard output or error fails the
+    write (logged) rather than end lw with the terminal raw.
 - The screen draws on the controlling terminal: `lw -T > pipelines.toml` and
   `cmd | lw -T` keep standard input and output as data. lw never writes the
   file it starts from, but the shell empties a redirect's target before lw
   reads it: redirect to a file lw does not load.
 - Color follows the `color` setting: `auto` the terminal and `NO_COLOR`,
   `always` the terminal, `never` none. True color and 256 colors paint the
-  website's dark theme; 16 colors and none keep the terminal's own; a text
-  console draws with CP437 glyphs, and a terminal outside UTF-8 with ASCII.
+  website's dark theme; 16 colors a console look on the terminal's own
+  background (bright white text, its grey for hints, a blue cursor bar that
+  keeps each tint); none the terminal's own colors, the cursor row one
+  reverse bar. A text console draws with CP437 glyphs, and a terminal outside
+  UTF-8 with ASCII.
 
 ## `lw auth`
 

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -239,6 +241,7 @@ type form struct {
 	focus          ui.Focus
 	scroll         ui.ViewportScroll // the fields' rows
 	err            string
+	mask           bool // draws each rune typed as '*'
 	apply          func(a *app, values map[string]string) error
 	back           func(a *app) // on Esc, after the form closes
 }
@@ -278,7 +281,15 @@ func (f *form) draw(a *app, r ui.Region) {
 	view.Window(len(f.fields)*tall, &f.scroll, th.Text, func(all ui.Region) {
 		for i, p := range f.params {
 			v, _ := all.Field(i*tall, labelW, ui.Field{Label: p.Name, Required: p.Required}, i == f.focus.Index, th)
-			v.TextInput(f.fields[i], p.Default, i == f.focus.Index, th)
+			field := f.fields[i]
+			if !f.mask {
+				v.TextInput(field, p.Default, i == f.focus.Index, th)
+				continue
+			}
+			shown := *field
+			shown.Text = []rune(strings.Repeat("*", len(field.Text)))
+			v.TextInput(&shown, p.Default, i == f.focus.Index, th)
+			field.Scroll = shown.Scroll
 		}
 	})
 	note, style := f.params[f.focus.Index].Usage(), th.Muted
@@ -337,36 +348,81 @@ func (f *form) submit(a *app) {
 	}
 }
 
-// outputMenu is what o offers: run, or print one of the forms
+// outputMenu is what o offers: run, tap, or print one of the forms
 func (a *app) outputMenu() dialog {
 	forms := compose.Forms()
-	options := []ui.Option{{Name: "run", Key: 'r', Hint: "start the pipelines now, with lw's other settings"}}
+	options := []ui.Option{{Name: "run", Key: 'r', Hint: "start the pipelines now, with lw's other settings"},
+		{Name: "tap", Key: 't', Hint: "run here and watch what flows; it runs for real"}}
 	for _, f := range forms {
 		options = append(options, ui.Option{Name: f.Name, Key: rune(f.Name[0]), Hint: "print " + f.Hint})
 	}
 	list := ui.NewOptionListState(options)
 	list.Menu = true
-	return &chooser{title: "Output, once the screen closes", list: list,
+	return &chooser{title: "Run, or print once the screen closes", list: list,
 		pick: func(a *app, i int) {
-			if i == 0 {
+			switch i {
+			case 0:
 				a.run()
 				return
+			case 1:
+				a.tap()
+				return
 			}
-			text, err := forms[i-1].Write(a.comp)
+			text, err := forms[i-2].Write(a.comp)
 			if err != nil {
 				a.status = err.Error()
 				return
 			}
-			a.result, a.done = Result{Exit: Print, Output: text}, true
+			a.leave(Result{Exit: Print, Output: text})
 		}}
+}
+
+// askPassword asks in a masked form for a password a terminal would be asked
+// for; with generate, Enter alone draws one and shows it once
+func (a *app) askPassword(user string, generate bool, reply chan<- []byte) {
+	answer := func(pw []byte) {
+		select {
+		case reply <- pw:
+		default:
+		}
+	}
+	if a.live.leaving {
+		answer(nil)
+		return
+	}
+	help := "the password lw would ask on the terminal"
+	if generate {
+		help += "; Enter alone generates one, shown once"
+	}
+	f := &form{title: "Password for " + user, params: []config.PresetParam{{Name: "password", Required: !generate, Help: help}}, mask: true,
+		apply: func(a *app, v map[string]string) error {
+			pw := v["password"]
+			switch {
+			case pw == "" && !generate:
+				return errors.New("type the password, or esc to give none")
+			case pw == "":
+				// answered once read: the start goes on only then, so no
+				// later ask or error replaces the notice unread
+				pw = rand.Text()
+				n := textNotice("Password for "+user, "generated, shown this once: "+pw)
+				n.closed, a.dialog = func(*app) { answer([]byte(pw)) }, n
+				return nil
+			}
+			answer([]byte(pw))
+			return nil
+		},
+		back: func(*app) { answer(nil) }}
+	f.fill(nil)
+	a.dialog = f
 }
 
 // notice shows text, wrapped to the screen, until a key other than one
 // that scrolls it
 type notice struct {
-	title string
-	body  func(w int) []string // the lines at a width
-	view  ui.ViewportScroll
+	title  string
+	body   func(w int) []string // the lines at a width
+	view   ui.ViewportScroll
+	closed func(a *app) // after a key closed it
 }
 
 // textNotice is a notice of plain text, its paragraphs split at '\n'
@@ -406,7 +462,9 @@ func (n *notice) handle(a *app, ev terminal.Event) {
 	case is(ev, terminal.KeyPageDown, ""):
 		n.view.PageDown()
 	default:
-		a.dialog = nil
+		if a.dialog = nil; n.closed != nil {
+			n.closed(a)
+		}
 	}
 }
 
@@ -440,8 +498,9 @@ func (c *confirm) handle(a *app, ev terminal.Event) {
 	}
 }
 
-// help lists the keys, each beside its description or, narrow, above it
-func help(f font) dialog {
+// help lists the keys of the diagram or, viewing, the view's, each beside
+// its description or, narrow, above it
+func help(f font, viewing bool) dialog {
 	keys := [][2]string{
 		{"arrows, hjkl", "move; up from the top row to the pipeline bar"},
 		{f.enter, "inspect a part; edit a value; open a list; add"},
@@ -455,10 +514,26 @@ func help(f font) dialog {
 		{"[ ]", "previous or next pipeline"},
 		{"p", "start over from a preset"},
 		{"r", "run the pipelines"},
-		{"o", "run, or print a command line, environment or file"},
+		{"o", "run, tap, or print a command line, environment or file"},
+		{"t", "tap: run here and watch what flows; it runs for real: binds, dials, writes files"},
 		{"!", "every problem, moving to the first"},
 		{"paste", "an lw command line replaces the pipelines"},
 		{"q", "quit"},
+	}
+	if viewing {
+		keys = [][2]string{
+			{"arrows, jk", "move; up pauses following, down to the newest follows"},
+			{"g G", "the oldest row; the newest, following; f follows too"},
+			{f.enter, "the row's detail; J K scroll it"},
+			{"/", "only the rows matching a pattern; lower case ignores case"},
+			{"1-5 0", "trace, debug, info, warn or error and up; all"},
+			{"v", "all that reaches the point, what passed it, what it dropped"},
+			{"s", "look at a source, a flow stage, the sinks or lw's own log"},
+			{"i", "inspect the stage that dropped the row"},
+			{"c", "clear the rows"},
+			{"t esc", "back to the diagram; the pipelines keep running"},
+			{"q", "stop the pipelines and quit"},
+		}
 	}
 	return &notice{title: "Keys", body: func(w int) []string {
 		var lines []string

@@ -29,6 +29,12 @@ func Network(host string) (string, error) {
 const (
 	MaxLogEntryBytes = 1024 * 1024
 
+	// A tapped entry's message, fields and payload are cut to this, and its
+	// level, source and node to TapNameBytes, so a viewer's scrollback holds
+	// no source's whole line
+	TapEntryBytes = 16 * 1024
+	TapNameBytes  = 256
+
 	FileWatcherPollInterval = 100 * time.Millisecond
 
 	SessionDefaultMaxIdleTime = 30 * time.Minute

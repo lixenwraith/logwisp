@@ -48,7 +48,11 @@ Package map:
 - `internal/core`: shared types (`LogEntry`, `TransportEvent`), capabilities,
   constants.
 - `internal/tokenbucket`: rate limiter primitive.
-- `internal/sanitize`: standalone hex-escaping helpers.
+- `internal/tui`: `lw --tui`, the diagram and the live view of what `t`
+  runs; `cmd/lw/screen.go` runs the pipelines for it.
+- `internal/logline`: reads a line of any common shape into time, level,
+  tag, message and fields for the live view; holds the one rule for runes a
+  terminal acts on, which the console sink shares.
 
 ## Plugin Registration
 
@@ -74,7 +78,9 @@ instance of a single type fails, naming both pipelines.
    the source's `dropped_entries` counter. The console source alone waits,
    since stdin can simply be read later.
 2. **Flow** applies, in order: rate limit → filter chain → formatter. A drop at
-   any stage ends the entry's life and increments `flow.total_dropped`.
+   any stage ends the entry's life and increments `flow.total_dropped`. The
+   verdict, passed or the stage that dropped it (a filter by its index), goes
+   to the pipeline's tap when a viewer set one, as `lw --tui`'s live view does.
 3. The formatter output becomes a `core.TransportEvent`, which carries both the
    formatted `Payload` and the original structured `Entry`.
 4. **Dispatch** sends the event to every sink's input channel with a
@@ -107,10 +113,15 @@ loses nothing. Each stage drops and counts instead of waiting:
   `flow.total_dropped`.
 - Pipeline → sink: a full sink input drops it for that sink only; pipeline
   `total_dropped_by_sink`. A sink declaring `core.CapBackpressure`, the console
-  sink, makes dispatch wait instead, so a filter loses no line to a slow
-  reader and its pipeline runs at the reader's pace; `Stop` ends the wait.
+  and null sinks, makes dispatch wait instead, so a filter loses no line to a
+  slow reader and its pipeline runs at the reader's pace; `Stop` ends the wait.
 - TCP/HTTP sink → client queue: a full queue drops it for that client only;
   sink `dropped_writes`.
+- Flow → tap: a full tap drops the record, copying nothing, which the live
+  view counts as "screen missed". It copies the first 16 KiB of a longer
+  message, fields or payload and 256 bytes of a level, source or node, so a
+  viewer's rows pin no source's line, and takes dropped entries only while
+  the view shows them.
 
 The `tcp_chain` sink is the one deliberate exception. It holds a line across
 reconnects until it is written or the process shuts down, so a downstream
@@ -202,7 +213,8 @@ Reload (signal or file watch) rebuilds the entire service:
 
 Because this is a full rebuild, listening sockets close and reopen and all
 clients are disconnected. Application logging is configured once at startup and
-is **not** re-applied on reload.
+is **not** re-applied on reload. `t` on the `lw --tui` screen reruns through
+the same path, giving each new service the screen's tap before it starts.
 
 Watch errors do not rebuild services. Queued changes are combined, and an
 unchanged pipeline/status snapshot is skipped. Signals always rebuild for

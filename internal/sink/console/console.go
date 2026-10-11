@@ -1,19 +1,17 @@
 package console
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/logline"
 	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/sink"
@@ -82,10 +80,7 @@ func NewConsoleSinkPlugin(
 		return nil, err
 	}
 
-	output := os.Stdout
-	if opts.Target == "stderr" {
-		output = os.Stderr
-	}
+	output := Stream(opts.Target)
 
 	// inline decides auto: a terminal, NO_COLOR unset, TERM not dumb. Paint
 	// returns its text unchanged exactly when color is off.
@@ -132,6 +127,14 @@ func NewConsoleSinkPlugin(
 	)
 
 	return cs, nil
+}
+
+// Stream is the stream a console sink with target writes
+func Stream(target string) *os.File {
+	if target == "stderr" {
+		return os.Stderr
+	}
+	return os.Stdout
 }
 
 // Capabilities returns supported capabilities
@@ -228,7 +231,7 @@ func (cs *ConsoleSink) drain() {
 func (cs *ConsoleSink) write(event core.TransportEvent) {
 	payload := event.Payload
 	if cs.escape {
-		payload = escapeControls(payload)
+		payload = logline.EscapeControls(payload)
 	}
 	if cs.painter != nil {
 		payload = paintLevel(cs.painter, payload, event.Entry.Level)
@@ -259,53 +262,4 @@ func paintLevel(p *inline.Printer, payload []byte, level string) []byte {
 		return append(out, payload[j:]...)
 	}
 	return payload
-}
-
-// escapeControls writes what a terminal would act on or reorder (C0 and C1
-// controls but tab, DEL, bidi controls, line separators, invalid UTF-8) as
-// <hex>, keeping the final newline: a log line cannot drive the terminal.
-// Other invisible characters stay: emoji and Indic scripts need ZWJ.
-func escapeControls(p []byte) []byte {
-	body, newline := bytes.CutSuffix(p, []byte{'\n'})
-	if printableASCII(body) {
-		return p
-	}
-	out := make([]byte, 0, len(p)+16)
-	for len(body) > 0 {
-		r, n := utf8.DecodeRune(body)
-		if !terminalControl(r, n) {
-			out = append(out, body[:n]...)
-		} else {
-			out = append(out, '<')
-			out = hex.AppendEncode(out, body[:n])
-			out = append(out, '>')
-		}
-		body = body[n:]
-	}
-	if newline {
-		out = append(out, '\n')
-	}
-	return out
-}
-
-func terminalControl(r rune, size int) bool {
-	switch {
-	case r == utf8.RuneError && size == 1:
-		return true
-	case r < 0x20:
-		return r != '\t'
-	case r >= 0x7f && r <= 0x9f, r == 0x061c, r == 0x200e, r == 0x200f,
-		r >= 0x2028 && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
-		return true
-	}
-	return false
-}
-
-func printableASCII(b []byte) bool {
-	for _, c := range b {
-		if (c < 0x20 || c > 0x7e) && c != '\t' {
-			return false
-		}
-	}
-	return true
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/config"
@@ -41,8 +42,9 @@ var modes = map[string][]terminal.ColorMode{
 }
 
 // Run composes c on the terminal until the user leaves; an empty c opens the
-// preset menu. color is lw's color setting.
-func Run(c *compose.Composition, color string) (Result, error) {
+// preset menu. color is lw's color setting; runner runs the pipelines on t,
+// and nothing runs once Run returns.
+func Run(c *compose.Composition, color string, runner Runner) (Result, error) {
 	t := terminal.New(modes[color]...)
 	if err := t.Init(); err != nil {
 		return Result{}, err
@@ -52,14 +54,21 @@ func Run(c *compose.Composition, color string) (Result, error) {
 		return Result{}, err
 	}
 	a := newApp(c, looks[t.ColorMode()], fontFor(terminal.DetectColorMode()))
+	a.live = newRun(runner, func() { t.PostEvent(terminal.Event{Type: terminal.EventKey, Key: terminal.KeyNone}) })
+	defer a.live.close()
+	defer a.live.onSignals()()
+	if runner != nil {
+		go a.live.watch(time.Second)
+	}
 	w, h := t.Size()
+	cells := make([]terminal.Cell, w*h)
 	for !a.done {
-		cells := make([]terminal.Cell, w*h)
 		a.paint(cells, w, h)
 		t.Flush(cells, w, h)
 		switch ev := t.PollEvent(); ev.Type {
 		case terminal.EventResize:
 			w, h = ev.Width, ev.Height
+			cells = make([]terminal.Cell, w*h)
 		case terminal.EventClosed:
 			return Result{}, errors.New("the terminal closed")
 		default:
@@ -93,6 +102,9 @@ type app struct {
 	inspect bool              // keys go to the inspector
 	insp    inspector
 	dialog  dialog // takes every key while open
+	live    *run   // what t runs
+	view    view   // what runs shows
+	viewing bool   // keys go to the view
 	status  string // the last edit's refusal
 	note    string // what the last action did
 	problem error  // the composition's problems, joined
@@ -102,7 +114,7 @@ type app struct {
 }
 
 func newApp(c *compose.Composition, l look, f font) *app {
-	a := &app{comp: c, look: l, th: l.Theme, font: f}
+	a := &app{comp: c, look: l, th: l.Theme, font: f, live: newRun(nil, func() {})}
 	a.th.Glyphs = f.Glyphs
 	a.insp.open = map[string]bool{}
 	if len(c.Pipelines) == 0 {
@@ -192,15 +204,27 @@ func (a *app) edit(err error) bool {
 
 func (a *app) check() { a.problem = a.comp.Validate() }
 
-// handle routes an event: an open dialog takes all, then the inspector, then
-// the canvas
+// handle routes an event: the tick first, which the input never sends (the
+// terminal library swallows unknown keys), then an open dialog takes all,
+// then the view, the inspector, the canvas; leaving, nothing more is taken
 func (a *app) handle(ev terminal.Event) {
-	if ev.Type == terminal.EventKey || ev.Type == terminal.EventPaste {
+	switch {
+	case ev.Type == terminal.EventKey && ev.Key == terminal.KeyNone:
+		a.tick()
+		return
+	case a.live.leaving:
+		return
+	case ev.Type == terminal.EventKey || ev.Type == terminal.EventPaste:
 		a.status, a.note = "", ""
+	}
+	if a.dialog == nil && !a.viewing {
+		a.view.own = false // a key on the diagram gives the point back to its cursor
 	}
 	switch {
 	case a.dialog != nil:
 		a.dialog.handle(a, ev)
+	case a.viewing:
+		a.viewKey(ev)
 	case ev.Type == terminal.EventPaste && a.insp.field != nil:
 		a.insp.field.Paste(ev.Text)
 	case ev.Type == terminal.EventPaste:
@@ -263,13 +287,15 @@ func (a *app) globalKey(ev terminal.Event) {
 	case is(ev, terminal.KeyNone, "o"):
 		a.dialog = a.outputMenu()
 	case is(ev, terminal.KeyNone, "?"):
-		a.dialog = help(a.font)
+		a.dialog = help(a.font, a.viewing)
 	case is(ev, terminal.KeyNone, "!"):
 		a.showProblem()
 	case is(ev, terminal.KeyNone, "c"):
 		a.changeType()
 	case is(ev, terminal.KeyNone, "r"):
 		a.run()
+	case is(ev, terminal.KeyNone, "t"):
+		a.tap()
 	case is(ev, terminal.KeyNone, "]") && n > 0:
 		a.pi, a.row, a.inspect = (a.pi+1)%n, [3]int{}, false
 	case is(ev, terminal.KeyNone, "[") && n > 0:
@@ -346,7 +372,7 @@ func (a *app) run() {
 		a.status = "not valid yet: ! shows the problem"
 		return
 	}
-	a.result, a.done = Result{Exit: Start, Pipelines: a.comp.Pipelines}, true
+	a.leave(Result{Exit: Start, Pipelines: a.comp.Pipelines})
 }
 
 // switchStage turns a flow stage on with its defaults, or off; a stage with
@@ -398,11 +424,15 @@ func (a *app) paste(text string) {
 }
 
 func (a *app) quit() {
-	if !a.changed {
-		a.done = true
-		return
+	leave := func(a *app) { a.leave(Result{}) }
+	switch {
+	case a.live.active():
+		a.dialog = &confirm{question: "Stop the pipelines and quit?", yes: leave}
+	case a.changed:
+		a.dialog = &confirm{question: "Quit without running or printing the pipelines?", yes: leave}
+	default:
+		leave(a)
 	}
-	a.dialog = &confirm{question: "Quit without running or printing the pipelines?", yes: func(a *app) { a.done = true }}
 }
 
 // showProblem chooses the part the first problem names and shows them all
@@ -447,8 +477,10 @@ func (a *app) choose(n compose.Node) {
 	}
 }
 
-// draw draws the screen: a title row, the canvas with the inspector beside
-// it from 110 columns or below it, a status row, and any dialog over them
+// draw draws the screen: a title row, the diagram, a status row, and any
+// dialog over them. Once something ran, the live view takes the rows under
+// the diagram from 40 rows, unless the inspector below it is in use, and the
+// whole screen under that while it takes the keys.
 func (a *app) draw(r ui.Region) {
 	r.FillStyle(a.th.Text)
 	status, style := a.bottom(r.W)
@@ -456,38 +488,67 @@ func (a *app) draw(r ui.Region) {
 		a.pi = min(a.pi, len(a.comp.Pipelines)-1)
 		a.node() // a delete can leave the row past its column's end
 		a.drawBar(r.Sub(0, 0, r.W, 1))
-		body := r.Sub(0, 1, r.W, r.H-1-len(status))
-		if r.W >= 110 {
-			iw := min(60, r.W*2/5)
-			a.drawCanvas(body.Sub(0, 0, r.W-iw-1, body.H))
-			a.drawInspector(body.Sub(r.W-iw, 0, iw, body.H))
-		} else {
-			ch := min(a.layout(r.W).h, body.H-min(10, body.H/2))
-			a.drawCanvas(body.Sub(0, 0, r.W, ch))
-			a.drawInspector(body.Sub(0, ch+1, r.W, body.H-ch-1))
+		body, l := r.Sub(0, 1, r.W, r.H-1-len(status)), a.layout(r.W)
+		a.view.sync(a.point(), a.live.tap)
+		switch watched := a.viewing || a.live.tap != nil || len(a.view.rows) > 0; {
+		case watched && r.H >= splitMin && (!a.inspect || l.inspector > 0):
+			top := l.h
+			if a.inspect {
+				top = max(top, body.H/2)
+			}
+			top = min(top, body.H*2/3)
+			a.drawDiagram(body.Sub(0, 0, r.W, top), l, false)
+			a.drawView(body.Sub(0, top, r.W, body.H-top))
+		case a.viewing:
+			a.drawView(body)
+		default:
+			a.drawDiagram(body, l, true)
 		}
 	}
-	for i, l := range status {
-		r.TextStyled(1, r.H-len(status)+i, l, style)
+	for i, row := range status {
+		r.TextStyled(1, r.H-len(status)+i, row, style)
 	}
 	if a.status == "" && a.note == "" && a.problem == nil {
-		keys := a.hints(r.W)
-		r.TextStyled(r.W-ui.RuneLen(keys)-1, r.H-1, keys, a.th.Muted)
+		x := 4 + ui.RuneLen(status[0])
+		r.TextStyled(x, r.H-1, a.hints(r.W-x-1), a.th.Muted)
+	}
+	if p := a.view.prompt; a.viewing && p != nil {
+		row := r.Sub(0, r.H-1, r.W, 1)
+		row.FillStyle(a.th.Text)
+		row.TextStyled(1, 0, "/", a.th.Accent)
+		row.Sub(3, 0, r.W-4, 1).TextInput(p, "a pattern: lower case ignores case; empty shows all", true, a.th)
 	}
 	if a.dialog != nil {
 		a.dialog.draw(a, r)
 	}
 }
 
+// drawDiagram draws the canvas with the inspector beside it from 110
+// columns, else, with below, under it
+func (a *app) drawDiagram(r ui.Region, l layout, below bool) {
+	switch {
+	case l.inspector > 0:
+		a.drawCanvas(r.Sub(0, 0, l.w, r.H), l)
+		a.drawInspector(r.Sub(r.W-l.inspector, 0, l.inspector, r.H))
+	case !below:
+		a.drawCanvas(r, l)
+	default:
+		ch := min(l.h, r.H-min(10, r.H/2))
+		a.drawCanvas(r.Sub(0, 0, r.W, ch), l)
+		a.drawInspector(r.Sub(0, ch+1, r.W, r.H-ch-1))
+	}
+}
+
 // drawBar draws the title row: the pipelines by name, the one shown marked,
 // or it and its place when they do not fit; with the keys, the bar's verbs
+// after them
 func (a *app) drawBar(r ui.Region) {
 	th, f := a.th, a.font
+	full, hint := r, ""
 	if a.bar {
 		r.TextStyled(0, 0, string(f.Focus), th.Accent)
-		hint := "a add  " + f.enter + " rename  d delete"
 		if r.W >= 60 {
-			r.TextStyled(r.W-ui.RuneLen(hint)-1, 0, hint, th.Muted)
+			hint = "a add  " + f.enter + " rename  d delete"
 			r = r.Sub(0, 0, r.W-ui.RuneLen(hint)-2, 1)
 		}
 	}
@@ -513,8 +574,16 @@ func (a *app) drawBar(r ui.Region) {
 		x += ui.RuneLen(label) + 2
 	}
 	if len(names) < len(a.comp.Pipelines) {
-		r.TextStyled(x, 0, fmt.Sprintf("%d/%d", a.pi+1, len(a.comp.Pipelines)), th.Muted)
+		place := fmt.Sprintf("%d/%d", a.pi+1, len(a.comp.Pipelines))
+		r.TextStyled(x, 0, place, th.Muted)
+		x += ui.RuneLen(place) + 2
 	}
+	if mark, style := a.runMark(); mark != "" {
+		mark = ui.Truncate(mark, max(0, r.W-x))
+		r.TextStyled(x, 0, mark, style)
+		x += ui.RuneLen(mark) + 2
+	}
+	full.TextStyled(min(x+1, full.W-ui.RuneLen(hint)-1), 0, hint, th.Muted)
 }
 
 // paint draws the screen into cells, each rune one the font's terminal shows
@@ -552,10 +621,14 @@ func (a *app) bottom(w int) ([]string, ui.Style) {
 	return clip(ui.WrapText(text, w-2), 3), style
 }
 
-// hints are the status row's keys, shown while nothing else needs the row
+// hints are the status row's keys in w columns, the view's while it takes
+// them, shown after the status while nothing else needs the row
 func (a *app) hints(w int) string {
-	keys := "a add  d delete  " + a.font.space + " on/off  J/K move  p preset  o output  ? help"
-	if ui.RuneLen(keys)+12 > w {
+	keys := "a add  d delete  " + a.font.space + " on/off  t tap  p preset  o output  ? help"
+	if a.viewing {
+		keys = "/ filter  0-5 level  v mode  s point  " + a.font.enter + " detail  t back  ? help"
+	}
+	if ui.RuneLen(keys) > w {
 		keys = "? help"
 	}
 	return keys

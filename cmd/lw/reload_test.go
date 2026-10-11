@@ -49,7 +49,7 @@ func TestShippedConfigurationBuildsWithCheckedPluginDecoder(t *testing.T) {
 	if len(cfg.Pipelines) != 1 || cfg.Pipelines[0].Name != "default" {
 		t.Fatalf("sample array-of-tables decoded incorrectly: %+v", cfg.Pipelines)
 	}
-	svc, err := bootstrapService(context.Background(), cfg)
+	svc, err := bootstrapService(context.Background(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestInvalidReloadLeavesStatusReporterRunning(t *testing.T) {
 				cfg.Pipelines[0].PluginSinks[0].Config["buffer_size"] = ^uint64(0)
 			}
 			cancelled := false
-			svc, next, _, err := handleReload(context.Background(), cfg, nil, func() { cancelled = true })
+			svc, next, _, err := handleReload(context.Background(), cfg, nil, func() { cancelled = true }, nil)
 			if err == nil || svc != nil || next != nil || cancelled {
 				t.Fatalf("invalid reload affected running state: svc=%v cfg=%v cancelled=%v error=%v", svc, next, cancelled, err)
 			}
