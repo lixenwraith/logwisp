@@ -8,9 +8,10 @@ type-specific `config` table.
 Registered types: `console`, `file`, `http`, `tcp`, `null`, `tcp_chain`,
 `http_chain`.
 
-Dispatch into a sink is non-blocking. A sink whose input queue is full drops the
-event *for itself only* and the pipeline counts it in `total_dropped_by_sink`;
-sibling sinks are unaffected.
+Dispatch waits for a `console` sink, so a slow reader paces the whole pipeline,
+sibling sinks included (`null` waits too but discards at once). Any other sink
+whose input queue is full drops the event for itself only
+(`total_dropped_by_sink`).
 
 ---
 
@@ -32,7 +33,8 @@ color       = "auto"
 
 Options, each as type and default:
 
-- `target` (string, `stdout`): `stdout` or `stderr`.
+- `target` (string, `stdout`): `stdout` or `stderr`; `split` exists only for
+  lw's own log (`logging.output`).
 - `buffer_size` (int, `1000`): sink input queue depth.
 - `escape` (string, `auto`): write control characters as `<hex>` of their
   bytes, `ESC` as `<1b>`: `auto` when the output is a terminal, `always`, or
@@ -41,16 +43,12 @@ Options, each as type and default:
   `auto` on a terminal with `NO_COLOR` unset and `TERM` not `dumb`, `always`,
   or `never`.
 
-> `split` is **not** a valid target for this sink and is rejected at startup.
-> Level-based splitting exists only for LogWisp's own application log
-> (`logging.output = "split"`).
-
 Payloads are written as the formatter made them, one record per line.
 
 - Escaping: a log line must not drive the terminal that shows it (cursor and
-  screen control, title changes, OSC 52 clipboard writes, bidi spoofing). C0
-  and C1 controls other than tab, DEL, the bidi controls, the line and
-  paragraph separators and invalid UTF-8 are escaped; other invisible
+  screen control, title changes, OSC 52 clipboard writes, bidi spoofing).
+  Escaped: every C0 control but tab; DEL and the C1 controls; the bidi
+  controls; the line and paragraph separators; invalid UTF-8. Other invisible
   characters, such as the joiners emoji and Indic scripts need, are kept.
   `never` keeps an application's own ANSI colours; under `auto`, pipes and
   files get the bytes unchanged.
@@ -91,19 +89,22 @@ flush_interval_ms = 100
 
 Options, each as type and default:
 
-- `directory` (string, **required**): output directory.
-- `name` (string, **required**): base filename.
+- `directory` (string, **required**): output directory. The sink writes
+  `NAME.log` and rotates it to `NAME_YYMMDD_HHMMSS.log`. The limits below
+  delete *any* `.log` file in the directory, so give each file sink a
+  directory of its own.
+- `name` (string, **required**): file name base.
 - `max_size_mb` (int, `100`): rotate when the active file reaches this size.
-- `max_total_size_mb` (int, `1000`): cap across all rotated files.
-- `min_disk_free_mb` (int, `0`): free-space floor before writing; `0` = none.
-- `retention_hours` (float, `168.0`): delete rotated files older than this.
+- `max_total_size_mb` (int, `1000`): above this total, the oldest `.log` files
+  there are deleted.
+- `min_disk_free_mb` (int, `0`): the oldest `.log` files there are deleted to
+  keep this much space free, and nothing is written while that fails. `0`
+  means none and a negative value means `100`.
+- `retention_hours` (float, `168.0`): `.log` files there older than this are
+  deleted; `0` keeps them.
 - `buffer_size` (int, `1000`): sink input queue depth, and the depth of the
   internal writer's queue, which drops and counts when full.
 - `flush_interval_ms` (int, `100`): forced flush interval.
-
-> `min_disk_free_mb` has an unusual default. The constructor replaces only
-> *negative* values with `100`; leaving the key unset yields `0`, which means no
-> free-space floor. Set it explicitly if you want one.
 
 The sink drives an internal writer configured for raw output with timestamps and
 levels disabled, so what lands on disk is exactly the formatted payload. On stop
@@ -113,8 +114,9 @@ it hands the writer what is queued before closing the file.
 
 ## null
 
-Discards everything, counting entries and bytes. Useful for benchmarking a
-source or flow in isolation.
+Discards; holds a sink's place until one is chosen, so a pipeline can be set
+up before its sink is. It counts entries and bytes, so it also isolates a
+source or flow when measuring it.
 
 ```toml
 [[pipelines.plugin_sinks]]
@@ -190,9 +192,10 @@ Options, each as type and default:
 
 **Behaviour**
 
-- Only `GET` is routed to either path; anything else gets `405`, `HEAD` on
-  `stream_path` included — a stream is a body, and a client registered to have
-  its body discarded never reads and never leaves.
+- Only `GET` (and `HEAD` on `status_path`) is routed to the two paths;
+  anything else gets `405`, including `HEAD` on `stream_path`. A stream is a
+  body, and a client registered to have its body discarded never reads and
+  never leaves.
 - With an `auth` block, one middleware gates **both** endpoints, with no body
   detail in a refusal. Under `mtls` a refused certificate gets `403`. Under
   `scram` a client logs in at `POST /auth`, which sits outside the gate (see
@@ -225,15 +228,17 @@ Options, each as type and default:
 - Refusals are logged at WARN and counted in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
   `auth_identity`.
-- On connect the client receives an `event: connected` frame carrying its
-  client id, session id, sink instance id, endpoint paths, and buffer size.
+- Stream responses carry `Content-Type: text/event-stream`,
+  `Cache-Control: no-cache` and `X-Accel-Buffering: no`. On connect the client
+  receives an `event: connected` frame carrying its client id, session id,
+  sink instance id, endpoint paths, and buffer size.
 - Payloads are framed per the SSE spec, one `data:` line per line break in the
   payload (CRLF, LF or a lone CR), so multi-line entries stream correctly and
   no entry can inject an `event:`, `id:` or `retry:` field.
 - The server sets no `WriteTimeout` (that would kill long-lived streams);
   per-write deadlines come from `write_timeout_ms` via `http.ResponseController`
   and cover the connected frame, every payload, and the idle comment.
-- A quiet stream emits an SSE comment every 15 s. It refreshes the client's
+- Every stream gets an SSE comment every 15 s. It refreshes the client's
   session and is how a peer that stopped reading is noticed.
 - A client whose send queue is full has that event dropped
   (`dropped_writes`); it is not disconnected. A `dropped_writes` that rises while
@@ -258,11 +263,9 @@ buffer sizes, connection limit, write timeout, uptime, endpoint paths, and the
 `total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected` /
 `acl_denied` / `acl_limited` counters.
 
-**Statistics**: `dropped_writes`, `rejected_clients`, `auth`, `auth_allowed`,
-`auth_rejected`; under `scram` also `auth_users`, `auth_throttled`,
-`auth_busy`, `auth_binding_mismatch` and `auth_token_lifetime_ms`, and in
-proxy mode `auth_trusted_proxies`; with a non-empty `acl` block also `acl`,
-`acl_denied`, `acl_limited` and `acl_proxy_headers`.
+**Statistics**: `host`, `port`, `tls`, `buffer_size`, `client_buffer_size`,
+`max_connections`, `write_timeout_ms`, `endpoints`, `dropped_writes`,
+`rejected_clients`, and the [auth and acl keys](sources.md#source-statistics).
 
 > Without an `auth` block both endpoints are unauthenticated, and the stream
 > response carries `Access-Control-Allow-Origin: *`, so any web origin can read
@@ -303,22 +306,14 @@ allow = ["viewer-01"]
 
 Options, each as type and default:
 
-- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the listener
-  keeps to its family ([Networking](networking.md#address-family)).
-- `port` (int, **required**): listen port.
-- `buffer_size` (int, `1000`): sink input queue depth.
-- `client_buffer_size` (int, `256`): per-client send queue depth.
+- `host`, `port`, `buffer_size`, `client_buffer_size`: as on [http](#http).
 - `write_timeout_ms` (int, `5000`): per-write deadline.
-- `keep_alive` (bool, `true`): TCP keep-alive on accepted connections.
+- `keep_alive` (bool, `true`): TCP keep-alive probes after
+  `keep_alive_period_ms` idle; `false` sends none.
 - `keep_alive_period_ms` (int, `30000`): keep-alive idle period.
 - `max_connections` (int, `0`): concurrent connection cap; `0` = unlimited.
-- `tls` (table): listener TLS.
-- `auth` (table): client authentication (`mtls` or `scram`); see
-  [Security](security.md#the-auth-block).
-- `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
-  before TLS, `proxy_protocol` with `proxy_from` for the client a PROXY header
-  names, and `max_connections_per_client`; see
-  [Security](security.md#the-acl-block).
+- `tls`, `auth`: as on `http`.
+- `acl` (table): as on `http`, without `requests_per_second_per_client`.
 
 **Behaviour**
 
@@ -342,11 +337,9 @@ Options, each as type and default:
   receives a broadcast. Its connection is closed, the rejection logged at WARN,
   and `rejected_conns` incremented.
 
-**Statistics**: `write_errors`, `dropped_writes`, `rejected_conns`,
-`tls_handshake_errors`, `auth`, `auth_allowed`, `auth_rejected`; under `scram`
-also `auth_users`, `auth_throttled`, `auth_busy` and `auth_binding_mismatch`;
-with a non-empty `acl` block also `acl`, `acl_denied`, `acl_limited` and
-`acl_proxy_headers`.
+**Statistics**: `host`, `port`, `tls`, `buffer_size`, `write_errors`,
+`dropped_writes`, `rejected_conns`, `tls_handshake_errors`, and the
+[auth and acl keys](sources.md#source-statistics).
 
 ---
 
@@ -360,7 +353,7 @@ persistent connection. See [Chaining](chaining.md).
 id   = "to_relay"
 type = "tcp_chain"
 [pipelines.plugin_sinks.config]
-host                 = "relay.internal"
+host                 = "relay.example.org"
 port                 = 15801
 node                 = "edge-01"
 buffer_size          = 1000
@@ -388,8 +381,10 @@ Options, each as type and default:
 - `dial_timeout_ms` (int, `5000`): TCP connect timeout.
 - `write_timeout_ms` (int, `5000`): per-write deadline.
 - `backoff_min_ms` (int, `500`): reconnect backoff floor.
-- `backoff_max_ms` (int, `30000`): reconnect backoff ceiling.
-- `keep_alive` (bool, `true`): TCP keep-alive.
+- `backoff_max_ms` (int, `30000`): reconnect backoff ceiling; below
+  `backoff_min_ms` it is `30000`.
+- `keep_alive` (bool, `true`): TCP keep-alive probes after
+  `keep_alive_period_ms` idle; `false` sends none.
 - `keep_alive_period_ms` (int, `30000`): keep-alive idle period.
 - `tls` (table): dialer TLS; `cert_file`/`key_file` present a client identity.
 - `auth` (table): server identity pinning (`mtls`) or a login (`scram`); see
@@ -401,12 +396,13 @@ Options, each as type and default:
   downstream being up.
 - Under `scram` the hello carries the login, and the link counts as established
   only once the server's final message proves it holds the user's verifier. The
-  exchange is bounded at 10 s and cut short by shutdown. A refusal —
-  `authentication failed`, `authentication not enabled`, `no challenge within
-  10s` — is logged at WARN as `Chain connect refused` on every attempt; other
-  connect failures log at DEBUG. Both retry under the normal backoff.
+  exchange is bounded at 10 s and cut short by shutdown.
+- A refusal (`authentication failed`, `authentication not enabled`, `no
+  challenge within 10s`) or a server failing its CA or pin is logged at WARN
+  as `Chain connect refused` on every attempt; other connect failures log at
+  DEBUG as `Chain connect failed`. Both retry under the normal backoff.
 - Each entry is serialized as one canonical JSON line. Delivery holds the line
-  across reconnects until it is written or the process shuts down, with
+  across reconnects until the socket accepts it or the process shuts down, with
   exponential backoff plus ±20 % jitter between attempts. The delay keeps
   growing until a link outlives `backoff_min_ms`, so a source that drops every
   link right after accepting it is not retried in a tight loop.
@@ -425,12 +421,9 @@ Options, each as type and default:
 - Events arriving without a structured entry are wrapped from the formatted
   payload and counted in `synthesized`.
 
-Under `mtls` the policy pins the server's identity as part of the handshake, so
-a server it rejects is refused like a failed login above.
-
-**Statistics**: `target`, `node`, `tls`, `auth`, `connected`, `reconnects`,
-`write_errors`, `synthesized`; under `scram` also `auth_username`,
-`auth_failures` and `last_auth_error` (empty after a successful login).
+**Statistics**: `target`, `node`, `tls`, `connected`, `reconnects`,
+`write_errors`, `synthesized`, and the
+[auth keys](sources.md#source-statistics).
 
 ---
 
@@ -444,7 +437,7 @@ Batches structured entries as NDJSON and POSTs them to a downstream LogWisp
 id   = "to_collector"
 type = "http_chain"
 [pipelines.plugin_sinks.config]
-host               = "collector.internal"
+host               = "collector.example.org"
 port               = 15802
 ingest_path        = "/ingest"
 node               = "edge-01"
@@ -465,29 +458,22 @@ key_file  = "/etc/logwisp/tls/client.key"
 
 Options, each as type and default:
 
-- `host` (string, **required**): downstream host or address; an IPv6 one goes
-  bare (`::1`).
-- `port` (int, **required**): downstream port.
-- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`.
-- `node` (string, `os.Hostname()`): origin label stamped on first-hop entries.
-- `buffer_size` (int, `1000`): sink input queue depth.
+- `host`, `port`, `node`, `buffer_size`, `tls`, `auth`: as on
+  [tcp_chain](#tcp_chain).
+- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
+  `/auth` is reserved for the login.
 - `max_batch_count` (int, `100`): flush after this many entries.
 - `max_batch_bytes` (int, `1048576`): flush after this many bytes (1 MiB).
 - `flush_interval_ms` (int, `1000`): flush after this long.
 - `request_timeout_ms` (int, `10000`): covers dial, write, and response.
 - `backoff_min_ms` (int, `500`): retry backoff floor.
-- `backoff_max_ms` (int, `30000`): retry backoff ceiling.
-- `tls` (table): dialer TLS; `cert_file`/`key_file` present a client identity.
-- `auth` (table): server identity pinning (`mtls`) or a login (`scram`); see
-  [Security](security.md#the-auth-block).
+- `backoff_max_ms` (int, `30000`): retry backoff ceiling; below
+  `backoff_min_ms` it is `30000`.
 
 **Behaviour**
 
-- Delivery is at-least-once per batch: a retried batch can be delivered twice if
-  the first attempt succeeded but the response was lost.
-- Retries apply to transport errors, `408`, `429`, and `5xx`. Any other
-  non-2xx response is treated as permanent, and the batch is dropped and counted
-  in `dropped_batches`. A retry is logged at WARN, a dropped batch at ERROR.
+- Delivery: [Chaining](chaining.md#delivery-semantics); a retry logs WARN, a
+  dropped batch ERROR.
 - Under `scram` the sink logs in at `POST /auth` whenever it holds no token and
   sends `Authorization: Bearer <token>`. A failed login is retried like a
   transport error, holding the batch. The token is renewed ahead of its expiry;
@@ -503,9 +489,9 @@ Options, each as type and default:
   within `request_timeout_ms`, at most 2 s; each batch still undelivered then
   is dropped and logged at WARN.
 
-**Statistics**: `target`, `node`, `tls`, `auth`, `batches_sent`,
-`request_errors`, `dropped_batches`, `synthesized`; under `scram` also
-`auth_username`, `auth_failures` and `last_auth_error`.
+**Statistics**: `target`, `node`, `tls`, `batches_sent`, `request_errors`,
+`dropped_batches`, `synthesized`, and the
+[auth keys](sources.md#source-statistics).
 
 ---
 
@@ -513,4 +499,5 @@ Options, each as type and default:
 
 Every sink reports: `id`, `type`, `total_processed`, `active_connections`,
 `start_time`, `last_processed`, and a type-specific `details` map. The DEBUG
-status report spreads `details` into each plugin's line.
+status report spreads `details` into each plugin's line, network sinks' with
+the [auth and acl keys](sources.md#source-statistics).

@@ -46,8 +46,9 @@ post-install:
 	${INSTALL_DATA} ${WRKSRC}/config/logwisp.toml ${STAGEDIR}${ETCDIR}/logwisp.toml.sample
 
 post-install-DOCS-on:
-	${MKDIR} ${STAGEDIR}${DOCSDIR}/doc
-	${INSTALL_DATA} ${WRKSRC}/README.md ${STAGEDIR}${DOCSDIR}
-	${INSTALL_DATA} ${WRKSRC}/doc/*.md ${STAGEDIR}${DOCSDIR}/doc
+	${MKDIR} ${STAGEDIR}${DOCSDIR}/doc ${STAGEDIR}${DOCSDIR}/config
+	${INSTALL_DATA} ${WRKSRC}/README.md ${WRKSRC}/logwisp-logo.svg ${STAGEDIR}${DOCSDIR}
+	${INSTALL_DATA} ${WRKSRC}/doc/*.md ${WRKSRC}/doc/lw.1 ${STAGEDIR}${DOCSDIR}/doc
+	${INSTALL_DATA} ${WRKSRC}/config/logwisp.toml ${STAGEDIR}${DOCSDIR}/config
 
 .include <bsd.port.mk>

@@ -66,14 +66,15 @@ jobs:
           test ! -e /etc/logwisp/logwisp.toml
           lw config init
           lw --check
-          lw --dump | grep -q 'id = "default_source"'
+          lw --dump | grep -q '^status_reporter = true'
           if lw config init; then exit 1; fi
           make uninstall PREFIX="$HOME/.local"
           test ! -e "$HOME/.local/bin/lw"
           test -f "$HOME/.config/logwisp/logwisp.toml"
-  # make deb on a host with systemd: the service runs from the package's
-  # configuration and survives a reinstall that keeps an edited one; remove
-  # stops and disables it and leaves the conffile, purge removes that too
+  # make deb on a host with systemd: the service runs once the package's
+  # configuration, which ships no pipeline, gets one, and survives a reinstall
+  # that keeps it; remove stops and disables it and leaves the conffile, purge
+  # removes that too
   deb:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -87,6 +88,7 @@ jobs:
           sudo apt-get install -y ./bin/logwisp_*.deb
           lw --version
           test -f /usr/share/zsh/vendor-completions/_lw
+          printf '[[pipelines]]\nname = "ci"\n[[pipelines.plugin_sources]]\nid = "in"\ntype = "null"\n[[pipelines.plugin_sinks]]\nid = "out"\ntype = "null"\n' | sudo tee -a /etc/logwisp/logwisp.toml
           sudo systemctl enable --now logwisp
           sleep 3
           systemctl is-active logwisp || { sudo journalctl -u logwisp --no-pager; exit 1; }
@@ -104,7 +106,7 @@ jobs:
           sudo apt-get purge -y logwisp
           test ! -e /etc/logwisp/logwisp.toml
   # BSD make on FreeBSD: build, install twice keeping an edited configuration,
-  # run the rc.d service, uninstall
+  # run the rc.d service once the configuration has a pipeline, uninstall
   freebsd:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -125,6 +127,7 @@ jobs:
             lw --version
             pw groupadd logwisp
             pw useradd logwisp -g logwisp -d /nonexistent -s /usr/sbin/nologin
+            printf '[[pipelines]]\nname = "ci"\n[[pipelines.plugin_sources]]\nid = "in"\ntype = "null"\n[[pipelines.plugin_sinks]]\nid = "out"\ntype = "null"\n' >> /usr/local/etc/logwisp/logwisp.toml
             service logwisp onestart
             sleep 3
             service logwisp onestatus

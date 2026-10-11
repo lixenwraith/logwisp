@@ -15,35 +15,30 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// init registers the component in plugin factory
 func init() {
 	if err := plugin.RegisterSink("null", NewNullSinkPlugin); err != nil {
 		panic(fmt.Sprintf("failed to register null sink: %v", err))
 	}
 }
 
-// NullSink discards all received transport events, used for testing
+// NullSink discards every event: it holds a sink's place until one is chosen,
+// or isolates a source or flow while it is measured
 type NullSink struct {
-	// Plugin identity and session management
 	id      string
 	proxy   *session.Proxy
 	session *session.Session
 
-	// Application
 	input  chan core.TransportEvent
 	logger *log.Logger
 
-	// Runtime
 	done      chan struct{}
 	startTime time.Time
 
-	// Statistics
 	totalReceived atomic.Uint64
 	totalBytes    atomic.Uint64
 	lastReceived  atomic.Value // time.Time
 }
 
-// NewNullSinkPlugin creates a null sink through plugin factory
 func NewNullSinkPlugin(
 	id string,
 	configMap map[string]any,
@@ -62,7 +57,6 @@ func NewNullSinkPlugin(
 	}
 	ns.lastReceived.Store(time.Time{})
 
-	// Create session for null sink
 	ns.session = proxy.CreateSession(
 		"null://devnull",
 		map[string]any{
@@ -78,7 +72,6 @@ func NewNullSinkPlugin(
 	return ns, nil
 }
 
-// Capabilities returns supported capabilities
 func (ns *NullSink) Capabilities() []core.Capability {
 	return []core.Capability{
 		core.CapSessionAware,
@@ -86,14 +79,11 @@ func (ns *NullSink) Capabilities() []core.Capability {
 	}
 }
 
-// Input returns the channel for sending transport events
 func (ns *NullSink) Input() chan<- core.TransportEvent {
 	return ns.input
 }
 
-// Start begins the processing loop
 func (ns *NullSink) Start(ctx context.Context) error {
-
 	ns.startTime = time.Now()
 	go ns.processLoop(ctx)
 	ns.logger.Debug("msg", "Null sink started",
@@ -102,7 +92,6 @@ func (ns *NullSink) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the sink
 func (ns *NullSink) Stop() {
 	if ns.session != nil {
 		ns.proxy.RemoveSession(ns.session.ID)
@@ -113,7 +102,6 @@ func (ns *NullSink) Stop() {
 		"total_received", ns.totalReceived.Load())
 }
 
-// GetStats returns sink statistics
 func (ns *NullSink) GetStats() sink.SinkStats {
 	lastRcv, _ := ns.lastReceived.Load().(time.Time)
 
@@ -129,7 +117,6 @@ func (ns *NullSink) GetStats() sink.SinkStats {
 	}
 }
 
-// processLoop reads transport events and discards them
 func (ns *NullSink) processLoop(ctx context.Context) {
 	for {
 		select {
@@ -137,7 +124,6 @@ func (ns *NullSink) processLoop(ctx context.Context) {
 			if !ok {
 				return
 			}
-			// Discard the event, only update stats
 			ns.totalReceived.Add(1)
 			ns.totalBytes.Add(uint64(len(event.Payload)))
 			ns.lastReceived.Store(time.Now())

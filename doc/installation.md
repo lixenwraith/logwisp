@@ -6,8 +6,9 @@
 - Architecture: amd64; arm64 builds but is untested
 - To build: Go 1.27.2 or newer (FreeBSD: the `go127` package), and GNU make
   or BSD make
-- For `make e2e`: bash 5+, coreutils, curl, openssl and go (the proxy test
-  builds its reverse proxy). Optional, else those checks SKIP: node with
+- For `make e2e`: bash 5+, coreutils, curl, openssl, go (the proxy and acl
+  tests build helpers) and nc (acl). Optional, else those checks SKIP:
+  script(1) and setsid(1) (`preset-test.sh`'s terminal checks), node with
   playwright and the Chromium builds `playwright install chromium` fetches
   (browser checks), an IPv6 loopback (`ipv6-test.sh`), docker as root with the
   `logwisp:dev` image (`deploy-test.sh`'s container run)
@@ -31,7 +32,8 @@ The Makefile works with GNU make and BSD make alike. Targets:
     `lwconf.js` that loads and calls it, `schema.json` (`lw --schema`) and
     `lwconf.json`, their manifest: version, commit, Go version and each
     file's sha256. Stamped with the commit's time, a commit's files are the
-    same on every build
+    same on every build. Its calls:
+    [Architecture](architecture.md#configuration-engine)
   - `make version`: the metadata a build would embed
   - `make completion`: regenerate the bash, zsh and fish completion in
     `deploy/package/completion/` from `cmd/lw`'s `shorts` and `commands`
@@ -60,6 +62,8 @@ Variables:
 - `GO_BUILDFLAGS`, `GO_LDFLAGS`: extra `go build` and linker flags for
   packagers. They are distinct from `GOFLAGS` and `LDFLAGS`, which the go
   command and the C linker read themselves.
+- `VERSION`, `GIT_COMMIT`, `BUILD_TIME`: what a build embeds, by default from
+  git and the clock; a package sets them.
 - `SOURCE_DATE_EPOCH`: when set, the embedded build time comes from it, so
   package builds are reproducible.
 
@@ -73,8 +77,9 @@ checkout.
 
 `make install` copies what a package ships and compiles nothing, so build
 first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR`, `BINDIR` (default
-`$PREFIX/bin`, the path the systemd unit and the rc.d script run `lw` from)
-and `SERVICE`:
+`$PREFIX/bin`, the path the systemd unit and the rc.d script run `lw` from),
+`MANDIR`, `DOCDIR` and `LICENSEDIR` (under `$PREFIX/share` by default) and
+`SERVICE`:
 
 - Linux defaults: `PREFIX=/usr`, `SYSCONFDIR=/etc`. Outside a package
   manager, prefer `PREFIX=/usr/local`; systemd reads units, sysusers and
@@ -83,7 +88,7 @@ and `SERVICE`:
 - `INSTALL_OS` (default: `uname -s`) picks the layout, so
   `INSTALL_OS=FreeBSD DESTDIR=...` stages the FreeBSD one on another system.
 - `SERVICE`: `yes` (default) adds the service and its configuration; `no`
-  installs `lw` alone ([Without a Service](#without-a-service)).
+  leaves them out ([Without a Service](#without-a-service)).
 - `BASHCOMPDIR`, `ZSHCOMPDIR`, `FISHCOMPDIR`: where the shell completion
   goes, by default `$PREFIX/share/bash-completion/completions`,
   `$PREFIX/share/zsh/site-functions` (`/usr/share/zsh/vendor-completions`
@@ -97,16 +102,16 @@ sudo make install PREFIX=/usr/local
 
 Every install gets:
 
-- `$BINDIR/lw` and the manual `$PREFIX/share/man/man1/lw.1`
+- `$BINDIR/lw` and the manual `$MANDIR/man1/lw.1`
 - completion for `lw`, its commands, flags, files and preset names:
   `lw`, `_lw` and `lw.fish` in the three directories above
-- `$PREFIX/share/doc/logwisp/` (this documentation) and
-  `$PREFIX/share/licenses/logwisp/LICENSE`
+- `$DOCDIR` (this documentation) and `$LICENSEDIR/LICENSE`
 
 A service install also gets the service files below and, on Linux and
 FreeBSD alike, `$SYSCONFDIR/logwisp/logwisp.toml`: the annotated sample
-configuration, placed when none is there and otherwise kept. Edit it before
-starting the service.
+configuration, placed when none is there and otherwise kept. As shipped it
+defines no pipeline, so the service would copy an empty stdin and exit: edit it
+before starting the service.
 
 ### Linux (systemd)
 
@@ -139,7 +144,7 @@ Create a credentials file with its owner and mode first; `lw auth` keeps
 both:
 
 ```bash
-sudo install -m 0600 -o logwisp -g logwisp /dev/null /etc/logwisp/users.toml
+sudo install -m 0640 -o root -g logwisp /dev/null /etc/logwisp/users.toml
 sudo lw auth add-user --credentials /etc/logwisp/users.toml --user <name> \
   --password-file <file>
 sudo systemctl reload logwisp
@@ -256,10 +261,11 @@ For every user: `sudo make install SERVICE=no PREFIX=/usr/local`.
 existing file, where you choose:
 
 - `lw config init`: `~/.config/logwisp/logwisp.toml`, which `lw` reads
-  without `-c` unless a `LOGWISP_CONFIG_*` variable names another file. With
-  it in place, `lw` without pipeline options runs its
-  pipelines instead of copying stdin to stdout; pipeline options and presets
-  still replace them.
+  without `-c` unless a `LOGWISP_CONFIG_*` variable names another file. As
+  shipped it defines no pipeline, so `lw` still copies stdin to stdout, though
+  its own log on stderr is at the file's default `info` rather than `warn`;
+  once it defines `[[pipelines]]`, `lw` without pipeline options runs them,
+  and pipeline options and presets still replace them.
 - `sudo lw config init --out /usr/local/etc/logwisp/logwisp.toml`: a file
   for every user, named with `-c`, or without it by
   `LOGWISP_CONFIG_DIR=/usr/local/etc/logwisp`
@@ -324,11 +330,11 @@ docker run -d --name logwisp \
   -e LOGWISP_SINK=console
   ```
 
-  Without a file lw logs warnings only and runs no status reporter; add
-  `-e LOGWISP_LOGGING_LEVEL=info` (and `-e LOGWISP_STATUS_REPORTER=true`) for
-  the service defaults. The image cannot set them: a variable would override
-  a mounted file's value. Without `-i`, stdin is `/dev/null`, so a container
-  needs a source other than `console`.
+  Without a file lw logs less ([CLI](cli.md#built-in-defaults)): add
+  `-e LOGWISP_LOGGING_LEVEL=info -e LOGWISP_STATUS_REPORTER=true`; the image
+  sets neither, as a variable would override a mounted file's value. Without
+  `-i`, stdin is `/dev/null`, so a container needs a source other than
+  `console`.
 
 - Secrets: only as mounted files, at `/run/secrets` (Docker or Compose
   secrets, a Kubernetes secret volume), named by `tls.key_file`,
@@ -413,36 +419,41 @@ or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
 ```
 15801-15804  chain-test.sh, chain-aggregate-test.sh  test/run/
 (no ports)   passthrough-test.sh                     test/run/passthrough/
+(no ports)   pipe-test.sh                            test/run/pipe/
 15811-15814  mtls-chain-test.sh                      test/run-mtls/
 15821-15825  scram-chain-test.sh                     test/run-scram/
-15831-15832  scram-proxy-test.sh                     test/run-proxy/
+15831-15833  scram-proxy-test.sh                     test/run-proxy/
 15851-15855  ipv6-test.sh                            test/run-ipv6/
 15871-15879  deploy-test.sh                          test/run-deploy/
 15881-15889  acl-test.sh                             test/run/acl/
+15890-15898  preset-test.sh                          test/run/preset/
 ```
 
-- `chain-test.sh`: two edges into a relay, one pipeline per chain transport;
-  ports 15801-15804
+- `chain-test.sh`: two edges into a relay, one pipeline per chain transport
 - `chain-aggregate-test.sh`: the same edges, with the relay fanning both into
-  both sinks; ports 15801-15804
+  both sinks
 - `passthrough-test.sh`: `file` source to `file` sink, a wide envelope byte
-  for byte (`raw = true`) and, parsed, with no key dropped; no ports
-- `mtls-chain-test.sh`: mTLS chain edges and viewers, allow lists, node
-  binding; ports 15811-15814
+  for byte (`raw = true`) and, parsed, with no key dropped
+- `pipe-test.sh`: lw without a configuration as a filter, stdin to stdout
+  line for line without loss, quiet on stderr, exit 0 at the end of input
+- `mtls-chain-test.sh`: mTLS chain edges and viewers, allow lists, node binding
 - `scram-chain-test.sh`: SCRAM chain edges and viewers with `lw auth`
-  credentials; ports 15821-15825
+  credentials
 - `scram-proxy-test.sh`: browser and CLI logins to an `http` sink behind a
-  TLS-terminating proxy; ports 15831-15832; the browser checks skip without
-  node and playwright's Chromium: the headless shell for the scenarios with
-  cookies, full Chromium for the profile that blocks them
+  TLS-terminating proxy; the browser checks skip without node and
+  playwright's Chromium: the headless shell for the scenarios with cookies,
+  full Chromium for the profile that blocks them
 - `ipv6-test.sh`: a relay on `::1` over both chain transports, IPv6 SANs,
-  per-family listeners; ports 15851-15855; skips (exit 77) without an IPv6
-  loopback
+  per-family listeners; skips (exit 77) without an IPv6 loopback
 - `deploy-test.sh`: the configurations `deploy/lw-deploy.sh` writes, deployed
-  and checked; ports 15871-15879
+  and checked
 - `acl-test.sh`: each listener admitting or refusing peers by address before
   TLS, with clients from 127.0.0.1 and 127.0.0.2, then by the client a PROXY
   header names behind a stub proxy on 127.0.0.11-13 (and nginx `stream` on
   127.0.0.14 when installed) or an L7 proxy's `X-Forwarded-For`, with
-  per-client connection caps, request rates and login throttling; ports
-  15881-15889; skips (exit 77) where 127.0.0.2 cannot be bound
+  per-client connection caps, request rates and login throttling; skips
+  (exit 77) where 127.0.0.2 cannot be bound
+- `preset-test.sh`: colors, presets, `--dump`, `lw tls`, listeners that make
+  their certificate, the serve preset's viewer, network sinks delivering a
+  finite input whole, a SCRAM pipe whose password is on no disk; the
+  terminal checks skip without script(1) or setsid(1)

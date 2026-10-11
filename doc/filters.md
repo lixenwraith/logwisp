@@ -18,8 +18,9 @@ patterns = ["ERROR", "WARN"]
   pattern matches).
 - `patterns`, []string, default `[]`: Go RE2 regular expressions.
 
-A filter with no patterns passes everything. Invalid patterns fail at startup
-with the filter index and the offending pattern in the message.
+A filter with no patterns passes everything. An invalid pattern is refused
+when the configuration loads, named by its path
+(`pipelines[0].flow.filters[0].patterns[1]`).
 
 ## What Gets Matched
 
@@ -34,7 +35,8 @@ Empty parts are omitted, so an entry with no detected level matches
 level as easily as the message body:
 
 - `"^app\\.log "` matches entries whose source is `app.log`.
-- `"ERROR"` matches level `ERROR`, or the word `ERROR` anywhere in the message.
+- `"ERROR"` matches `ERROR` anywhere in the text: the level, the message, the
+  source name, or inside a word (`NOERROR`). Use `"\\bERROR\\b"` for the word.
 
 The structured `fields` payload is **not** part of the match text.
 
@@ -124,16 +126,15 @@ time, which is exactly what you want in a log hot path.
 - Whole word: `\berror\b`
 - Alternation: `ERROR|WARN|FATAL`
 - Character class: `[0-9]{3}`
-- Anchors: `^ERROR`, `ERROR$`
+- Anchors: `^app\.log ` (the text starts with the source), `ERROR$`
 - Any characters: `.*exception.*`
 
 Remember that TOML basic strings process escapes, so a regex backslash needs
 doubling: `"\\berror\\b"`. TOML literal strings avoid the issue:
 `'\berror\b'`.
 
-Anchors apply to the assembled match text, which begins with the source name —
-so `^ERROR` will not match an entry whose source is non-empty. Use
-`\bERROR\b` instead unless you mean to anchor on the source.
+Anchors apply to the assembled match text, which begins with the source name,
+so `^ERROR` never matches an entry that has a source; use `\bERROR\b`.
 
 ## Common Recipes
 
@@ -153,16 +154,14 @@ type     = "exclude"
 patterns = ["/healthz", "/metrics", "\\bping\\b"]
 ```
 
-**Secret suppression** — see [Security](security.md); filters are the only
-redaction mechanism LogWisp currently offers.
+**Secret suppression**: LogWisp has no redaction; an exclude filter drops each
+entry that matches ([Security](security.md)).
 
 ```toml
 [[pipelines.flow.filters]]
 type     = "exclude"
 patterns = ["password", "api[_-]?key", "authorization", "bearer ", "secret", "token"]
 ```
-
-Note this drops the whole entry, it does not redact part of it.
 
 **Per-application routing** — run one pipeline per application, each with its
 own include filter, rather than trying to route inside one pipeline. Sinks fan
@@ -182,7 +181,6 @@ evaluated against every filter until one rejects it, so cost scales with the
 number of patterns and their complexity. Prefer literal substrings and simple
 alternations over broad `.*` wildcards.
 
-Filters log at DEBUG on every entry — pattern text, match results, and the
-final decision. That is invaluable when a filter is not behaving as expected and
-very expensive in production; keep `logging.level` at `info` or higher on a busy
-pipeline.
+Filters log every pattern match and decision at DEBUG: useful when a filter
+misbehaves, expensive on a busy pipeline, where `logging.level` stays at
+`info` or higher.

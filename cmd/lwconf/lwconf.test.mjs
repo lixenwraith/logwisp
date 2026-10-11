@@ -152,6 +152,7 @@ test("fields are a node's keys, its tables' of the plugin's side as groups", () 
   assert.deepEqual(rows.find(r => r.path === "port").key.max, 65535);
   assert.equal(fields(schema, "rate_limit").find(r => r.path === "entries_per_second").placeholder, "(off)");
   assert.equal(fields(schema, "heartbeat").find(r => r.path === "interval_ms").placeholder, "1000");
+  assert.equal(fields(schema, "sink", "file").find(r => r.path === "retention_hours").placeholder, "168");
 });
 
 test("a refused call answers why and where, and the engine keeps answering", () => {

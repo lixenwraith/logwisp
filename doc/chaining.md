@@ -43,13 +43,14 @@ Chained entries carry a `node` label identifying where they originated.
   - `false`: always overwrite with the sender's remote address.
 
 Relays preserve `node`, so a label survives any number of hops and identifies
-the original producer rather than the last relay.
+the original producer, unless a hop's source overwrites it: `trust_node =
+false`, or `node_binding = "force"` (the default with an `auth` block).
+Formatters write the label as a prefix on the source
+([Formatters](formatters.md#node-identity-in-output)).
 
 With an `auth` block the source can instead bind the label to the sender's
-authenticated identity — its certificate identity under `mtls`, its username
-under `scram`. `assert` and `force` take the connection label over from
-`trust_node`; only `force` also overrides the per-entry labels.
-`auth.node_binding`:
+authenticated identity: its certificate identity under `mtls`, its username
+under `scram`. `auth.node_binding`:
 
 - `none`: `trust_node` governs the connection label and the per-entry `node`
   field.
@@ -63,10 +64,6 @@ where a compromised edge cannot mislabel its entries, including through the
 per-entry `node` field. Pick `assert` on a relay-to-relay hop, where the relay
 should prove its own identity but the origin labels it forwards must survive.
 See [Security](security.md#node-binding).
-
-Formatters render node identity as a syslog-style prefix on the source field:
-`edge-01/app.log`. In JSON output the node therefore appears inside the source
-field, not as a separate top-level key.
 
 > `trust_node = true` with no `auth` block means any peer that can connect can
 > claim **any** node label, including one belonging to another host. On an
@@ -96,6 +93,11 @@ A persistent connection carrying newline-delimited JSON.
 
 Line size is bounded at 1 MiB. An oversized line is a protocol violation and
 terminates the connection, because the scanner cannot resynchronize afterwards.
+The cap applies to the encoded line, envelope and JSON escapes included, so a
+message near 1 MiB exceeds it (the console and file sources cut lines at
+1 MiB). On `tcp_chain` such an entry ends the link and is lost, together with
+any line the sink writes before it notices the close. On `http_chain` it fails
+its whole batch with `400`, which the sink drops.
 
 Under `auth.type = "scram"` the hello also carries the SCRAM client-first
 message, and three more lines precede the entries, each one JSON object of at
@@ -127,15 +129,19 @@ Batches of NDJSON delivered by `POST`, with the preamble expressed as headers.
 - Response header
   - `X-Logwisp-Accepted`: the number of entries ingested.
 
-Responses: `204` on success, `400` for a bad protocol version or a malformed
-body, `413` when the body cap is exceeded, `405` for a non-`POST` method, `401`
-for a missing or expired token, `403` for a refused certificate or node label.
+Responses: `204` on success; `400` for a bad protocol version or a malformed
+body, a line over 1 MiB included; `413` past `max_body_bytes`; `404` for
+another path; `405` for a non-`POST` method; `429` (with `Retry-After`) past
+`acl.requests_per_second_per_client`; `401` for a missing, invalid or expired
+token; `403` for a refused certificate or node label.
 
-Under `scram` the sink first logs in with two `POST /auth` requests carrying the
-same JSON as the TCP lines: the hello (`200` and the challenge), then the proof
-(`200` with the final message, `token` and `expires_in` in seconds). A refusal is
-`{"error":"…"}`: `401` for a failed proof, `429` when throttled, `503` when the
-listener is busy, `400` or `413` for a malformed or oversized body.
+Under `scram` the sink first logs in with two `POST /auth` requests, each
+`Content-Type: application/json` and carrying the same JSON as the TCP lines:
+the hello (`200` and the challenge), then the proof (`200` with the final
+message, `token` and `expires_in` in seconds). A refusal is `{"error":"…"}`:
+`401` for a failed proof, `429` when throttled, `503` when the listener is
+busy, `415` without the JSON content type, `400` or `413` for a malformed or
+oversized body.
 
 ### Entry encoding
 
@@ -155,19 +161,16 @@ in at ingest.
 
 ## Delivery Semantics
 
-- `tcp_chain`: per line, each held across reconnects.
-  - On failure it retries with exponential backoff plus ±20 % jitter until
-    the line is written or the sink shuts down.
-  - Back-pressure appears upstream as `total_dropped_by_sink`.
-- `http_chain`: at least once per batch.
-  - It retries transport errors, `408`, `429`, `5xx` and, under `scram`, failed
-    logins and `401`.
-  - It drops the batch on any other non-2xx, counted in `dropped_batches`.
-
-`http_chain` batches can be delivered twice when a successful request's response
-is lost. There is no de-duplication downstream; design your consumers to
-tolerate it, or use `tcp_chain` where each line is written once per successful
-write.
+- `tcp_chain`: per line, held across reconnects until the socket accepts it,
+  with exponential backoff plus ±20 % jitter. There is no acknowledgement:
+  lines in flight when a link breaks are lost (at most once).
+- `http_chain`: at least once per batch. It retries transport errors, `408`,
+  `429`, `5xx` and, under `scram`, failed logins and `401`. It drops the batch
+  on any other non-2xx, counted in `dropped_batches`. A batch can arrive twice
+  when a successful request's response is lost; there is no de-duplication
+  downstream.
+- Both: while a link is down or a batch retries, the sink's input queue fills
+  and the pipeline counts drops in `total_dropped_by_sink`.
 
 Neither transport persists anything to disk. Entries buffered in memory during
 an outage are lost if the process exits.
@@ -191,7 +194,7 @@ pattern = "*.log"
 id = "forward"
 type = "tcp_chain"
 [pipelines.plugin_sinks.config]
-host = "relay.internal"
+host = "relay.example.org"
 port = 15801
 node = "edge-01"
 [pipelines.plugin_sinks.config.tls]
@@ -201,7 +204,7 @@ cert_file = "/etc/logwisp/tls/edge-01.crt"
 key_file  = "/etc/logwisp/tls/edge-01.key"
 [pipelines.plugin_sinks.config.auth]
 type  = "mtls"
-allow = ["relay.internal"]      # pin the relay, not just its hostname
+allow = ["relay.example.org"]   # pin the relay, not just its hostname
 ```
 
 **Relay** — ingest, keep errors only, archive and stream:
@@ -252,27 +255,23 @@ port = 8080
 
 Entries arriving on this relay are labelled `edge-01` or `edge-02` because that
 is what their certificates say, regardless of the `node` each edge configured.
-`test/mtls-chain-test.sh` builds exactly this shape against a throwaway PKI.
+`test/mtls-chain-test.sh` runs a relay of this kind (mTLS ingest with
+`node_binding = "force"`) against a throwaway PKI.
 
 To use passwords instead of client certificates, replace both `auth` blocks:
 `type = "scram"` with `username` and `password_file` on the edge, and on the
 relay a `credentials_file`, or one `username` with its `password_file`.
-`client_auth` and the edge's certificate become
-optional, and entries are labelled with the username. See
+`client_auth` and the edge's certificate become optional, and entries are
+labelled with the username. See
 [Password Authentication](security.md#password-authentication-scram).
 
 ## Operational Notes
 
-- **Formatting is a relay decision.** Because chain links carry structured
-  entries, the edge node's `flow.format` affects only its own local sinks. Set
-  the output shape on the node that owns the human-facing sink.
 - **Filtering early saves bandwidth.** A filter on the edge drops entries before
   they cross the network; a filter on the relay is easier to change centrally.
 - **Rate limits are per pipeline.** An edge limit protects the link; a relay
   limit protects the relay from a noisy edge.
 - **Heartbeats traverse chain links** as ordinary structured entries and keep
   otherwise-idle links and their sessions warm.
-- **Ports** used by the bundled test scripts: `15801` tcp_chain ingest, `15802`
-  http_chain ingest, `15803` tcp sink, `15804` http sink.
 - **Dial the listener's own literal** when testing locally: a listener on
   `127.0.0.1` takes IPv4 only, and `localhost` may resolve to `::1`.

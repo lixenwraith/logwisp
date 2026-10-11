@@ -40,16 +40,18 @@ streams, or downstream LogWisp nodes.
 ### Inputs
 
 `file` (directory tail with rotation detection and JSON line parsing),
-`console` (stdin, one reader per process), `random` (synthetic generator),
-`null`, and the chain ingest listeners `tcp_chain` and `http_chain`.
+`console` (stdin, one reader per process), `random` (generated entries, to
+check a deployment before real logs), `null` (nothing; holds a source's place
+until one is chosen), and the chain ingest listeners `tcp_chain` and
+`http_chain`.
 
 ### Outputs
 
 `console` (level names in color and control characters escaped on a
 terminal), `file` (rotating with
 retention), `http` (Server-Sent Events, a JSON status endpoint and a browser
-viewer), `tcp` (broadcast server), `null`, and the chain
-forwarders `tcp_chain` and `http_chain`.
+viewer), `tcp` (broadcast server), `null` (discards; holds a sink's place
+until one is chosen), and the chain forwarders `tcp_chain` and `http_chain`.
 
 ### Processing
 
@@ -87,13 +89,14 @@ exponential backoff and jitter.
 - Node binding: a chain source can label entries from the sender's certificate
   identity or username instead of from what the sender claims, so origin
   attribution is not forgeable
-- Fail-closed configuration: unknown keys are rejected, and startup warns about
-  expiring certificates, disabled verification, unanchored allow patterns and
-  world-readable secrets
+- Address rules: an `acl` block admits or refuses peers by address, or by the
+  client an L4 proxy's PROXY header names, and limits each client
+- Fail-closed configuration: every option is validated when the file loads,
+  unknown keys included, and startup warns about expiring certificates,
+  disabled verification, unanchored allow patterns and world-readable secrets
 
 See [Security](doc/security.md) for configuration and the exact boundary, and
-the [mTLS](doc/mtls-auth-plan.md) and [SCRAM](doc/scram-auth-plan.md)
-authentication designs for the rationale and what is deliberately left out.
+[Current State](doc/security.md#current-state) for what is left out.
 
 ## Documentation
 
@@ -102,7 +105,7 @@ authentication designs for the rationale and what is deliberately left out.
 - [Deployment](doc/deployment.md): `deploy/lw-deploy.sh` for edges,
   aggregators, containers, services, jails
 - [Architecture](doc/architecture.md): component model, data flow,
-  concurrency, back-pressure
+  concurrency, back-pressure, the configuration engine's WebAssembly API
 - [Configuration](doc/configuration.md): TOML structure, precedence,
   environment and CLI overrides
 - [Sources](doc/sources.md) and [Sinks](doc/sinks.md): every plugin and its
@@ -111,15 +114,16 @@ authentication designs for the rationale and what is deliberately left out.
   matching, output shaping and sanitization
 - [Chaining](doc/chaining.md): multi-node topologies and the wire protocol
 - [Networking](doc/networking.md): listeners, dialers, timeouts, limits
-- [Security](doc/security.md): TLS, mTLS, peer authorization, threat model
-- Design notes: [mTLS](doc/mtls-auth-plan.md) and
-  [password](doc/scram-auth-plan.md) authentication
-- [CLI](doc/cli.md): filter use, flags, pipeline specifications, signals,
-  exit codes, `lw --tui`, `lw auth`; also the `lw(1)` manual,
+- [Security](doc/security.md): TLS, mTLS, password (SCRAM) authentication,
+  address ACLs, certificates made at startup; threat model and current limits
+- [CLI](doc/cli.md): filter use, flags, pipeline specifications, presets,
+  environment, signals, exit codes, `lw --tui`, `--schema`, `lw auth`,
+  `lw tls`, `lw preset`, `lw config`; also the `lw(1)` manual,
   [`doc/lw.1`](doc/lw.1)
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
-- [To Do](doc/todo.md): planned work: packaging, `lw --tui` and its shared configuration engine
+- [To Do](doc/todo.md): the maintainer's release and packaging steps, and
+  what `lw --tui` and the schema leave for later
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](config/logwisp.toml).
@@ -191,10 +195,10 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
 
 `sudo make install` installs the binary, the manual, shell completion, a
 systemd unit or FreeBSD rc.d script and its configuration; `make deb` and
-`make arch` package them for Debian, Ubuntu and Arch. Without a service,
-`make install SERVICE=no PREFIX="$HOME/.local"` installs `lw` alone and
-`lw config init` writes the annotated configuration it reads. See
-[Installation](doc/installation.md).
+`make arch` package them for Debian, Ubuntu and Arch.
+`make install SERVICE=no PREFIX="$HOME/.local"` installs `lw`, its manual,
+completion and documentation, and no service; `lw config init` writes the
+annotated configuration it reads. See [Installation](doc/installation.md).
 
 ## System Requirements
 

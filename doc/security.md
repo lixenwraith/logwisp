@@ -33,10 +33,8 @@ configure it, and — equally important — what it does not yet do.
 - Startup warnings for expiring certificates and risky settings: see
   [Startup Warnings](#startup-warnings).
 - Unknown configuration keys rejected: a typo in `tls`, `auth`, `acl` or a
-  table path fails startup.
-- Configuration input hardened (lixenwraith/config v0.2.2 and
-  lixenwraith/toml v0.1.3, reviewed with adversarial tests and fuzzing like
-  `auth`):
+  table path is refused when the configuration loads.
+- Configuration input hardened (lixenwraith/config, lixenwraith/toml):
   - a document creates at most 65536 tables, so a small file cannot exhaust
     memory, and unescaped control characters are refused in strings and
     comments;
@@ -58,6 +56,10 @@ configure it, and — equally important — what it does not yet do.
 - Per-client stream caps: under HTTP/2 `max_connections_per_client` bounds a
   client's connections, not the streams each carries; the request rate only
   slows how fast it opens them.
+- A per-identity listing in the `http` status endpoint: it shows the policy
+  and `auth_rejected` only.
+- More than one identity mode per listener: `auth.identity` takes one of
+  `cn`, `san_dns`, `san_uri`, `san_email`.
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
@@ -96,7 +98,9 @@ Options by role, each with its default:
   - `cert_file`: local certificate; a listener needs it, `self_signed` or the
     issuer files, a dialer may present it as its client identity.
   - `key_file`: private key for `cert_file`; set the two together.
-  - `min_version` (`"1.3"`): `"1.2"` or `"1.3"`.
+  - `min_version` (`"1.3"`): `"1.2"` or `"1.3"`. There is no `max_version`
+    and no `cipher_suites`: Go fixes the 1.3 suites, and the 1.2 ones are
+    its defaults.
 - Listeners
   - `self_signed` (`false`): make a self-signed certificate at startup.
   - `issuer_cert_file`, `issuer_key_file`: make one at startup, signed by this
@@ -118,18 +122,16 @@ Options by role, each with its default:
 Listeners are the `tcp` and `http` sinks and the `tcp_chain` and `http_chain`
 sources; dialers are the `tcp_chain` and `http_chain` sinks.
 
-> `min_version` takes `"1.2"` or `"1.3"`. The older `"TLS1.2"` spelling from
-> pre-restructure releases is rejected. There is no `max_version` and no
-> `cipher_suites` option; TLS 1.3 suites are not configurable in Go, and the
-> 1.2 defaults are the standard library's.
-
 ### Validation
 
-Misconfiguration fails at plugin construction, before the pipeline starts:
+Misconfiguration is refused when the configuration loads
+([Validation](configuration.md#validation)), unknown keys always and the other
+rules only when `enabled`; certificate and key files fail when the plugin is
+built:
 
 - a listener with `enabled = true` and none of `cert_file`/`key_file`,
-  `self_signed`, `issuer_cert_file`/`issuer_key_file`, or more than one; an
-  issuer that is no CA (`lw tls ca` makes one)
+  `self_signed`, `issuer_cert_file`/`issuer_key_file`, or more than one
+- `hosts` on a listener without `self_signed` or the issuer files
 - `pin_sha256` with `ca_file` or `insecure_skip_verify`, or not of the
   `sha256//BASE64` form
 - a key of the other role: `self_signed`, `issuer_cert_file`,
@@ -137,12 +139,13 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
   `ca_file`, `server_name`, `insecure_skip_verify` or `pin_sha256` on a
   listener
 - `client_auth = true` with no `client_ca_file`
-- a dialer with only one of `cert_file` / `key_file`
-- a certificate or key that will not load, or a CA file containing no
-  certificates
+- only one of `cert_file` / `key_file`
 - a `min_version` that is neither `"1.2"` nor `"1.3"`
 - a key the plugin does not know, at any depth: `unknown key "tls.enabeld"`. A
   misspelled option must not silently leave a protection switched off
+- when the plugin is built: a certificate or key that will not load, a CA
+  file containing no certificates, or an issuer that is no CA (`lw tls ca`
+  makes one)
 
 ## The Auth Block
 
@@ -286,7 +289,7 @@ you listed.
 ```toml
 [pipelines.plugin_sinks.config.auth]
 type  = "mtls"
-allow = ["relay.internal"]
+allow = ["relay.example.org"]
 ```
 
 The check runs as part of the handshake, so a server the policy rejects never
@@ -296,7 +299,8 @@ was shown instead; see [Channel binding](#channel-binding).
 
 ### Validation
 
-Misconfiguration fails at plugin construction, before the pipeline starts:
+As for `tls`, the rules are checked when the configuration loads, and the
+files (`credentials_file`, `password_file`) when the plugin is built:
 
 - `type` `mtls` or `scram` without `tls.enabled` (proxy mode aside), or on a
   dialer with `tls.insecure_skip_verify`: an identity read from an unverified
@@ -320,14 +324,16 @@ Misconfiguration fails at plugin construction, before the pipeline starts:
 - `trusted_proxies` on anything but the `http` sink, with `identity`, or with
   an entry that is neither an address nor a CIDR; `login_page` or
   `viewer_page` without `trusted_proxies`, `viewer_page` without `login_page`
-- an `identity` that is not one of the four modes
+- an `identity` that is not one of the four modes, or a `node_binding` that
+  is not one of the three values, whatever `type` is, `none` included
+- under `mtls` or `scram`, a `node_binding` other than `none` on a plugin
+  other than a chain source
 - an `allow_patterns` entry that does not compile
-- a `node_binding` that is not one of the three values, or one set on a plugin
-  that has no node concept
-- an HTTP path (`stream_path`, `status_path`, `ingest_path`) equal to `/auth`,
-  which is reserved for logins
+- `/auth`, which is reserved for logins: `ingest_path` may not equal it;
+  `stream_path` and `status_path` may not be it or lie under it
 
-Errors read like `auth: type "mtls" requires tls.client_auth`.
+Errors name their path:
+`pipelines[0].plugin_sinks[tcp].config.auth: type "mtls" requires tls.client_auth`.
 
 ## The ACL Block
 
@@ -352,9 +358,9 @@ requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
   on an IPv4 listener, IPv6 on an IPv6 one, either behind a hostname (only the
   family it binds ever matches). Behind `proxy_from` or the `http` sink's
   `trusted_proxies` they take either, as the proxy may name a client of
-  either. An entry of the other family, an
-  IPv4-mapped address, one with a zone, or anything but an address or CIDR
-  fails construction. A link-local peer matches without its zone.
+  either. An entry of the other family, an IPv4-mapped address, one with a
+  zone, or anything but an address or CIDR fails at load. A link-local peer
+  matches without its zone.
 - A refused connection is closed at once and counted in `acl_denied`, or
   `acl_limited` past a [limit](#per-client-limits) (plugin stats, the `http`
   sink's status). A WARN names the client, the reason and the counts, at most
@@ -374,7 +380,7 @@ requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
   - HTTP keep-alive connections count, idle ones too, and a browser opens up
     to six; under HTTP/2 one connection carries a client's many requests.
   - Behind `trusted_proxies` every connection is the proxy's, so the key
-    fails construction: cap clients at the proxy.
+    fails at load: cap clients at the proxy.
 - `requests_per_second_per_client`, on the `http` sink and the `http_chain`
   source, admits a second's worth of requests at once (at least one),
   refilled at that rate; past it a request gets `429`, with `Retry-After` the
@@ -437,6 +443,11 @@ when it is constructed, so startup and every reload repeat them:
 - `insecure_skip_verify` on a dialer
 - an `allow_patterns` entry not anchored at both ends of every alternative
   (`^a|b$` admits `a…` and `…b`)
+- `type = "mtls"` on a listener with neither `allow` nor `allow_patterns`: it
+  admits any identity the CA vouches for ([The allow list](#the-allow-list))
+- `auth.trusted_proxies` with an entry beyond loopback and `tls` off: the hop
+  from the proxy is plaintext
+  ([Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy))
 - a `key_file`, `issuer_key_file`, `credentials_file` or `password_file` every
   local user can read (once per path per process); terminals, pipes and
   descriptors hold nothing at rest and are not reported
@@ -506,10 +517,10 @@ openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
 
 # Relay (server) certificate — SAN must match how clients address it
 openssl req -newkey rsa:2048 -nodes -keyout relay.key -out relay.csr \
-  -subj "/CN=relay.internal"
+  -subj "/CN=relay.example.org"
 openssl x509 -req -in relay.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
   -out relay.crt -days 825 \
-  -extfile <(printf "subjectAltName=DNS:relay.internal\nextendedKeyUsage=serverAuth")
+  -extfile <(printf "subjectAltName=DNS:relay.example.org\nextendedKeyUsage=serverAuth")
 
 # Edge (client) certificate — CN identifies the node
 openssl req -newkey rsa:2048 -nodes -keyout edge-01.key -out edge-01.csr \
@@ -557,7 +568,7 @@ min_version = "1.3"
 
 [pipelines.plugin_sinks.config.auth]
 type  = "mtls"
-allow = ["relay.internal"]
+allow = ["relay.example.org"]
 ```
 
 ### 4. Verify
@@ -685,9 +696,10 @@ TCP connection that ends mid-exchange frees it at once. A refused start answers
 `too many attempts` (HTTP `429`) and counts `auth_throttled`; the table holds
 65,536 addresses and refuses new ones when full. Separately, at most 4,096
 exchanges may be in flight per listener; beyond that, or while the plugin
-stops, a login gets `busy` (HTTP `503`) and counts `auth_busy`. Peers behind
-one NAT, or one passthrough proxy that sends no PROXY header, share a bucket:
-there, one client can exhaust every other client's logins.
+stops, a login gets `busy` (HTTP `503`) and counts `auth_busy`; neither
+counts in `auth_rejected`. Peers behind one NAT, or one passthrough proxy that
+sends no PROXY header, share a bucket: there, one client can exhaust every
+other client's logins.
 
 ### Credentials file
 
@@ -857,9 +869,11 @@ location /logs/ {
     A page not served over HTTPS keeps no `Secure` cookie either: both pages
     name HTTPS instead and offer no sign-in.
 - **Integrating `scram.js`.** A site with its own CSP can copy `scram.js` from
-  `internal/sink/http/web/` into its bundle: one dependency-free ES module,
-  where `base` is the mount URL ending in `/`. It needs a secure context for
-  WebCrypto and takes about 2 s of Argon2 per login on a desktop.
+  `internal/sink/http/web/` into its bundle: one dependency-free ES module in
+  plain JS (no WebAssembly, so no `'wasm-unsafe-eval'`), where `base` is the
+  mount URL ending in `/`. It needs a secure context for WebCrypto and takes
+  about 2 s of Argon2 per login on a desktop. `argon2id` and `_proofForTest`
+  are exported for `scram.test.mjs` only; do not rely on them.
   - Cookie mode, the default: `login(base, username, password, {onProgress})`,
     then `EventSource` and `fetch` as for any same-origin resource;
     `logout(base)`.
@@ -872,12 +886,12 @@ location /logs/ {
   - `cookiesUsable()` tells which applies: false when the session cookie would
     not stick. `loginUnavailable()`, asked first, names why neither can run
     (no secure context), or is empty.
-- **Pages.** Under `/auth/` the sink serves `scram.js` and `style.css` always,
-  and with `login_page` / `viewer_page` the login page and a minimal live
-  viewer with their scripts; `GET /` leads to the viewer, else the login page.
-  All are served under `default-src 'none'; script-src 'self';
-  connect-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors
-  'none'; base-uri 'none'`.
+- **Pages.** Under `/auth/` the sink serves `scram.js`, `style.css` and
+  `favicon.svg` always, and with `login_page` / `viewer_page` the login page
+  and a minimal live viewer with their scripts; `GET /` leads to the viewer,
+  else the login page. All are served with `nosniff`, `no-referrer` and the CSP
+  `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self';
+  img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`.
 
 `test/scram-proxy-test.sh --auto` logs in from headless Chromium through such a
 proxy, with cookies and with every cookie blocked.
@@ -1011,9 +1025,7 @@ peer is.
 identity or user and send `SIGHUP`: the reload rebuilds every pipeline, so the
 change takes effect on the next connection and existing ones are dropped by the
 rebuild. No network call on the handshake path, and no window between revocation
-and the next CRL publication. See
-[mtls-auth-plan.md](mtls-auth-plan.md#not-implemented) for what CRL support
-would add.
+and the next CRL publication.
 
 ## Surfaces Without Access Control
 
@@ -1026,20 +1038,21 @@ What each exposes when `auth.type = "none"`:
 - `http` sink `stream_path`: the full log stream, with
   `Access-Control-Allow-Origin: *`, so any browser origin can read it (the
   header is omitted once an auth policy is set).
-- `http` sink `status_path`: host, port, TLS flag, uptime, client counts,
-  throughput counters.
-- `http` sink `GET /` (`303` to `/auth/view`) and the viewer's files: static
-  pages that read the two endpoints above under the CSP and expose nothing
-  beyond them. Under `mtls` they are served before the allow list, while the
-  stream and status stay gated.
+- `http` sink `status_path`: version and instance id, host, port, TLS flag,
+  the auth and acl policy summary, buffer sizes and limits, endpoints,
+  uptime, client counts, throughput and rejection counters.
+- `http` sink `GET /` (`303` to `auth/view`, relative to the mount) and the
+  viewer's files: static pages that read the two endpoints above under the
+  CSP and expose nothing beyond them. Under `mtls` they are served before the
+  allow list, while the stream and status stay gated.
 - `tcp` sink: the full log stream to any client that connects.
 - `tcp_chain` and `http_chain` sources: ingest from any peer that can connect
   (with `client_auth`, any the CA vouches for), under any node label it
   claims.
 
-`max_connections` bounds concurrency on all but the `http_chain` source; the
-`acl` block's [per-client limits](#per-client-limits) bound each caller's
-share.
+`max_connections` bounds connections on the `tcp` sink and `tcp_chain` source
+and streams on the `http` sink; the `acl` block's
+[per-client limits](#per-client-limits) bound each caller's share.
 
 Both methods require TLS on the listener, except an `http` sink in proxy mode,
 where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
@@ -1050,9 +1063,10 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 
 - Use a dedicated CA for LogWisp so its trust decisions stay independent.
 - Keep leaf lifetimes short (90–825 days) and automate renewal.
-- Key, credentials and password files should be `0600` and owned by the service
-  account; a world-readable one is reported at startup. `lw auth` creates
-  them `0600` and keeps the mode of an existing file.
+- Keep key, credentials and password files unreadable by others: `0600`
+  owned by the account lw runs as, or `0640` `root:GROUP` for a group it is
+  in; startup warns about world-readable ones. `lw auth` and `lw tls` create
+  them `0600`, and `lw auth` keeps the mode of an existing file.
 - Rotation requires a reload (`SIGHUP`), because certificates and credentials
   are loaded once at plugin construction; there is no on-disk watch for them.
 - Startup and every reload warn 30 days before a certificate lapses. Still

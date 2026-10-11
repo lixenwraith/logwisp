@@ -1,4 +1,4 @@
-.Dd October 10, 2026
+.Dd October 11, 2026
 .Dt LW 1
 .Os
 .Sh NAME
@@ -68,12 +68,10 @@ source runs until shutdown.
 When every pipeline has finished,
 .Nm
 shuts down gracefully and exits 0.
-Every sink first writes what it holds; the
-.Cm http
-and
-.Cm tcp
-sinks give each client
-.Cm write_timeout_ms ,
+Every sink first writes what it holds; a network sink gives its clients or
+its downstream
+.Cm write_timeout_ms
+.Po Cm request_timeout_ms No for Cm http_chain Pc ,
 at most 2 seconds, to take it.
 Under a supervisor, standard input is usually
 .Pa /dev/null :
@@ -116,8 +114,12 @@ A value follows as the next argument or after
 .Ql = ;
 a value that starts with
 .Ql - ,
-and a switch's, follows
-.Ql = .
+and a boolean key's, follows
+.Ql = ;
+.Fl t , Fl \-dump , Fl T , Fl \-schema
+and
+.Fl V
+take none.
 Short options do not combine.
 .Nm
 takes options only: an unknown option, or a word no option takes, is a usage
@@ -347,9 +349,12 @@ make a pipeline named after its preset, or
 .Dq cli
 without one.
 .It Fl p Ar spec , Fl \-preset Ar spec
-Start the pipeline with a preset, described in
+Begin the pipeline with a preset, as its first option, described in
 .Sx Presets ;
-later options add sources, sinks and filters to it, or replace its format.
+later options add sources, sinks and filters to it, set its rate limit and
+heartbeat, or replace its format.
+A second preset needs its own
+.Fl \-pipeline .
 .It Fl \-source Ar spec , Fl \-sink Ar spec , Fl \-filter Ar spec
 Add a source, sink or filter; each is repeatable.
 .It Fl \-format Ar spec , Fl \-rate\-limit Ar spec , Fl \-heartbeat Ar spec
@@ -410,9 +415,21 @@ specification, and
 is
 .Fl \-user .
 A
-.Ar path
-is a file, a directory, whose files are followed, or a glob; without one, a
-preset that takes it reads standard input.
+.Cm path
+is a file, a directory, whose files are followed, or a glob, and this host
+decides which: an existing directory is followed whole, any other path is a
+file name or glob in its directory; for a directory not here, as in a
+.Fl \-dump
+for another host, write
+.Ql dir/* .
+Without one,
+.Cm serve
+and
+.Cm edge
+read standard input.
+.Cm from
+.Pq Cm end No or Cm start
+is where reading a file starts.
 .Cm user
 names one SCRAM user, an edge's login or a listener's only user in place of
 .Cm users ;
@@ -431,7 +448,7 @@ runs without a configuration.
 .It Cm tail path Op Cm from , format
 Follow files to standard output, like
 .Ql tail \-F .
-.It Cm serve Oo Cm path , listen , format , tls , users , user , password_file , proxy , viewer , allow , deny Oc
+.It Cm serve Oo Cm path , from , listen , format , tls , cert , key , issuer_cert , issuer_key , hosts , users , user , password_file , proxy , viewer , allow , deny Oc
 Serve a live HTTP stream on
 .Cm listen
 .Pq default Li 127.0.0.1:8080 ,
@@ -446,6 +463,8 @@ is
 or
 .Cm files
 .Pq Cm cert No and Cm key ;
+.Cm hosts
+adds names and addresses to a certificate made at startup;
 .Cm users
 names a credentials file, or
 .Cm user
@@ -463,26 +482,38 @@ since a browser cannot bind its login to the TLS channel.
 and
 .Cm deny
 list the addresses or CIDRs the listener admits and refuses.
-.It Cm edge to Oo Cm path , transport , ca | pin , user , password_file , cert , key , node Oc
+.It Cm edge to Oo Cm path , from , transport , ca | pin , server_name , user , password_file , cert , key , node Oc
 Forward to an aggregator at
 .Cm to
 over TLS, by
 .Cm tcp_chain
 or, with
 .Cm transport=http ,
-.Cm http_chain .
+.Cm http_chain ,
+verifying it by
+.Cm ca ,
+by default the system roots, or
+.Cm pin ;
+.Cm server_name
+is the name its certificate carries, by default the host of
+.Cm to .
 It refuses to run without credentials:
 .Cm user ,
 or a client
 .Cm cert
 and
 .Cm key .
-.It Cm aggregator Oo Cm listen , transport , tls , users , user , password_file , client_ca , out , format , allow , deny Oc
+.It Cm aggregator Oo Cm listen , transport , tls , cert , key , issuer_cert , issuer_key , hosts , users , user , password_file , client_ca , out , format , allow , deny Oc
 Receive from edges on
 .Cm listen
 .Pq default Li 0.0.0.0:9000
 over TLS, never off
-.Pq default Cm tls=self ,
+.Po default Cm tls=self ;
+.Cm cert , key , issuer_cert , issuer_key
+and
+.Cm hosts
+as for
+.Cm serve Pc ,
 authenticated by the
 .Cm users
 credentials file, the one
@@ -523,6 +554,11 @@ lists the DNS names and addresses a server certificate carries
 is also the subject, the identity
 .Cm auth.type=mtls
 checks.
+One of
+.Fl \-server
+and
+.Fl \-client
+is required; both may be given.
 .El
 .Pp
 A listener needs no files:
@@ -646,7 +682,7 @@ The directory holding
 .It Ev LOGWISP_PIPELINE
 The name of the one pipeline the variables below define.
 .It Ev LOGWISP_PRESET
-The preset that starts it.
+The preset that begins it.
 All of these are ignored when a pipeline option is on the command line.
 .It Ev LOGWISP_SOURCE , LOGWISP_SINK , LOGWISP_FILTER
 Source, sink and filter specifications, in the syntax of the matching
@@ -820,7 +856,7 @@ $ lw \-\-preset tail:path=/var/log/app
 .Pp
 Print the configuration a set of options makes, to keep as a file:
 .Bd -literal -offset indent
-$ lw \-\-preset serve:path=/var/log/app,tls=self \-\-dump > serve.toml
+$ lw \-\-preset 'serve:path=/var/log/app/*,tls=self' \-\-dump > serve.toml
 .Ed
 .Pp
 Ship a directory from an edge to an aggregator: on the aggregator, create
@@ -873,7 +909,7 @@ letting
 .Nm
 generate the password into a file, then reload the server:
 .Bd -literal -offset indent
-# install \-m 0600 \-o logwisp \-g logwisp \e
+# install \-m 0640 \-o root \-g logwisp \e
     /dev/null /etc/logwisp/users.toml
 # lw auth add-user \-\-credentials /etc/logwisp/users.toml \e
     \-\-user alice \-\-password-file /root/alice.pass
@@ -894,6 +930,8 @@ under the installation prefix and kept at
 A listener without an
 .Cm auth
 block serves or accepts logs from anyone who can reach it.
-Keep key, credentials and password files at mode 0600, owned by the account
+Keep key, credentials and password files unreadable by others: mode 0600,
+owned by the account
 .Nm
-runs as; startup warns about world-readable ones.
+runs as, or 0640, owned by root and a group that account is in; startup
+warns about world-readable ones.

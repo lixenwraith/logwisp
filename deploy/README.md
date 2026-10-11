@@ -12,20 +12,4 @@ deploy/lw-deploy.sh --dry-run ...    # print the configuration and commands only
 deploy/lw-deploy.sh --yes ...        # no questions: defaults, or fail on a missing value
 ```
 
-- Roles
-  - `edge`: tails log directories, forwards the entries to an aggregator
-  - `aggregator`: receives from edges; writes files, serves HTTP and TCP streams
-  - `standalone`: tails log directories; writes files, serves streams
-- Runtimes
-  - `docker`, `podman`: a hardened container of the `logwisp` image (Linux)
-  - `native`: systemd on Linux, rc.d on FreeBSD, `--jail NAME` for a jail
-  - `manual`: the configuration only, for `lw -c`
-- Every question has a flag. Before changing anything the script prints its
-  plan and the command line that repeats it without questions, ready for the
-  next node. It starts nothing that `lw --check` rejects.
-- The native runtimes install the service files of `deploy/package/`.
-- Not covered, and printed by the script: filters, rate limits, heartbeat,
-  several pipelines, proxy mode, ACLs, certificate creation. Edit the generated
-  `logwisp.toml` for those.
-
-Scenarios and what each runtime writes: [doc/deployment.md](../doc/deployment.md).
+Roles, runtimes, scenarios and what is not covered: [doc/deployment.md](../doc/deployment.md).

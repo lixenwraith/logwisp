@@ -57,11 +57,11 @@ Dialers:
 - `http_chain` sink: chain v1; forwards entries as batched POSTs.
 
 There is no port registry and no default port: `port` is required on every
-network plugin. There is also no cross-pipeline conflict detection — two sinks
-on the same port fail at bind time when the pipeline starts:
+network plugin. Two sinks on the same port pass `lw --check` and fail at bind
+when the service starts; lw exits 1:
 
 ```
-ERROR msg="Failed to start sink" error="tcp sink bind 0.0.0.0:9090: listen tcp4 0.0.0.0:9090: bind: address already in use"
+ERROR msg "Failed to initialize service" error "failed to start service pipelines: failed to start pipeline <name>: failed to start sink <id>: tcp sink bind <host>:<port>: listen tcp4 <host>:<port>: bind: address already in use"
 ```
 
 ## Timeouts
@@ -91,7 +91,8 @@ Fixed, non-configurable bounds:
 
 - TLS handshake: 10 s, on all TLS listeners and dialers.
 - HTTP read-header timeout: 10 s, on the `http` sink and `http_chain` source.
-- HTTP server shutdown grace: 2 s, on the `http` sink and `http_chain` source.
+- HTTP server shutdown grace: 2 s on the `http_chain` source and the `http`
+  sink; on the `http` sink, `write_timeout_ms` instead when set below 2 s.
 - Single entry line: at most 1 MiB, on chain listeners.
 - SCRAM login: 10 s, on the `tcp` sink, chain sinks, `lw auth`, and each
   `/auth` request.
@@ -103,15 +104,16 @@ would terminate long-lived SSE streams; per-event deadlines come from
 
 ## Connection Limits
 
-`max_connections` caps concurrent connections on the `tcp` sink, the `http`
-sink, and the `tcp_chain` source. `0` means unlimited.
+`max_connections` caps concurrent connections on the `tcp` sink and the
+`tcp_chain` source, and concurrent streams on the `http` sink (other requests
+are not counted); `0` means unlimited.
 
-- Admission is a load-then-check, so a burst can over-admit by roughly one
-  connection. This is accepted, not a bug to work around.
+- Admission is a load-then-check, so a burst can over-admit by roughly one.
 - On the `tcp` sink and `tcp_chain` source the count is taken at accept, so it
   bounds concurrent TLS handshakes as well as established sessions.
-- Over-limit connections are closed immediately and counted in `rejected_conns`
-  (TCP) or `rejected_clients` (HTTP, which first answers `503`).
+- Over the limit a TCP connection is closed and counted in `rejected_conns`;
+  an `http` stream request is answered `503` and counted in
+  `rejected_clients`, its connection kept.
 
 The `http_chain` source has no connection cap; it bounds work with
 `max_body_bytes` and `read_timeout_ms` instead.
@@ -123,39 +125,24 @@ pipeline-wide entry rate limit: it cannot distinguish or throttle a peer.
 
 ## Keep-Alive
 
-TCP keep-alive is available on the `tcp` sink (for accepted connections) and the
-`tcp_chain` sink (for its outbound connection):
+The `tcp` sink (accepted connections) and the `tcp_chain` sink (its outbound
+connection) configure TCP keep-alive:
 
 ```toml
-keep_alive           = true
+keep_alive           = true    # false sends no probes
 keep_alive_period_ms = 30000
 ```
 
-This is kernel-level keep-alive; it detects a dead peer but does not keep an
-application-level stream flowing. For that, use a heartbeat.
+Probes start after `keep_alive_period_ms` idle. Other listeners and the
+`http_chain` sink use Go's default TCP keep-alive (15 s); it is not
+configurable there. Keep-alive detects a dead peer but does not keep an
+application-level stream flowing: that is a heartbeat's job.
 
 ## Heartbeats
 
-Heartbeats are a **flow-level** feature, not a per-sink one. Enabling one
-injects a synthetic entry into the pipeline at a fixed interval; it reaches
-every sink and traverses chain links as an ordinary structured entry.
-
-```toml
-[pipelines.flow.heartbeat]
-enabled           = true
-interval_ms       = 30000
-include_timestamp = true
-include_stats     = false
-format            = "txt"      # txt | json | raw
-```
-
-Use it to keep idle SSE clients, TCP clients, and chain links from being
-reaped by intermediate NAT or proxy timeouts, and to make an idle pipeline
-visibly alive.
-
-> `format = "comment"` (SSE `:` comment framing) is rejected by validation
-> despite appearing in older documentation and in a still-present code branch.
-> A pipeline configured with it fails to start.
+A flow heartbeat keeps idle TCP clients and chain links alive through NAT and
+proxy timeouts; idle SSE streams already get a comment every 15 s. See
+[Configuration](configuration.md#heartbeat).
 
 ## Reconnection
 
@@ -169,35 +156,34 @@ backoff_max_ms = 30000
 ```
 
 The connection is established lazily, so an edge node starts cleanly even when
-its relay is down and connects as soon as the relay appears. Reconnect counts
-are reported in the sink's `reconnects` statistic.
+its relay is down and connects as soon as the relay appears. The `tcp_chain`
+sink reports `connected` and `reconnects`; the `http_chain` sink reports
+`request_errors` and `dropped_batches`.
 
 Server-side sinks (`tcp`, `http`) do not reconnect; clients are expected to
 retry. Browsers reconnect SSE streams automatically.
 
 ## Protocol Details
 
-**HTTP sink (SSE)** — HTTP/1.1 in plaintext; HTTP/2 is negotiated via ALPN when
-TLS is enabled. Only `GET` is routed to the stream and status paths. Each event
-is framed as one `data:` line per newline in the payload, so multi-line entries
-stream intact. Response headers set `Cache-Control: no-cache`,
-`X-Accel-Buffering: no`, and, without an auth policy,
-`Access-Control-Allow-Origin: *`. Under `scram`, `POST /auth` serves the login
-and both paths take `Authorization: Bearer <token>`.
+**HTTP sink (SSE)**: HTTP/1.1 in plaintext, HTTP/2 via ALPN under TLS; `GET`
+on the stream path, `GET` or `HEAD` on the status path. Framing and headers:
+[Sinks](sinks.md#http). Under `scram`, `POST /auth` logs in and both paths
+take `Authorization: Bearer <token>`.
 
-**TCP sink** — raw payload bytes, no framing added by the sink. Whether entries
-are newline-delimited depends on the formatter. Under `scram` the client's hello
-and login lines come first, as on a [chain link](chaining.md#tcp-transport).
+**TCP sink**: the formatted payloads, each ending in a newline, with no other
+framing; under `json` that is one entry per line, while `raw` passes a
+message's own line breaks through. Under `scram` the client's hello and login
+lines come first, as on a [chain link](chaining.md#tcp-transport).
 
-**Chain transports** — see [Chaining](chaining.md) for the hello preamble,
-headers, and entry encoding.
+**Chain transports**: see [Chaining](chaining.md#wire-protocol) for the hello
+preamble, headers, and entry encoding.
 
 ## Troubleshooting
 
-**Plugin fails to start with `unknown key "..."`**
-- The key is misspelled or belongs to another plugin type. Every plugin rejects
-  keys it does not declare, nested tables included, so a typo in `tls` or `auth`
-  cannot leave a protection silently off.
+**`unknown key "..."` when the configuration loads**
+- The key is misspelled or belongs to another plugin type. A plugin's keys are
+  checked at load (`lw --check` too), nested tables included, so a typo in
+  `tls` or `auth` cannot leave a protection silently off.
 
 **Connection refused**
 - Confirm the pipeline started; a bind failure is logged at ERROR.
@@ -252,18 +238,23 @@ headers, and entry encoding.
   `tls_handshake_errors`.
 
 **Rejected after a successful handshake**
-- `auth: identity "..." is not allowed` — the certificate is valid and chains to
-  the CA, but the identity is not in `auth.allow` / `auth.allow_patterns`. On
-  TCP the connection is closed; on HTTP the answer is `403`.
-- `auth: peer certificate carries no <mode> identity` — `auth.identity` names a
-  field the certificate does not populate, e.g. `san_dns` on a CN-only leaf.
-- `auth: node_binding "assert": declared node "..." does not match identity` —
-  the sender's `node` option and its certificate disagree. Fix one, or use
+- `auth: refused: identity "<id>" is not allowed` — the certificate is valid
+  and chains to the CA, but the identity is not in `auth.allow` /
+  `auth.allow_patterns`. On TCP the connection is closed; on HTTP the answer
+  is `403`.
+- `auth: refused: peer certificate carries no <mode> identity` —
+  `auth.identity` names a field the certificate does not populate, e.g.
+  `san_dns` on a CN-only leaf.
+- `auth: node_binding "assert": declared node "<node>" does not match identity "<id>"`
+  — the sender's `node` option and its certificate disagree. Fix one, or use
   `node_binding = "force"` to let the certificate win silently.
 - On a `tcp_chain` sink the same message inside `Chain connect refused` means
   the *server* was refused: its certificate identity is not in the sink's
   `auth.allow`.
-- Rejections appear as WARN and increment `auth_rejected`.
+- Allow-list and login rejections log WARN and count `auth_rejected`; a
+  node-binding refusal logs `Connection rejected by node binding`
+  (`tcp_chain`, `rejected_conns`) or `Request rejected by node binding`
+  (`http_chain`, `rejected_requests`).
 
 **SCRAM login fails**
 - `authentication failed` — the dialer is not told why, by design. The
@@ -334,11 +325,14 @@ headers, and entry encoding.
   send the header.
 
 **Entries not arriving over a chain link**
-- Check the sink's `connected` statistic and its `reconnects` count.
+- `tcp_chain`: check the sink's `connected` and `reconnects`; `http_chain`:
+  its `request_errors` and `dropped_batches`.
 - Check the source's `auth_rejected` — an allow-list miss or a failed login
   looks exactly like a network fault from the sender's side — and the sink's
   `last_auth_error`.
-- Check the source's `parse_errors` — a version skew shows up here.
+- A version skew: `tcp_chain` logs WARN `Rejected chain connection`
+  (unsupported protocol version), counted only under `scram`, in
+  `auth_rejected`; `http_chain` answers `400` and counts `rejected_requests`.
 - On `http_chain`, remember entries wait up to `flush_interval_ms` before a
   batch is sent.
 

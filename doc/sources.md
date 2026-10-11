@@ -2,21 +2,12 @@
 
 Sources produce `core.LogEntry` values for a pipeline. Every source is declared
 as a `[[pipelines.plugin_sources]]` entry with an `id`, a `type`, and a
-type-specific `config` table.
+type-specific `config` table. Registered types: `file`, `console`, `random`,
+`null`, `tcp_chain`, `http_chain`.
 
-```toml
-[[pipelines.plugin_sources]]
-id   = "app_logs"
-type = "file"
-[pipelines.plugin_sources.config]
-directory = "/var/log/myapp"
-```
-
-Registered types: `file`, `console`, `random`, `null`, `tcp_chain`,
-`http_chain`.
-
-Publication from any source is non-blocking. When a subscriber channel is full
-the entry is dropped and counted in `dropped_entries`.
+Publication is non-blocking for every source but `console`: a full subscriber
+channel drops the entry and counts it in `dropped_entries`. The `console`
+source waits instead (see [console](#console)).
 
 ---
 
@@ -41,30 +32,32 @@ Options, each as type and default:
 - `directory` (string, required): directory to scan; not recursive.
 - `pattern` (string, `*`): glob over filenames; `*` and `?` only.
 - `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
+  An open file is polled every 100 ms whatever this is.
 - `raw` (bool, `false`): never parse a line: the whole line is the message.
 - `from` (string, `end`): where a new watcher starts, `end` or `start` of the
   file.
 
 **Behaviour**
 
-- `check_interval_ms` governs how often the directory is rescanned for new or
-  removed files. Tailing an already-open file polls on a **fixed 100 ms**
-  interval that this option does not change.
-- Each matched file gets its own watcher. Watchers for files that disappear are
-  stopped and removed on the next scan.
+- Each matched file gets its own watcher, and its entries the file's base
+  name as `Source`. Watchers for files that disappear are stopped and removed
+  on the next scan.
 - The file lw's stdout or stderr is redirected to is never followed, with a
   warning: `lw > out.log` in the directory would read its own output back.
 - A line longer than 1 MiB continues in the next entry, as on the console
   source.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
-  restart resumes from the current end of each file and content written while
-  LogWisp was down is not read. `from = "start"` reads each file whole when its
-  watcher is created instead — what a process writing beside LogWisp needs, at
-  the cost of replaying a file already on disk at every restart.
+  restart or a reload resumes from the current end of each file, and content
+  written meanwhile is not read. `from = "start"` instead reads each file whole
+  when its watcher is created, which a process writing beside LogWisp needs, at
+  the cost of replaying files already on disk at every restart and reload.
 - Rotation is detected from size decrease, modification-time reset, a position
   beyond end-of-file, or an inode change. An inode change where the new file is
-  already larger than the recorded position is treated as an atomic save, not a
-  rotation, and the position is preserved.
+  at least as large as the recorded position is treated as an atomic save, not
+  a rotation, and the position is preserved. Each rotation also publishes an
+  INFO entry `Log rotation detected (#N): REASON` with the file's name as
+  `Source`; it reaches every sink, so exclude it with a filter
+  (`Log rotation detected`) where unwanted.
 - A rotation that renames in place — what a size-capped writer does — puts the
   same inode back under a name `pattern` also matches. Its watcher resumes at
   the position the original reached, so `from = "start"` reads the tail an
@@ -72,17 +65,19 @@ Options, each as type and default:
 - A line is parsed as JSON only when it is an object whose top-level keys are
   all drawn from `time`, `level`, `msg` and `fields` — the four an entry can
   carry. `time` is read as RFC3339Nano. Any other key, and any non-object line,
-  is kept whole as text, because parsing it would drop the rest.
+  is kept whole as text, because parsing it would drop the rest. `level` is
+  kept as written (a filter sees `Error` or `fatal` as is), and a line without
+  `level` has none; only text lines get the inference below.
 - A text line's level is its first whole word, in any case, naming one:
   `TRACE`; `DEBUG`, `DBG`; `INFO`, `INF`; `WARN`, `WARNING`; `ERROR`, `ERR`,
   `FATAL`. `warning: disk full` is WARN, `INFO retry after error` INFO. The
   console sink paints that word and the http sink's viewer filters on it.
-- `raw = true` skips the JSON branch entirely. The line, plus its newline,
-  becomes the message; `fields` stays empty, the time is the read time, and the
-  level is inferred from the text as for any unparsed line. Paired with
-  `format.type = "raw"` this is byte-exact transport for records LogWisp's
-  envelope cannot hold — see [Formatters](formatters.md#raw).
-- `Source` is set to the file's base name.
+- `raw = true` skips the JSON branch. The line, with its terminator (`\n` or
+  `\r\n`) removed, becomes the message. `fields` stays empty, the time is the
+  read time, and the level is inferred from the text. Blank lines are skipped.
+  With `format.type = "raw"` each line is written back with one `\n`, which
+  carries records the envelope cannot hold but is not byte-exact; see
+  [Formatters](formatters.md#raw).
 
 **Statistics**: per-watcher size, position, entries read, rotation count, and
 last read time, plus `active_watchers`.
@@ -128,7 +123,8 @@ Delivery and lifetime:
 
 ## random
 
-Synthetic entry generator for development, smoke tests, and sanitizer testing.
+Generated entries, to check a deployment before real logs are wired: paths,
+permissions, sinks, chains, and sanitizer policies with `special = true`.
 
 ```toml
 [[pipelines.plugin_sources]]
@@ -145,23 +141,25 @@ special     = false
 Options, each as type and default:
 
 - `interval_ms` (int, `500`): emission period.
-- `jitter_ms` (int, `0`): symmetric jitter; must be non-negative, clamped to
-  `interval_ms`.
+- `jitter_ms` (int, `0`): each interval varies by up to ±`jitter_ms`/2;
+  non-negative, capped at `interval_ms`.
 - `format` (string, `txt`): `raw` (message only), `txt` (bracketed line) or
   `json` (JSON object as the message).
-- `length` (int, `20`): message length in characters.
-- `special` (bool, `false`): inject control and non-ASCII characters.
+- `length` (int, `20`): bytes of random text; `txt` and `json` wrap it in a
+  longer message.
+- `special` (bool, `false`): with `length` ≥ 3, mix in up to one control byte
+  (`\n` and `\r` among them) and a few non-ASCII bytes, often invalid UTF-8.
+  `raw` and `txt` carry them as they are; `json` escapes them inside its
+  message.
 
-`special = true` is the intended way to exercise sanitizer policies: it inserts
-control bytes and multi-byte Unicode into otherwise ordinary messages. Levels
-are chosen at random from DEBUG, INFO, WARN, ERROR.
+Levels (`txt` and `json` only) are random among DEBUG, INFO, WARN, ERROR.
 
 ---
 
 ## null
 
-Produces nothing. Useful as a placeholder so a sink-only pipeline satisfies the
-"at least one source" requirement.
+Nothing; holds a source's place until one is chosen, so a pipeline can be set
+up, sinks first, before its source is.
 
 ```toml
 [[pipelines.plugin_sources]]
@@ -216,8 +214,8 @@ Options, each as type and default:
 - `hello_timeout_ms` (int, `10000`): deadline for the hello preamble.
 - `trust_node` (bool, `true`): `false` overrides the sender's node label with
   its remote address. `auth.node_binding` `assert` or `force` takes over the
-  connection label; only `force` also overrides the per-entry labels; `none`
-  leaves both to `trust_node`.
+  connection label, and `force` the per-entry labels too
+  ([Chaining](chaining.md#node-identity)).
 - `tls` (table): listener TLS; see [Security](security.md).
 - `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
   see [Security](security.md#the-auth-block).
@@ -235,33 +233,31 @@ and a `credentials_file`, or one `username` with its `password_file`, and
 
 - TLS handshakes run explicitly with a 10 s bound before the preamble is read,
   after the `max_connections` admission check.
-- A connection is rejected if the first line is not a valid hello with a
-  matching protocol version.
 - Under `mtls` the certificate is checked before the hello is read, so an
   unauthorized peer never gets a preamble parsed on its behalf. Under `scram`
   the hello opens the login: challenge, proof and final follow on the same
   connection, the whole exchange within `hello_timeout_ms`, and the final is
   sent only once node binding agrees. A source without `scram` answers a hello
-  offering credentials with `authentication not enabled`. A rejection is logged
-  at WARN and counted in `rejected_conns`.
-- The node label is then resolved: under `auth.node_binding` it comes from the
-  peer's certificate identity or username, otherwise `trust_node` governs.
-  `force` also overrides the `node` field on every individual entry; `assert`
-  leaves per-entry labels to `trust_node`, so a relay can forward other nodes'
-  entries while proving its own identity.
-- Each accepted connection gets a session recording the remote address, node
-  label, — under TLS — `tls` and `tls_peer_cn`, — under auth —
-  `auth_method` and `auth_identity`, and behind a PROXY header the proxy as
-  `peer_addr`.
+  offering credentials with `authentication not enabled`.
+- An auth or node-binding refusal is logged at WARN and counted in
+  `rejected_conns`. A missing, malformed or wrong-version hello is logged at
+  WARN (`Rejected chain connection`) and not counted in `rejected_conns`;
+  under `scram` a malformed or wrong-version one counts in `auth_rejected`. A
+  connection over `max_connections` is closed and counted without a log.
+- The node label is then resolved by `trust_node` and `auth.node_binding` (see
+  [Chaining](chaining.md#node-identity)).
+- Each accepted connection gets a session recording its remote address and:
+  - `node`, the resolved label
+  - under TLS: `tls`, `tls_peer_cn`
+  - under auth: `auth_method`, `auth_identity`
+  - behind a PROXY header: the proxy as `peer_addr`
 - A malformed entry line increments `parse_errors` and is skipped; the
   connection survives. A line over 1 MiB is a protocol violation and terminates
   the connection.
 
-**Statistics**: `active_connections`, `rejected_conns`, `parse_errors`,
-`tls_handshake_errors`, `trust_node`, `auth`, `auth_allowed`, `auth_rejected`,
-`node_binding`; under `scram` also `auth_users`, `auth_throttled`, `auth_busy`
-and `auth_binding_mismatch`; with a non-empty `acl` block also `acl`,
-`acl_denied`, `acl_limited` and `acl_proxy_headers`.
+**Statistics**: `host`, `port`, `tls`, `active_connections`, `rejected_conns`,
+`parse_errors`, `tls_handshake_errors`, `trust_node`, and the
+[auth and acl keys](#source-statistics).
 
 ---
 
@@ -297,25 +293,13 @@ node_binding = "force"
 
 Options, each as type and default:
 
-- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the
-  listener keeps to its family ([Networking](networking.md#address-family)).
-- `port` (int, required): listen port, 1–65535.
+- `host`, `port`, `trust_node`, `tls`, `auth`: as on [tcp_chain](#tcp_chain).
 - `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
   `/auth` is reserved for the login.
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB).
 - `read_timeout_ms` (int, `30000`): full request read deadline.
-- `trust_node` (bool, `true`): `false` overrides the sender's node label with
-  its remote address. `auth.node_binding` `assert` or `force` takes over the
-  connection label; only `force` also overrides the per-entry labels; `none`
-  leaves both to `trust_node`.
-- `tls` (table): listener TLS; see [Security](security.md).
-- `auth` (table): peer authentication (`mtls` or `scram`) and node binding;
-  see [Security](security.md#the-auth-block).
-- `acl` (table): `allow` and `deny`, addresses or CIDRs admitted and refused
-  before TLS, `proxy_protocol` with `proxy_from` for the client a PROXY header
-  names, and the per-client `max_connections_per_client` and
-  `requests_per_second_per_client`; see [Security](security.md#the-acl-block).
+- `acl` (table): as on `tcp_chain`, plus `requests_per_second_per_client`.
 
 **Behaviour**
 
@@ -329,21 +313,23 @@ Options, each as type and default:
   node-binding failure answer `403`. Both are distinct from the `400` used for
   protocol errors, so a sender can tell "not allowed" from "malformed batch".
 - A missing or mismatched `X-Logwisp-Protocol` header is rejected with `400`.
+- With `acl.requests_per_second_per_client`, a request over the rate gets `429`
+  with `Retry-After`; the sink retries it.
 - Batch acceptance is atomic: entries are published only after the body reads
-  cleanly end to end. A transfer error rejects the whole batch (`400`, or `413`
-  when the body cap is hit) so the sender retries it. A malformed *line* inside
-  an otherwise clean transfer is skipped and counted in `parse_errors`.
+  cleanly end to end. A transfer error, a line over 1 MiB included, rejects the
+  whole batch with `400`, or `413` when the body cap is hit; an `http_chain`
+  sink drops such a batch (`dropped_batches`) rather than retry it. A malformed
+  *line* inside an otherwise clean transfer is skipped and counted in
+  `parse_errors`.
 - Success is `204 No Content` with `X-Logwisp-Accepted` set to the number of
   entries ingested.
 - Sessions are cached per remote host + node + authenticated identity, and
   recreated after idle expiry. Including the identity in the key means two peers
   sharing a remote address never share a session.
 
-**Statistics**: `total_requests`, `rejected_requests`, `parse_errors`,
-`cached_sessions`, `trust_node`, `auth`, `auth_allowed`, `auth_rejected`,
-`node_binding`; under `scram` also `auth_users`, `auth_throttled`, `auth_busy`,
-`auth_binding_mismatch` and `auth_token_lifetime_ms`; with a non-empty `acl`
-block also `acl`, `acl_denied`, `acl_limited` and `acl_proxy_headers`.
+**Statistics**: `host`, `port`, `ingest_path`, `tls`, `total_requests`,
+`rejected_requests`, `parse_errors`, `cached_sessions`, `trust_node`, and the
+[auth and acl keys](#source-statistics).
 
 ---
 
@@ -352,3 +338,16 @@ block also `acl`, `acl_denied`, `acl_limited` and `acl_proxy_headers`.
 Every source reports: `id`, `type`, `total_entries`, `dropped_entries`,
 `start_time`, `last_entry_time`, and a type-specific `details` map. The DEBUG
 status report spreads `details` into each plugin's line.
+
+Network sources and sinks add the auth and acl keys to `details`:
+
+- `auth`: the method, `none` without an `auth` block; with one also
+  - `auth_allowed`, `auth_rejected`; chain sources `node_binding`
+  - `mtls`: `auth_identity`, `auth_unrestricted`
+  - `scram` listeners: `auth_users`, `auth_throttled`, `auth_busy`,
+    `auth_binding_mismatch`, `auth_identity` when bound; on HTTP
+    `auth_token_lifetime_ms`; in proxy mode `auth_trusted_proxies`
+  - `scram` dialers: `auth_username`, `auth_failures`, `last_auth_error`
+- with a non-empty `acl` block: `acl`, `acl_denied`, `acl_limited`,
+  `acl_proxy_headers`
+

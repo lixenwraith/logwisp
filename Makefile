@@ -46,7 +46,7 @@ IMAGE_RUN = $(CONTAINER_ENGINE) run --read-only --user 65532:65532 \
 	--network none --cap-drop ALL --security-opt no-new-privileges
 
 DESTDIR ?=
-# SERVICE=no installs lw alone: no service files and no system configuration,
+# SERVICE=no leaves out the service files and the system configuration,
 # which lw config init then places where the user wants it.
 SERVICE ?= yes
 INSTALL_OS_DEFAULT != uname -s
@@ -234,7 +234,7 @@ install:
 	put 0644 $(PKG_DIR)/completion/_lw "$$root$(ZSHCOMPDIR)/_lw"; \
 	put 0644 $(PKG_DIR)/completion/lw.fish "$$root$(FISHCOMPDIR)/lw.fish"; \
 	put 0644 LICENSE "$$root$(LICENSEDIR)/LICENSE"; \
-	for src in README.md doc/*.md; do put 0644 "$$src" "$$root$(DOCDIR)/$$src"; done; \
+	for src in README.md logwisp-logo.svg doc/*.md doc/lw.1 config/logwisp.toml; do put 0644 "$$src" "$$root$(DOCDIR)/$$src"; done; \
 	if [ '$(SERVICE)' = no ]; then echo "skip    the service and $$etc (SERVICE=no): lw config init writes a configuration"; exit 0; fi; \
 	if [ -e "$$etc/logwisp.toml" ]; then echo "keep    $$etc/logwisp.toml"; \
 	else put 0644 config/logwisp.toml "$$etc/logwisp.toml"; fi; \
