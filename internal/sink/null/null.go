@@ -82,6 +82,7 @@ func NewNullSinkPlugin(
 func (ns *NullSink) Capabilities() []core.Capability {
 	return []core.Capability{
 		core.CapSessionAware,
+		core.CapBackpressure, // it discards at once: a wait loses nothing, a drop would count
 	}
 }
 

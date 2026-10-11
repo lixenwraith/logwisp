@@ -10,17 +10,15 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Chain manages a sequence of filters, applying them in order
+// Chain is a pipeline's filters, applied in order
 type Chain struct {
 	filters []*Filter
 	logger  *log.Logger
 
-	// Statistics
 	totalProcessed atomic.Uint64
 	totalPassed    atomic.Uint64
 }
 
-// NewChain creates a new filter chain from a slice of filter configurations
 func NewChain(configs []config.FilterConfig, logger *log.Logger) (*Chain, error) {
 	chain := &Chain{
 		filters: make([]*Filter, 0, len(configs)),
@@ -41,32 +39,23 @@ func NewChain(configs []config.FilterConfig, logger *log.Logger) (*Chain, error)
 	return chain, nil
 }
 
-// Apply runs a log entry through all filters in the chain
-func (c *Chain) Apply(entry core.LogEntry) bool {
+// Apply runs an entry through the filters in order and returns the index of
+// the one that dropped it, or -1
+func (c *Chain) Apply(entry core.LogEntry) int {
 	c.totalProcessed.Add(1)
-
-	// No filters means pass everything
-	if len(c.filters) == 0 {
-		c.totalPassed.Add(1)
-		return true
-	}
-
-	// All filters must pass
 	for i, filter := range c.filters {
 		if !filter.Apply(entry) {
 			c.logger.Debug("msg", "Entry filtered out",
 				"component", "filter_chain",
 				"filter_index", i,
 				"filter_type", filter.config.Type)
-			return false
+			return i
 		}
 	}
-
 	c.totalPassed.Add(1)
-	return true
+	return -1
 }
 
-// GetStats returns aggregated statistics for the entire chain
 func (c *Chain) GetStats() map[string]any {
 	filterStats := make([]map[string]any, len(c.filters))
 	for i, filter := range c.filters {

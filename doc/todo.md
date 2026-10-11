@@ -74,11 +74,12 @@ release tag, and both skeletons download the tagged source.
 
 ## 2. `lw --tui` and the configuration engine it shares with lixen.com
 
-`lw --tui` composes pipelines in a full-screen terminal UI, then either runs
-them at once or prints one form of them, chosen on exit: a command line,
-environment variables, or a configuration file. Its logic is a pure engine that
-lixen.com's planned Configure tab (lixencom `doc/todo.md`) runs as WebAssembly,
-so no part of LogWisp is rewritten in JavaScript.
+`lw --tui` composes pipelines in a full-screen terminal UI, runs them under
+the screen with a live view (`t`), and on exit runs them at once or prints one
+form of them: a command line, environment variables, or a configuration file.
+Its logic is a pure engine that lixen.com's planned Configure tab (lixencom
+`doc/todo.md`) runs as WebAssembly, so no part of LogWisp is rewritten in
+JavaScript.
 
 What exists:
 - Option structs with toml tags for every plugin and flow stage
@@ -117,7 +118,8 @@ Steps:
    optional, in `color`: export the 16 xterm reference shades (RGBTo16 maps
    the site's hues badly, so the 16-color tier is chosen by hand). v0.2.1:
    radio buttons, narrow form fields and option lists, menus, frames, rules,
-   wires and windows, moved from `lw --tui`.
+   wires and windows, moved from `lw --tui`. Pinned at the untagged v0.2.2
+   commit: one glyph per cell at output, a reverse cursor bar in one style.
 5. `lw --tui`: done ([doc/cli.md](cli.md#lw---tui)).
 6. WebAssembly: done. `make wasm` writes `bin/lwconf/`, which a site drops
    in whole:
@@ -154,11 +156,23 @@ Steps:
    - Pipelines are a JSON list in the file's shape (`name`, `flow`,
      `plugin_sources`, `plugin_sinks`); a misspelled key is refused. A node
      is `{role, id, index}`: a source's or sink's id, a filter's index.
+7. `t`, the tap: done ([doc/cli.md](cli.md#lw---tui)): `core.Tap` takes each
+   flow verdict, `internal/logline` reads any line shape, and the live view
+   shows them under the diagram.
 
-Still to verify: a scripted session on a pseudo-terminal for Run and each
-output.
-
-Still to derive: `AuthOptions.Check` alone limits `auth.node_binding` to chain
-sources and `auth.trusted_proxies` to the http sink, so the schema lists both
-on every listener; a side tag naming those sides would filter them as `http`
-filters HTTP's keys.
+Not yet:
+- Pins and export in the live view, as vif-log has them: pinned rows survive
+  filter changes and show alone on a key; the pins or the shown rows go to a
+  new file.
+- Per-sink taps: what each sink took, where the tap at the flow's exit shows
+  what dispatch offered (a full sink input drops for that sink only).
+- Live filter patching: a filter edited while `t` runs takes effect through
+  `Filter.UpdatePatterns` (unused), not a rerun that rebinds every listener.
+- The wide-rune table `internal/tui/view.go` copies from
+  `lixenwraith/terminal`'s one-cell rule goes once terminal exports that rule.
+- A scripted session on a pseudo-terminal for Run, each output and `t` (keys,
+  the password dialog, `SIGHUP`), on a text console and over ssh.
+- `AuthOptions.Check` alone limits `auth.node_binding` to chain sources and
+  `auth.trusted_proxies` to the http sink, so the schema lists both on every
+  listener; a side tag naming those sides would filter them as `http`
+  filters HTTP's keys.

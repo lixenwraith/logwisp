@@ -298,9 +298,26 @@ func readDevice(path, user string, generate bool) ([]byte, bool, error) {
 	return data, false, err
 }
 
+// asker answers in the terminal's place while a host's screen owns it
+var asker atomic.Pointer[func(user string, generate bool) ([]byte, error)]
+
+// SetAsker has fn answer what the terminal would be asked; nil asks the
+// terminal again. With generate, fn draws a password for an empty answer and
+// shows it once, never in a log.
+func SetAsker(fn func(user string, generate bool) ([]byte, error)) {
+	if fn == nil {
+		asker.Store(nil)
+		return
+	}
+	asker.Store(&fn)
+}
+
 // ask prompts on the terminal at path without echo. A generated password is
 // shown there only: logs persist, and stderr is often a file.
 func ask(path, user string, generate bool) ([]byte, error) {
+	if fn := asker.Load(); fn != nil {
+		return (*fn)(user, generate)
+	}
 	tty, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return nil, err

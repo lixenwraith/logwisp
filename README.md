@@ -25,6 +25,9 @@ streams, or downstream LogWisp nodes.
 - **Presets**: `tail`, `serve`, `edge` and `aggregator` build the common
   pipelines from a few keys (`lw --preset tail:path=/var/log/app`);
   `lw --dump` turns any command line into a configuration file
+- **On screen**: `lw --tui` composes pipelines on a terminal and runs or
+  prints them; `t` runs them under the screen, where a live view shows each
+  entry with its fate: passed, or the stage or filter that dropped it
 - **Independent pipelines**, each `sources → flow → sinks`, running concurrently
   in one process
 - **Fan-in and fan-out**: many sources and many sinks per pipeline
@@ -112,7 +115,8 @@ authentication designs for the rationale and what is deliberately left out.
 - Design notes: [mTLS](doc/mtls-auth-plan.md) and
   [password](doc/scram-auth-plan.md) authentication
 - [CLI](doc/cli.md): filter use, flags, pipeline specifications, signals,
-  exit codes, `lw auth`; also the `lw(1)` manual, [`doc/lw.1`](doc/lw.1)
+  exit codes, `lw --tui`, `lw auth`; also the `lw(1)` manual,
+  [`doc/lw.1`](doc/lw.1)
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
 - [To Do](doc/todo.md): planned work: packaging, `lw --tui` and its shared configuration engine

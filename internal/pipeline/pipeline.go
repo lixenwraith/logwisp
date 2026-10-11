@@ -21,13 +21,11 @@ import (
 type Pipeline struct {
 	Config *config.PipelineConfig
 
-	// Components
 	Registry *Registry
-	Sources  map[string]source.Source // Track instances by ID
+	Sources  map[string]source.Source
 	Sinks    map[string]sink.Sink
 	Sessions *session.Manager
 
-	// Pipeline flow
 	Flow   *flow.Flow
 	Stats  *PipelineStats
 	logger *log.Logger
@@ -35,7 +33,8 @@ type Pipeline struct {
 	// Sinks that stall dispatch rather than drop (core.CapBackpressure)
 	backpressure map[string]bool
 
-	// Runtime
+	tap atomic.Pointer[core.Tap] // a viewer's copy of what the flow decides
+
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
@@ -45,7 +44,6 @@ type Pipeline struct {
 	finishedOnce sync.Once
 }
 
-// PipelineStats contains runtime statistics for a pipeline
 type PipelineStats struct {
 	StartTime                 time.Time
 	TotalEntriesDroppedBySink atomic.Uint64
@@ -54,18 +52,14 @@ type PipelineStats struct {
 	FlowStats                 map[string]any
 }
 
-// NewPipeline creates a new pipeline with registry support
 func NewPipeline(
 	cfg *config.PipelineConfig,
 	logger *log.Logger,
 ) (*Pipeline, error) {
-	// Create pipeline context
 	pipelineCtx, pipelineCancel := context.WithCancel(context.Background())
 
-	// Create session manager with default timeout
 	sessionManager := session.NewManager(core.SessionDefaultMaxIdleTime)
 
-	// Create pipeline instance with registry
 	pipeline := &Pipeline{
 		Config:   cfg,
 		Registry: NewRegistry(cfg.Name, logger),
@@ -81,17 +75,14 @@ func NewPipeline(
 		finished:     make(chan struct{}),
 	}
 
-	// Create flow processor
 	flowProcessor, err := flow.NewFlow(cfg.Flow, logger)
 	if err != nil {
-		// If flow fails, stop session manager
 		pipelineCancel()
 		sessionManager.Stop()
 		return nil, fmt.Errorf("failed to create flow processor: %w", err)
 	}
 	pipeline.Flow = flowProcessor
 
-	// Initialize sources and sinks
 	if err := pipeline.initializeComponents(); err != nil {
 		pipelineCancel()
 		sessionManager.Stop()
@@ -102,10 +93,8 @@ func NewPipeline(
 }
 
 func (p *Pipeline) initializeComponents() error {
-	// Create sources based on plugin config if available
 	if len(p.Config.PluginSources) > 0 {
 		for _, srcCfg := range p.Config.PluginSources {
-			// Create session proxy for this source instance
 			sessionProxy := session.NewProxy(p.Sessions, srcCfg.ID)
 
 			src, err := p.Registry.CreateSource(
@@ -116,12 +105,11 @@ func (p *Pipeline) initializeComponents() error {
 				sessionProxy,
 			)
 			if err != nil {
-				return err // the registry names the plugin
+				return p.part("source", srcCfg.ID, err) // the registry names the plugin
 			}
 
-			// Check and inject capabilities using core interfaces
 			if err := p.initSourceCapabilities(src, srcCfg); err != nil {
-				return fmt.Errorf("failed to initiate capabilities for source %s: %w", srcCfg.ID, err)
+				return p.part("source", srcCfg.ID, fmt.Errorf("failed to initiate capabilities for source %s: %w", srcCfg.ID, err))
 			}
 
 			p.Sources[srcCfg.ID] = src
@@ -130,10 +118,8 @@ func (p *Pipeline) initializeComponents() error {
 		return fmt.Errorf("no plugin sources defined")
 	}
 
-	// Create sinks based on plugin config if available
 	if len(p.Config.PluginSinks) > 0 {
 		for _, sinkCfg := range p.Config.PluginSinks {
-			// Create session proxy for this sink instance
 			sessionProxy := session.NewProxy(p.Sessions, sinkCfg.ID)
 
 			snk, err := p.Registry.CreateSink(
@@ -144,12 +130,11 @@ func (p *Pipeline) initializeComponents() error {
 				sessionProxy,
 			)
 			if err != nil {
-				return err // the registry names the plugin
+				return p.part("sink", sinkCfg.ID, err) // the registry names the plugin
 			}
 
-			// Check and inject capabilities using core interfaces
 			if err := p.initSinkCapabilities(snk, sinkCfg); err != nil {
-				return fmt.Errorf("failed to initiate capabilities for sink %s: %w", sinkCfg.ID, err)
+				return p.part("sink", sinkCfg.ID, fmt.Errorf("failed to initiate capabilities for sink %s: %w", sinkCfg.ID, err))
 			}
 
 			p.Sinks[sinkCfg.ID] = snk
@@ -161,24 +146,34 @@ func (p *Pipeline) initializeComponents() error {
 	return nil
 }
 
-// initSourceCapabilities checks and injects optional capabilities
+// PartError is a source's or sink's error, which names its part for a screen
+// to place; its text is the error's own
+type PartError struct {
+	Pipeline, Role, ID string
+	Err                error
+}
+
+func (e *PartError) Error() string { return e.Err.Error() }
+func (e *PartError) Unwrap() error { return e.Err }
+
+func (p *Pipeline) part(role, id string, err error) error {
+	return &PartError{p.Config.Name, role, id, err}
+}
+
 func (p *Pipeline) initSourceCapabilities(s source.Source, cfg config.PluginSourceConfig) error {
-	// Initiate and activate source capabilities
 	var hasTLS, hasAuth bool
 	for _, c := range s.Capabilities() {
 		switch c {
-		// Network capabilities
 		case core.CapNetLimit:
-			continue // No-op for now, placeholder
+			continue
 		case core.CapTLS, core.CapProxyTLS:
 			hasTLS = true
 		case core.CapAuth:
 			hasAuth = true
 
-		// Session capabilities
 		case core.CapSessionAware:
 		case core.CapMultiSession:
-			continue // TODO
+			continue
 
 		default:
 			return fmt.Errorf("unknown capability type: %s", c)
@@ -202,27 +197,23 @@ func checkAuthCapability(hasTLS, hasAuth bool) error {
 	return nil
 }
 
-// initSinkCapabilities checks and injects optional capabilities
 func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig) error {
-	// Initiate and activate sink capabilities
 	var hasTLS, hasAuth bool
 	for _, c := range s.Capabilities() {
 		switch c {
 		case core.CapBackpressure:
 			p.backpressure[cfg.ID] = true
 
-		// Network capabilities
 		case core.CapNetLimit:
-			continue // No-op for now, placeholder
+			continue
 		case core.CapTLS, core.CapProxyTLS:
 			hasTLS = true
 		case core.CapAuth:
 			hasAuth = true
 
-		// Session capabilities
 		case core.CapSessionAware:
 		case core.CapMultiSession:
-			continue // TODO
+			continue
 
 		default:
 			return fmt.Errorf("unknown capability type: %s", c)
@@ -238,19 +229,23 @@ func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig
 
 // run connects the subscribed sources through the flow to the sinks. It
 // returns once every source channel has closed, at Stop or at end of input.
-func (p *Pipeline) run(subscriptions []<-chan core.LogEntry) {
+func (p *Pipeline) run(ids []string, subscriptions []<-chan core.LogEntry) {
 	defer p.wg.Done()
 	defer p.finish()
 	defer p.logger.Info("msg", "Pipeline processing loop stopped", "pipeline", p.Config.Name)
 
 	var componentWg sync.WaitGroup
-	for _, ch := range subscriptions {
+	for i, ch := range subscriptions {
 		componentWg.Add(1)
 		go func() {
 			defer componentWg.Done()
 			// Range drains in-flight entries once the source closes the channel
 			for entry := range ch {
-				if event, passed := p.Flow.Process(entry); passed {
+				event, stage, index := p.Flow.Process(entry)
+				if t := p.tap.Load(); t != nil {
+					t.Offer(core.Tapped{Pipeline: p.Config.Name, Source: ids[i], Stage: stage, Index: index, Event: event})
+				}
+				if stage == "" {
 					p.dispatch(event)
 				}
 			}
@@ -269,6 +264,9 @@ func (p *Pipeline) run(subscriptions []<-chan core.LogEntry) {
 				case event, ok := <-heartbeatCh:
 					if !ok {
 						return
+					}
+					if t := p.tap.Load(); t != nil {
+						t.Offer(core.Tapped{Pipeline: p.Config.Name, Event: event})
 					}
 					p.dispatch(event)
 				case <-hbCtx.Done():
@@ -303,13 +301,16 @@ func (p *Pipeline) dispatch(event core.TransportEvent) {
 	}
 }
 
+// SetTap offers what the flow decides to t from the next entry on; nil stops
+func (p *Pipeline) SetTap(t *core.Tap) { p.tap.Store(t) }
+
 func (p *Pipeline) finish() { p.finishedOnce.Do(func() { close(p.finished) }) }
 
 // Finished is closed when every source has ended, or the pipeline shut down.
 // Only a finite source (console at end of input) ends without Stop.
 func (p *Pipeline) Finished() <-chan struct{} { return p.finished }
 
-// Start starts the pipeline operation and all its components including flow, sources, and sinks
+// Start starts the sinks before the sources, so the first entry has somewhere to go
 func (p *Pipeline) Start() error {
 	if !p.running.CompareAndSwap(false, true) {
 		return fmt.Errorf("pipeline %s is already running", p.Config.Name)
@@ -319,33 +320,34 @@ func (p *Pipeline) Start() error {
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.halt = make(chan struct{})
 
-	// Start all sinks
 	for id, s := range p.Sinks {
 		if err := s.Start(p.ctx); err != nil {
-			return fmt.Errorf("failed to start sink %s: %w", id, err)
+			return p.part("sink", id, fmt.Errorf("failed to start sink %s: %w", id, err))
 		}
 	}
 
-	// Subscribed before Start: a source publishes from its first entry on
+	// Subscribed before Start: a source publishes from its first entry on. One
+	// loop keeps ids beside their channels; map order differs between loops.
+	ids := make([]string, 0, len(p.Sources))
 	subscriptions := make([]<-chan core.LogEntry, 0, len(p.Sources))
-	for _, src := range p.Sources {
-		subscriptions = append(subscriptions, src.Subscribe())
+	for id, src := range p.Sources {
+		ids, subscriptions = append(ids, id), append(subscriptions, src.Subscribe())
 	}
 	for id, src := range p.Sources {
 		if err := src.Start(); err != nil {
-			return fmt.Errorf("failed to start source %s: %w", id, err)
+			return p.part("source", id, fmt.Errorf("failed to start source %s: %w", id, err))
 		}
 	}
 
-	// Start the central processing loop
 	p.Stats.StartTime = time.Now()
 	p.wg.Add(1)
-	go p.run(subscriptions)
+	go p.run(ids, subscriptions)
 
 	return nil
 }
 
-// Stop stops the pipeline operation and all its components including flow, sources, and sinks
+// Stop stops the sources, lets the run loop drain, then stops the sinks, so
+// entries in flight reach them
 func (p *Pipeline) Stop() error {
 	if !p.running.CompareAndSwap(true, false) {
 		return fmt.Errorf("pipeline %s is not running", p.Config.Name)
@@ -354,7 +356,6 @@ func (p *Pipeline) Stop() error {
 	p.logger.Info("msg", "Stopping pipeline", "pipeline", p.Config.Name)
 	close(p.halt)
 
-	// 1. Stop all sources concurrently to halt new data ingress and close their channels
 	var sourceWg sync.WaitGroup
 	for _, src := range p.Sources {
 		sourceWg.Add(1)
@@ -365,10 +366,8 @@ func (p *Pipeline) Stop() error {
 	}
 	sourceWg.Wait()
 
-	// 2. Wait for the run loop to finish processing and sending all in-flight data
 	p.wg.Wait()
 
-	// 3. Stop all sinks concurrently now that no new data will be sent
 	var sinkWg sync.WaitGroup
 	for _, s := range p.Sinks {
 		sinkWg.Add(1)
@@ -384,20 +383,18 @@ func (p *Pipeline) Stop() error {
 	return nil
 }
 
-// Shutdown gracefully stops the pipeline and all its components, deinitializing them for app shutdown or complete pipeline removal by service
+// Shutdown stops the pipeline for good, with its session manager
 func (p *Pipeline) Shutdown() {
 	p.logger.Info("msg", "Shutting down pipeline",
 		"component", "pipeline",
 		"pipeline", p.Config.Name)
 
-	// Ensure the pipeline is stopped before shutting down
 	if p.running.Load() {
 		if err := p.Stop(); err != nil {
 			p.logger.Error("msg", "Error stopping pipeline during shutdown", "error", err)
 		}
 	}
 
-	// Stop long-running components
 	if p.Sessions != nil {
 		p.Sessions.Stop()
 	}
@@ -408,10 +405,8 @@ func (p *Pipeline) Shutdown() {
 		"pipeline", p.Config.Name)
 }
 
-// GetStats returns a map of pipeline statistics
 func (p *Pipeline) GetStats() map[string]any {
-	// Recovery to handle concurrent access during shutdown
-	// When service is shutting down, sources/sinks might be nil or partially stopped
+	// Sources and sinks may be partly stopped while the service shuts down
 	defer func() {
 		if r := recover(); r != nil {
 			p.logger.Error("msg", "Panic getting pipeline stats",
@@ -420,7 +415,6 @@ func (p *Pipeline) GetStats() map[string]any {
 		}
 	}()
 
-	// 1. Live collect source stats
 	sources := make([]map[string]any, 0, len(p.Sources))
 	for _, src := range p.Sources {
 		if src == nil {
@@ -438,7 +432,6 @@ func (p *Pipeline) GetStats() map[string]any {
 		})
 	}
 
-	// 2. Live collect sink stats
 	sinks := make([]map[string]any, 0, len(p.Sinks))
 	for _, snk := range p.Sinks {
 		if snk == nil {
@@ -456,7 +449,6 @@ func (p *Pipeline) GetStats() map[string]any {
 		})
 	}
 
-	// 3. Collect flow stats and calculate filtered total
 	var flowStats map[string]any
 	var totalFiltered uint64
 	var totalProcessed uint64
@@ -464,12 +456,10 @@ func (p *Pipeline) GetStats() map[string]any {
 	if p.Flow != nil {
 		flowStats = p.Flow.GetStats()
 
-		// Map the top-level processed counter directly from Flow's source of truth
 		if tp, ok := flowStats["total_processed"].(uint64); ok {
 			totalProcessed = tp
 		}
 
-		// Calculate total dropped specifically by the filter chain
 		if filters, ok := flowStats["filters"].(map[string]any); ok {
 			if totalPassed, ok := filters["total_passed"].(uint64); ok {
 				if tProc, ok := filters["total_processed"].(uint64); ok {
@@ -479,7 +469,6 @@ func (p *Pipeline) GetStats() map[string]any {
 		}
 	}
 
-	// 4. Calculate Uptime
 	var uptime int
 	if p.running.Load() && !p.Stats.StartTime.IsZero() {
 		uptime = int(time.Since(p.Stats.StartTime).Seconds())

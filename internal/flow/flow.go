@@ -13,8 +13,8 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Flow manages the complete processing pipeline for log entries:
-// LogEntry -> Rate Limiter -> Filters -> Formatter (with Sanitizer) -> TransportEvent
+// Flow takes a pipeline's entries through rate limit, filters and format to
+// the TransportEvent its sinks get
 type Flow struct {
 	rateLimiter *RateLimiter
 	filterChain *filter.Chain
@@ -22,13 +22,11 @@ type Flow struct {
 	heartbeat   *HeartbeatGenerator
 	logger      *log.Logger
 
-	// Statistics
 	totalProcessed atomic.Uint64
 	totalDropped   atomic.Uint64
 	totalFormatted atomic.Uint64
 }
 
-// NewFlow creates a flow processor from configuration
 func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 	if cfg == nil {
 		cfg = &config.FlowConfig{}
@@ -38,7 +36,6 @@ func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 		logger: logger,
 	}
 
-	// Create rate limiter if configured
 	if cfg.RateLimit != nil {
 		limiter, err := NewRateLimiter(*cfg.RateLimit, logger)
 		if err != nil {
@@ -47,7 +44,6 @@ func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 		f.rateLimiter = limiter
 	}
 
-	// Create filter chain if configured
 	if len(cfg.Filters) > 0 {
 		chain, err := filter.NewChain(cfg.Filters, logger)
 		if err != nil {
@@ -56,14 +52,13 @@ func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 		f.filterChain = chain
 	}
 
-	// Create formatter with sanitizer integration
 	formatter, err := format.NewFormatter(cfg.Format)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create formatter: %w", err)
 	}
 	f.formatter = formatter
 
-	// Create heartbeat generator with the same formatter if configured
+	// Heartbeats are written like the entries
 	if cfg.Heartbeat != nil {
 		hb, err := NewHeartbeatGenerator(cfg.Heartbeat, formatter, logger)
 		if err != nil {
@@ -82,51 +77,35 @@ func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 	return f, nil
 }
 
-// Process applies all flow stages to a log entry
-// Returns TransportEvent and whether entry passed all stages
-func (f *Flow) Process(entry core.LogEntry) (core.TransportEvent, bool) {
+// Process applies the flow's stages to an entry and returns the event for the
+// sinks, or the stage that dropped it and, for filters, which one
+func (f *Flow) Process(entry core.LogEntry) (event core.TransportEvent, stage string, index int) {
 	f.totalProcessed.Add(1)
-
-	// Stage 1: Rate limiting
-	if f.rateLimiter != nil {
-		if !f.rateLimiter.Allow(entry) {
-			f.totalDropped.Add(1)
-			return core.TransportEvent{}, false
-		}
+	if f.rateLimiter != nil && !f.rateLimiter.Allow(entry) {
+		f.totalDropped.Add(1)
+		return core.TransportEvent{Entry: entry}, "rate_limit", 0
 	}
-
-	// Stage 2: Filtering
 	if f.filterChain != nil {
-		if !f.filterChain.Apply(entry) {
+		if i := f.filterChain.Apply(entry); i >= 0 {
 			f.totalDropped.Add(1)
-			return core.TransportEvent{}, false
+			return core.TransportEvent{Entry: entry}, "filters", i
 		}
 	}
-
-	// Stage 3: Formatting
 	formatted, err := f.formatter.Format(entry)
 	if err != nil {
 		f.logger.Error("msg", "Failed to format log entry",
 			"component", "flow",
 			"error", err)
 		f.totalDropped.Add(1)
-		return core.TransportEvent{}, false
+		return core.TransportEvent{Entry: entry}, "format", 0
 	}
-
 	f.totalFormatted.Add(1)
-
-	// Create transport event
-	event := core.TransportEvent{
-		Time:    entry.Time,
-		Payload: formatted,
-		Entry:   entry, // Carry structured entry so chain sinks are format-independent
-	}
-
-	return event, true
+	// The structured entry rides along so chain sinks are format-independent
+	return core.TransportEvent{Time: entry.Time, Payload: formatted, Entry: entry}, "", 0
 }
 
-// StartHeartbeat starts the heartbeat generator if configured
-// Returns channel that emits heartbeat events
+// StartHeartbeat returns the heartbeat events until ctx ends, or nil without
+// a heartbeat
 func (f *Flow) StartHeartbeat(ctx context.Context) <-chan core.TransportEvent {
 	if f.heartbeat == nil {
 		return nil
@@ -134,7 +113,6 @@ func (f *Flow) StartHeartbeat(ctx context.Context) <-chan core.TransportEvent {
 	return f.heartbeat.Start(ctx)
 }
 
-// GetStats returns flow statistics
 func (f *Flow) GetStats() map[string]any {
 	stats := map[string]any{
 		"total_processed": f.totalProcessed.Load(),
