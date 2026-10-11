@@ -26,8 +26,9 @@ Usage:
 Commands (lw COMMAND -h lists its subcommands):
 %s
 Options: a short option is its long one; a value follows as the next argument
-or after '=' (-c FILE, --config=FILE), one that starts with '-' or a switch's
-after '='; short options do not combine. lw takes options only.
+or after '=' (-c FILE, --config=FILE), one starting with '-' after '='; a
+BOOL key's only after '=', and -t, --dump, -T, -V, --schema take none.
+Short options do not combine. lw takes options only.
   -c, --config FILE             Configuration file (default:
                                 ~/.config/logwisp/logwisp.toml if it exists,
                                 else ./logwisp.toml)
@@ -82,9 +83,10 @@ key alone means true:
 
 Pipelines (they replace the configuration file's pipelines):
   -p, --preset NAME[:KEY=VALUE,...]
-                                Start a pipeline with a preset: pipe, tail,
-                                serve, edge, aggregator; lw preset NAME -h
-                                lists its keys, lw preset NAME prints it
+                                Begin a pipeline with a preset (a second
+                                needs its own --pipeline): pipe, tail, serve,
+                                edge, aggregator; lw preset NAME -h lists
+                                its keys, lw preset NAME prints it
       --pipeline NAME           Start a pipeline named NAME, which the
                                 pipeline options after it configure; those
                                 before any --pipeline make one named after

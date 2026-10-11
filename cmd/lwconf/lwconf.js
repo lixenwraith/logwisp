@@ -55,7 +55,7 @@ export function fields(schema, role, type) {
   const rows = (keys, prefix) => keys.map(key => {
     const path = prefix + key.key;
     if (Array.isArray(key.keys)) return { path, key, rows: rows(key.keys, path + ".") };
-    return { path, key, placeholder: key.zero ? `(${key.zero})` : (key.default ?? key.hint ?? "") };
+    return { path, key, placeholder: key.default ?? (key.zero ? `(${key.zero})` : (key.hint ?? "")) };
   });
   return rows(plugin?.keys ?? schema.flow.find(s => s.key === role)?.keys ?? [], "");
 }

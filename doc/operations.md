@@ -13,15 +13,9 @@ tail -F app.log | lw --filter include:patterns=ERROR
 lw -c /etc/logwisp/logwisp.toml
 ```
 
-lw exits on its own only at the end of input: once every pipeline has
-finished, a pipeline finishing when all its sources have ended. Only a console
-source ends, when stdin does; file and network sources run until a signal, and
-lw shuts down gracefully, exit 0, either way.
-Every sink writes what is queued before the exit; a network sink gives its
-clients or its downstream its `write_timeout_ms` (`request_timeout_ms` for
-`http_chain`), at most 2 s, to take it. A reload stops the old sinks the same
-way, so a stalled client or downstream delays it by that much. See
-[CLI](cli.md#built-in-defaults).
+lw exits on its own only at the end of input ([CLI](cli.md#built-in-defaults)).
+A reload stops the old sinks as shutdown does, so a stalled client or
+downstream delays it by up to 2 s.
 
 There is no built-in daemon mode. Run LogWisp in the foreground under a
 supervisor — systemd, rc.d, or a container runtime — which is where restart,
@@ -63,13 +57,13 @@ kill -HUP $(pidof lw)
 ```
 
 Signals reread the selected TOML file even when `auto_reload` is disabled.
-Reload validates a detached snapshot and constructs a new service **before**
-tearing the old one down, so invalid configuration leaves the running service
-intact and logs the failure:
-
-```
-ERROR msg="Failed to bootstrap new service, keeping old service running" error=...
-```
+Reload validates a detached snapshot and builds a new service **before**
+tearing the old one down, so a bad configuration leaves the running service
+intact. An invalid one logs `Failed to read reload configuration` with the
+validator's `validate configuration: <key path>: ...` error. One whose files
+fail when its plugins are built (a missing certificate, an unreadable
+credentials file) logs `Failed to bootstrap new service, keeping old service
+running`.
 
 What reload does *not* do:
 
@@ -84,32 +78,16 @@ What reload does *not* do:
 Standard input survives a reload: one reader serves the process, so the new
 console source continues where the old one stopped, and no line is read twice.
 
-Plan reloads on a busy relay the way you would plan a restart.
-Listener bind/start failures happen after the old service stops; these can leave
-the application without working pipelines until a corrected configuration reloads.
-File-watch errors do not restart services, and queued changes are combined.
+Plan reloads on a busy relay as you would a restart: a listener that fails to
+bind does so after the old service stopped, leaving lw without working
+pipelines until a corrected configuration reloads
+([Hot Reload](configuration.md#hot-reload)).
 
 ### Checking a configuration
 
-`lw --check` builds every pipeline and plugin as a start would, without binding
-a port or opening, reading or creating a log file, prints the startup warnings,
-and exits 0, 1 on an invalid configuration, or 2 when a named file is missing:
-
-```bash
-lw --check -c candidate.toml
-```
-
-Before a reload, check the edited file this way: a failed reload keeps the
-running service, but `--check` says why without touching it. It prints the
-first problem of each setting, flow stage, source, sink and pipeline, a line
-each named by its key's path; once none is left, the files they name are
-opened as a start opens them:
-
-```text
-Error: Failed to load config: invalid configuration:
-pipelines[0].plugin_sources[in].config.directory: must be set
-pipelines[0].plugin_sinks[out].config.port: must be from 1 to 65535, got 70000
-```
+Before a reload, run `lw --check -c FILE` on the edited file: a failed reload
+keeps the running service, and `--check` says why without touching it
+([CLI](cli.md#usage-patterns)).
 
 ## Monitoring
 
@@ -143,27 +121,35 @@ curl -s http://127.0.0.1:8080/status | jq .
 
 ```json
 {
-  "service": "LogWisp",
-  "version": "v0.16.0",
+  "endpoints": {
+    "status": "/status",
+    "stream": "/stream"
+  },
   "instance_id": "sse",
   "server": {
-    "type": "http",
-    "host": "0.0.0.0",
-    "port": 8080,
-    "tls": false,
+    "acl": "none",
     "active_clients": 3,
+    "auth": "none",
     "buffer_size": 1000,
     "client_buffer_size": 256,
+    "host": "0.0.0.0",
     "max_connections": 32,
-    "write_timeout_ms": 5000,
-    "uptime_seconds": 8130
+    "port": 8080,
+    "tls": false,
+    "type": "http",
+    "uptime_seconds": 8130,
+    "write_timeout_ms": 5000
   },
-  "endpoints": { "stream": "/stream", "status": "/status" },
+  "service": "LogWisp",
   "statistics": {
-    "total_processed": 15234,
+    "acl_denied": 0,
+    "acl_limited": 0,
+    "auth_rejected": 0,
     "dropped_writes": 12,
-    "rejected_clients": 0
-  }
+    "rejected_clients": 0,
+    "total_processed": 15234
+  },
+  "version": "vX.Y.Z"
 }
 ```
 
@@ -188,18 +174,24 @@ Each counter, where it is reported, and what a rise means:
   auth refusals
 - `tls_handshake_errors` (`tcp` sink, `tcp_chain` source): a certificate or
   version mismatch, or scanning
-- `parse_errors` (chain sources): protocol or version skew upstream
+- `parse_errors` (chain sources): malformed entry lines from upstream, each
+  skipped
 - `reconnects` (`tcp_chain` sink): an unstable link or a flapping downstream
 - `dropped_batches` (`http_chain` sink): downstream is rejecting batches
   permanently
 - `synthesized` (chain sinks): events reach the sink without structure
+- `acl_denied`, `acl_limited` (a listener whose `acl` block sets a rule or
+  limit; the `http` status always): connections or requests the address
+  rules or PROXY-header checks refused, and those over a per-client limit;
+  `acl_proxy_headers` counts the PROXY headers read
 
 ## Log Management
 
-LogWisp's own operational log goes to stderr by default, at `info` with a
-configuration file and at `warn` without one; explicit values win. A container
-configured only through variables or flags therefore logs at `warn`: pass
-`-e LOGWISP_LOGGING_LEVEL=info`. `lw-deploy.sh` always passes `-c`, so its
+LogWisp's own log goes to stderr by default. Without a configuration file lw
+logs less ([CLI](cli.md#built-in-defaults)), so a container configured only
+through variables passes `LOGWISP_LOGGING_LEVEL=info` and
+`LOGWISP_STATUS_REPORTER=true`; the image sets neither, as a variable would
+override a mounted file's value. `lw-deploy.sh` always passes `-c`, so its
 nodes log at `info`. To files:
 
 ```toml
@@ -226,19 +218,14 @@ the filter stage logs several lines per entry evaluated.
 
 ### Buffers
 
-Raise `buffer_size` when `total_dropped_by_sink` is climbing but the sink itself
-is healthy — that is a burst-absorption problem.
-
-`dropped_writes` on a network sink has two causes that a counter alone does not
-separate. A consumer slower than the sustained rate cannot be bought off with
-buffer, and drops are the intended outcome. A burst the consumer would have
-drained, arriving faster than it reads, is configuration: the sink queues a
-whole burst while the client writes one frame at a time, so the part of a burst
-above `client_buffer_size` is lost even to a loopback reader.
-Where a `rate_limit` bounds the pipeline, its `burst` is that number — keep
-`client_buffer_size` at or above it and the second cause disappears. The HTTP
-status endpoint reports both queue bounds alongside the counters so an operator
-can tell which one is in play.
+- `total_dropped_by_sink` climbing while the sink is healthy: a burst
+  outran its queue; raise `buffer_size`
+- `dropped_writes` on a network sink:
+  - a client slower than the sustained rate: drops are intended
+  - a burst above `client_buffer_size`, lost even to a fast reader: keep
+    `client_buffer_size` at or above the burst a `drop` rate limit lets
+    through, its `burst_entries` (`entries_per_second` when 0)
+- the HTTP status endpoint reports both queue bounds beside the counters
 
 ```toml
 [pipelines.plugin_sinks.config]
@@ -256,10 +243,8 @@ policy               = "drop"
 max_entry_size_bytes = 65536
 ```
 
-Two behaviours to keep in mind: the limiter does not exist at all when
-`entries_per_second <= 0`, and `policy = "pass"` short-circuits the size cap as
-well as the rate check. Enforcing `max_entry_size_bytes` therefore requires
-`entries_per_second > 0` and `policy = "drop"`.
+Enforcing `max_entry_size_bytes` needs a rate above 0 and `policy = "drop"`
+(a file's default is `pass`); see [Rate limiting](configuration.md#rate-limiting).
 
 ### Formatting
 
@@ -314,10 +299,10 @@ problems see [Networking](networking.md#troubleshooting).
 
 **Environment variable override has no effect**
 
-LogWisp reads `LOGWISP_QUIET`, `LOGWISP_LOGGING_LEVEL`, and other prefixed
-names. Bare names used by older versions must be renamed. Array-indexed paths,
-such as a key inside `[[pipelines]]`, cannot be set from the environment or the
-command line; define whole pipelines there with the
+Only `LOGWISP_`-prefixed names are read (`LOGWISP_QUIET`,
+`LOGWISP_LOGGING_LEVEL`). Array-indexed paths, such as a key inside
+`[[pipelines]]`, cannot be set from the environment or the command line;
+define whole pipelines there with the
 [pipeline flags](cli.md#pipelines) or
 [pipeline variables](cli.md#pipeline-variables).
 
@@ -355,11 +340,10 @@ than masking parts of them. See [Filters](filters.md#common-recipes).
 
 **Upgrades**
 
-1. Read the changelog for configuration-schema changes.
-2. Start the new binary against the current configuration in a scratch
-   environment.
-3. Stop the old process, install the new binary, start it.
-4. Confirm each pipeline started and that counters are advancing.
+1. Run the new binary's `lw --check -c FILE` against the current
+   configuration: unknown or renamed keys fail there.
+2. Stop the old process, install the new binary, start it.
+3. Confirm each pipeline started and that counters are advancing.
 
 **Backup**
 

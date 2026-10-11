@@ -6,23 +6,11 @@ they belong to.
 
 ## 1. Packaging: AUR, FreeBSD ports, Debian
 
-The foundation exists:
-- The `lw` binary name, free in Arch (official repositories and AUR), Ubuntu
-  24.04 and 26.04, and the FreeBSD 15.1 ports tree.
-- The canonical module path `github.com/lixenwraith/logwisp`, which
-  `go install`, FreeBSD's `USES=go:modules` and Debian's dh-golang expect.
-- `make install` with `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `SERVICE`: the
-  binary, the `doc/lw.1` manual, bash, zsh and fish completion generated from
-  `cmd/lw`'s `shorts` and `commands` tables, and the service files in
-  `deploy/package/` (systemd unit, sysusers, tmpfiles, FreeBSD rc.d script)
-  with the configuration, kept on reinstall.
-- `make deb`, a binary package built with `dpkg-deb`, and `make arch`, the
-  PKGBUILD built from the working tree.
-- Skeletons in `deploy/package/arch/` and `deploy/package/freebsd/`.
-- `.github/workflows/package.yml`: `make arch`, the `.deb` and BSD make on
-  FreeBSD 15.1, each reinstalled over an edited configuration; the systemd
-  and rc.d services run; a home install with `SERVICE=no` and
-  `lw config init`; and `make image image-check`.
+[Installation](installation.md#packaging-status) lists what is in place. The
+`lw` name is free in Arch (official repositories and AUR), Ubuntu 24.04 and
+26.04, and the FreeBSD 15.1 ports tree; `go install`, FreeBSD's
+`USES=go:modules` and Debian's dh-golang expect the module path
+`github.com/lixenwraith/logwisp`.
 
 What remains is the maintainer's: it needs push rights, an identity or a
 release tag, and both skeletons download the tagged source.
@@ -62,8 +50,8 @@ release tag, and both skeletons download the tagged source.
    - `make deb` serves direct installs. A PPA builds from a signed source
      package without network access: a `debian/` directory (changelog,
      control, rules) and the Go modules vendored into the source tarball.
-   - The archive wants every Go dependency packaged (dh-golang); the four
-     `lixenwraith` libraries are not.
+   - The archive wants every Go dependency packaged (dh-golang); the
+     `lixenwraith` libraries in `go.mod` are not.
    - `lintian` on the `make deb` package reports `no-changelog` (a source
      package's `debian/changelog` provides it), `statically-linked-binary`
      (lw is static by design) and `maintainer-script-calls-systemctl` (dh's
@@ -72,95 +60,11 @@ release tag, and both skeletons download the tagged source.
    from a ports tree (`make stage check-plist` in a copy of
    `deploy/package/freebsd/`), rather than BSD make on the checkout.
 
-## 2. `lw --tui` and the configuration engine it shares with lixen.com
+## 2. What `lw --tui` and its engine leave for later
 
-`lw --tui` composes pipelines in a full-screen terminal UI, runs them under
-the screen with a live view (`t`), and on exit runs them at once or prints one
-form of them: a command line, environment variables, or a configuration file.
-Its logic is a pure engine that lixen.com's planned Configure tab (lixencom
-`doc/todo.md`) runs as WebAssembly, so no part of LogWisp is rewritten in
-JavaScript.
-
-What exists:
-- Option structs with toml tags for every plugin and flow stage
-  (`internal/config/config.go`), presets as rows with typed parameters
-  (`preset.go`), the command-line and environment grammar (`spec.go`),
-  `ValidateConfig`, `--check` and `--dump`.
-- The option schema, in `internal/config`: `default:`, `help:` and `lw:` tags
-  on the option structs, one catalogue row per plugin type, `Decode` (every
-  constructor decodes through it and keeps only I/O), `Coerce` for typed
-  command-line values, and a `ValidateConfig` that decodes every plugin
-  offline and names the first problem of each part by its key's path.
-- `internal/config` already compiles for `GOOS=js`; it links no net/http,
-  crypto/tls or terminal code.
-- The engine, `internal/compose`: starts empty, from a preset (whose path
-  `config.IsDir` resolves, from answers off the host), a loaded
-  configuration or pasted text of any form; adds, removes and moves sources,
-  sinks and filters, sets and unsets keys, validates; writes a command line,
-  environment variables or a file, each reading back to the same pipelines.
-  Its test fails when it links TLS, HTTP, process, signal or terminal code.
-- `lw --schema`: settings, pipeline flags, flow stages in order with what
-  turns each on, sources and sinks with their tables' keys of their side,
-  presets and forms, as one JSON document.
-- `github.com/lixenwraith/terminal` (pinned) and its `tui` package: regions,
-  layout, boxes, List, Tree, TabBar, StatusBar, TextField, Form, Modal,
-  ConfirmDialog, scrolling, mouse; themed Radio, Field, TextInput,
-  OptionList and menus, Frame, Rule, Wires and Window, which `lw --tui`
-  draws with. `github.com/lixenwraith/color`: RGB,
-  blending, RGBTo256, RGBTo16.
-
-Steps:
-1. Schema, in `internal/config`: done.
-2. Engine, `internal/compose`: done.
-3. `lw --schema`: done. The site generates its catalogue from it.
-4. `lixenwraith/terminal` v0.2.0: done: 16 and no color, the terminal's
-   default colors, `/dev/tty`, bracketed paste, themed form controls. Still
-   optional, in `color`: export the 16 xterm reference shades (RGBTo16 maps
-   the site's hues badly, so the 16-color tier is chosen by hand). v0.2.1:
-   radio buttons, narrow form fields and option lists, menus, frames, rules,
-   wires and windows, moved from `lw --tui`. Pinned at the untagged v0.2.2
-   commit: one glyph per cell at output, a reverse cursor bar in one style.
-5. `lw --tui`: done ([doc/cli.md](cli.md#lw---tui)).
-6. WebAssembly: done. `make wasm` writes `bin/lwconf/`, which a site drops
-   in whole:
-   - `lwconf.wasm`, version stamped: 7.1 MB, 1.9 MB at gzip -9.
-   - `wasm_exec.js`, the toolchain's, which uses no eval: the page needs only
-     `'wasm-unsafe-eval'` in its `script-src`.
-   - `lwconf.js`, one dependency-free ES module that knows the calls and
-     shapes, never a key: `load({execURL, execSRI, wasmURL, wasmSRI})`
-     fetches both by their integrity and resolves to the engine;
-     `fields(schema, role, type)` is a node's form rows, a table's a group;
-     `value`, `at` and `group` read a node's value and sort problems by node.
-   - `schema.json`, equal to `schema()`, and `lwconf.json`, the manifest:
-     version, commit, Go version and each file's sha256.
-
-   The engine's calls take strings (`lwconf.js` writes objects as JSON) and
-   answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key"}`,
-   as far as the engine places the refusal:
-   - `schema()`: what `lw --schema` prints.
-   - `preset(name, values, dirs)`: a preset's pipelines; `values` maps a key
-     to a string, a list key to strings.
-   - `parse(text, form, dirs)`: the pipelines of a form's pasted text.
-   - `validate(pipelines)`: `{pipelines, problems}`, the pipelines settled
-     (defaults, kinds, ids) and the first problem of each part (a value of
-     the wrong kind too) as `{path, pipeline, node, key, text}`.
-   - `emit(pipelines, form)`: the text of `command`, `environment` or `file`.
-   - `edit(pipelines, op)`: `{pipelines, node}`, the node left chosen. `op` is
-     `{op, pipeline, ...}`: `add_pipeline` and `rename_pipeline` (`name`),
-     `remove_pipeline`, `add` (`role`, `type`), `retype` (`node`, `type`),
-     `remove` (`node`), `move_filter` (`from`, `to`), `set` (`node`, `key`,
-     `values`), `unset` (`node`, `key`).
-   - `dirs` answers whether a path a preset names is a directory,
-     `{"/var/log/app.log": false}`; unanswered, a path ending in `/` is one,
-     one with a glob a pattern, and any other is refused at `path`.
-   - Pipelines are a JSON list in the file's shape (`name`, `flow`,
-     `plugin_sources`, `plugin_sinks`); a misspelled key is refused. A node
-     is `{role, id, index}`: a source's or sink's id, a filter's index.
-7. `t`, the tap: done ([doc/cli.md](cli.md#lw---tui)): `core.Tap` takes each
-   flow verdict, `internal/logline` reads any line shape, and the live view
-   shows them under the diagram.
-
-Not yet:
+`lw --tui` ([CLI](cli.md#lw---tui)) and the configuration engine it shares
+with the website ([Architecture](architecture.md#configuration-engine)) are
+in place. Not yet:
 - Pins and export in the live view, as vif-log has them: pinned rows survive
   filter changes and show alone on a key; the pins or the shown rows go to a
   new file.
@@ -172,7 +76,11 @@ Not yet:
   `lixenwraith/terminal`'s one-cell rule goes once terminal exports that rule.
 - A scripted session on a pseudo-terminal for Run, each output and `t` (keys,
   the password dialog, `SIGHUP`), on a text console and over ssh.
-- `AuthOptions.Check` alone limits `auth.node_binding` to chain sources and
-  `auth.trusted_proxies` to the http sink, so the schema lists both on every
-  listener; a side tag naming those sides would filter them as `http`
-  filters HTTP's keys.
+- The schema lists `auth.node_binding` on every listener and
+  `auth.trusted_proxies` on both HTTP listeners, though `AuthOptions.Check`
+  refuses a binding off the chain sources (under `mtls` or `scram`) and
+  `trusted_proxies` off the `http` sink; side tags for chain sources and the
+  `http` sink would filter them as `http` filters HTTP's keys.
+- Optional, in `lixenwraith/color`: export the 16 xterm reference shades
+  (`RGBTo16` maps the site's hues badly, so the 16-color tier is chosen by
+  hand).

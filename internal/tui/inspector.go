@@ -109,7 +109,7 @@ func (a *app) items(n compose.Node, path string) []string {
 // placeholder says what an unset key means: its default, what zero means, or
 // the kind of value it takes
 func placeholder(k config.Key) string {
-	if k.Zero != "" {
+	if k.Zero != "" && k.Default == "" {
 		return "(" + k.Zero + ")"
 	}
 	return cmp.Or(k.Default, k.Hint)

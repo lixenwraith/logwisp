@@ -1,310 +1,333 @@
 ###############################################################################
-### LogWisp Configuration
-### Default location: ~/.config/logwisp/logwisp.toml
-### Precedence: CLI flags > Environment > File > Defaults
+### LogWisp configuration
+### lw reads -c FILE, else LOGWISP_CONFIG_FILE / LOGWISP_CONFIG_DIR, else
+### ~/.config/logwisp/logwisp.toml if it exists, else ./logwisp.toml
+### Precedence: flags > environment > file > built-in defaults; pipeline flags
+### or variables replace the file's pipelines whole
 ###
-### Commented values are the built-in defaults unless marked "example".
-### Uncommenting a default is a no-op.
+### Every key is listed with its built-in default, commented: uncommenting a
+### default is a no-op. Values marked "example" are not defaults, and keys
+### marked "Required" have none. As shipped the file defines no pipeline, so
+### lw runs its built-in one, stdin to stdout.
 ###
-### NOTE: http/tcp ingest sources and http_client/tcp_client sinks are not
-### available in this version. TLS is available on every network source and
-### sink (the [...tls] blocks below), the [...auth] blocks authenticate peers by
-### certificate (mtls) or password (scram; credentials via `lw auth`), and the
-### listeners' [...acl] blocks admit peers by address, or by the client an L4
-### proxy's PROXY header names, and limit each client. Unknown keys anywhere in
-### this file or in any plugin config are rejected at startup.
+### Every setting is also a flag (--logging.level=debug) and a variable
+### (LOGWISP_LOGGING_LEVEL=debug). A pipeline is set whole by pipeline flags
+### (--source, --sink, --preset, ...) or variables (LOGWISP_SOURCE, ...), never
+### key by key.
 ###
-### Environment overrides use the LOGWISP_ prefix
-### (LOGWISP_QUIET, LOGWISP_LOGGING_LEVEL, ...). Bare names are ignored.
-### LOGWISP_CONFIG_FILE and LOGWISP_CONFIG_DIR select the file. Paths such as
-### pipelines.0.name cannot be set from the CLI or environment at all.
+### TLS is available on every network source and sink (the [...tls] tables),
+### [...auth] authenticates peers by certificate (mtls) or password (scram;
+### credentials via `lw auth`), and the listeners' [...acl] admits peers by
+### address, or by the client an L4 proxy's PROXY header names, and limits
+### each client. Unknown keys are refused, except a top-level config_file,
+### version, check or dump, which is ignored.
 ###############################################################################
 
 ###############################################################################
-### Global Settings
+### Settings
 ###############################################################################
 
-quiet = false                           # No log of lw's own; pipeline output still flows
-status_reporter = true                  # Periodic status logging (30s, DEBUG level); false without a file
-auto_reload = false                     # Watch file; read at startup (signals always reread it)
-color = "auto"                          # auto|always|never: level names on console sinks; auto on a terminal, NO_COLOR unset
+# quiet = false                         # No log of lw's own; pipeline output still flows
+# status_reporter = true                # Periodic status logging (30s, DEBUG level); false without a file
+# auto_reload = false                   # Watch file; read at startup (signals always reread it)
+# color = "auto"                        # auto|always|never: level names on console sinks; auto on a terminal, NO_COLOR unset
 
 ###############################################################################
-### Logging (LogWisp's internal operational logging)
+### Logging (lw's own log)
 ###############################################################################
 
-[logging]
-output = "stderr"                       # file|stdout|stderr|split|all|none; stdout is the console sink's
-level = "info"                          # debug|info|warn|error; warn without a file
+# [logging]
+# output = "stderr"                     # file|stdout|stderr|split|all|none; stdout is the console sink's
+# level = "info"                        # debug|info|warn|error; warn without a file
 # format = "txt"                        # raw|txt|json
-# sanitization = ""                     # raw|json|txt|shell (empty = logger default)
+# sanitization = ""                     # raw|json|txt|shell; empty = the log default
 
 # [logging.file]                        # Used when output is "file" or "all"
-# directory = "./log"
+# directory = "./log"                   # lw's alone: the limits below delete any .log file in it
 # name = "logwisp"
 # max_size_mb = 100
-# max_total_size_mb = 1000
-# retention_hours = 168.0               # 7 days
+# max_total_size_mb = 1000              # past it the oldest .log files there are deleted
+# retention_hours = 168.0               # .log files there older than this are deleted; 0 keeps them
 
 ## Validated but NOT applied: the console destination comes from `output` above.
 # [logging.console]
-# target = "stdout"                     # stdout|stderr|split
+# target = "stderr"                     # stdout|stderr|split
 
 ###############################################################################
-### Pipelines
-### Each pipeline: plugin_sources -> flow (rate_limit|filters|format) -> plugin_sinks
-### Names must be unique. 1+ source and 1+ sink required.
+### Pipelines: plugin_sources -> flow -> plugin_sinks
+### A pipeline has a unique name, one source and one sink at least. The blocks
+### below form one pipeline holding every source and sink: uncomment
+### [[pipelines]], its name and the blocks it needs.
 ###############################################################################
 
-[[pipelines]]
-name = "default"
+# [[pipelines]]
+# name = "default"                      # example
 
 ###============================================================================
-### Flow (processing between sources and sinks)
+### Flow: the stages between sources and sinks, validated whether on or off
 ###============================================================================
 
-## policy="pass" short-circuits the size check too: enforcing a size cap needs
-## entries_per_second > 0 AND policy = "drop".
+## policy = "pass" lets every entry through, the size check included: a limit
+## needs entries_per_second > 0 and policy = "drop".
 # [pipelines.flow.rate_limit]
-# entries_per_second = 0.0              # 0 = limiter disabled
-# burst_entries = 0.0                   # Bucket capacity (0 = entries_per_second)
+# entries_per_second = 0.0              # 0 = off
+# burst_entries = 0.0                   # Bucket capacity; 0 = entries_per_second
 # policy = "pass"                       # pass|drop
 # max_entry_size_bytes = 0              # 0 = unlimited
 
-## Filters: sequential include/exclude chain, matched against "<source> <level> <message>"
+## Filters run in order, each matching "<source> <level> <message>"
 # [[pipelines.flow.filters]]
 # type = "include"                      # include|exclude
-# logic = "or"                          # or|and
-# patterns = [".*ERROR.*", ".*WARN.*"]  # example; RE2 syntax
+# logic = "or"                          # or|and: any pattern, or all
+# patterns = []                         # RE2, e.g. [".*ERROR.*", ".*WARN.*"]; none passes every entry
 
 # [pipelines.flow.format]
-# type = "raw"                          # raw|json|txt
-# flags = 0                             # Formatter flags (0 = defaults per type)
-# timestamp_format = ""                 # Go time layout (formatter default if empty)
-# sanitizer_policy = ""                 # raw|json|txt|shell (defaults per type)
+# type = "raw"                          # raw|txt|json
+# flags = 0                             # Formatter flags; 0 = by type
+# timestamp_format = ""                 # Go time layout; empty = RFC 3339 with nanoseconds
+# sanitizer_policy = ""                 # raw|json|txt|shell; empty = by type
 
-## Flow-level heartbeat (fan-out to all sinks, traverses chain links)
+## Heartbeat: sent to every sink, through chain links
 # [pipelines.flow.heartbeat]
 # enabled = false
-# interval_ms = 1000                    # Minimum 100
-# include_timestamp = false
-# include_stats = false
-# format = "txt"                        # accepted, no effect: heartbeats use flow.format
+# interval_ms = 1000                    # At least 100
+# include_timestamp = false             # false: level only; the raw format shows neither
+# include_stats = false                 # Adds type, beat_count and, from the second beat, interval_ms
+# format = "txt"                        # txt|json|raw; no effect: heartbeats use the flow's format
 
 ###============================================================================
-### TLS (shared shape; applies to every network source and sink)
+### TLS (a [...tls] table on every network source and sink)
+### Listeners (tcp/http sinks, tcp_chain/http_chain sources) take one of
+### cert_file + key_file, self_signed, or issuer_cert_file + issuer_key_file;
+### client_auth + client_ca_file make it mTLS. Dialers (tcp_chain/http_chain
+### sinks) verify the server by ca_file + server_name, or by pin_sha256, and
+### present cert_file + key_file for mTLS. `lw tls ca` / `lw tls cert` make a
+### CA and certificates. A table not enabled has no effect; only its keys
+### and kinds are checked.
 ###
-### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
-###   cert_file + key_file, self_signed, or issuer_cert_file + issuer_key_file
-###   (exactly one); client_auth + client_ca_file enable mTLS.
-### Dialers    (tcp_chain/http_chain sinks):
-###   ca_file + server_name, or pin_sha256, verify the server; cert_file +
-###   key_file present a client identity for mTLS.
-### `lw tls ca` / `lw tls cert` make a CA and certificates.
-###
-### enabled = false      Master switch
-### cert_file = ""       Local certificate
-### key_file = ""        Private key for cert_file (set together)
-### client_auth = false  Listener: require and verify a client certificate
-### client_ca_file = ""  Listener: CA bundle verifying client certs
-### ca_file = ""         Dialer: CA bundle verifying the server (empty = system)
-### server_name = ""     Dialer: SNI / name to verify (empty = configured host)
-### self_signed = false  Listener: make a self-signed certificate at startup;
-###                      it logs the pin_sha256 dialers set (changes on restart)
-### issuer_cert_file = "" Listener: make one at startup signed by this CA ...
-### issuer_key_file = ""   ... and its key (lw tls ca writes both)
-### hosts = []           Listener: names/addresses of a made certificate, beyond
-###                      host, os.Hostname(), localhost, 127.0.0.1, ::1
-### insecure_skip_verify = false   Dialer: disable verification (never in prod)
-### pin_sha256 = ""      Dialer: sha256//BASE64 of the server key, in place of
-###                      ca_file; ';' between several
-### min_version = "1.3"  "1.2" or "1.3". No max_version, no cipher_suites.
+### enabled                master switch
+### cert_file, key_file    the certificate presented and its key, set together
+### self_signed            listener: make a self-signed certificate at startup;
+###                        it logs the pin_sha256 dialers set (new each start)
+### issuer_cert_file, issuer_key_file
+###                        listener: make one at startup, signed by this CA
+###                        (lw tls ca writes both)
+### hosts                  listener: names/addresses of a made certificate,
+###                        beyond host, os.Hostname(), localhost, 127.0.0.1, ::1
+### client_auth            listener: require and verify a client certificate
+### client_ca_file         listener: CA bundle verifying client certificates
+### ca_file                dialer: server CA bundle; empty = the system roots
+### server_name            dialer: name to verify; empty = the configured host
+### insecure_skip_verify   dialer: verify nothing (never in production)
+### pin_sha256             dialer: sha256//BASE64 of the server key, in place of
+###                        ca_file; ';' between several
+### min_version            "1.2" or "1.3"; no max_version, no cipher_suites
 ###
 ### TLS alone is a CA membership check: ANY certificate the CA signed is
-### accepted. Add an [...auth] block to decide WHICH of them may connect.
+### accepted. An [...auth] table decides WHICH of them may connect.
 ###============================================================================
 
 ###============================================================================
-### AUTH (shared shape; sits beside [...tls] on every network source and sink)
-###
-### Both methods REQUIRE tls.enabled; dialers forbid tls.insecure_skip_verify.
-### On the http sink the block gates stream_path AND status_path.
-### Listeners  (tcp/http sinks, tcp_chain/http_chain sources):
+### AUTH (an [...auth] table beside [...tls] on every network source and sink)
+### Both methods REQUIRE tls.enabled, except scram behind trusted_proxies on
+### the http sink; dialers forbid tls.insecure_skip_verify. A table naming
+### peers or credentials with type = "none" is refused.
+### Listeners (tcp/http sinks, tcp_chain/http_chain sources):
 ###   mtls  authorizes the client certificate; REQUIRES tls.client_auth.
 ###   scram admits the users in credentials_file (`lw auth add-user`), or
 ###         the one username whose password is in password_file.
-### Dialers    (tcp_chain/http_chain sinks):
+### Dialers (tcp_chain/http_chain sinks):
 ###   mtls  pins the server identity.
 ###   scram logs in as username with the password in password_file.
-### Chain sources additionally bind the node label to the identity or username.
-### A block naming peers or credentials with type = "none" is refused.
 ###
-### type = "none"        none | mtls | scram
-### identity = "cn"      cn | san_dns | san_uri | san_email. Unset under scram;
-###                      set on a scram listener (needs tls.client_auth), the
-###                      certificate's field must equal the username.
-### allow = []           mtls: exact identities. Empty allow AND allow_patterns
-###                      admits any identity the CA vouches for (logged WARN).
-### allow_patterns = []  mtls: RE2 patterns; anchor them yourself (^...$)
-### node_binding = ""    Chain sources only, default "force" with mtls or scram:
-###                        none   - trust_node governs, as before
-###                        assert - declared label must equal the identity;
-###                                 per-entry node labels still follow trust_node
-###                        force  - label AND every entry take the identity
-###                      Overrides trust_node. See doc/security.md.
-### credentials_file = ""   scram listeners: verifiers; read at (re)load, not watched
-### token_lifetime_ms = 0   scram, http sink and http_chain source: 10 s to 24 h, 0 = 15 minutes
-### username = ""           scram dialers, or a listener's one user
-### password_file = ""      scram, with username: one trailing line break is
-###                         trimmed; /dev/fd/N or a pipe is read once and kept
-###                         for reloads, /dev/tty asks once
-### trusted_proxies = []    scram http sink: TLS-terminating reverse proxies
-###                         (addresses or CIDRs); browsers log in through them
+### type                   none | mtls | scram
+### identity               cn | san_dns | san_uri | san_email; unset = cn under
+###                        mtls. Set on a scram listener, it binds the client
+###                        certificate to the user (needs tls.client_auth)
+### allow                  mtls: exact identities. Empty allow AND
+###                        allow_patterns admits any identity the CA vouches
+###                        for (logged WARN)
+### allow_patterns         mtls: RE2 patterns; anchor them yourself (^...$)
+### node_binding           chain sources: binds the node label to the identity
+###                        or username, overriding trust_node; unset = force
+###                          none   - trust_node governs
+###                          assert - declared label must equal the identity;
+###                                   per-entry node labels follow trust_node
+###                          force  - label AND every entry take the identity
+### credentials_file       scram listener: verifiers, read at (re)load only
+### token_lifetime_ms      scram, HTTP listeners: 10 s to 24 h; 0 = 15 minutes
+### username               scram: a dialer's user, or a listener's one user
+### password_file          scram, with username: one trailing line break is
+###                        trimmed; /dev/fd/N or a pipe is read once and kept
+###                        for reloads, /dev/tty asks once
+### trusted_proxies        scram, http sink: TLS-terminating reverse proxies
+###                        (addresses or CIDRs); browsers log in through them
 ###============================================================================
 
 ###============================================================================
-### ACL (beside [...tls] and [...auth] on the listeners; dialers have none)
-###
+### ACL (an [...acl] table beside [...tls] and [...auth] on the listeners)
 ### Applied as a connection is accepted, before TLS: a refused peer is closed
 ### at once and counted in acl_denied (acl_limited past a limit), with a WARN
 ### at most once a minute.
-### allow = []   addresses or CIDRs of the listener's family (either behind
-###              proxy_from or trusted_proxies); empty = all
-### deny = []    refused, listed in allow or not
-### proxy_protocol = "off"   off | optional | required: PROXY v1/v2 headers,
-###                          read before TLS; the rules then see the client.
-###                          optional lets a headerless stream pass as the
-###                          proxy: use it only while rolling headers out
-### proxy_from = []          the proxies that may send one; a header from any
-###                          other peer is refused
-### max_connections_per_client = 0       per client (an IPv6 one by its /64);
-###                                      refused behind trusted_proxies
-### requests_per_second_per_client = 0   HTTP listeners, /auth aside: past it,
-###                                      429; behind trusted_proxies, per
-###                                      forwarded client
+###
+### allow                  addresses or CIDRs of the listener's family (either
+###                        behind proxy_from or trusted_proxies); empty = all
+### deny                   refused, listed in allow or not
+### proxy_protocol         off | optional | required: PROXY v1/v2 headers, read
+###                        before TLS; the rules then see the client. optional
+###                        lets a headerless stream pass as the proxy: use it
+###                        only while rolling headers out
+### proxy_from             the proxies that may send one; a header from any
+###                        other peer is refused
+### max_connections_per_client
+###                        per client (an IPv6 one by its /64); 0 = unlimited;
+###                        refused behind trusted_proxies
+### requests_per_second_per_client
+###                        HTTP listeners, /auth aside: past it, 429; behind
+###                        trusted_proxies, per forwarded client; 0 = unlimited
 ###============================================================================
 
 ###============================================================================
-### Sources (1+ required)
+### Sources (one at least; ids are examples, unique among a pipeline's sources)
 ###============================================================================
 
-## Null source (testing)
+## Null source: nothing; holds a source's place until one is chosen
 # [[pipelines.plugin_sources]]
 # id = "null_in"
 # type = "null"
 
-[[pipelines.plugin_sources]]
-id = "default_source"
-type = "file"
-[pipelines.plugin_sources.config]
-directory = "./"                        # Directory to monitor (required, not recursive)
-pattern = "*.log"                       # Glob pattern (* and ? only)
-## Tailing an already-open file polls at a fixed 100ms, regardless of this value.
-check_interval_ms = 100                 # Directory rescan interval (min 10)
-## raw = true never parses a line; with format type "raw" the file is relayed byte for byte.
-raw = false                             # Keep the whole line as the message
-from = "end"                            # "end" or "start" of a newly discovered file
+## File source: follows the files of a directory that match a pattern
+# [[pipelines.plugin_sources]]
+# id = "file_in"
+# type = "file"
+# [pipelines.plugin_sources.config]
+# directory = "/var/log/app"            # Required (example); not recursive
+# pattern = "*"                         # Glob of the whole file name (* and ? only)
+# check_interval_ms = 100               # Directory rescan, at least 10; open files are polled every 100 ms
+## raw = true never parses a line; with format type "raw" each line is relayed
+## as written, except that empty lines are skipped and CRLF becomes LF.
+# raw = false
+# from = "end"                          # end|start: where a newly found file is read from
 
-## Console source (stdin; one in the whole configuration, ends lw's pipeline at end of input)
+## Console source (stdin; one in the whole configuration). lw exits at end of
+## input only when it is the configuration's only source.
 # [[pipelines.plugin_sources]]
 # id = "console_in"
 # type = "console"
 # [pipelines.plugin_sources.config]
 # buffer_size = 1000
 
-## Random source (testing; special=true exercises sanitizer policies)
+## Random source: generated entries, to check a deployment before real logs
+## (paths, permissions, sinks, chains; special = true for sanitizer policies)
 # [[pipelines.plugin_sources]]
 # id = "random_in"
 # type = "random"
 # [pipelines.plugin_sources.config]
 # interval_ms = 500
-# jitter_ms = 0                         # Clamped to interval_ms
+# jitter_ms = 0                         # The interval varies by it, half each way; at most interval_ms
 # format = "txt"                        # raw|txt|json
-# length = 20
-# special = false
+# length = 20                           # Bytes of random text
+# special = false                       # Mix in control and non-ASCII bytes
 
-## TCP chain source (stdlib listener; receives NDJSON from upstream tcp_chain sinks)
-## Topology: jail [file source -> tcp_chain sink] -> host [tcp_chain source -> aggregate sink]
+## TCP chain source (receives NDJSON from upstream tcp_chain sinks)
+## Topology: edge [file source -> tcp_chain sink] -> aggregator [tcp_chain source -> sinks]
 # [[pipelines.plugin_sources]]
 # id = "chain_in"
 # type = "tcp_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" or "::1": IPv6 only
-# port = 9440                           # Required
+# host = "0.0.0.0"                      # IPv4 only; "::" for IPv6 only
+# port = 9440                           # Required (example)
 # buffer_size = 1000
 # max_connections = 0                   # 0 = unlimited
-# read_timeout_ms = 0                   # idle deadline, 0 = none
+# read_timeout_ms = 0                   # Idle deadline; 0 = none
 # hello_timeout_ms = 10000              # Protocol preamble deadline
 # trust_node = true                     # false: label entries by remote address
 # [pipelines.plugin_sources.config.tls]
-# enabled = true                        # example: mTLS listener
-# cert_file = "/etc/logwisp/tls/server.crt"
-# key_file = "/etc/logwisp/tls/server.key"
-# client_auth = true
-# client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+# enabled = false
+# cert_file = ""
+# key_file = ""
+# self_signed = false
+# issuer_cert_file = ""
+# issuer_key_file = ""
+# hosts = []
+# client_auth = false
+# client_ca_file = ""
 # min_version = "1.3"
 # [pipelines.plugin_sources.config.auth]  # authenticate senders
-# type = "none"                         # none | mtls | scram; mtls requires client_auth
-# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
-# allow = []                            # mtls: exact identities; empty = any the CA issued
-# allow_patterns = []                   # mtls: RE2, anchor them yourself
-# node_binding = "force"                # none | assert | force; overrides trust_node
+# type = "none"
+# identity = ""
+# allow = []
+# allow_patterns = []
+# node_binding = ""
 # credentials_file = ""                 # scram: written by `lw auth add-user`
-# [pipelines.plugin_sources.config.acl]   # refuse peers by address, before TLS
-# allow = []                            # empty = every address deny does not list
+# username = ""
+# password_file = ""
+# [pipelines.plugin_sources.config.acl]
+# allow = []
 # deny = []
-# proxy_protocol = "off"                # off | optional | required
-# proxy_from = []                       # proxies that may send a PROXY header
-# max_connections_per_client = 0       # per client at once; 0 = unlimited
+# proxy_protocol = "off"
+# proxy_from = []
+# max_connections_per_client = 0
 
-## HTTP chain source (stdlib listener; receives NDJSON batches from upstream http_chain sinks)
+## HTTP chain source (receives NDJSON batches from upstream http_chain sinks)
 # [[pipelines.plugin_sources]]
 # id = "hchain_in"
 # type = "http_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
-# port = 9441                           # Required
-# ingest_path = "/ingest"               # Must start with "/"
+# host = "0.0.0.0"                      # IPv4 only; "::" for IPv6 only
+# port = 9441                           # Required (example)
+# ingest_path = "/ingest"               # Must start with "/"; not "/auth"
 # buffer_size = 1000
-# max_body_bytes = 8388608              # per-request cap (8 MiB)
+# max_body_bytes = 8388608              # Per-request cap (8 MiB)
 # read_timeout_ms = 30000
 # trust_node = true                     # false: label entries by remote address
 # [pipelines.plugin_sources.config.tls]
-# enabled = true                        # example: mTLS listener
-# cert_file = "/etc/logwisp/tls/server.crt"
-# key_file = "/etc/logwisp/tls/server.key"
-# client_auth = true
-# client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+# enabled = false
+# cert_file = ""
+# key_file = ""
+# self_signed = false
+# issuer_cert_file = ""
+# issuer_key_file = ""
+# hosts = []
+# client_auth = false
+# client_ca_file = ""
+# min_version = "1.3"
 # [pipelines.plugin_sources.config.auth]  # authenticate senders
-# type = "none"                         # none | mtls | scram; mtls requires client_auth
-# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
-# allow = []                            # mtls: exact identities; empty = any the CA issued
-# allow_patterns = []                   # mtls: RE2, anchor them yourself
-# node_binding = "force"                # none | assert | force; overrides trust_node
+# type = "none"
+# identity = ""
+# allow = []
+# allow_patterns = []
+# node_binding = ""
 # credentials_file = ""                 # scram: written by `lw auth add-user`
-# token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
-# [pipelines.plugin_sources.config.acl]   # refuse peers by address, before TLS
-# allow = []                            # empty = every address deny does not list
+# token_lifetime_ms = 0
+# trusted_proxies = []                  # the http sink only
+# username = ""
+# password_file = ""
+# [pipelines.plugin_sources.config.acl]
+# allow = []
 # deny = []
-# proxy_protocol = "off"                # off | optional | required
-# proxy_from = []                       # proxies that may send a PROXY header
-# max_connections_per_client = 0       # per client at once; 0 = unlimited
-# requests_per_second_per_client = 0   # per client, a second's worth at once; 0 = unlimited
+# proxy_protocol = "off"
+# proxy_from = []
+# max_connections_per_client = 0
+# requests_per_second_per_client = 0
 
 ###============================================================================
-### Sinks (1+ required, fan-out)
+### Sinks (one at least, each getting every entry; ids are examples, unique
+### among a pipeline's sinks)
 ###============================================================================
 
-## Null sink (testing)
+## Null sink: discards; holds a sink's place until one is chosen, or isolates a
+## source or flow while it is measured
 # [[pipelines.plugin_sinks]]
 # id = "null_out"
 # type = "null"
 
-[[pipelines.plugin_sinks]]
-id = "default_sink"
-type = "console"
-[pipelines.plugin_sinks.config]
-target = "stdout"                       # stdout|stderr ("split" NOT supported)
+## Console sink
+# [[pipelines.plugin_sinks]]
+# id = "console_out"
+# type = "console"
+# [pipelines.plugin_sinks.config]
+# target = "stdout"                     # stdout|stderr ("split" NOT supported)
 # buffer_size = 1000
 # escape = "auto"                       # auto|always|never: control characters as <hex>, auto on a terminal
 # color = "auto"                        # auto|always|never: level names in color (default: top-level color)
@@ -314,146 +337,166 @@ target = "stdout"                       # stdout|stderr ("split" NOT supported)
 # id = "file_out"
 # type = "file"
 # [pipelines.plugin_sinks.config]
-# directory = "./logs"                  # Required
-# name = "output"                       # Required
+# directory = "/var/log/logwisp"        # Required (example)
+# name = "output"                       # Required (example)
 # max_size_mb = 100
 # max_total_size_mb = 1000
-# min_disk_free_mb = 0                  # 0 = no floor (only negatives become 100)
-# retention_hours = 168.0
+# min_disk_free_mb = 0                  # 0 = no floor; a negative value means 100
+# retention_hours = 168.0               # .log files there older than this are deleted; 0 keeps them
 # buffer_size = 1000
 # flush_interval_ms = 100
 
-## HTTP sink (SSE streaming server + JSON status endpoint)
-## Without an auth block both endpoints are UNAUTHENTICATED and the stream sends
-## Access-Control-Allow-Origin: *. Bind to a trusted interface.
+## HTTP sink (server-sent events, a JSON status document and a browser viewer)
+## Without an auth table both endpoints are UNAUTHENTICATED and the stream
+## sends Access-Control-Allow-Origin: *. Bind to a trusted interface.
 # [[pipelines.plugin_sinks]]
 # id = "http_out"
 # type = "http"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
-# port = 8081                           # Required
-# stream_path = "/stream"               # Exact; starts with "/", clean, none of { } % ? #
+# host = "0.0.0.0"                      # IPv4 only; "::" for IPv6 only
+# port = 8081                           # Required (example)
+# stream_path = "/stream"               # Exact; starts with "/", clean (one trailing "/" allowed), none of { } % ? #; not /auth or under it
 # status_path = "/status"               # Same rules; differs from stream_path
 # buffer_size = 1000                    # Sink input queue
 # client_buffer_size = 256              # Per-client send queue
-# write_timeout_ms = 0                  # Per-event deadline, 0 = none
+# write_timeout_ms = 0                  # Per-event deadline; 0 = none
 # max_connections = 0                   # 0 = unlimited
-# replay_lines = 0                      # Last entries a new stream gets first, 0 = none
-# login_page = false                    # GET /auth/login; scram behind auth.trusted_proxies
-# viewer_page = false                   # GET /auth/view, needs login_page; scram + trusted_proxies only
-                                        # (without auth or under mtls the viewer is always on)
+# replay_lines = 0                      # Last entries a new stream gets first; 0 = none
+# login_page = false                    # GET /auth/login; scram behind auth.trusted_proxies only
+# viewer_page = false                   # GET /auth/view, needs login_page; without auth or under mtls the viewer is always at /
 # [pipelines.plugin_sinks.config.tls]
-# enabled = true                        # example
-# cert_file = "/etc/logwisp/tls/server.crt"
-# key_file = "/etc/logwisp/tls/server.key"
+# enabled = false
+# cert_file = ""
+# key_file = ""
+# self_signed = false
+# issuer_cert_file = ""
+# issuer_key_file = ""
+# hosts = []
 # client_auth = false
 # client_ca_file = ""
+# min_version = "1.3"
 # [pipelines.plugin_sinks.config.auth]  # gates BOTH stream_path and status_path
-# type = "none"                         # none | mtls | scram; browsers: mtls, or scram behind a proxy
-# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
-# allow = []                            # mtls: exact identities; empty = any the CA issued
-# allow_patterns = []                   # mtls: RE2, anchor them yourself
+# type = "none"                         # browsers: mtls, or scram behind a proxy
+# identity = ""
+# allow = []
+# allow_patterns = []
+# node_binding = ""                     # chain sources only
 # credentials_file = ""                 # scram: log in with `lw auth token`
-# token_lifetime_ms = 0                 # scram bearer tokens, 10 s to 24 h; 0 = 15 minutes
+# token_lifetime_ms = 0
 # trusted_proxies = []                  # scram: proxies ending the browsers' TLS; tls may then be off
-# [pipelines.plugin_sinks.config.acl]   # refuse peers by address, before TLS
-# allow = []                            # empty = every address deny does not list
+# username = ""
+# password_file = ""
+# [pipelines.plugin_sinks.config.acl]
+# allow = []
 # deny = []
-# proxy_protocol = "off"                # off | optional | required
-# proxy_from = []                       # proxies that may send a PROXY header
-# max_connections_per_client = 0       # per client at once; 0 = unlimited
-# requests_per_second_per_client = 0   # per client, a second's worth at once; 0 = unlimited
+# proxy_protocol = "off"
+# proxy_from = []
+# max_connections_per_client = 0
+# requests_per_second_per_client = 0
 
-## TCP sink (streaming server)
+## TCP sink (serves entries to TCP clients, one per line)
 # [[pipelines.plugin_sinks]]
 # id = "tcp_out"
 # type = "tcp"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"                      # or "::" for IPv6 (IPv6 only)
-# port = 9090                           # Required
+# host = "0.0.0.0"                      # IPv4 only; "::" for IPv6 only
+# port = 9090                           # Required (example)
 # buffer_size = 1000
 # client_buffer_size = 256
-# write_timeout_ms = 5000               # Missed deadline disconnects the client
-# keep_alive = true
+# write_timeout_ms = 5000               # A missed deadline disconnects the client
+# keep_alive = true                     # false: no TCP keep-alive
 # keep_alive_period_ms = 30000
-# max_connections = 0
+# max_connections = 0                   # 0 = unlimited
 # [pipelines.plugin_sinks.config.tls]
-# enabled = true                        # example
-# cert_file = "/etc/logwisp/tls/server.crt"
-# key_file = "/etc/logwisp/tls/server.key"
-# client_auth = true
-# client_ca_file = "/etc/logwisp/tls/client-ca.crt"
+# enabled = false
+# cert_file = ""
+# key_file = ""
+# self_signed = false
+# issuer_cert_file = ""
+# issuer_key_file = ""
+# hosts = []
+# client_auth = false
+# client_ca_file = ""
+# min_version = "1.3"
 # [pipelines.plugin_sinks.config.auth]  # authenticate stream readers
-# type = "none"                         # none | mtls | scram; mtls requires client_auth
-# identity = "cn"                       # mtls default; under scram unset, set binds the cert to the user
-# allow = []                            # mtls: exact identities; empty = any the CA issued
-# allow_patterns = []                   # mtls: RE2, anchor them yourself
+# type = "none"
+# identity = ""
+# allow = []
+# allow_patterns = []
+# node_binding = ""                     # chain sources only
 # credentials_file = ""                 # scram: readers use `lw auth stream`
-# [pipelines.plugin_sinks.config.acl]   # refuse peers by address, before TLS
-# allow = []                            # empty = every address deny does not list
+# username = ""
+# password_file = ""
+# [pipelines.plugin_sinks.config.acl]
+# allow = []
 # deny = []
-# proxy_protocol = "off"                # off | optional | required
-# proxy_from = []                       # proxies that may send a PROXY header
-# max_connections_per_client = 0       # per client at once; 0 = unlimited
+# proxy_protocol = "off"
+# proxy_from = []
+# max_connections_per_client = 0
 
-## TCP chain sink (stdlib client; forwards to downstream tcp_chain source)
+## TCP chain sink (forwards to a downstream tcp_chain source)
 ## Do NOT point a chain sink at a chain source in the SAME pipeline: entries
 ## loop back in and amplify without bound.
 # [[pipelines.plugin_sinks]]
 # id = "chain_out"
 # type = "tcp_chain"
 # [pipelines.plugin_sinks.config]
-# host = "10.0.0.1"                     # Required; IPv6 bare, e.g. "fd00::1"
-# port = 9440                           # Required
-# node = ""                             # origin label, default hostname; preserved across hops
+# host = "aggregator.example.org"       # Required (example); an IPv6 literal bare, e.g. "2001:db8::1"
+# port = 9440                           # Required (example)
+# node = ""                             # Origin label, kept across hops; empty = the host name
 # buffer_size = 1000
 # dial_timeout_ms = 5000
 # write_timeout_ms = 5000
 # backoff_min_ms = 500
-# backoff_max_ms = 30000
-# keep_alive = true
+# backoff_max_ms = 30000                # Below backoff_min_ms: 30000
+# keep_alive = true                     # false: no TCP keep-alive
 # keep_alive_period_ms = 30000
 # [pipelines.plugin_sinks.config.tls]
-# enabled = true                        # example: mTLS dialer
-# ca_file = "/etc/logwisp/tls/ca.crt"
+# enabled = false
+# cert_file = ""
+# key_file = ""
+# ca_file = ""
 # server_name = ""
 # insecure_skip_verify = false
-# cert_file = "/etc/logwisp/tls/client.crt"
-# key_file = "/etc/logwisp/tls/client.key"
+# pin_sha256 = ""
 # min_version = "1.3"
 # [pipelines.plugin_sinks.config.auth]  # pin the server (mtls) or log in (scram)
-# type = "none"                         # none | mtls | scram; both require tls.enabled
-# identity = "cn"                       # mtls: cn | san_dns | san_uri | san_email
-# allow = []                            # mtls: exact identities; empty = any the CA issued
-# allow_patterns = []                   # mtls: RE2, anchor them yourself
-# username = ""                         # scram
-# password_file = ""                    # scram
+# type = "none"
+# identity = ""                         # mtls only; unset = cn
+# allow = []
+# allow_patterns = []
+# username = ""
+# password_file = ""
 
-## HTTP chain sink (stdlib client; batched NDJSON POST to downstream http_chain source)
+## HTTP chain sink (posts NDJSON batches to a downstream http_chain source)
 # [[pipelines.plugin_sinks]]
 # id = "hchain_out"
 # type = "http_chain"
 # [pipelines.plugin_sinks.config]
-# host = "10.0.0.1"                     # Required; IPv6 bare, e.g. "fd00::1"
-# port = 9441                           # Required
-# ingest_path = "/ingest"
-# node = ""                             # origin label, default hostname; preserved across hops
+# host = "aggregator.example.org"       # Required (example); an IPv6 literal bare, e.g. "2001:db8::1"
+# port = 9441                           # Required (example)
+# ingest_path = "/ingest"               # Must start with "/"; not "/auth"
+# node = ""                             # Origin label, kept across hops; empty = the host name
 # buffer_size = 1000
 # max_batch_count = 100
 # max_batch_bytes = 1048576
 # flush_interval_ms = 1000
-# request_timeout_ms = 10000            # Covers dial + write + response
+# request_timeout_ms = 10000            # Covers dial, write and response
 # backoff_min_ms = 500
-# backoff_max_ms = 30000
+# backoff_max_ms = 30000                # Below backoff_min_ms: 30000
 # [pipelines.plugin_sinks.config.tls]
-# enabled = true                        # example: mTLS dialer
-# ca_file = "/etc/logwisp/tls/ca.crt"
-# cert_file = "/etc/logwisp/tls/client.crt"
-# key_file = "/etc/logwisp/tls/client.key"
+# enabled = false
+# cert_file = ""
+# key_file = ""
+# ca_file = ""
+# server_name = ""
+# insecure_skip_verify = false
+# pin_sha256 = ""
+# min_version = "1.3"
 # [pipelines.plugin_sinks.config.auth]  # pin the server (mtls) or log in (scram)
-# type = "none"                         # none | mtls | scram; both require tls.enabled
-# identity = "cn"                       # mtls: cn | san_dns | san_uri | san_email
-# allow = []                            # mtls: exact identities; empty = any the CA issued
-# allow_patterns = []                   # mtls: RE2, anchor them yourself
-# username = ""                         # scram
-# password_file = ""                    # scram
+# type = "none"
+# identity = ""                         # mtls only; unset = cn
+# allow = []
+# allow_patterns = []
+# username = ""
+# password_file = ""

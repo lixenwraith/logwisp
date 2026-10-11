@@ -39,26 +39,15 @@ func TestWatchErrorsDoNotTriggerReloadAndChangesAreCoalesced(t *testing.T) {
 	}
 }
 
-func TestShippedConfigurationBuildsWithCheckedPluginDecoder(t *testing.T) {
-	testLogger(t)
+// The shipped file defines no pipeline, so lw keeps its built-in pipe
+func TestShippedConfigurationKeepsTheBuiltInPipeline(t *testing.T) {
 	path, err := filepath.Abs(filepath.Join("..", "..", "config", "logwisp.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := loadTestConfig(t, path)
-	if len(cfg.Pipelines) != 1 || cfg.Pipelines[0].Name != "default" {
-		t.Fatalf("sample array-of-tables decoded incorrectly: %+v", cfg.Pipelines)
+	if cfg := loadTestConfig(t, path); len(cfg.Pipelines) != 1 || cfg.Pipelines[0].Name != "pipe" {
+		t.Fatalf("the sample defines pipelines: %+v", cfg.Pipelines)
 	}
-	svc, err := bootstrapService(context.Background(), cfg, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer svc.Shutdown()
-	pl, err := svc.GetPipeline("default")
-	if err != nil || len(pl.Sources) != 1 || len(pl.Sinks) != 1 {
-		t.Fatalf("sample plugins failed to build: %v", err)
-	}
-	svc.Shutdown() // A later reload failure or process exit can close it again.
 }
 
 // Once the first service is built a reload reads no descriptor, pipe or

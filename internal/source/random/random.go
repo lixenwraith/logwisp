@@ -17,49 +17,41 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// init registers the component in plugin factory
 func init() {
 	if err := plugin.RegisterSource("random", NewRandomSourcePlugin); err != nil {
 		panic(fmt.Sprintf("failed to register random source: %v", err))
 	}
 }
 
-// RandomSource generates random log entries for testing
+// RandomSource generates entries, to check a deployment before real logs are wired
 type RandomSource struct {
-	// Plugin identity and session management
 	id      string
 	proxy   *session.Proxy
 	session *session.Session
 
-	// Configuration
 	config *config.RandomSourceOptions
 
-	// Application
 	subscribers []chan core.LogEntry
 	logger      *log.Logger
 	rng         *rand.Rand
 	mu          sync.RWMutex
 
-	// Runtime
 	done   chan struct{}
 	wg     sync.WaitGroup
 	cancel chan struct{}
 
-	// Statistics
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
 	startTime      time.Time
 	lastEntryTime  atomic.Value // time.Time
 }
 
-// NewRandomSourcePlugin creates a random source through plugin factory
 func NewRandomSourcePlugin(
 	id string,
 	configMap map[string]any,
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (source.Source, error) {
-	// Step 1: Create empty config struct with defaults
 	opts, err := config.Decode[config.RandomSourceOptions]("source", "random", configMap)
 	if err != nil {
 		return nil, err
@@ -77,7 +69,6 @@ func NewRandomSourcePlugin(
 	}
 	rs.lastEntryTime.Store(time.Time{})
 
-	// Create session for random source
 	rs.session = proxy.CreateSession(
 		fmt.Sprintf("random://%s", id),
 		map[string]any{
@@ -98,14 +89,12 @@ func NewRandomSourcePlugin(
 	return rs, nil
 }
 
-// Capabilities returns supported capabilities
 func (rs *RandomSource) Capabilities() []core.Capability {
 	return []core.Capability{
 		core.CapSessionAware,
 	}
 }
 
-// Subscribe returns a channel for receiving log entries
 func (rs *RandomSource) Subscribe() <-chan core.LogEntry {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -114,7 +103,6 @@ func (rs *RandomSource) Subscribe() <-chan core.LogEntry {
 	return ch
 }
 
-// Start begins generating random log entries
 func (rs *RandomSource) Start() error {
 	rs.startTime = time.Now()
 	rs.wg.Add(1)
@@ -127,7 +115,6 @@ func (rs *RandomSource) Start() error {
 	return nil
 }
 
-// Stop signals the source to stop generating
 func (rs *RandomSource) Stop() {
 	close(rs.cancel)
 	rs.wg.Wait()
@@ -148,7 +135,6 @@ func (rs *RandomSource) Stop() {
 		"total_entries", rs.totalEntries.Load())
 }
 
-// GetStats returns the source's statistics
 func (rs *RandomSource) GetStats() source.SourceStats {
 	lastEntry, _ := rs.lastEntryTime.Load().(time.Time)
 
@@ -169,12 +155,10 @@ func (rs *RandomSource) GetStats() source.SourceStats {
 	}
 }
 
-// generateLoop continuously generates random log entries at configured intervals
 func (rs *RandomSource) generateLoop() {
 	defer rs.wg.Done()
 
 	for {
-		// Calculate next interval with jitter
 		interval := time.Duration(rs.config.IntervalMS) * time.Millisecond
 		if rs.config.JitterMS > 0 {
 			jitter := time.Duration(rs.rng.Intn(int(rs.config.JitterMS))) * time.Millisecond
@@ -194,7 +178,6 @@ func (rs *RandomSource) generateLoop() {
 	}
 }
 
-// generateEntry creates a random log entry based on configured format
 func (rs *RandomSource) generateEntry() core.LogEntry {
 	now := time.Now()
 
@@ -247,7 +230,6 @@ func (rs *RandomSource) generateEntry() core.LogEntry {
 	}
 }
 
-// generateRandomString creates a random string of specified length
 func (rs *RandomSource) generateRandomString(length int) string {
 	const normalChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
 	const specialChars = "\t\n\r\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F"
@@ -259,17 +241,14 @@ func (rs *RandomSource) generateRandomString(length int) string {
 		// Reserve space for at least one special and one unicode char
 		normalLength := length - 2
 
-		// Generate normal characters
 		for i := 0; i < normalLength; i++ {
 			result = append(result, normalChars[rs.rng.Intn(len(normalChars))])
 		}
 
-		// Insert special character at random position
 		specialPos := rs.rng.Intn(len(result) + 1)
 		specialChar := specialChars[rs.rng.Intn(len(specialChars))]
 		result = append(result[:specialPos], append([]byte{specialChar}, result[specialPos:]...)...)
 
-		// Insert unicode character at random position
 		unicodePos := rs.rng.Intn(len(result) + 1)
 		unicodeChar := unicodeChars[rs.rng.Intn(len(unicodeChars)/3)*3:]
 		if len(unicodeChar) >= 3 {
@@ -281,12 +260,10 @@ func (rs *RandomSource) generateRandomString(length int) string {
 			}
 		}
 
-		// Trim to exact length if needed
 		if len(result) > length {
 			result = result[:length]
 		}
 	} else {
-		// Normal generation without special characters
 		for i := 0; i < length; i++ {
 			result = append(result, normalChars[rs.rng.Intn(len(normalChars))])
 		}
@@ -295,13 +272,11 @@ func (rs *RandomSource) generateRandomString(length int) string {
 	return string(result)
 }
 
-// randomLogLevel returns a random log level
 func (rs *RandomSource) randomLogLevel() string {
 	levels := []string{"DEBUG", "INFO", "WARN", "ERROR"}
 	return levels[rs.rng.Intn(len(levels))]
 }
 
-// publish sends a log entry to all subscribers
 func (rs *RandomSource) publish(entry core.LogEntry) {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()

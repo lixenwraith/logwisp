@@ -32,10 +32,11 @@ func TestEveryRowDecodesFromItsRequiredKeys(t *testing.T) {
 	}
 }
 
-// A zero number takes the default unless zero means something there, a switch
-// that defaults on stays off when set off, a negative number is refused, and
-// what moved from the constructors keeps its meaning: min_disk_free_mb below
-// zero is the default, a backoff maximum below the minimum the default maximum
+// A zero number takes the default unless zero means something there (a file
+// sink's retention_hours 0 keeps files), a switch that defaults on stays off
+// when set off, a negative number is refused, and what moved from the
+// constructors keeps its meaning: min_disk_free_mb below zero is the default,
+// a backoff maximum below the minimum the default maximum
 func TestZeroDefaultsAndNegatives(t *testing.T) {
 	tcp, err := Decode[TCPSinkOptions]("sink", "tcp", map[string]any{"port": int64(1), "buffer_size": int64(0), "keep_alive": false})
 	if err != nil || tcp.BufferSize != 1000 || tcp.KeepAlive || tcp.Host != "0.0.0.0" {
@@ -53,6 +54,16 @@ func TestZeroDefaultsAndNegatives(t *testing.T) {
 		file, err := Decode[FileSinkOptions]("sink", "file", m)
 		if err != nil || file.MinDiskFreeMB != want {
 			t.Errorf("min_disk_free_mb %v: %+v %v, want %d", in, file, err, want)
+		}
+	}
+	for in, want := range map[any]float64{nil: 168, int64(0): 0, 0.0: 0, 2.5: 2.5} {
+		m := map[string]any{"directory": "d", "name": "n", "retention_hours": in}
+		if in == nil {
+			delete(m, "retention_hours")
+		}
+		file, err := Decode[FileSinkOptions]("sink", "file", m)
+		if err != nil || file.RetentionHours != want {
+			t.Errorf("retention_hours %v: %+v %v, want %v", in, file, err, want)
 		}
 	}
 	chain, err := Decode[TCPChainSinkOptions]("sink", "tcp_chain", map[string]any{"host": "h", "port": int64(1), "backoff_min_ms": int64(800), "backoff_max_ms": int64(700)})
