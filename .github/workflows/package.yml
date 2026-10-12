@@ -47,8 +47,10 @@ jobs:
           pacman -R --noconfirm logwisp
           test ! -e /usr/bin/lw
           test -f /etc/logwisp/logwisp.toml.pacsave
-  # make install SERVICE=no into a home, twice, then lw config init places the
-  # configuration lw reads without -c, and never replaces it
+  # make release install as a user without root installs into the home,
+  # twice, without the service; lw config init then places the configuration
+  # lw reads without -c, and never replaces it. An explicit PREFIX the user
+  # cannot write fails before writing.
   user:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -57,18 +59,20 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: make release
       - run: |
-          make install SERVICE=no PREFIX="$HOME/.local"
-          make install SERVICE=no PREFIX="$HOME/.local"
+          make release install
+          make install
           export PATH="$HOME/.local/bin:$PATH"
+          test ! -e /usr/bin/lw
           test ! -e "$HOME/.local/lib/systemd/system/logwisp.service"
-          test ! -e /etc/logwisp/logwisp.toml
+          test ! -e "$HOME/.config/logwisp/logwisp.toml"
+          if make install PREFIX=/usr SERVICE=no; then exit 1; fi
+          test ! -e /usr/bin/lw
           lw config init
           lw --check
           lw --dump | grep -q '^status_reporter = true'
           if lw config init; then exit 1; fi
-          make uninstall PREFIX="$HOME/.local"
+          make uninstall
           test ! -e "$HOME/.local/bin/lw"
           test -f "$HOME/.config/logwisp/logwisp.toml"
   # make deb on a host with systemd: the service runs once the package's

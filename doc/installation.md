@@ -76,15 +76,23 @@ checkout.
 ## Installing
 
 `make install` copies what a package ships and compiles nothing, so build
-first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR`, `BINDIR` (default
-`$PREFIX/bin`, the path the systemd unit and the rc.d script run `lw` from),
-`MANDIR`, `DOCDIR` and `LICENSEDIR` (under `$PREFIX/share` by default) and
-`SERVICE`:
+first, or in one command: `make release install`. It honours `DESTDIR`,
+`PREFIX`, `SYSCONFDIR`, `BINDIR` (default `$PREFIX/bin`, the path the systemd
+unit and the rc.d script run `lw` from), `MANDIR`, `DOCDIR` and `LICENSEDIR`
+(under `$PREFIX/share` by default) and `SERVICE`; `make help` prints the
+values in effect:
 
 - Linux defaults: `PREFIX=/usr`, `SYSCONFDIR=/etc`. Outside a package
   manager, prefer `PREFIX=/usr/local`; systemd reads units, sysusers and
   tmpfiles from there too.
 - FreeBSD defaults: `PREFIX=/usr/local`, `SYSCONFDIR=/usr/local/etc`.
+- A user who cannot write that layout's `bin` directory, unstaged, gets a
+  per-user install instead: `PREFIX=~/.local`, `SYSCONFDIR=~/.config`,
+  `SERVICE=no` ([Without a Service](#without-a-service)). `sudo make install`
+  installs system-wide.
+- Before writing anything, `install` checks that it can write every
+  directory it needs, and stops naming the first it cannot. It creates the
+  missing ones and leaves the mode of existing ones alone.
 - `INSTALL_OS` (default: `uname -s`) picks the layout, so
   `INSTALL_OS=FreeBSD DESTDIR=...` stages the FreeBSD one on another system.
 - `SERVICE`: `yes` (default) adds the service and its configuration; `no`
@@ -99,6 +107,9 @@ first. It honours `DESTDIR`, `PREFIX`, `SYSCONFDIR`, `BINDIR` (default
 make release
 sudo make install PREFIX=/usr/local
 ```
+
+Build as yourself and install with `sudo`: under `sudo` the build would run
+with root's `PATH` and Go cache and leave a `bin/` only root can replace.
 
 Every install gets:
 
@@ -241,19 +252,20 @@ d=$(mktemp -d); lw config init --out "$d/logwisp.toml"; diff "$d/logwisp.toml" /
 ### Without a Service
 
 `SERVICE=no` installs `lw`, its manual, completion and documentation, and
-nothing else: no service files, account or configuration. For one user,
-without root:
+nothing else: no service files, account or configuration. A user without
+root gets it under `~/.local` by default:
 
 ```bash
-make release
-make install SERVICE=no PREFIX="$HOME/.local"
+make release install
 lw config init
 ```
 
-- `~/.local/bin` goes on `PATH`. `man lw` then finds the manual, and bash
-  and fish the completion; zsh needs
+- `~/.local/bin` goes on `PATH` (`make install` notes when it is not).
+  `man lw` then finds the manual, and bash and fish the completion; zsh needs
   `fpath=(~/.local/share/zsh/site-functions $fpath)` before `compinit`.
-- `make uninstall PREFIX="$HOME/.local"` removes it.
+- `make uninstall`, as the same user, removes it.
+- Where that user can write the system's `bin` directory, name the layout:
+  `make install SERVICE=no PREFIX="$HOME/.local" SYSCONFDIR="$HOME/.config"`.
 
 For every user: `sudo make install SERVICE=no PREFIX=/usr/local`.
 
@@ -374,8 +386,9 @@ In place:
     reinstalled keeping it, removed
   - Ubuntu: the `.deb` installed, started, reinstalled keeping an edited
     configuration, removed and purged
-  - Ubuntu, without a service: `make install SERVICE=no` into a home twice,
-    then `lw config init` writing the file `lw` reads, once
+  - Ubuntu, as a user without root: `make release install` into the home
+    twice, without a service, then `lw config init` writing the file `lw`
+    reads, once; an explicit `PREFIX` it cannot write fails
   - FreeBSD: BSD make building, installing twice keeping an edited
     configuration, and running the rc.d service
   - `make image image-check`
