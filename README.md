@@ -25,9 +25,6 @@ streams, or downstream LogWisp nodes.
 - **Presets**: `tail`, `serve`, `edge` and `aggregator` build the common
   pipelines from a few keys (`lw --preset tail:path=/var/log/app`);
   `lw --dump` turns any command line into a configuration file
-- **On screen**: `lw --tui` composes pipelines on a terminal and runs or
-  prints them; `t` runs them under the screen, where a live view shows each
-  entry with its fate: passed, or the stage or filter that dropped it
 - **Independent pipelines**, each `sources → flow → sinks`, running concurrently
   in one process
 - **Fan-in and fan-out**: many sources and many sinks per pipeline
@@ -37,9 +34,38 @@ streams, or downstream LogWisp nodes.
 - **Hot reload** via `SIGHUP`/`SIGUSR1` or a config file watch, with the new
   configuration validated before the old service is torn down
 
+### On screen
+
+`lw --tui` (`-T`) composes pipelines on a full-screen terminal, with the
+configuration engine the website's configurator runs as WebAssembly:
+
+- **Start anywhere**: from the pipelines `lw` would run with the same options
+  (`-c FILE`, pipeline flags, a discovered file), from a preset, or from a
+  pasted `lw` command line
+- **Edit with the schema**: sources, flow stages and sinks side by side; the
+  inspector edits each part's options from their defaults, every edit is
+  checked, and `!` lists the problems
+- **Run or print**: `r` runs the pipelines; `o` also prints them as a command
+  line, environment variables or a TOML file once the screen closes
+  (`lw -T > pipelines.toml`)
+- **Tap**: `t` runs them in place and opens a live view of every entry with its
+  fate, passed or the stage or filter that dropped it; `e` edits that stage,
+  and `t` again reruns as a reload, keeping the running pipelines when the new
+  ones do not build. Listeners bind, dialers connect and files are written for
+  real; a password is asked in a masked dialog
+- **Read any log**: the view parses LogWisp's JSON, lw's own log, pino, zap,
+  slog, docker, journald, ECS, GCP, logfmt and stamped text into time, level,
+  message and fields, filters them by level or pattern, and shows the payload
+  as the sinks receive it. It never slows a pipeline: what it misses is
+  counted
+- **Any terminal**: `cmd | lw -T` taps piped input, since the screen draws on
+  the controlling terminal; colors range from true color to none, and a text
+  console gets CP437 glyphs
+
 ### Inputs
 
-`file` (directory tail with rotation detection and JSON line parsing),
+`file` (a directory's files tailed through rotation, a missing directory
+waited for, JSON lines parsed),
 `console` (stdin, one reader per process), `random` (generated entries, to
 check a deployment before real logs), `null` (nothing; holds a source's place
 until one is chosen), and the chain ingest listeners `tcp_chain` and
@@ -152,6 +178,12 @@ journalctl -f | ./bin/lw --sink http:host=127.0.0.1,port=8080
 
 # the same with a preset; on a terminal the level names are in color
 ./bin/lw --preset tail:path=/var/log/myapp
+
+# compose on screen from a preset menu; r runs, t taps, o prints
+./bin/lw -T
+
+# tap a stream: t shows each line parsed, and its fate
+journalctl -f -o json | ./bin/lw -T --preset pipe
 ```
 
 As a service, a configuration file holds the pipelines:
@@ -193,12 +225,12 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     -v /etc/logwisp:/etc/logwisp:ro logwisp:dev -c /etc/logwisp/logwisp.toml
 ```
 
-`sudo make install` installs the binary, the manual, shell completion, a
-systemd unit or FreeBSD rc.d script and its configuration; `make deb` and
-`make arch` package them for Debian, Ubuntu and Arch.
-`make install SERVICE=no PREFIX="$HOME/.local"` installs `lw`, its manual,
-completion and documentation, and no service; `lw config init` writes the
-annotated configuration it reads. See [Installation](doc/installation.md).
+`make release && sudo make install` installs the binary, the manual, shell
+completion, a systemd unit or FreeBSD rc.d script and its configuration.
+Without root, `make release install` installs `lw`, its manual, completion and
+documentation under `~/.local`, and no service; `lw config init` writes the
+annotated configuration it reads. `make deb` and `make arch` package them for
+Debian, Ubuntu and Arch. See [Installation](doc/installation.md).
 
 ## System Requirements
 
