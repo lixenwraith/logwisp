@@ -46,16 +46,22 @@ IMAGE_RUN = $(CONTAINER_ENGINE) run --read-only --user 65532:65532 \
 	--network none --cap-drop ALL --security-opt no-new-privileges
 
 DESTDIR ?=
-# SERVICE=no leaves out the service files and the system configuration,
-# which lw config init then places where the user wants it.
-SERVICE ?= yes
 INSTALL_OS_DEFAULT != uname -s
 INSTALL_OS ?= $(INSTALL_OS_DEFAULT)
 # FreeBSD keeps everything outside the base system under /usr/local.
-PREFIX_DEFAULT != [ '$(INSTALL_OS)' = FreeBSD ] && echo /usr/local || echo /usr
+SYSTEM_PREFIX != [ '$(INSTALL_OS)' = FreeBSD ] && echo /usr/local || echo /usr
+# Unstaged, a user who cannot write the system's bin directory installs for
+# itself: under ~/.local, without the service. sudo make install is system-wide.
+USER_INSTALL != [ -z '$(DESTDIR)' ] && [ "$$(id -u)" != 0 ] && [ ! -w '$(SYSTEM_PREFIX)/bin' ] && echo yes || echo no
+PREFIX_DEFAULT != [ '$(USER_INSTALL)' = yes ] && echo "$$HOME/.local" || echo '$(SYSTEM_PREFIX)'
 PREFIX ?= $(PREFIX_DEFAULT)
-SYSCONFDIR_DEFAULT != [ '$(INSTALL_OS)' = FreeBSD ] && echo /usr/local/etc || echo /etc
+SYSCONFDIR_DEFAULT != if [ '$(USER_INSTALL)' = yes ]; then echo "$$HOME/.config"; \
+	elif [ '$(INSTALL_OS)' = FreeBSD ]; then echo /usr/local/etc; else echo /etc; fi
 SYSCONFDIR ?= $(SYSCONFDIR_DEFAULT)
+# SERVICE=no leaves out the service files and the configuration, which lw
+# config init then places where the user wants it.
+SERVICE_DEFAULT != [ '$(USER_INSTALL)' = yes ] && echo no || echo yes
+SERVICE ?= $(SERVICE_DEFAULT)
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
 DOCDIR ?= $(PREFIX)/share/doc/logwisp
@@ -69,6 +75,8 @@ FISHCOMPDIR ?= $(PREFIX)/share/fish/vendor_completions.d
 DEB_MAINTAINER ?= Maintainer <maintainer@example.org>
 
 .DEFAULT_GOAL := help
+# Goals run in the order given, so make release install installs what it built.
+.NOTPARALLEL:
 
 .PHONY: help check-go build release dev wasm test verify e2e image image-check install uninstall deb arch completion clean version
 
@@ -92,9 +100,10 @@ help:
 	@echo "  image        Build $(IMAGE):$(IMAGE_TAG) with $(CONTAINER_ENGINE) (scratch, static, UID 65532)"
 	@echo "  image-check  Run it read-only, offline, without capabilities: --version, then"
 	@echo "               --check on $(IMAGE_CHECK_CONFIG)"
-	@echo "Install (build or release first):"
-	@echo "  install      Binary, manual, shell completion, licence and docs; unless SERVICE=no,"
-	@echo "               the service files and $(SYSCONFDIR)/logwisp/logwisp.toml (kept if present)"
+	@echo "Install (build or release first, as in make release install):"
+	@echo "  install      Binary, manual, shell completion, licence and docs under $(PREFIX); unless"
+	@echo "               SERVICE=no, the service files and $(SYSCONFDIR)/logwisp/logwisp.toml (kept"
+	@echo "               if present). A user who cannot write $(SYSTEM_PREFIX)/bin gets ~/.local and no service"
 	@echo "  uninstall    Remove them, keeping $(SYSCONFDIR)/logwisp"
 	@echo "  deb          Package a release build as $(BIN_DIR)/logwisp_VERSION_ARCH.deb (dpkg-deb)"
 	@echo "  arch         Build the Arch package from this working tree in $(BIN_DIR)/arch (makepkg)"
@@ -108,6 +117,7 @@ help:
 check-go:
 	@command -v $(GO) >/dev/null 2>&1 || { \
 		echo "Go toolchain '$(GO)' not found; go.mod requires go $$(sed -n 's/^go //p' go.mod)."; \
+		[ -z "$${SUDO_USER:-}" ] || echo "  sudo may reset PATH: make release as $$SUDO_USER, then sudo make install"; \
 		if [ "$$(uname -s)" = FreeBSD ]; then echo "  FreeBSD: pkg install $(GO_DEFAULT)"; \
 		elif [ -f /etc/arch-release ]; then echo "  Arch Linux: pacman -S go"; \
 		else echo "  Elsewhere: https://go.dev/dl/ (distribution packages often lag)"; fi; \
@@ -216,18 +226,30 @@ image-check:
 		'$(IMAGE):$(IMAGE_TAG)' --check -c /etc/logwisp/logwisp.toml
 
 # install stages what a package ships and compiles nothing, so a packager owns
-# the build flags. The service files get the installed paths substituted; a
-# configuration already in place is kept, on every system alike.
+# the build flags. It writes nothing until every directory it needs is
+# writable, and leaves existing directories as they are. The service files get
+# the installed paths substituted; a configuration already in place is kept.
 install:
 	@set -eu; \
-	[ -x $(BIN_DIR)/$(BINARY) ] || { echo "no $(BIN_DIR)/$(BINARY): run make build or make release first" >&2; exit 1; }; \
+	[ -x $(BIN_DIR)/$(BINARY) ] || { echo "no $(BIN_DIR)/$(BINARY): make build or make release first, as in make release install" >&2; exit 1; }; \
 	case '$(SERVICE)' in yes|no) ;; *) echo "SERVICE is yes or no, not '$(SERVICE)'" >&2; exit 2 ;; esac; \
-	put() { install -d -m 0755 "$${3%/*}"; install -m "$$1" "$$2" "$$3"; echo "install $$3"; }; \
-	sub() { install -d -m 0755 "$${3%/*}"; \
+	root='$(DESTDIR)'; etc="$$root$(SYSCONFDIR)/logwisp"; \
+	dirs='$(BINDIR) $(MANDIR) $(BASHCOMPDIR) $(ZSHCOMPDIR) $(FISHCOMPDIR) $(LICENSEDIR) $(DOCDIR)'; \
+	[ '$(SERVICE)' = no ] || case '$(INSTALL_OS)' in \
+		FreeBSD) dirs="$$dirs $(SYSCONFDIR)/logwisp $(PREFIX)/etc/rc.d" ;; \
+		*) dirs="$$dirs $(SYSCONFDIR)/logwisp $(PREFIX)/lib/systemd/system $(PREFIX)/lib/sysusers.d $(PREFIX)/lib/tmpfiles.d" ;; \
+	esac; \
+	for d in $$dirs; do d="$$root$$d"; while [ ! -e "$$d" ]; do d=$$(dirname "$$d"); done; \
+		[ -w "$$d" ] || { echo "no write access to $$d: sudo make install, or set PREFIX, SYSCONFDIR or SERVICE=no" >&2; exit 1; }; \
+	done; \
+	if [ '$(USER_INSTALL)' = yes ] && [ '$(PREFIX)' = '$(PREFIX_DEFAULT)' ]; then \
+		echo "$(SYSTEM_PREFIX)/bin is not writable: installing for $$(id -un) under $(PREFIX) (sudo make install: system-wide)"; fi; \
+	dir() { [ -d "$$1" ] || install -d -m 0755 "$$1"; }; \
+	put() { dir "$${3%/*}"; install -m "$$1" "$$2" "$$3"; echo "install $$3"; }; \
+	sub() { dir "$${3%/*}"; \
 		sed -e 's|@BINDIR@|$(BINDIR)|g' -e 's|@SYSCONFDIR@|$(SYSCONFDIR)|g' -e 's|%%BINDIR%%|$(BINDIR)|g' \
 			-e 's|%%PREFIX%%/etc|$(SYSCONFDIR)|g' -e 's|%%PREFIX%%|$(PREFIX)|g' "$$2" > "$$3"; \
 		chmod "$$1" "$$3"; echo "install $$3"; }; \
-	root='$(DESTDIR)'; etc="$$root$(SYSCONFDIR)/logwisp"; \
 	put 0755 $(BIN_DIR)/$(BINARY) "$$root$(BINDIR)/$(BINARY)"; \
 	put 0644 doc/lw.1 "$$root$(MANDIR)/man1/lw.1"; \
 	put 0644 $(PKG_DIR)/completion/lw.bash "$$root$(BASHCOMPDIR)/lw"; \
@@ -235,20 +257,25 @@ install:
 	put 0644 $(PKG_DIR)/completion/lw.fish "$$root$(FISHCOMPDIR)/lw.fish"; \
 	put 0644 LICENSE "$$root$(LICENSEDIR)/LICENSE"; \
 	for src in README.md logwisp-logo.svg doc/*.md doc/lw.1 config/logwisp.toml; do put 0644 "$$src" "$$root$(DOCDIR)/$$src"; done; \
-	if [ '$(SERVICE)' = no ]; then echo "skip    the service and $$etc (SERVICE=no): lw config init writes a configuration"; exit 0; fi; \
-	if [ -e "$$etc/logwisp.toml" ]; then echo "keep    $$etc/logwisp.toml"; \
-	else put 0644 config/logwisp.toml "$$etc/logwisp.toml"; fi; \
-	case '$(INSTALL_OS)' in \
-	FreeBSD) \
-		sub 0755 $(PKG_DIR)/logwisp.rc "$$root$(PREFIX)/etc/rc.d/logwisp" ;; \
-	*) \
-		sub 0644 $(PKG_DIR)/logwisp.service "$$root$(PREFIX)/lib/systemd/system/logwisp.service"; \
-		sub 0644 $(PKG_DIR)/logwisp.sysusers "$$root$(PREFIX)/lib/sysusers.d/logwisp.conf"; \
-		sub 0644 $(PKG_DIR)/logwisp.tmpfiles "$$root$(PREFIX)/lib/tmpfiles.d/logwisp.conf" ;; \
-	esac
+	if [ '$(SERVICE)' = no ]; then echo "skip    the service and $$etc (SERVICE=no): lw config init writes a configuration"; \
+	else \
+		if [ -e "$$etc/logwisp.toml" ]; then echo "keep    $$etc/logwisp.toml"; \
+		else put 0644 config/logwisp.toml "$$etc/logwisp.toml"; fi; \
+		case '$(INSTALL_OS)' in \
+		FreeBSD) \
+			sub 0755 $(PKG_DIR)/logwisp.rc "$$root$(PREFIX)/etc/rc.d/logwisp" ;; \
+		*) \
+			sub 0644 $(PKG_DIR)/logwisp.service "$$root$(PREFIX)/lib/systemd/system/logwisp.service"; \
+			sub 0644 $(PKG_DIR)/logwisp.sysusers "$$root$(PREFIX)/lib/sysusers.d/logwisp.conf"; \
+			sub 0644 $(PKG_DIR)/logwisp.tmpfiles "$$root$(PREFIX)/lib/tmpfiles.d/logwisp.conf" ;; \
+		esac; \
+	fi; \
+	[ -n "$$root" ] || case ":$$PATH:" in *':$(BINDIR):'*) ;; *) echo "note:   $(BINDIR) is not on PATH" ;; esac
 
 uninstall:
 	@set -eu; root='$(DESTDIR)'; \
+	if [ '$(USER_INSTALL)' = yes ] && [ '$(PREFIX)' = '$(PREFIX_DEFAULT)' ]; then \
+		echo "$(SYSTEM_PREFIX)/bin is not writable: uninstalling under $(PREFIX) (sudo make uninstall: system-wide)"; fi; \
 	for f in "$$root$(BINDIR)/$(BINARY)" "$$root$(MANDIR)/man1/lw.1" \
 		"$$root$(BASHCOMPDIR)/lw" "$$root$(ZSHCOMPDIR)/_lw" "$$root$(FISHCOMPDIR)/lw.fish" \
 		"$$root$(PREFIX)/lib/systemd/system/logwisp.service" \
