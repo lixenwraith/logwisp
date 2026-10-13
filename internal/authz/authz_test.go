@@ -156,7 +156,7 @@ func TestNewValidation(t *testing.T) {
 		{"trusted proxies on a chain source", listener(config.AuthOptions{TrustedProxies: proxies}), nil, config.ChainListener, HTTP, "only to the http sink"},
 		{"trusted proxies on tcp", listener(config.AuthOptions{TrustedProxies: proxies}), nil, config.Listener, TCP, "only to HTTP listeners"},
 		{"trusted proxies with certificate binding", listener(config.AuthOptions{TrustedProxies: proxies, Identity: "cn"}), f.serverTLS, config.Listener, HTTP, "TLS-terminating proxy"},
-		{"malformed trusted proxy", listener(config.AuthOptions{TrustedProxies: []string{"localhost"}}), nil, config.Listener, HTTP, "neither an address"},
+		{"malformed trusted proxy", listener(config.AuthOptions{TrustedProxies: []string{"localhost"}}), nil, config.Listener, HTTP, "host names and IPv6 zones are not accepted"},
 		{"trusted proxies on a dialer", dialer(config.AuthOptions{TrustedProxies: proxies}), &tls.Config{}, config.Dialer, HTTP, "only to listeners"},
 	}
 	for _, tc := range tests {

@@ -254,8 +254,8 @@ never a key:
 - `value`, `at` and `group` read a node's value and sort problems by node.
 
 The engine's calls take strings (`lwconf.js` writes objects as JSON) and
-answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key"}`, as
-far as the engine places the refusal:
+answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
+"ask"}`, as far as the engine places the refusal:
 
 - `schema()`: what `lw --schema` prints.
 - `preset(name, values, dirs)`: a preset's pipelines; `values` maps a key to
@@ -273,7 +273,8 @@ far as the engine places the refusal:
   - `set` (`node`, `key`, `values`), `unset` (`node`, `key`)
 - `dirs` answers whether a path a preset names is a directory,
   `{"/var/log/app.log": false}`; unanswered, a path ending in `/` is one, one
-  with a glob a pattern, and any other is refused at `path`.
+  with a glob a pattern, and any other is refused at `path` with `ask` naming
+  it: answer it in `dirs` and call again.
 - Pipelines are a JSON list in the file's shape (`name`, `flow`,
   `plugin_sources`, `plugin_sinks`); a misspelled key is refused. A node is
   `{role, id, index}`: a source's or sink's id, a filter's index.

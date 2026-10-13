@@ -115,6 +115,18 @@ func TestPastedEnvironmentReadsAsAShellRunsIt(t *testing.T) {
 	}
 }
 
+// Of a line piped into lw, lw's part is read, its pipeline reading standard
+// input; a word that is no pipeline flag is refused, naming those to paste
+func TestPastedCommandLineIsLwsPart(t *testing.T) {
+	c, err := FromCommandLine("tail -F app.log | lw --filter include:patterns=ERROR", nil)
+	if err != nil || c.Pipelines[0].PluginSources[0].Type != "console" || len(c.Pipelines[0].Flow.Filters) != 1 {
+		t.Fatalf("%v %v", c, err)
+	}
+	if _, err := FromCommandLine("lw -c lw.toml --sink null", nil); err == nil || !strings.HasPrefix(err.Error(), "-c: not a pipeline flag; paste lw's --pipeline, --preset, ") {
+		t.Fatalf("-c: %v", err)
+	}
+}
+
 // Locate places a problem by its path: a plugin's key, a key of its table, a
 // rule between its table's keys, a list entry, the plugin itself under an id
 // holding ']', a filter's list entry, a stage and the pipeline; and nothing
@@ -192,8 +204,9 @@ func TestShellFormsRefuseControlCharacters(t *testing.T) {
 	}
 }
 
-// Set refuses a value of the wrong kind and leaves the key as it was; Unset
-// returns a key to its default, dropping a table it leaves empty
+// Set refuses a value of the wrong kind, a plugin's and a stage's alike, and
+// leaves the key as it was; Unset returns a key to its default, dropping a
+// table it leaves empty
 func TestSetKeepsAKeyItCannotTake(t *testing.T) {
 	c := &Composition{}
 	if err := c.AddPipeline("p"); err != nil {
@@ -207,8 +220,11 @@ func TestSetKeepsAKeyItCannotTake(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := c.Set(0, n, "port", "http"); err == nil || !strings.HasPrefix(err.Error(), "port: ") {
-		t.Fatalf("port http: %v", err)
+	for want, err := range map[string]error{"port: not an integer": c.Set(0, n, "port", "http"),
+		"interval_ms: not an integer": c.Set(0, beat, "interval_ms", "soon")} {
+		if err == nil || err.Error() != want {
+			t.Errorf("%v, want %s", err, want)
+		}
 	}
 	if m, beat := c.Pipelines[0].PluginSinks[0].Config, c.Pipelines[0].Flow.Heartbeat; !reflect.DeepEqual(m, map[string]any{"port": int64(8080)}) ||
 		beat.IntervalMS != 1000 {

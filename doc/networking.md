@@ -209,8 +209,8 @@ preamble, headers, and entry encoding.
   - `PROXY header: …` — malformed, too long, or incomplete after 10 s.
   - `PROXY header from a peer outside proxy_from` — at the first read, after
     the connection opened: list the proxy in `proxy_from`.
-- `acl: allow entry "...": not of the listener's family` at startup — an IPv4
-  entry on an IPv6 `host`, or the reverse: each family's listener takes its own.
+- `acl: allow entry "...": IPv4, and the listener's host is IPv6` at startup,
+  or the reverse: each family's listener takes its own.
   Behind `proxy_from` or `trusted_proxies`, `allow` and `deny` take both;
   `proxy_from` its own.
 

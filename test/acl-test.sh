@@ -96,7 +96,7 @@ section "Rules"
 rejects() { ! lw --check --source null --sink "$1" >/dev/null 2>"$LOG/check.err" && grep -q -- "$2" "$LOG/check.err" && echo 1 || echo 0; }
 # warns SINK PATTERN: lw --check builds SINK and WARNs PATTERN
 warns() { lw --check --source null --sink "$1" 2>&1 >/dev/null | grep ' WARN ' | grep -q -- "$2" && echo 1 || echo 0; }
-check "an IPv4 entry on an IPv6 listener is refused" "$(rejects 'tcp:host=::1,port=15881,acl.allow=10.0.0.0/8' "not of the listener's family")"
+check "an IPv4 entry on an IPv6 listener is refused" "$(rejects 'tcp:host=::1,port=15881,acl.allow=10.0.0.0/8' "IPv4, and the listener's host is IPv6")"
 check "an acl on a dialer is refused" "$(rejects 'tcp_chain:host=127.0.0.1,port=15881,acl.deny=10.0.0.1' 'unknown key "acl"')"
 check "a CIDR with host bits warns, naming the network it matches" "$(warns 'tcp:host=127.0.0.1,port=15881,acl.allow=10.0.0.1/8' 'network 10.0.0.0/8')"
 check "a deny list alone on a wildcard listener warns" "$(warns 'tcp:port=15881,acl.deny=10.0.0.1' 'admits all that acl.deny does not list')"

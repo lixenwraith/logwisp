@@ -72,10 +72,22 @@ test("load takes an engine a server sends as plain bytes", async () => {
   }
 });
 
+// A path neither ending in '/' nor holding a glob is a question, in a preset
+// or a pasted one, whose ask dirs answers
+test("a preset path of unknown kind is asked, and dirs answers it", () => {
+  const path = { path: "/var/log/app.log" }, dirs = { "/var/log/app.log": false };
+  const asked = engine.preset("tail", path);
+  assert.deepEqual([asked.path, asked.ask, asked.value], ["path", "/var/log/app.log", undefined]);
+  assert.match(asked.error, /^path: "\/var\/log\/app\.log": a directory or a file\? end a directory with \//);
+  const pasted = engine.parse("lw -p tail:path=/var/log/app.log", "command");
+  assert.deepEqual([pasted.path, pasted.ask], ["path", "/var/log/app.log"]);
+  const { value: pipelines } = engine.preset("tail", path, dirs);
+  assert.deepEqual(value(pipelines, 0, { role: "source", id: "file" }), { directory: "/var/log", pattern: "app.log", from: "end" });
+});
+
 // The environment holds one pipeline, which a preset makes
 test("a preset's pipeline, a single file answered by dirs, reads back from every form", () => {
   const path = { path: "/var/log/app.log" }, dirs = { "/var/log/app.log": false };
-  assert.deepEqual(engine.preset("tail", path), { error: "path: a directory or a file pattern?", path: "path" });
   const { value: pipelines } = engine.preset("serve", { ...path, allow: ["192.0.2.0/24", "198.51.100.7"] }, dirs);
   assert.deepEqual(value(pipelines, 0, { role: "source", id: "file" }), { directory: "/var/log", pattern: "app.log", from: "end" });
   assert.deepEqual(value(pipelines, 0, { role: "sink", id: "http" }, "acl.allow"), ["192.0.2.0/24", "198.51.100.7"]);
@@ -166,7 +178,7 @@ test("a refused call answers why and where, and the engine keeps answering", () 
     [["edit", JSON.stringify([{ name: "p", plugin_sinks: [{ type: "tcp" }] }]),
       JSON.stringify({ op: "set", pipeline: 0, node: { role: "sink", id: "tcp" }, key: "port", values: ["x"] })],
       { error: /port: not an integer$/, path: "pipelines[0].plugin_sinks[tcp].config.port", pipeline: 0, key: "port" }],
-    [["emit", JSON.stringify([{ name: "p" }]), "command"], { error: /no sources defined/, path: "pipelines[0].plugin_sources" }],
+    [["emit", JSON.stringify([{ name: "p" }]), "command"], { error: /plugin_sources: add a source; a pipeline needs at least one\n/, path: "pipelines[0].plugin_sources" }],
     [["emit", "[]", "yaml"], { error: /no form "yaml"/ }],
     [["edit", "[]", JSON.stringify({ op: "add_pipeline", nmae: "p" })], { error: /unknown field "nmae"/ }],
     [["edit", "[]", JSON.stringify({ op: "rename" })], { error: /^no op "rename" \(valid: add, add_pipeline/ }],
