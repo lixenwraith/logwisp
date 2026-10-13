@@ -39,33 +39,38 @@ func TestPresetStartsAndNamesItsPipeline(t *testing.T) {
 }
 
 // Keys are checked against the preset's own, required ones enforced, and
-// the edge and aggregator refuse to run without authentication.
+// the edge and aggregator refuse to run without authentication; a refusal of
+// one key is a KeyError at it, the others name the preset.
 func TestPresetKeysAreChecked(t *testing.T) {
 	isolateConfig(t)
 	for spec, want := range map[string]string{
 		"nope":                             `no preset "nope" (valid: pipe, tail, serve, edge, aggregator)`,
 		"tail:path=x,colour=1":             `preset tail has no key "colour" (valid: path, from, format)`,
-		"tail":                             "preset tail needs path",
+		"tail":                             "path: must be set",
 		"tail:path=x,format.type=json":     "preset keys do not nest",
-		"tail:path=x,path=y":               `key "path" takes one value`,
-		"serve:listen=8080":                `listen "8080": want HOST:PORT`,
-		"serve:tls=self,cert=c":            "cert does not apply to tls=self",
-		"serve:tls=files,cert=c":           "tls=files needs key",
-		"serve:viewer=yes":                 `viewer "yes"`,
-		"serve:proxy=127.0.0.1":            "proxy needs user or users",
-		"serve:viewer=true":                "viewer=true needs proxy",
-		"serve:user=u":                     "user and users need tls (self, issuer or files), or proxy",
-		"serve:tls=self,user=u,users=f":    "user or users, not both",
-		"edge:to=agg:9000":                 "it never sends unauthenticated",
-		"edge:to=agg:9000,password_file=p": "password_file needs user",
-		"edge:to=agg:9000,user=u,password_file=p,transport=udp": `transport "udp"`,
-		"aggregator:users=u,tls=off":                            `tls "off" (valid: `,
-		"aggregator:user=u,users=f":                             "user or users, not both",
-		"aggregator":                                            "it never receives unauthenticated",
+		"tail:path=x,path=y":               "path: takes one value",
+		"serve:listen=8080":                `listen: must be HOST:PORT, an IPv6 address in brackets as in [::1]:9000, got "8080"`,
+		"serve:tls=self,cert=c":            "cert: does not apply to tls=self",
+		"serve:tls=files,cert=c":           "key: must be set for tls=files",
+		"serve:viewer=yes":                 `viewer: must be true or false, got "yes"`,
+		"serve:proxy=127.0.0.1":            "proxy: needs user or users",
+		"serve:viewer=true":                "viewer: true needs proxy",
+		"serve:user=u":                     "tls: user and users need self, issuer or files, or proxy",
+		"serve:tls=self,user=u,users=f":    "user: set user or users, not both",
+		"edge:to=agg:9000":                 "user: required unless cert and key are set; an edge never sends unauthenticated",
+		"edge:to=agg:9000,password_file=p": "password_file: needs user",
+		"edge:to=agg:9000,user=u,password_file=p,transport=udp": `transport: must be one of tcp, http, got "udp"`,
+		"aggregator:users=u,tls=off":                            `tls: must be one of self, issuer, files, got "off"`,
+		"aggregator:user=u,users=f":                             "user: set user or users, not both",
+		"aggregator":                                            "users: required unless user or client_ca is set; an aggregator never receives unauthenticated",
 	} {
 		_, err := Load(Args{Specs: specs("preset", spec)})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want %s", spec, err, want)
+		}
+		ke, keyed := errors.AsType[*KeyError](err)
+		if keyed == strings.Contains(want, "preset") || keyed && !strings.HasPrefix(want, ke.Key+": ") {
+			t.Errorf("%s: %v placed at %v", spec, err, ke)
 		}
 	}
 }
@@ -127,7 +132,7 @@ func TestPresetUserWithoutPasswordFileAsks(t *testing.T) {
 // A preset path ending in '/' is a directory, there yet or not; any other is
 // what isDir answers, a directory named with brackets too: this host's,
 // reading ~ as home, or off it the user's answer, a single file too; without
-// one it is a pattern when it holds a glob, and otherwise ErrPathKind asks
+// one it is a pattern when it holds a glob, and otherwise PathKindError asks
 func TestPresetPathKind(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -145,8 +150,8 @@ func TestPresetPathKind(t *testing.T) {
 		{"~/logs", HostIsDir, "~/logs *"}, {home + "/later/", HostIsDir, home + "/later/ *"}} {
 		p, err := ExpandPreset("tail", map[string]string{"path": c.path}, c.isDir)
 		if c.want == "" {
-			if !errors.Is(err, ErrPathKind) {
-				t.Errorf("%s: %v, want ErrPathKind", c.path, err)
+			if pk, ok := errors.AsType[*PathKindError](err); !errors.Is(err, ErrPathKind) || !ok || pk.Path != c.path {
+				t.Errorf("%s: %v, want ErrPathKind asking about it", c.path, err)
 			}
 			continue
 		}

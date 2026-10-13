@@ -93,7 +93,7 @@
 # interval_ms = 1000                    # At least 100
 # include_timestamp = false             # false: level only; the raw format shows neither
 # include_stats = false                 # Adds type, beat_count and, from the second beat, interval_ms
-# format = "txt"                        # txt|json|raw; no effect: heartbeats use the flow's format
+# format = "txt"                        # txt|json|raw; kept for older files: heartbeats use the flow's format
 
 ###============================================================================
 ### TLS (a [...tls] table on every network source and sink)
@@ -235,7 +235,7 @@
 # id = "chain_in"
 # type = "tcp_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" for IPv6 only
+# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
 # port = 9440                           # Required (example)
 # buffer_size = 1000
 # max_connections = 0                   # 0 = unlimited
@@ -274,7 +274,7 @@
 # id = "hchain_in"
 # type = "http_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" for IPv6 only
+# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
 # port = 9441                           # Required (example)
 # ingest_path = "/ingest"               # Must start with "/"; not "/auth"
 # buffer_size = 1000
@@ -353,7 +353,7 @@
 # id = "http_out"
 # type = "http"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" for IPv6 only
+# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
 # port = 8081                           # Required (example)
 # stream_path = "/stream"               # Exact; starts with "/", clean (one trailing "/" allowed), none of { } % ? #; not /auth or under it
 # status_path = "/status"               # Same rules; differs from stream_path
@@ -399,7 +399,7 @@
 # id = "tcp_out"
 # type = "tcp"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" for IPv6 only
+# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
 # port = 9090                           # Required (example)
 # buffer_size = 1000
 # client_buffer_size = 256

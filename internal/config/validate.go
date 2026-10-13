@@ -59,10 +59,10 @@ func ValidatePipelines(pipelines []PipelineConfig) error {
 		}
 		names[p.Name] = true
 		if len(p.PluginSources) == 0 {
-			at(path+".plugin_sources", errors.New("no sources defined"))
+			at(path+".plugin_sources", errors.New("add a source; a pipeline needs at least one"))
 		}
 		if len(p.PluginSinks) == 0 {
-			at(path+".plugin_sinks", errors.New("no sinks defined"))
+			at(path+".plugin_sinks", errors.New("add a sink; a pipeline needs at least one"))
 		}
 		if err := checkFlow(p.Flow, path+".flow"); err != nil {
 			errs = append(errs, err)
@@ -77,7 +77,7 @@ func ValidatePipelines(pipelines []PipelineConfig) error {
 			case !ok:
 				at(path+".type", fmt.Errorf("unknown %s type %q", role, typ))
 			case plugin.Single && single[role+typ] != "":
-				at(path, fmt.Errorf("one %s %s may run, and pipeline %q has it", typ, role, single[role+typ]))
+				at(path, fmt.Errorf("one %s %s may run, and pipeline %q has it, as lw has one standard input; give this pipeline another %s", typ, role, single[role+typ], role))
 			default:
 				ids[list+id] = true
 				if plugin.Single {
@@ -414,15 +414,17 @@ func ParsePrefix(entry, network string) (netip.Prefix, error) {
 	if err != nil {
 		addr, aerr := netip.ParseAddr(entry)
 		if aerr != nil || addr.Zone() != "" {
-			return netip.Prefix{}, fmt.Errorf("neither an address nor a CIDR (and no zone)")
+			return netip.Prefix{}, errors.New("not an IP address or CIDR; host names and IPv6 zones are not accepted")
 		}
 		prefix = netip.PrefixFrom(addr, addr.BitLen())
 	}
 	switch a := prefix.Addr(); {
 	case a.Is4In6():
 		return netip.Prefix{}, fmt.Errorf("IPv4-mapped; write it as IPv4")
-	case network == "tcp4" && !a.Is4(), network == "tcp6" && a.Is4():
-		return netip.Prefix{}, fmt.Errorf("not of the listener's family (%s)", network)
+	case network == "tcp4" && !a.Is4():
+		return netip.Prefix{}, errors.New("IPv6, and the listener's host is IPv4; write an IPv4 address or CIDR")
+	case network == "tcp6" && a.Is4():
+		return netip.Prefix{}, errors.New("IPv4, and the listener's host is IPv6; write an IPv6 address or CIDR")
 	}
 	return prefix, nil
 }
@@ -520,9 +522,13 @@ func (c *FilterConfig) Check() error {
 }
 
 // Scan decodes a flow stage's command-line map into target, rejecting keys
-// target does not declare: a misspelled key must fail, not be dropped.
+// target does not declare: a misspelled key must fail, not be dropped. Its
+// values take their kinds as a plugin's do, a wrong one refused at its key.
 func Scan(configMap map[string]any, target any) error {
 	if err := checkKeys(configMap, reflect.TypeOf(target), ""); err != nil {
+		return err
+	}
+	if err := coerce(reflect.TypeOf(target).Elem(), configMap, ""); err != nil {
 		return err
 	}
 	return lconfig.ScanMap(configMap, target)

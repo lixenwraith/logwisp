@@ -35,7 +35,7 @@ type Plugin struct {
 	Type    string `json:"type"`
 	Side    Side   `json:"side"`
 	HTTP    bool   `json:"http"`   // speaks HTTP: takes bearer tokens and request limits
-	Single  bool   `json:"single"` // one instance per process
+	Single  bool   `json:"single"` // one instance per process, as standard input is one
 	Summary string `json:"summary"`
 	options reflect.Type
 }
@@ -45,15 +45,15 @@ var plugins = []Plugin{
 	{"source", "file", Local, false, false, "Follow the files of a directory that match a pattern", reflect.TypeFor[FileSourceOptions]()},
 	{"source", "random", Local, false, false, "Generated entries, to check a deployment before real logs", reflect.TypeFor[RandomSourceOptions]()},
 	{"source", "null", Local, false, false, "Nothing; holds a source's place until one is chosen", reflect.TypeFor[NullSourceOptions]()},
-	{"source", "tcp_chain", ChainListener, false, false, "Entries from tcp_chain sinks of other instances", reflect.TypeFor[TCPChainSourceOptions]()},
-	{"source", "http_chain", ChainListener, true, false, "Entry batches from http_chain sinks of other instances", reflect.TypeFor[HTTPChainSourceOptions]()},
+	{"source", "tcp_chain", ChainListener, false, false, "Receive entries from other nodes' tcp_chain sinks, each over one lasting TCP connection", reflect.TypeFor[TCPChainSourceOptions]()},
+	{"source", "http_chain", ChainListener, true, false, "Receive entries from other nodes' http_chain sinks, as batches each posts over HTTP", reflect.TypeFor[HTTPChainSourceOptions]()},
 	{"sink", "console", Local, false, false, "Standard output or standard error", reflect.TypeFor[ConsoleSinkOptions]()},
 	{"sink", "file", Local, false, false, "Rotating files", reflect.TypeFor[FileSinkOptions]()},
 	{"sink", "null", Local, false, false, "Discards; holds a sink's place until one is chosen", reflect.TypeFor[NullSinkOptions]()},
 	{"sink", "tcp", Listener, false, false, "Serve entries to TCP clients, one per line", reflect.TypeFor[TCPSinkOptions]()},
 	{"sink", "http", Listener, true, false, "Serve entries as server-sent events, with a browser viewer", reflect.TypeFor[HTTPSinkOptions]()},
-	{"sink", "tcp_chain", Dialer, false, false, "Forward entries to a tcp_chain source", reflect.TypeFor[TCPChainSinkOptions]()},
-	{"sink", "http_chain", Dialer, true, false, "Post entry batches to an http_chain source", reflect.TypeFor[HTTPChainSinkOptions]()},
+	{"sink", "tcp_chain", Dialer, false, false, "Forward entries to another node's tcp_chain source over one lasting TCP connection", reflect.TypeFor[TCPChainSinkOptions]()},
+	{"sink", "http_chain", Dialer, true, false, "Forward entries to another node's http_chain source in batches, an HTTP POST each", reflect.TypeFor[HTTPChainSinkOptions]()},
 }
 
 // Plugins lists the catalogue
@@ -64,12 +64,9 @@ func Plugins() []Plugin { return slices.Clone(plugins) }
 func (p Plugin) Keys() []Key { return p.applying(keys(p.options)) }
 
 func (p Plugin) applying(all []Key) []Key {
-	side, out := "listener", []Key{}
-	if p.Side == Dialer {
-		side = "dialer"
-	}
+	out := []Key{}
 	for _, k := range all {
-		if (k.Side == "" || k.Side == side) && (!k.HTTP || p.HTTP) {
+		if (k.Side == "" || k.Side == sideNames[p.Side] || k.Side == "listener" && p.Side == ChainListener) && (!k.HTTP || p.HTTP) {
 			if k.Keys != nil {
 				k.Keys = p.applying(k.Keys)
 			}
@@ -99,10 +96,10 @@ func (e *KeyError) Error() string { return e.Key + ": " + e.Err.Error() }
 func (e *KeyError) Unwrap() error { return e.Err }
 
 // option is one key of an options table, from its field's tags: toml names
-// it, default: holds the default as typed on a command line, help: says what
-// it does, and lw: lists its rules: required, enum=a|b, min=N, max=N,
-// zero=MEANING (zero is a value, not the default), hint=KIND, listener or
-// dialer, and http (only plugins that speak HTTP take it).
+// it, default: holds the default as a command line types it, help: says what
+// it does, lw: lists its rules: required, enum=a|b, min=N, max=N, zero=MEANING
+// (a value, not the default), hint=KIND, a side (listener, a chain source's
+// too; chain_listener; dialer), and http (only plugins that speak HTTP take it).
 type option struct {
 	Key
 	index int
@@ -125,7 +122,7 @@ func options(t reflect.Type) []option {
 			case "":
 			case "required":
 				o.Required = true
-			case "listener", "dialer":
+			case "listener", "chain_listener", "dialer":
 				o.Side = name
 			case "http":
 				o.HTTP = true

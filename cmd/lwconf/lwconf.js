@@ -31,8 +31,9 @@ function script(src, integrity) {
 }
 
 // Engine's calls take objects or JSON text and return the engine's answer,
-// {value} or {error, path?, pipeline?, node?, key?}; dirs answers whether a
-// preset path is a directory, {"/var/log/app.log": false}
+// {value} or {error, path?, pipeline?, node?, key?, ask?}; ask is the path a
+// preset names whose kind dirs must answer: pass dirs {[ask]: true for a
+// directory, false for a file} and call again
 export class Engine {
   #api;
   constructor(api) { this.#api = api; }

@@ -4,7 +4,7 @@
 // globalThis.lwconf for lwconf.js, calls taking strings and returning JSON,
 // {"value"} or {"error"} with its path, one in a pipeline placed on its node
 // and key, any other a preset's or flag's key. Pipelines are compose's JSON
-// form; dirs answers config.IsDir by path, {} leaving '/' and globs to tell.
+// form; dirs answers config.IsDir by path; an error's ask is a path to answer.
 package main
 
 import (
@@ -146,7 +146,8 @@ var edits = map[string]func(*compose.Composition, op) (compose.Node, error){
 }
 
 // problem is where a problem, or a call's refusal, lies as far as the engine
-// knows: its path, and the pipeline, node and key Locate reads from it
+// knows: its path, and the pipeline, node and key Locate reads from it; ask
+// is a preset's path whose kind dirs must answer
 type problem struct {
 	Error    string        `json:"error,omitempty"`
 	Path     string        `json:"path,omitempty"`
@@ -154,12 +155,16 @@ type problem struct {
 	Node     *compose.Node `json:"node,omitempty"`
 	Key      string        `json:"key,omitempty"`
 	Text     string        `json:"text,omitempty"`
+	Ask      string        `json:"ask,omitempty"`
 }
 
 func place(err error) problem {
 	p := problem{Text: err.Error()}
 	if ke, ok := errors.AsType[*config.KeyError](err); ok {
 		p.Path = ke.Key
+	}
+	if pk, ok := errors.AsType[*config.PathKindError](err); ok {
+		p.Ask = pk.Path
 	}
 	if pi, n, key, text, ok := compose.Locate(err); ok {
 		p.Pipeline, p.Key, p.Text = &pi, key, text

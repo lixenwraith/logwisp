@@ -457,8 +457,9 @@ WebAssembly; `t` runs them under the screen and shows what flows.
 
 - Start: the pipelines `lw` would run with the same options (`-c FILE`,
   pipeline flags, `LOGWISP_SOURCE`, a discovered file); with none but the
-  built-in pipe, the preset menu (or `empty`). A pasted `lw` command line
-  replaces the pipelines, in the preset menu too.
+  built-in pipe, the preset menu (or `empty`). A pasted `lw` command line of
+  pipeline flags, or the `lw` part of `... | lw ...`, replaces the
+  pipelines, in the preset menu too.
 - Screen: the pipeline bar on top; SOURCES, FLOW and SINKS side by side
   from 64 columns, stacked below; each source and sink a tinted bar with its
   type, whether it listens or dials, and a summary; the four flow stages in

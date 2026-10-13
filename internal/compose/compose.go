@@ -61,13 +61,21 @@ func FromPreset(name string, values map[string]string, isDir config.IsDir) (*Com
 
 // FromCommandLine starts from a pasted lw command line, quoted as a POSIX
 // shell reads it; it takes pipeline flags only, at least one, as a composition
-// holds no settings
+// holds no settings. Of a line piped into lw it reads lw's part, whose
+// pipelines read standard input.
 func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 	words, err := split(strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(line)) // pasted line ends
 	if err != nil {
 		return nil, err
 	}
-	if len(words) > 0 && (words[0] == "lw" || strings.HasSuffix(words[0], "/lw")) {
+	lw := func(word string) bool { return word == "lw" || strings.HasSuffix(word, "/lw") }
+	for i := len(words) - 2; i >= 0; i-- {
+		if words[i] == "|" && lw(words[i+1]) {
+			words = words[i+1:]
+			break
+		}
+	}
+	if len(words) > 0 && lw(words[0]) {
 		words = words[1:]
 	}
 	var specs []config.Spec
@@ -77,8 +85,12 @@ func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 			name = "--preset"
 		}
 		flag, long := strings.CutPrefix(name, "--")
-		if !long || !slices.ContainsFunc(config.SpecFlags(), func(f config.SpecFlag) bool { return f.Flag == flag }) {
-			return nil, fmt.Errorf("%s: not a pipeline flag", words[i])
+		if flags := config.SpecFlags(); !long || !slices.ContainsFunc(flags, func(f config.SpecFlag) bool { return f.Flag == flag }) {
+			var names []string
+			for _, f := range flags {
+				names = append(names, "--"+f.Flag)
+			}
+			return nil, fmt.Errorf("%s: not a pipeline flag; paste lw's %s only", words[i], strings.Join(names, ", "))
 		}
 		if !inline {
 			if i++; i == len(words) || strings.HasPrefix(words[i], "-") {
@@ -205,8 +217,11 @@ func (c *Composition) RenamePipeline(i int, name string) error {
 
 // free refuses a name that is empty or held by a pipeline other than i
 func (c *Composition) free(name string, i int) error {
-	if j := slices.IndexFunc(c.Pipelines, func(p config.PipelineConfig) bool { return p.Name == name }); name == "" || j >= 0 && j != i {
-		return fmt.Errorf("pipeline %q: a name no other pipeline has", name)
+	switch j := slices.IndexFunc(c.Pipelines, func(p config.PipelineConfig) bool { return p.Name == name }); {
+	case name == "":
+		return errors.New("a pipeline needs a name; give it one")
+	case j >= 0 && j != i:
+		return fmt.Errorf("another pipeline is named %q; choose another name", name)
 	}
 	return nil
 }
@@ -574,7 +589,7 @@ func (c *Composition) CommandLine() (string, error) {
 // line as an environment file holds them; the environment holds one pipeline
 func (c *Composition) Environment() (string, error) {
 	if len(c.Pipelines) != 1 {
-		return "", fmt.Errorf("the environment holds one pipeline, not %d", len(c.Pipelines))
+		return "", fmt.Errorf("the environment holds one pipeline, not %d; choose the command or file form, or remove pipelines down to one", len(c.Pipelines))
 	}
 	specs, err := c.shellSpecs()
 	if err != nil {
@@ -632,9 +647,9 @@ type Form struct {
 }
 
 var forms = []Form{
-	{"command", "lw's flags", (*Composition).CommandLine, FromCommandLine},
-	{"environment", "LOGWISP_ variables: one pipeline", (*Composition).Environment, FromEnvironment},
-	{"file", "a configuration file's pipelines", func(c *Composition) (string, error) {
+	{"command", "an lw command line", (*Composition).CommandLine, FromCommandLine},
+	{"environment", "LOGWISP_ variables for one pipeline", (*Composition).Environment, FromEnvironment},
+	{"file", "the pipelines of a configuration file", func(c *Composition) (string, error) {
 		data, err := c.File()
 		return string(data), err
 	}, func(text string, _ config.IsDir) (*Composition, error) { return FromFile([]byte(text)) }},
