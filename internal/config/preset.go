@@ -63,10 +63,19 @@ func mirror[T any](p PresetParam, key string) PresetParam {
 // IsDir tells whether a preset's path is a directory, whose files it follows,
 // or a file pattern; a path ending in '/' is a directory without asking. Off
 // the target host it is the user's Answers, or nil: a path with a glob is then
-// a pattern, and any other fails with ErrPathKind.
+// a pattern, and any other fails at key path with a PathKindError.
 type IsDir func(path string) (bool, error)
 
-var ErrPathKind error = &KeyError{"path", errors.New("a directory or a file pattern?")}
+// ErrPathKind is what every PathKindError unwraps to
+var ErrPathKind = errors.New("a directory or a file?")
+
+// PathKindError asks whether Path, which a preset names, is a directory
+type PathKindError struct{ Path string }
+
+func (e *PathKindError) Error() string {
+	return fmt.Sprintf("%q: %v end a directory with / to follow its files", e.Path, ErrPathKind)
+}
+func (e *PathKindError) Unwrap() error { return ErrPathKind }
 
 // HostIsDir asks this host, a leading ~ being the home directory: a path that
 // does not exist is a pattern
@@ -85,16 +94,16 @@ func Answers(dirs map[string]bool) IsDir {
 		if strings.ContainsAny(path, `*?[\`) {
 			return false, nil
 		}
-		return false, ErrPathKind
+		return false, &KeyError{"path", &PathKindError{path}}
 	}
 }
 
 // Keys several presets share
 var (
-	pathParam   = PresetParam{Name: "path", Help: "file, directory (its files) or glob to follow; default: standard input"}
+	pathParam   = PresetParam{Name: "path", Help: "a file, a directory (its files) or a glob such as /var/log/*.log, to follow; default: standard input"}
 	fromParam   = mirror[FileSourceOptions](PresetParam{Name: "from", Default: "end", Help: "where reading a file starts"}, "from")
 	formatParam = func(def string) PresetParam {
-		return mirror[FormatConfig](PresetParam{Name: "format", Default: def, Help: "entry format"}, "type")
+		return mirror[FormatConfig](PresetParam{Name: "format", Default: def, Help: "raw writes each message as it came, txt a line with time and level, json one object an entry"}, "type")
 	}
 	tlsParams = []PresetParam{
 		mirror[TLSOptions](PresetParam{Name: "cert", Help: "certificate file, for tls=files"}, "cert_file"),
@@ -107,13 +116,13 @@ var (
 		mirror[ACLOptions](PresetParam{Name: "allow", List: true, Help: "addresses or CIDRs that may connect, of listen's family (either behind proxy=); default: all; ',' between them"}, "allow"),
 		mirror[ACLOptions](PresetParam{Name: "deny", List: true, Help: "addresses or CIDRs refused, allow or not; ',' between them"}, "deny"),
 	}
-	transportParam = PresetParam{Name: "transport", Default: "tcp", Help: "tcp_chain or http_chain", Enum: transports()}
+	transportParam = PresetParam{Name: "transport", Default: "tcp", Help: "tcp sends over one lasting connection (tcp_chain), http posts batches (http_chain)", Enum: transports()}
 	usersParam     = func(who string) PresetParam {
 		return mirror[AuthOptions](PresetParam{Name: "users", Help: "credentials file (lw auth add-user): " + who + " log in with SCRAM"}, "credentials_file")
 	}
-	userParams = []PresetParam{
-		{Name: "user", Help: "SCRAM user: an edge's login, or a listener's only user in place of users"},
-		mirror[AuthOptions](PresetParam{Name: "password_file", Help: "file holding user's password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks"}, "password_file"),
+	userParams = func(help string) []PresetParam {
+		return []PresetParam{{Name: "user", Help: help},
+			mirror[AuthOptions](PresetParam{Name: "password_file", Help: "file holding user's password; /dev/fd/N or a pipe is read once; default: /dev/tty, which asks"}, "password_file")}
 	}
 )
 
@@ -146,7 +155,7 @@ var presets = []Preset{
 			return nil
 		}},
 	{"tail", "Follow files to standard output, like tail -F",
-		[]PresetParam{{Name: "path", Required: true, Help: "file, directory (its files) or glob to follow"}, fromParam, formatParam("raw")},
+		[]PresetParam{{Name: "path", Required: true, Help: "a file, a directory (its files) or a glob such as /var/log/*.log, to follow"}, fromParam, formatParam("raw")},
 		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
 			sources, err := pathOrStdin(v, isDir)
 			p.PluginSources, p.PluginSinks = sources, pipeDefault("").PluginSinks
@@ -155,12 +164,12 @@ var presets = []Preset{
 		}},
 	{"serve", "Serve files or standard input live: a browser viewer at /, SSE at /stream",
 		slices.Concat([]PresetParam{pathParam, fromParam, formatParam("json"),
-			{Name: "listen", Default: "127.0.0.1:8080", Help: "HOST:PORT; [IPV6]:PORT"},
+			{Name: "listen", Default: "127.0.0.1:8080", Help: "HOST:PORT to listen on: 127.0.0.1:8080 this machine only, 0.0.0.0:8080 every IPv4 interface, [::]:8080 every IPv6 interface"},
 			serveTLS,
 			usersParam("readers"),
-		}, userParams, []PresetParam{
+		}, userParams("the one SCRAM user readers log in as, in place of users"), []PresetParam{
 			mirror[AuthOptions](PresetParam{Name: "proxy", List: true, Help: "addresses or CIDRs of the TLS-terminating proxies browsers come through; ',' between them"}, "trusted_proxies"),
-			mirror[HTTPSinkOptions](PresetParam{Name: "viewer", Default: "false", Help: "the login page and viewer, behind proxy; without user or users the viewer is always on"}, "viewer_page"),
+			mirror[HTTPSinkOptions](PresetParam{Name: "viewer", Default: "false", Help: "a login page, then the viewer, for browsers behind proxy; without user or users the viewer is on anyway"}, "viewer_page"),
 		}, aclParams, tlsParams),
 		func(p *PipelineConfig, v map[string]string, isDir IsDir) error {
 			sources, err := pathOrStdin(v, isDir)
@@ -177,11 +186,11 @@ var presets = []Preset{
 			case err != nil:
 				return err
 			case auth != nil && v["tls"] == "off" && v["proxy"] == "":
-				return fmt.Errorf("user and users need tls (self, issuer or files), or proxy")
+				return &KeyError{"tls", errors.New("user and users need self, issuer or files, or proxy")}
 			case auth != nil:
 				sink["auth"] = auth
 			case v["proxy"] != "":
-				return fmt.Errorf("proxy needs user or users: browsers log in with SCRAM")
+				return &KeyError{"proxy", errors.New("needs user or users: browsers log in with SCRAM")}
 			}
 			if v["proxy"] != "" {
 				auth["trusted_proxies"] = list(v["proxy"])
@@ -189,12 +198,12 @@ var presets = []Preset{
 			switch v["viewer"] {
 			case "true":
 				if v["proxy"] == "" {
-					return fmt.Errorf("viewer=true needs proxy, behind which browsers log in; without users the viewer is always on")
+					return &KeyError{"viewer", errors.New("true needs proxy, behind which browsers log in; without users the viewer is always on")}
 				}
 				sink["login_page"], sink["viewer_page"] = true, true
 			case "false":
 			default:
-				return fmt.Errorf("viewer %q (valid: true, false)", v["viewer"])
+				return &KeyError{"viewer", fmt.Errorf("must be true or false, got %q", v["viewer"])}
 			}
 			sink["replay_lines"] = int64(1000) // a browser opened late sees the recent entries
 			p.Flow.Format = &FormatConfig{Type: v["format"]}
@@ -203,12 +212,12 @@ var presets = []Preset{
 		}},
 	{"edge", "Forward files or standard input to an aggregator over TLS, authenticated",
 		slices.Concat([]PresetParam{pathParam, fromParam,
-			{Name: "to", Required: true, Help: "the aggregator's HOST:PORT; [IPV6]:PORT"},
+			{Name: "to", Required: true, Help: "the aggregator's HOST:PORT, an IPv6 address in brackets: logs.example.net:9000, [2001:db8::1]:9000"},
 			transportParam,
 			mirror[TLSOptions](PresetParam{Name: "ca", Help: "CA file that verifies the aggregator; default: system roots"}, "ca_file"),
 			{Name: "pin", Help: "sha256//BASE64 of the aggregator's key, which it logs with tls=self"},
 			{Name: "server_name", Help: "name the aggregator's certificate carries; default: to's host"},
-		}, userParams, []PresetParam{
+		}, userParams("SCRAM user this edge logs in to the aggregator as"), []PresetParam{
 			mirror[TLSOptions](PresetParam{Name: "cert", Help: "client certificate file, for an aggregator with client_ca"}, "cert_file"),
 			mirror[TLSOptions](PresetParam{Name: "key", Help: "client key file"}, "key_file"),
 			{Name: "node", Help: "origin label; default: this host's name"},
@@ -241,7 +250,7 @@ var presets = []Preset{
 			case v["cert"] != "" && v["key"] != "":
 				auth = map[string]any{"type": "mtls"}
 			default:
-				return fmt.Errorf("edge needs user, or cert and key: it never sends unauthenticated")
+				return &KeyError{"user", errors.New("required unless cert and key are set; an edge never sends unauthenticated")}
 			}
 			sink := map[string]any{"host": host, "port": port, "tls": tls, "auth": auth}
 			if v["node"] != "" {
@@ -252,11 +261,11 @@ var presets = []Preset{
 		}},
 	{"aggregator", "Receive from edges over TLS, authenticated, to files or standard output",
 		slices.Concat([]PresetParam{
-			{Name: "listen", Default: "0.0.0.0:9000", Help: "HOST:PORT; [IPV6]:PORT; [::] for IPv6 only"},
+			{Name: "listen", Default: "0.0.0.0:9000", Help: "HOST:PORT to listen on: 0.0.0.0:9000 every IPv4 interface, [::]:9000 every IPv6 interface, 127.0.0.1:9000 this machine only"},
 			transportParam,
 			aggregatorTLS,
 			usersParam("edges"),
-		}, userParams, []PresetParam{
+		}, userParams("the one SCRAM user edges log in as, in place of users"), []PresetParam{
 			mirror[TLSOptions](PresetParam{Name: "client_ca", Help: "CA file that verifies edge certificates (mTLS)"}, "client_ca_file"),
 			mirror[FileSinkOptions](PresetParam{Name: "out", Help: "directory for the received entries; default: standard output"}, "directory"),
 			formatParam("json"),
@@ -283,7 +292,7 @@ var presets = []Preset{
 			case v["client_ca"] != "":
 				src["auth"] = map[string]any{"type": "mtls"}
 			default:
-				return fmt.Errorf("aggregator needs user, users or client_ca: it never receives unauthenticated")
+				return &KeyError{"users", errors.New("required unless user or client_ca is set; an aggregator never receives unauthenticated")}
 			}
 			p.PluginSources = append(p.PluginSources, PluginSourceConfig{ID: "edges", Type: typ, Config: src})
 			p.PluginSinks = pipeDefault("").PluginSinks
@@ -331,13 +340,13 @@ func applyPreset(p *PipelineConfig, name string, values map[string][]string, isD
 		case j < 0:
 			return fmt.Errorf("preset %s has no key %q (valid: %s)", name, k, strings.Join(keys, ", "))
 		case len(each) > 1 && !r.Params[j].List:
-			return fmt.Errorf("preset %s key %q takes one value", name, k)
+			return &KeyError{k, errors.New("takes one value")}
 		}
 		v[k] = cmp.Or(strings.Join(each, ","), v[k])
 	}
 	for _, k := range r.Params {
 		if k.Required && v[k.Name] == "" {
-			return fmt.Errorf("preset %s needs %s", name, k.Name)
+			return &KeyError{k.Name, errors.New("must be set")}
 		}
 	}
 	p.Name = cmp.Or(p.Name, name)
@@ -404,20 +413,20 @@ func listener(v map[string]string, key PresetParam) (map[string]any, error) {
 	mode := cmp.Or(v["tls"], key.Default)
 	i := slices.IndexFunc(tlsModes, func(m tlsMode) bool { return m.name == mode })
 	if i < 0 || !slices.Contains(key.Enum, mode) {
-		return nil, fmt.Errorf("tls %q (valid: %s)", mode, strings.Join(key.Enum, ", "))
+		return nil, &KeyError{"tls", fmt.Errorf("must be one of %s, got %q", strings.Join(key.Enum, ", "), mode)}
 	}
 	m := tlsModes[i]
 	for _, other := range tlsModes {
 		for k := range other.needs {
 			if _, needed := m.needs[k]; needed && v[k] == "" {
-				return nil, fmt.Errorf("tls=%s needs %s", mode, k)
+				return nil, &KeyError{k, fmt.Errorf("must be set for tls=%s", mode)}
 			} else if !needed && v[k] != "" {
-				return nil, fmt.Errorf("%s does not apply to tls=%s", k, mode)
+				return nil, &KeyError{k, fmt.Errorf("does not apply to tls=%s", mode)}
 			}
 		}
 	}
 	if v["hosts"] != "" && !m.made {
-		return nil, fmt.Errorf("hosts does not apply to tls=%s", mode)
+		return nil, &KeyError{"hosts", fmt.Errorf("does not apply to tls=%s", mode)}
 	}
 	if mode == "off" {
 		return opts, nil
@@ -439,11 +448,11 @@ func listener(v map[string]string, key PresetParam) (map[string]any, error) {
 func scramAuth(v map[string]string) (map[string]any, error) {
 	switch {
 	case v["user"] != "" && v["users"] != "":
-		return nil, fmt.Errorf("user or users, not both")
+		return nil, &KeyError{"user", errors.New("set user or users, not both")}
 	case v["user"] != "":
 		return map[string]any{"type": "scram", "username": v["user"], "password_file": cmp.Or(v["password_file"], "/dev/tty")}, nil
 	case v["password_file"] != "":
-		return nil, fmt.Errorf("password_file needs user")
+		return nil, &KeyError{"password_file", errors.New("needs user")}
 	case v["users"] != "":
 		return map[string]any{"type": "scram", "credentials_file": v["users"]}, nil
 	}
@@ -454,7 +463,7 @@ func splitAddr(key, addr string) (string, int64, error) {
 	host, p, err := net.SplitHostPort(addr)
 	port, perr := strconv.ParseUint(p, 10, 16)
 	if err != nil || perr != nil || port == 0 {
-		return "", 0, fmt.Errorf("%s %q: want HOST:PORT, an IPv6 address in brackets", key, addr)
+		return "", 0, &KeyError{key, fmt.Errorf("must be HOST:PORT, an IPv6 address in brackets as in [::1]:9000, got %q", addr)}
 	}
 	return host, int64(port), nil
 }
@@ -462,7 +471,7 @@ func splitAddr(key, addr string) (string, int64, error) {
 // chainType is a transport's chain plugin type, both a source and a sink
 func chainType(transport string) (string, error) {
 	if !slices.Contains(transports(), transport) {
-		return "", fmt.Errorf("transport %q (valid: %s)", transport, strings.Join(transports(), ", "))
+		return "", &KeyError{"transport", fmt.Errorf("must be one of %s, got %q", strings.Join(transports(), ", "), transport)}
 	}
 	return transport + "_chain", nil
 }

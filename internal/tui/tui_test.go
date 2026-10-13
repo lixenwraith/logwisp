@@ -811,7 +811,8 @@ func TestPresetFormShowsTheChoices(t *testing.T) {
 	ps := config.Presets()
 	tail := ps[slices.IndexFunc(ps, func(p config.Preset) bool { return p.Name == "tail" })].Params
 	format := tail[slices.IndexFunc(tail, func(p config.PresetParam) bool { return p.Name == "format" })]
-	if screen := strings.Join(text(render(a, 80, 24), 80), "\n"); !strings.Contains(screen, format.Usage()) || len(format.Enum) == 0 {
+	note := strings.Join(format.Enum, "|") + ": " + strings.Fields(format.Help)[0] // the help wraps
+	if screen := strings.Join(text(render(a, 80, 24), 80), "\n"); !strings.Contains(screen, note) || len(format.Enum) == 0 {
 		t.Fatalf("format's choices not shown:\n%s", screen)
 	}
 }
