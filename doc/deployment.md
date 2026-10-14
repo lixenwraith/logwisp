@@ -10,7 +10,9 @@ certificates: `lw tls` makes them ([CLI](cli.md#lw-tls)).
 ## Roles
 
 - `edge`
-  - tails each `--log-dir` (not recursive) for `--log-pattern` (default `*.log`)
+  - tails each `--log-dir` (not recursive) for `--log-pattern` (default
+    `*.log`), a newly found file from its end, or with `--from start` from its
+    first line
   - forwards to `--aggregator` over `tcp_chain` (port 9440) or, with
     `--chain http`, `http_chain` (port 9441)
   - labels its entries `--node`: the short host name, or the jail name
@@ -27,15 +29,16 @@ certificates: `lw tls` makes them ([CLI](cli.md#lw-tls)).
 - `docker`, `podman` (Linux)
   - the container runs `--read-only --cap-drop ALL --security-opt
     no-new-privileges -u 65532:65532 --restart unless-stopped`
-  - `--config-dir` (default `/etc/logwisp/NAME`) holds `logwisp.toml`, `tls/`,
-    and the credentials files, owned by 65532 and mounted read-only at
-    `/etc/logwisp`
+  - `--name` (default `logwisp-ROLE`) names the container; `--config-dir`
+    (default `/etc/logwisp/NAME`) holds `logwisp.toml`, `tls/`, and the
+    credentials files, owned by 65532 and mounted read-only at `/etc/logwisp`
   - log directories mount read-only and the output directory writable, each at
     its host path; `--log-group` adds that group's id to the container
   - listener ports publish on `--listen`, an IP address; the process inside
     binds `0.0.0.0`
   - `--network NET` joins a user network, created when missing, where edges
-    reach an aggregator by container name; `host` publishes nothing
+    reach an aggregator by container name; `host` publishes nothing, and the
+    process binds `--listen` itself
   - `--image` defaults to `logwisp:dev`, the `make image` tag; `--build` builds
     it from the repository. Behind an HTTPS-intercepting proxy add
     `--build-ca FILE` and, for a proxy on loopback,
@@ -47,10 +50,11 @@ certificates: `lw tls` makes them ([CLI](cli.md#lw-tls)).
     script does not relabel, since `:z` on a shared directory such as
     `/var/log` would relabel it for every other service too
 - `native`, Linux
-  - needs systemd; installs `lw` to `/usr/local/bin` unless one is installed
-    (`--bin FILE`, or `--build` for `make build`), and
-    `deploy/package/logwisp.service`, `logwisp.sysusers` and
-    `logwisp.tmpfiles` under `/etc`
+  - needs systemd; installs `deploy/package/logwisp.service`,
+    `logwisp.sysusers` and `logwisp.tmpfiles` under `/etc`, and `--bin FILE`
+    or the repository's `bin/lw` (`--build` runs `make build` first) to
+    `/usr/local/bin`, unless neither flag is given and an `lw` is in
+    `/usr/local/bin` or `/usr/bin`
   - a package's unit (`/usr/lib/systemd/system/logwisp.service`) is used as it
     is, with the `lw` its `ExecStart` runs; `--bin` and `--build` then stop the
     run, since the service would never run that binary
@@ -58,14 +62,17 @@ certificates: `lw tls` makes them ([CLI](cli.md#lw-tls)).
   - refuses log and output directories under `/tmp` and `/var/tmp`: the unit's
     `PrivateTmp=yes` gives the service its own, empty ones
   - adds `logwisp.service.d/deploy.conf` when the node needs it:
-    `ReadWritePaths` for an output outside `/var/log/logwisp`,
-    `ProtectHome=read-only` for logs or output under `/home`,
+    `ReadWritePaths` for an output other than `/var/log/logwisp` or
+    `/var/lib/logwisp`, `ProtectHome=read-only` for logs or output under
+    `/home`, `/root` or `/run/user`,
     `SupplementaryGroups` for `--log-group`, `CAP_NET_BIND_SERVICE` for a port
     below 1024
 - `native`, FreeBSD
-  - installs `deploy/package/logwisp.rc` as `/usr/local/etc/rc.d/logwisp`,
-    creates the `logwisp` user with `pw`, enables it with `sysrc`; LogWisp logs
-    to syslog under the tag `logwisp`
+  - installs `lw` to `/usr/local/bin` unless one is there (`--bin` and
+    `--build` as on Linux), and `deploy/package/logwisp.rc` as
+    `/usr/local/etc/rc.d/logwisp`; creates the `logwisp` user with `pw` and
+    adds it to `--log-group`, enables the service with `sysrc`; LogWisp logs to
+    syslog under the tag `logwisp`
   - writes `/usr/local/etc/logwisp/logwisp.toml`
   - `--jail NAME` writes the files and runs the commands through `jexec`, so
     the jail's own symlinks cannot redirect a write onto the host; the jail
@@ -98,9 +105,9 @@ needs `--force`.
     certificate must name the address dialed (an IP SAN for an IP), or the
     name given as `--server-name`
 - `--auth` on the chain link
-  - `mtls`: edges present `--cert-file`; the aggregator admits the `--allow`
-    CNs (none: any certificate the CA issued); an edge's `--allow` pins the
-    aggregator's CN
+  - `mtls`: edges present `--cert-file`; the aggregator verifies them with
+    `--ca-file` and admits the `--allow` CNs (none: any certificate the CA
+    issued); an edge's `--allow` pins the aggregator's CN
   - `scram`: the aggregator creates each `--add-user`, its password generated
     into `--secrets-dir`, an absolute path (default `~/logwisp-secrets`), and
     handed to `lw auth add-user`, natively or through the image; copy each
@@ -108,8 +115,9 @@ needs `--force`.
     `.pass` is the default `--username`
   - either binds the node label to the authenticated identity
 - `--sink-auth` on the `http` and `tcp` outputs
-  - `mtls` with `--sink-allow`, or `scram` with `--add-viewer` (a separate
-    `viewers.toml`); viewers log in with `lw auth token` and `lw auth stream`
+  - `mtls` with `--ca-file` and `--sink-allow`, or `scram` with `--add-viewer`
+    (a separate `viewers.toml`); viewers log in with `lw auth token` and
+    `lw auth stream`
   - without it the outputs admit anyone who reaches them: bind `--listen` to a
     trusted address
 - without `--auth` or `--sink-auth`, the auth flags imply their mode:
@@ -156,10 +164,11 @@ Variants:
 - the aggregator on the host itself: drop `--jail logs`
 - no daemon per jail: one `standalone` or `edge` on the host tails each jail's
   logs through the host path (`--log-dir JAIL_PATH/var/log`); the entries then
-  carry the host's label and the bare file name, so files of the same name in
-  two jails cannot be told apart
-- a Linux aggregator: run step 2 with `--runtime docker` on that host and point
-  the edges at it; the chain protocol is the same
+  carry the bare file name and, from an edge, the host's label, so files of
+  the same name in two jails cannot be told apart
+- a Linux aggregator: run step 2 on that host with `--runtime docker` in place
+  of `--runtime native --jail logs`, and point the edges at it; the chain
+  protocol is the same
 
 ## Linux host with containers
 
