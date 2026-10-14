@@ -30,7 +30,7 @@
 # quiet = false                         # No log of lw's own; pipeline output still flows
 # status_reporter = true                # Periodic status logging (30s, DEBUG level); false without a file
 # auto_reload = false                   # Watch file; read at startup (signals always reread it)
-# color = "auto"                        # auto|always|never: level names on console sinks; auto on a terminal, NO_COLOR unset
+# color = "auto"                        # auto|always|never: level names on console sinks; auto on a terminal, NO_COLOR empty or unset, TERM not dumb
 
 ###############################################################################
 ### Logging (lw's own log)
@@ -61,7 +61,7 @@
 ###############################################################################
 
 # [[pipelines]]
-# name = "default"                      # example
+# name = "default"                      # Required (example)
 
 ###============================================================================
 ### Flow: the stages between sources and sinks, validated whether on or off
@@ -83,7 +83,7 @@
 
 # [pipelines.flow.format]
 # type = "raw"                          # raw|txt|json
-# flags = 0                             # Formatter flags; 0 = by type
+# flags = 0                             # For experts, a sum of bits: 1 messages verbatim, 16 no time, 32 no level; 0 = by type
 # timestamp_format = ""                 # Go time layout; empty = RFC 3339 with nanoseconds
 # sanitizer_policy = ""                 # raw|json|txt|shell; empty = by type
 
@@ -146,7 +146,7 @@
 ###                        certificate to the user (needs tls.client_auth)
 ### allow                  mtls: exact identities. Empty allow AND
 ###                        allow_patterns admits any identity the CA vouches
-###                        for (logged WARN)
+###                        for (a listener logs a WARN)
 ### allow_patterns         mtls: RE2 patterns; anchor them yourself (^...$)
 ### node_binding           chain sources: binds the node label to the identity
 ###                        or username, overriding trust_node; unset = force
@@ -205,7 +205,8 @@
 # pattern = "*"                         # Glob of the whole file name (* and ? only)
 # check_interval_ms = 100               # Directory rescan, at least 10; open files are polled every 100 ms
 ## raw = true never parses a line; with format type "raw" each line is relayed
-## as written, except that empty lines are skipped and CRLF becomes LF.
+## as written, except that empty lines are skipped, CRLF becomes LF and a line
+## over 1 MiB, or one still being written when read, is split.
 # raw = false
 # from = "end"                          # end|start: where a newly found file is read from
 
@@ -300,7 +301,7 @@
 # node_binding = ""
 # credentials_file = ""                 # scram: written by `lw auth add-user`
 # token_lifetime_ms = 0
-# trusted_proxies = []                  # the http sink only
+# trusted_proxies = []                  # refused here: the http sink only
 # username = ""
 # password_file = ""
 # [pipelines.plugin_sources.config.acl]
@@ -380,7 +381,6 @@
 # identity = ""
 # allow = []
 # allow_patterns = []
-# node_binding = ""                     # chain sources only
 # credentials_file = ""                 # scram: log in with `lw auth token`
 # token_lifetime_ms = 0
 # trusted_proxies = []                  # scram: proxies ending the browsers' TLS; tls may then be off
@@ -423,7 +423,6 @@
 # identity = ""
 # allow = []
 # allow_patterns = []
-# node_binding = ""                     # chain sources only
 # credentials_file = ""                 # scram: readers use `lw auth stream`
 # username = ""
 # password_file = ""
@@ -443,7 +442,7 @@
 # [pipelines.plugin_sinks.config]
 # host = "aggregator.example.org"       # Required (example); an IPv6 literal bare, e.g. "2001:db8::1"
 # port = 9440                           # Required (example)
-# node = ""                             # Origin label, kept across hops; empty = the host name
+# node = ""                             # Origin label, kept across hops; empty = this machine's host name
 # buffer_size = 1000
 # dial_timeout_ms = 5000
 # write_timeout_ms = 5000
@@ -476,7 +475,7 @@
 # host = "aggregator.example.org"       # Required (example); an IPv6 literal bare, e.g. "2001:db8::1"
 # port = 9441                           # Required (example)
 # ingest_path = "/ingest"               # Must start with "/"; not "/auth"
-# node = ""                             # Origin label, kept across hops; empty = the host name
+# node = ""                             # Origin label, kept across hops; empty = this machine's host name
 # buffer_size = 1000
 # max_batch_count = 100
 # max_batch_bytes = 1048576
