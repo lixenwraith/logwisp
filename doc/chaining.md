@@ -20,7 +20,7 @@ nodes can filter and reformat as if the entries were local.
   ┌───────────────┐             │ http_chain sink ───┼──►  upstream collector
   │ file source   │  HTTP/TLS   │                    │
   │      ↓        ├────────────►│ http_chain source  │
-  │ http_chain sink│   :15802   └────────────────────┘
+  │http_chain sink│   :15802    └────────────────────┘
   └───────────────┘
 ```
 
@@ -44,7 +44,7 @@ Chained entries carry a `node` label identifying where they originated.
 
 Relays preserve `node`, so a label survives any number of hops and identifies
 the original producer, unless a hop's source overwrites it: `trust_node =
-false`, or `node_binding = "force"` (the default with an `auth` block).
+false`, or `node_binding = "force"` (the default under `mtls` or `scram`).
 Formatters write the label as a prefix on the source
 ([Formatters](formatters.md#node-identity-in-output)).
 
@@ -55,9 +55,10 @@ under `scram`. `auth.node_binding`:
 - `none`: `trust_node` governs the connection label and the per-entry `node`
   field.
 - `assert`: the connection label must equal the identity, or the peer is
-  rejected; `trust_node` governs the per-entry `node` field.
-- `force` (default with an `auth` block): the identity is the connection label
-  and overwrites every per-entry `node` field.
+  rejected; `trust_node` governs the per-entry `node` field, the label standing
+  in wherever it would put the remote address.
+- `force` (default under `mtls` or `scram`): the identity is the connection
+  label and overwrites every per-entry `node` field.
 
 Pick `force` at an ingest boundary you do not trust — it is the only setting
 where a compromised edge cannot mislabel its entries, including through the
@@ -87,17 +88,23 @@ A persistent connection carrying newline-delimited JSON.
    {"logwisp":1,"node":"edge-01"}
    ```
 
-3. The listener reads that line within `hello_timeout_ms` and rejects the
-   connection if it is malformed or declares a different protocol version.
+3. The listener reads that line, at most 4 KiB, within `hello_timeout_ms` and
+   rejects the connection if it is malformed or declares a different protocol
+   version.
 4. Every subsequent line is one JSON-encoded `LogEntry`.
 
 Line size is bounded at 1 MiB. An oversized line is a protocol violation and
 terminates the connection, because the scanner cannot resynchronize afterwards.
 The cap applies to the encoded line, envelope and JSON escapes included, so a
 message near 1 MiB exceeds it (the console and file sources cut lines at
-1 MiB). On `tcp_chain` such an entry ends the link and is lost, together with
-any line the sink writes before it notices the close. On `http_chain` it fails
-its whole batch with `400`, which the sink drops.
+1 MiB). On `tcp_chain` such an entry ends the link. If the socket took the
+whole line, the entry is lost, together with any line the sink writes before it
+notices the close. If the line overruns the cap by more than the socket buffers
+hold, as a message of control characters can (most escape to six bytes), the
+write fails and the sink resends the line on every reconnect: the link stalls
+until a stop or reload, and later entries count in `total_dropped_by_sink`. The
+sink does not yet drop a line the source must refuse. On `http_chain` such an
+entry fails its whole batch with `400`, which the sink drops.
 
 Under `auth.type = "scram"` the hello also carries the SCRAM client-first
 message, and three more lines precede the entries, each one JSON object of at
@@ -119,18 +126,20 @@ binary ignores it and the dialer gives up after 10 s.
 
 ### HTTP transport
 
-Batches of NDJSON delivered by `POST`, with the preamble expressed as headers.
+Batches of NDJSON delivered by `POST` to `ingest_path` (default `/ingest`), with
+the preamble expressed as headers.
 
 - Request headers
   - `X-Logwisp-Protocol`: the protocol version; must be `1`.
-  - `X-Logwisp-Node`: the origin node label.
+  - `X-Logwisp-Node`: the sending sink's `node`, the connection label, as in the
+    TCP hello.
   - `Content-Type`: `application/x-ndjson`.
   - `Authorization`: `Bearer <token>`, under `scram`.
 - Response header
   - `X-Logwisp-Accepted`: the number of entries ingested.
 
-Responses: `204` on success; `400` for a bad protocol version or a malformed
-body, a line over 1 MiB included; `413` past `max_body_bytes`; `404` for
+Responses: `204` on success; `400` for a bad protocol version or a transfer
+error, a line over 1 MiB included; `413` past `max_body_bytes`; `404` for
 another path; `405` for a non-`POST` method; `429` (with `Retry-After`) past
 `acl.requests_per_second_per_client`; `401` for a missing, invalid or expired
 token; `403` for a refused certificate or node label.
@@ -157,7 +166,8 @@ oversized body.
 ```
 
 `node`, `level`, and `fields` are omitted when empty. A missing `time` is filled
-in at ingest.
+in at ingest. A line that does not decode is skipped and counted in
+`parse_errors`; the connection or batch stands.
 
 ## Delivery Semantics
 

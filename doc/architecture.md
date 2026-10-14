@@ -45,18 +45,23 @@ Package map:
 - `internal/filter`: regex filter and filter chain.
 - `internal/format`: adapter over the `lixenwraith/log` formatter and
   sanitizer.
-- `internal/source/*`, `internal/sink/*`: the source and sink plugins.
+- `internal/source`, `internal/sink`: the `Source` and `Sink` interfaces and
+  their stats, and the stop helpers network sinks share (`sink.FlushBound`,
+  `FlushContext`, `Drain`); their subpackages are the plugins.
 - `internal/plugin`: global factory registry populated by plugin `init()`.
 - `internal/chain`: chain wire protocol: hello preamble, entry codec, backoff.
-- `internal/tlsx`: the single seam between `TLSOptions` and `crypto/tls`.
+- `internal/tlsx`: the single seam between `TLSOptions` and `crypto/tls`; also
+  the certificates `lw tls` writes and a listener makes at startup, pins and
+  startup warnings.
 - `internal/authz`: the single seam between `AuthOptions` and the network
   plugins: `Admit`, `AuthorizeRequest`, `Greet`, `Prepare`; `Authorize`
   refuses under `scram`.
 - `internal/netacl`: a listener's `acl` block: address rules, PROXY headers
   and per-client limits; its `Table` is SCRAM throttling's limiter too.
 - `internal/session`: session manager and per-instance proxy.
-- `internal/core`: shared types (`LogEntry`, `TransportEvent`), capabilities,
-  constants.
+- `internal/core`: shared types (`LogEntry`, `TransportEvent`, the viewer's
+  `Tap`), the level table `core.Levels`, capabilities, constants, and
+  `Network` and `Listen`, which keep a socket to its host's address family.
 - `internal/tokenbucket`: rate limiter primitive.
 - `internal/tui`: `lw --tui`, the diagram and the live view of what `t`
   runs; `cmd/lw/screen.go` runs the pipelines for it.
@@ -65,6 +70,8 @@ Package map:
   terminal acts on, which the console sink shares.
 - `internal/version`: version, commit and build time, stamped at build.
 - `internal/testutil`: fixtures for tests only.
+- `config`: embeds `logwisp.toml`, the annotated default configuration that
+  `lw config init` writes and the packages install.
 
 ## Plugin Registration
 
@@ -97,6 +104,11 @@ instance of a single type fails, naming both pipelines.
    formatted `Payload` and the original structured `Entry`.
 4. **Dispatch** sends the event to every sink's input channel with a
    non-blocking send, except to a sink declaring `CapBackpressure`.
+
+A heartbeat joins at step 4: the flow writes it in its format with a
+structured `Entry`, and the pipeline offers it to the tap and dispatches it,
+so no rate limit or filter drops it and `flow.total_processed` does not count
+it.
 
 `LogEntry` fields:
 
@@ -161,7 +173,10 @@ shutdown (`dropped_batches`).
 `Pipeline.Stop` is ordered so in-flight data drains:
 
 1. Release dispatch waits on backpressure sinks; stop all sources
-   concurrently, each closing its subscriber channels.
+   concurrently, each closing its subscriber channels. From the release on,
+   dispatch picks at random between a backpressure sink's input and the
+   release, so it drops about half of the entries still in flight for one
+   (`total_dropped_by_sink`) even with room.
 2. Wait for the run loop, which ends when every subscription channel closes.
 3. Stop all sinks concurrently: console and file sinks write their queue;
    network sinks deliver theirs within `sink.FlushBound`, their write or
@@ -197,11 +212,13 @@ TLS is built in exactly one place, `internal/tlsx`, which exposes
 ## Sessions
 
 Each pipeline owns a `session.Manager`. Plugins receive a `session.Proxy`
-scoped to their instance id, so one plugin cannot see or remove another's
-sessions. A session records the remote address, creation and last-activity
-timestamps, and metadata — including `tls` and `tls_peer_cn` for TLS peers,
-`auth_method` / `auth_identity` for authorized ones, and `peer_addr`, the proxy,
-for a client a PROXY header names.
+scoped to their id, so a plugin sees and removes only the sessions under its
+id; ids are unique per list, so a source and a sink that share one (the
+built-in pipe's two `console`s) share that scope. A session records the
+remote address, creation and last-activity timestamps, and metadata —
+including `tls` and `tls_peer_cn` for TLS peers, `auth_method` /
+`auth_identity` for authorized ones, and `peer_addr`, the proxy, for a client
+a PROXY header names.
 
 Idle sessions are reaped every 5 minutes against a 30-minute idle limit. The
 HTTP sink's broker treats a vanished session as an eviction signal and closes
@@ -277,7 +294,10 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
   it: answer it in `dirs` and call again.
 - Pipelines are a JSON list in the file's shape (`name`, `flow`,
   `plugin_sources`, `plugin_sinks`); a misspelled key is refused. A node is
-  `{role, id, index}`: a source's or sink's id, a filter's index.
+  `{role, id, index}`: `source` or `sink` by its id, `filters` by its index,
+  or the flow stage `rate_limit`, `format` or `heartbeat`, which `set` turns
+  on and `remove` off; `add` takes `source`, `sink`, or `filters` with the
+  type `include` or `exclude`.
 
 ## Resource Management
 
@@ -285,18 +305,25 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
   load.
 - `max_connections` caps connections on the `tcp` sink and the `tcp_chain`
   source, and streams on the `http` sink. Admission is a load-then-check, so a
-  burst can over-admit by roughly one.
+  burst can over-admit by the connections that arrive before the count rises.
+- A listener's `acl` block caps each client: `max_connections_per_client`,
+  and on the `http` sink and `http_chain` source
+  `requests_per_second_per_client` ([Security](security.md#per-client-limits)).
 - Chain listeners bound a single line at `core.MaxLogEntryBytes` (1 MiB); an
   oversized line terminates a `tcp_chain` link and fails an `http_chain`
   batch with `400`.
 - The `http_chain` source caps each request body at `max_body_bytes`.
-- File sinks rotate on size, cap total rotated size, and honour a retention
-  window.
+- File sinks rotate on size, cap total rotated size, honour a retention
+  window, and with `min_disk_free_mb` delete the oldest files to keep that
+  much disk free.
 
 ## Performance Notes
 
-- In-memory entry processing is sub-millisecond; the formatter mutex is the
-  only shared serialization point in the hot path.
+- In-memory entry processing is sub-millisecond. Besides the formatter's
+  mutex, an entry can take the rate limiter's bucket lock (`policy = "drop"`)
+  and the pipeline's session-manager lock, which the network plugins and the
+  console and random sources take as entries pass, to refresh session
+  activity.
 - File tailing detects new content within roughly 100 ms (fixed poll), while
   `check_interval_ms` governs how quickly a *newly created* file is noticed.
 - `http_chain` trades latency for efficiency: entries wait up to
