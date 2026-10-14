@@ -4,7 +4,7 @@ The [README](../README.md) has LogWisp's features, a quick start and the
 system requirements.
 
 - [Installation](installation.md): building, installing, services,
-  the container image, packaging
+  the container image, packaging, the end-to-end test scripts
 - [Deployment](deployment.md): `deploy/lw-deploy.sh` for edges,
   aggregators, containers, services, jails
 - [Architecture](architecture.md): component model, data flow,
