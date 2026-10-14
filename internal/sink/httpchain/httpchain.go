@@ -53,7 +53,7 @@ type HTTPChainSink struct {
 	tlsEnabled bool
 	mtls       bool
 
-	// Authorization: pins the downstream server's identity
+	// Authorization: mtls pins the downstream server's identity; scram logs this sink in
 	auth *authz.Policy
 
 	client *http.Client
@@ -189,7 +189,7 @@ func (t *HTTPChainSink) Capabilities() []core.Capability {
 		caps = append(caps, core.CapTLS)
 	}
 	if t.auth.Enabled() {
-		caps = append(caps, core.CapAuth) // pins the server identity
+		caps = append(caps, core.CapAuth) // pins the server, or logs in under scram
 	}
 	return caps
 }

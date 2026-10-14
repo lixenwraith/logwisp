@@ -1,6 +1,8 @@
-// Package tlsx builds crypto/tls configurations from config.TLSOptions.
-// It is the single seam between declarative TLS config and the stdlib;
-// each network plugin calls exactly one constructor.
+// Package tlsx is the TLS seam of the network plugins, beside authz and
+// netacl: Server and Client build a plugin's crypto/tls configuration from
+// config.TLSOptions, a listener without files gets a certificate issued on the
+// process key, lw tls makes its CA and certificates here, and LogWarnings
+// reports settings that work but are likely mistakes.
 package tlsx
 
 import (

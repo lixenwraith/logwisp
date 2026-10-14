@@ -1,3 +1,7 @@
+// Package session tracks the sessions of a pipeline's plugins: a client
+// connection, or a plugin's own input or output. A Manager per pipeline sweeps
+// the idle ones; each plugin reaches it through a Proxy that sees only its
+// instance's sessions.
 package session
 
 import (
@@ -11,7 +15,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/core"
 )
 
-// Session represents a connection session
+// Session is a client connection, or a plugin's own input or output
 type Session struct {
 	InstanceID   string         // Plugin instance identifier
 	ID           string         // Unique session identifier
@@ -20,8 +24,7 @@ type Session struct {
 	LastActivity time.Time      // Last activity timestamp
 	Metadata     map[string]any // Optional metadata (e.g., TLS info)
 
-	// Connection context
-	Source string // Source type: "tcp_source", "http_source", "tcp_sink", etc.
+	Source string // the owning plugin's instance ID, which Proxy sets
 }
 
 // Manager handles the lifecycle of sessions
@@ -34,7 +37,7 @@ type Manager struct {
 	cleanupTicker *time.Ticker
 	done          chan struct{}
 
-	// Expiry callbacks by source type
+	// Expiry callbacks by plugin instance
 	expiryCallbacks map[string]func(sessionID, remoteAddr string)
 	callbacksMu     sync.RWMutex
 }
@@ -52,7 +55,6 @@ func NewManager(maxIdleTime time.Duration) *Manager {
 		expiryCallbacks: make(map[string]func(sessionID, remoteAddr string)),
 	}
 
-	// Start cleanup routine
 	m.startCleanup()
 
 	return m
@@ -145,7 +147,7 @@ func (m *Manager) GetSessionCount() int {
 	return len(m.sessions)
 }
 
-// GetSessionsBySource returns snapshots of sessions matching a specific source type.
+// GetSessionsBySource returns snapshots of sessions matching a specific plugin instance.
 func (m *Manager) GetSessionsBySource(source string) []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -159,7 +161,7 @@ func (m *Manager) GetSessionsBySource(source string) []*Session {
 	return sessions
 }
 
-// GetActiveSessionsBySource returns snapshots of active sessions for a given source.
+// GetActiveSessionsBySource returns snapshots of active sessions for a given plugin instance.
 func (m *Manager) GetActiveSessionsBySource(source string) []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -240,7 +242,7 @@ func (m *Manager) RegisterExpiryCallback(source string, callback func(sessionID,
 	m.expiryCallbacks[source] = callback
 }
 
-// UnregisterExpiryCallback removes an expiry callback for a given source type
+// UnregisterExpiryCallback removes an expiry callback for a given plugin instance
 func (m *Manager) UnregisterExpiryCallback(source string) {
 	m.callbacksMu.Lock()
 	defer m.callbacksMu.Unlock()
@@ -290,7 +292,6 @@ func (m *Manager) cleanupIdleSessions() {
 
 		for _, session := range expiredSessions {
 			if callback, exists := callbacks[session.Source]; exists {
-				// Call callback to notify owner
 				go callback(session.ID, session.RemoteAddr)
 			}
 		}

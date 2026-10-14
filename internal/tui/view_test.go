@@ -187,8 +187,8 @@ func TestARowCountsAllItHolds(t *testing.T) {
 
 // The canvas cursor picks the point and v the verdicts at it: a source's
 // entries, what reaches a stage or a filter, passes it or it drops, the
-// heartbeats, what the sinks got and what the flow dropped on the way; lw's
-// own log shows from warn up at every point, and whole at its own
+// heartbeats, what the flow offered the sinks and what it dropped on the way;
+// lw's own log shows from warn up at every point, and whole at its own
 func TestThePointAndModePickTheRows(t *testing.T) {
 	c := pipeline(t, []string{"null", "null"}, []string{"null"})
 	for _, typ := range []string{"include", "exclude"} {

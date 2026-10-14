@@ -1,3 +1,8 @@
+// Package config is lw's configuration: the settings and pipeline tables, the
+// plugin catalogue whose option structs' tags are the schema, the pipeline
+// flags, LOGWISP_ variables and presets that build pipelines, and the rules
+// Decode and ValidateConfig apply. Load's Manager merges the file, environment
+// and command line, and rereads the file on reload.
 package config
 
 // --- LogWisp Configuration Options ---
@@ -31,7 +36,7 @@ type LogConfig struct {
 	// File output settings (when Output includes "file" or "all")
 	File *LogFileConfig `toml:"file"`
 
-	// Console output settings
+	// Accepted for older files: logging.output chooses the console
 	Console *LogConsoleConfig `toml:"console"`
 }
 
@@ -44,7 +49,8 @@ type LogFileConfig struct {
 	RetentionHours float64 `toml:"retention_hours" help:"hours a .log file is kept; 0 keeps them"`
 }
 
-// LogConsoleConfig defines settings for console-based application logging
+// LogConsoleConfig is logging.console, whose target has no effect:
+// logging.output chooses the console stream
 type LogConsoleConfig struct {
 	Target string `toml:"target" lw:"enum=stdout|stderr|split" help:"accepted without effect: logging.output chooses the console"`
 }

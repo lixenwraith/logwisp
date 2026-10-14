@@ -1,3 +1,6 @@
+// Package service holds the pipelines of one configuration: it builds all of
+// them or none, starts and stops them together, gives a viewer's tap to each,
+// and reports when every one has finished.
 package service
 
 import (

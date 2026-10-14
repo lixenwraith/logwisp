@@ -1,3 +1,7 @@
+// Package chain is the protocol between logwisp nodes: the hello a dialer
+// opens with (ProtocolVersion, node, SCRAM), the NDJSON entries after it, the
+// headers and /auth path of its HTTP mapping, and the reconnect backoff the
+// chain sinks share.
 package chain
 
 import (

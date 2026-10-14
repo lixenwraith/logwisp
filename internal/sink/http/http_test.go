@@ -373,7 +373,7 @@ func TestProxiedStreamSessionKeepsTheProxy(t *testing.T) {
 
 // The constructor refuses what it cannot serve: the login pages outside
 // scram's proxy mode, a viewer without the login page, a path under /auth, and
-// a path ServeMux or a URL would not take literally, which panicked at Start.
+// a path ServeMux or a URL would not take literally.
 func TestUnservableOptionsAreRefused(t *testing.T) {
 	scram := map[string]any{"type": "scram", "credentials_file": scramCredentials(t)}
 	pki := testutil.NewPKI(t, "viewer-01")

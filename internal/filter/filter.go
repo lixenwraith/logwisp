@@ -37,7 +37,6 @@ func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 		logger:   logger,
 	}
 
-	// Compile patterns
 	for i, pattern := range cfg.Patterns {
 		re, err := regexp.Compile(pattern)
 		if err != nil {
@@ -82,8 +81,8 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 		"logic", f.config.Logic,
 		"entry_level", entry.Level,
 		"entry_source", entry.Source,
-		"entry_message", entry.Message[:min(100, len(entry.Message))], // First 100 chars
-		"text_to_match", text[:min(150, len(text))], // First 150 chars
+		"entry_message", entry.Message[:min(100, len(entry.Message))],
+		"text_to_match", text[:min(150, len(text))],
 		"patterns", f.config.Patterns)
 
 	for i, pattern := range f.config.Patterns {
@@ -103,7 +102,6 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 		"component", "filter",
 		"matched", matched)
 
-	// Determine if we should pass or drop
 	shouldPass := false
 	switch f.config.Type {
 	case config.FilterTypeInclude:
@@ -137,11 +135,12 @@ func (f *Filter) GetStats() map[string]any {
 	}
 }
 
-// UpdatePatterns allows for dynamic, thread-safe updates to the filter's regex patterns
+// UpdatePatterns replaces the patterns under f.mu, which Apply does not take:
+// it is safe only before entries flow
 func (f *Filter) UpdatePatterns(patterns []string) error {
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
 
-	// Compile all patterns first
+	// Compiled before the swap, so a bad pattern leaves the filter as it was
 	for i, pattern := range patterns {
 		re, err := regexp.Compile(pattern)
 		if err != nil {
@@ -150,7 +149,6 @@ func (f *Filter) UpdatePatterns(patterns []string) error {
 		compiled = append(compiled, re)
 	}
 
-	// Update atomically
 	f.mu.Lock()
 	f.patterns = compiled
 	f.config.Patterns = patterns
@@ -166,7 +164,6 @@ func (f *Filter) UpdatePatterns(patterns []string) error {
 func (f *Filter) matches(text string) bool {
 	switch f.config.Logic {
 	case config.FilterLogicOr:
-		// Match any pattern
 		for _, re := range f.patterns {
 			if re.MatchString(text) {
 				return true
@@ -175,7 +172,6 @@ func (f *Filter) matches(text string) bool {
 		return false
 
 	case config.FilterLogicAnd:
-		// Must match all patterns
 		for _, re := range f.patterns {
 			if !re.MatchString(text) {
 				return false

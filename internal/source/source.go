@@ -20,7 +20,7 @@ type Source interface {
 	// Stop gracefully shuts down the source
 	Stop()
 
-	// SourceStats contains statistics about a source
+	// GetStats returns the source's statistics
 	GetStats() SourceStats
 }
 

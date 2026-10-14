@@ -82,8 +82,8 @@ func NewConsoleSinkPlugin(
 
 	output := Stream(opts.Target)
 
-	// inline decides auto: a terminal, NO_COLOR unset, TERM not dumb. Paint
-	// returns its text unchanged exactly when color is off.
+	// inline decides auto: a terminal, NO_COLOR empty or unset, TERM not
+	// dumb. Paint returns its text unchanged exactly when color is off.
 	printer := inline.New(output)
 	if opts.Color != "auto" {
 		printer.SetColor(opts.Color == "always")

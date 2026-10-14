@@ -25,7 +25,8 @@ import (
 // ValidateConfig checks a configuration without reading a file it names:
 // the settings, then each pipeline's flow stages, and its sources and sinks
 // decoded in full. Its error joins every problem, one a part, each a
-// *KeyError naming the path of the refused key. lw --check opens the files.
+// *KeyError naming the refused key's path, save "no pipelines configured".
+// lw --check opens the files.
 func ValidateConfig(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
@@ -521,9 +522,11 @@ func (c *FilterConfig) Check() error {
 	return nil
 }
 
-// Scan decodes a flow stage's command-line map into target, rejecting keys
-// target does not declare: a misspelled key must fail, not be dropped. Its
-// values take their kinds as a plugin's do, a wrong one refused at its key.
+// Scan decodes a table into target: a flow stage from a spec or an edit, a
+// file's root or the website's pipelines. It refuses a key target does not
+// declare, nested tables' too: a misspelled key must fail, not be dropped.
+// Values outside a list of tables take their kinds as a plugin's do, a wrong
+// one refused at its key.
 func Scan(configMap map[string]any, target any) error {
 	if err := checkKeys(configMap, reflect.TypeOf(target), ""); err != nil {
 		return err
@@ -580,7 +583,7 @@ func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 
 // checkFileKeys rejects keys the configuration file declares that Config does
 // not: a misspelled table path such as plugin_sinks.confg.tls would otherwise
-// drop the whole table. Plugin config maps are checked by Scan instead.
+// drop the whole table. Plugin config maps are checked by Decode instead.
 func checkFileKeys(path string) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
