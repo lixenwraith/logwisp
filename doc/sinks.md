@@ -18,7 +18,8 @@ whose input queue is full drops the event for itself only
 ## console
 
 Writes formatted payloads to stdout or stderr. It is the sink of the built-in
-`pipe` pipeline, and of every spec pipeline given no `--sink`.
+`pipe` pipeline, and of every pipeline from flags or variables that gets no
+sink from `--sink`, `LOGWISP_SINK` or its preset.
 
 ```toml
 [[pipelines.plugin_sinks]]
@@ -40,8 +41,8 @@ Options, each as type and default:
   bytes, `ESC` as `<1b>`: `auto` when the output is a terminal, `always`, or
   `never`.
 - `color` (string, the top-level `color`, itself `auto`): paint level names:
-  `auto` on a terminal with `NO_COLOR` unset and `TERM` not `dumb`, `always`,
-  or `never`.
+  `auto` on a terminal with `NO_COLOR` empty or unset and `TERM` not `dumb`,
+  `always`, or `never`.
 
 Payloads are written as the formatter made them, one record per line.
 
@@ -60,10 +61,12 @@ Payloads are written as the formatter made them, one record per line.
   sink's own, written after escaping. A line whose source found no level
   stays plain. The codes go into whatever the format makes, JSON included:
   for output another program parses keep `auto` or `never`, not `always`.
-- Backpressure: the sink never drops. When its output is slow (a slow reader,
-  a paused terminal, a stalled log collector) the pipeline waits for it, with
-  its other sinks. A service whose stdout may stall writes to a `file` sink
-  instead. A closed stdout pipe ends lw with `SIGPIPE`, as it ends `cat`.
+- Backpressure: the sink never drops while its pipeline runs; a stop or
+  reload can drop entries still in flight (`total_dropped_by_sink`). When its
+  output is slow (a slow reader, a paused terminal, a stalled log collector)
+  the pipeline waits for it, with its other sinks. A service whose stdout may
+  stall writes to a `file` sink instead. A closed stdout pipe ends lw with
+  `SIGPIPE`, as it ends `cat`.
 - On stop it writes what is queued.
 
 ---
@@ -90,9 +93,9 @@ flush_interval_ms = 100
 Options, each as type and default:
 
 - `directory` (string, **required**): output directory. The sink writes
-  `NAME.log` and rotates it to `NAME_YYMMDD_HHMMSS.log`. The limits below
-  delete *any* `.log` file in the directory, so give each file sink a
-  directory of its own.
+  `NAME.log` and rotates it to `NAME_YYMMDD_HHMMSS.log`, adding
+  `_1`, `_2`, ... when that name is taken. The limits below delete *any*
+  `.log` file in the directory, so give each file sink a directory of its own.
 - `name` (string, **required**): file name base.
 - `max_size_mb` (int, `100`): rotate when the active file reaches this size.
 - `max_total_size_mb` (int, `1000`): above this total, the oldest `.log` files
@@ -103,7 +106,8 @@ Options, each as type and default:
 - `retention_hours` (float, `168.0`): `.log` files there older than this are
   deleted; `0` keeps them.
 - `buffer_size` (int, `1000`): sink input queue depth, and the depth of the
-  internal writer's queue, which drops and counts when full.
+  internal writer's queue, which drops when full. That drop is reported
+  nowhere, and `total_processed` still counts the entry. At most `1048576`.
 - `flush_interval_ms` (int, `100`): forced flush interval.
 
 The sink drives an internal writer configured for raw output with timestamps and
@@ -115,8 +119,8 @@ it hands the writer what is queued before closing the file.
 ## null
 
 Discards; holds a sink's place until one is chosen, so a pipeline can be set
-up before its sink is. It counts entries and bytes, so it also isolates a
-source or flow when measuring it.
+up before its sink is. It counts entries and bytes (`total_processed`,
+`total_bytes`), so it also isolates a source or flow when measuring it.
 
 ```toml
 [[pipelines.plugin_sinks]]
@@ -172,7 +176,8 @@ Options, each as type and default:
 - `buffer_size` (int, `1000`): sink input queue depth.
 - `client_buffer_size` (int, `256`): per-client send queue depth.
 - `write_timeout_ms` (int, `0`): per-event write deadline; `0` = none.
-- `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited.
+- `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited. A
+  stream past it gets `503` and counts in `rejected_clients`.
 - `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
   a new stream gets after its `connected` event, before the live ones, so a
   browser opened late sees a backlog; `0` = none.
@@ -231,7 +236,8 @@ Options, each as type and default:
 - Stream responses carry `Content-Type: text/event-stream`,
   `Cache-Control: no-cache` and `X-Accel-Buffering: no`. On connect the client
   receives an `event: connected` frame carrying its client id, session id,
-  sink instance id, endpoint paths, and buffer size.
+  sink instance id, endpoint paths, and `client_buffer_size` (as
+  `buffer_size`).
 - Payloads are framed per the SSE spec, one `data:` line per line break in the
   payload (CRLF, LF or a lone CR), so multi-line entries stream correctly and
   no entry can inject an `event:`, `id:` or `retry:` field.
@@ -312,6 +318,7 @@ Options, each as type and default:
   `keep_alive_period_ms` idle; `false` sends none.
 - `keep_alive_period_ms` (int, `30000`): keep-alive idle period.
 - `max_connections` (int, `0`): concurrent connection cap; `0` = unlimited.
+  A connection past it is closed at once and counts in `rejected_conns`.
 - `tls`, `auth`: as on `http`.
 - `acl` (table): as on `http`, without `requests_per_second_per_client`.
 
