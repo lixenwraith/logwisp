@@ -20,7 +20,7 @@ release tag, and both skeletons download the tagged source.
    git tag -a vX.Y.Z -m vX.Y.Z      # git tag -s signs it with your key
    git push origin vX.Y.Z
    ```
-   - `make` then stamps `vX.Y.Z` (from `git describe`), and
+   - The Makefile's builds then stamp `vX.Y.Z` (from `git describe`), and
      `go install github.com/lixenwraith/logwisp/cmd/lw@vX.Y.Z` works.
    - A GitHub release for the tag is optional; the tag alone serves
      `archive/vX.Y.Z.tar.gz`, which the PKGBUILD downloads.
@@ -33,10 +33,12 @@ release tag, and both skeletons download the tagged source.
    - Push `PKGBUILD` and `.SRCINFO` to
      `ssh://aur@aur.archlinux.org/logwisp.git`; optionally a `logwisp-git`
      package built from the main branch.
-3. FreeBSD, `deploy/package/freebsd/` (`sysutils/logwisp`):
+3. FreeBSD, `deploy/package/freebsd/` (`sysutils/logwisp`), copied into a
+   ports tree with `cp -RL` (`files/logwisp.in` links to
+   `deploy/package/logwisp.rc`):
    - `DISTVERSION=X.Y.Z` and `MAINTAINER=` your address.
-   - `make makesum` writes `distinfo`: the module zip that the Go proxy
-     serves for `GO_MODULE` at the tag.
+   - `make makesum` writes `distinfo`, the checksums of the `.mod` and `.zip`
+     that the Go proxy serves for `GO_MODULE` at the tag.
    - The `logwisp` user needs an ID registered in the ports tree. Take a
      number below 1000 that is free in both `/usr/ports/UIDs` and
      `/usr/ports/GIDs`, and add to the same patch:
@@ -57,7 +59,7 @@ release tag, and both skeletons download the tagged source.
      (lw is static by design) and `maintainer-script-calls-systemctl` (dh's
      scripts use `deb-systemd-helper` instead).
 5. With a tag, the packaging workflow's FreeBSD job can build the port itself
-   from a ports tree (`make stage check-plist` in a copy of
+   from a ports tree (`make stage check-plist` in a `cp -RL` copy of
    `deploy/package/freebsd/`), rather than BSD make on the checkout.
 
 ## 2. What `lw --tui` and its engine leave for later
@@ -71,16 +73,16 @@ in place. Not yet:
 - Per-sink taps: what each sink took, where the tap at the flow's exit shows
   what dispatch offered (a full sink input drops for that sink only).
 - Live filter patching: a filter edited while `t` runs takes effect through
-  `Filter.UpdatePatterns` (unused), not a rerun that rebinds every listener.
+  `Filter.UpdatePatterns` (unused, and racing `Apply`, which reads the
+  patterns without `f.mu`), not a rerun that rebinds every listener.
 - The wide-rune table `internal/tui/view.go` copies from
   `lixenwraith/terminal`'s one-cell rule goes once terminal exports that rule.
 - A scripted session on a pseudo-terminal for Run, each output and `t` (keys,
   the password dialog, `SIGHUP`), on a text console and over ssh.
-- The schema lists `auth.node_binding` on every listener and
-  `auth.trusted_proxies` on both HTTP listeners, though `AuthOptions.Check`
-  refuses a binding off the chain sources (under `mtls` or `scram`) and
-  `trusted_proxies` off the `http` sink; side tags for chain sources and the
-  `http` sink would filter them as `http` filters HTTP's keys.
+- The schema lists `auth.trusted_proxies` on both HTTP listeners, though
+  `AuthOptions.Check` refuses it off the `http` sink; a side tag for the
+  `http` sink would filter it as `chain_listener` keeps `node_binding` to the
+  chain sources.
 - Optional, in `lixenwraith/color`: export the 16 xterm reference shades
   (`RGBTo16` maps the site's hues badly, so the 16-color tier is chosen by
   hand).
