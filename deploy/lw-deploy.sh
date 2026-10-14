@@ -105,7 +105,9 @@ Containers (Linux)
                           publishes nothing and listens on --listen
 
 Native services
-  --bin FILE              lw binary to install (default: the installed one, else bin/lw)
+  --bin FILE              lw binary to install (default: the installed one, else
+                          bin/lw); manual: the lw that adds users and checks
+                          (default: lw on PATH, else bin/lw)
   --jail NAME             FreeBSD: install into this running jail through jexec
   --package-dir DIR       service files (default deploy/package)
 

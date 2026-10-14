@@ -26,10 +26,10 @@ configure it, and — equally important — what it does not yet do.
   [Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy).
 - Server pinning by dialers: certificate identity (`mtls`), bound certificate
   (`scram`).
-- Address rules and per-client connection and request limits on every
-  listener, applied before TLS to the client a PROXY header (v1 or v2) from a
-  listed L4 proxy names, and per request to the client an L7 proxy forwards:
-  see [The ACL Block](#the-acl-block).
+- Address rules and per-client limits (connections on every listener, a
+  request rate on HTTP listeners), applied before TLS to the client a PROXY
+  header (v1 or v2) from a listed L4 proxy names, and per request to the
+  client an L7 proxy forwards: see [The ACL Block](#the-acl-block).
 - Startup warnings for expiring certificates and risky settings: see
   [Startup Warnings](#startup-warnings).
 - Unknown configuration keys rejected: a typo in `tls`, `auth`, `acl` or a
@@ -40,8 +40,8 @@ configure it, and — equally important — what it does not yet do.
     comments;
   - a string in the file is one list entry, so a filter pattern holding a
     comma is not split into patterns that match nothing;
-  - the file is opened without blocking, so a FIFO swapped in for it cannot
-    hang the watcher or a `SIGHUP` reload;
+  - the file must be a regular file and is opened without blocking, so a
+    FIFO in its place fails a reload rather than hanging it;
   - a permission change on the file is reported once and does not stop
     auto-reload;
   - parse and conversion errors name the key, never the value, so a secret
@@ -60,12 +60,15 @@ configure it, and — equally important — what it does not yet do.
   and `auth_rejected` only.
 - More than one identity mode per listener: `auth.identity` takes one of
   `cn`, `san_dns`, `san_uri`, `san_email`.
+- One read of the configuration file: lw's unknown-key check opens it again,
+  blocking, so a FIFO swapped in between the two reads hangs that load.
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
 the `auth` block decides which of those peers may do what. Passwords (`scram`)
-need no client PKI: the listener holds verifiers, never passwords, and every
-login is bound to the listener's certificate.
+need no client PKI: a credentials file holds verifiers, never passwords, and a
+login is bound to the listener's certificate unless the listener sits behind
+`trusted_proxies`.
 
 ## The TLS Block
 
@@ -139,7 +142,8 @@ built:
   `ca_file`, `server_name`, `insecure_skip_verify` or `pin_sha256` on a
   listener
 - `client_auth = true` with no `client_ca_file`
-- only one of `cert_file` / `key_file`
+- only one of `cert_file` / `key_file`, or of `issuer_cert_file` /
+  `issuer_key_file`
 - a `min_version` that is neither `"1.2"` nor `"1.3"`
 - a key the plugin does not know, at any depth: `unknown key "tls.enabeld"`. A
   misspelled option must not silently leave a protection switched off
@@ -212,8 +216,8 @@ Options by where they apply, each with its default:
 
 Under `mtls` the identity is one string pulled from the peer's verified leaf
 certificate; under `scram` it is the username. The handshake has already
-checked the chain, signature, and validity window, so this is pure field
-selection.
+checked the chain, signature, and validity window (on a dialer with
+`pin_sha256`, only the key), so this is pure field selection.
 
 Modes, each with the field it reads and its typical use:
 
@@ -229,17 +233,17 @@ identity is a refusal, not an empty match.
 ### The allow list
 
 `allow` is an exact-match set; `allow_patterns` holds RE2 patterns. An identity
-passes if it appears in either. Under `scram` the credentials file is the allow
-list, and both keys are refused.
+passes if it appears in either. Under `scram` the listener's users are the
+allow list, and both keys are refused.
 
 Leaving **both** empty under `type = "mtls"` admits any identity the CA vouches
 for. That is deliberate — it is how you enable node binding without enumerating
 a whole fleet — but it is announced rather than silent:
 
 ```
-WARN msg="Auth policy admits any identity the configured CA vouches for"
-     component=tcp_chain_source instance_id=in_tcp
-     hint="set auth.allow or auth.allow_patterns to authorize named peers"
+WARN msg "Auth policy admits any identity the configured CA vouches for"
+     component tcp_chain_source instance_id in_tcp
+     hint "set auth.allow or auth.allow_patterns to authorize named peers"
 ```
 
 Anchor your patterns. `allow_patterns = ["edge-\\d{2}"]` matches
@@ -275,8 +279,9 @@ attribution survives.
 When binding is active the source says so at startup:
 
 ```
-INFO msg="Node labels bound to peer identity; trust_node is ignored"
-     component=tcp_chain_source node_binding=force trust_node=true
+INFO msg "Node labels bound to peer identity; trust_node is ignored"
+     component tcp_chain_source instance_id in_tcp
+     node_binding force trust_node true
 ```
 
 ### Dialer-side pinning
@@ -284,7 +289,8 @@ INFO msg="Node labels bound to peer identity; trust_node is ignored"
 Under `mtls`, the block on a chain sink pins the *server's* identity. Hostname
 verification already proves the server holds a certificate valid for the address
 you dialed; pinning additionally requires that certificate to name an identity
-you listed.
+you listed. With `pin_sha256` the key's holder writes that certificate, so the
+pin is the whole check.
 
 ```toml
 [pipelines.plugin_sinks.config.auth]
@@ -319,8 +325,9 @@ files (`credentials_file`, `password_file`) when the plugin is built:
   `identity` but no `tls.client_auth`
 - a `scram` dialer without `username` and `password_file`, with
   `credentials_file`, `token_lifetime_ms`, `trusted_proxies` or `identity`
-  (server pinning is `mtls` only), or with a password file that is empty or
-  over 1024 bytes
+  (server pinning is `mtls` only)
+- when the plugin is built: a `password_file` holding no password or over
+  1024 bytes, or under 8 bytes for a listener's one user
 - `trusted_proxies` on anything but the `http` sink, with `identity`, or with
   an entry that is neither an address nor a CIDR; `login_page` or
   `viewer_page` without `trusted_proxies`, `viewer_page` without `login_page`
@@ -576,10 +583,10 @@ allow = ["relay.example.org"]
 Startup logs report the transport flags and the compiled policy:
 
 ```
-INFO msg="TCP chain source initialized" ... tls=true mtls=true
-     auth="mtls identity=cn allow=[2 exact, 0 pattern(s)] node_binding=force"
-INFO msg="TCP chain sink initialized"   ... tls=true mtls=true
-     auth="mtls identity=cn allow=[1 exact, 0 pattern(s)] node_binding=none"
+INFO msg "TCP chain source initialized" ... tls true mtls true
+     auth "mtls identity=cn allow=[2 exact, 0 pattern(s)] node_binding=force"
+INFO msg "TCP chain sink initialized"   ... tls true mtls true
+     auth "mtls identity=cn allow=[1 exact, 0 pattern(s)] node_binding=none"
 ```
 
 A client that presents no certificate is refused during the handshake
@@ -588,8 +595,8 @@ A client whose certificate is valid but whose identity is not authorized gets
 past the handshake and is refused by the policy:
 
 ```
-WARN msg="Connection rejected by auth policy" component=tcp_chain_source
-     remote_addr=<addr> error="auth: refused: identity \"edge-99\" is not allowed"
+WARN msg "Connection rejected by auth policy" component tcp_chain_source ...
+     remote_addr <addr> error "auth: refused: identity \"edge-99\" is not allowed"
 ```
 
 Policy rejections are counted in the plugin's `auth_rejected` statistic; the
@@ -627,8 +634,8 @@ username      = "edge-01"
 password_file = "/etc/logwisp/edge-01.pass"
 ```
 
-Startup reports `auth="scram users=2 certificate=independent node_binding=force"`
-on such a chain source, and `auth="scram user=edge-01"` on the dialer.
+Startup reports `auth "scram users=2 certificate=independent node_binding=force"`
+on such a chain source, and `auth "scram user=edge-01"` on the dialer.
 
 ### Mechanism
 
@@ -670,7 +677,8 @@ requires `tls.client_auth`) binds the two: the certificate's identity field must
 equal the username, so every peer needs its own certificate *and* its own
 password, like `clientcert=verify-full`. A mismatch fails the login; an HTTP
 request whose certificate does not match its token's user gets `403`. Startup
-shows the mode as `certificate=independent` or `certificate=cn=username`.
+shows the mode as `certificate=independent`, or as the bound field, such as
+`certificate=cn=username`.
 
 ### Tokens
 
@@ -717,12 +725,14 @@ stored_key = "<base64>"
 username = "edge-01"
 ```
 
-Write it with [`lw auth add-user`](cli.md#lw-auth) rather than by
-hand. The whole file is validated when the plugin is built: a `decoy_key` of at
-least 32 bytes, at least one user, unique names, no unknown keys, and one Argon2
-profile and salt length for every user, since mixed profiles would tell a prober
-which users exist. `decoy_key` keeps unknown-user challenges stable across
-restarts and edits; the CLI creates it once and preserves it. A single probe
+Write it with [`lw auth add-user`](cli.md#lw-auth) rather than by hand. A
+username, in the file or in `auth.username`, is 1 to 256 bytes of UTF-8
+without `,`, `=` or a control character. The whole file is validated when the
+plugin is built: a `decoy_key` of at least 32 bytes, at least one user, unique
+names, no unknown keys, and one Argon2 profile and salt length for every user,
+since mixed profiles would tell a prober which users exist. `decoy_key` keeps
+unknown-user challenges stable across restarts and edits; the CLI creates it
+once and preserves it. A single probe
 cannot tell a real user from an unknown one, but a prober polling a name sees
 its salt change when the user is added, rotated or removed. The file is read
 only when the plugin is built and `auto_reload` does not watch it: send
@@ -756,7 +766,7 @@ edge. `password_file` is read by what it names, on either side:
     on that terminal, never in the log or on stderr: logs persist, are
     forwarded, and stderr is often a file.
   - With no terminal (systemd, cron) the plugin fails. `lw ... &` stops on
-    `SIGTTIN` at the prompt.
+    `SIGTTOU` at the prompt.
   - Under `lw --tui`'s `t`, the screen asks in a masked dialog instead; a
     generated password stays shown until a key closes it.
 
@@ -865,9 +875,9 @@ location /logs/ {
   - The token lives in a page variable only, never in storage or the URL. It
     lasts as long as the page and at most the token lifetime: a reload, another
     tab, or a reconnect after expiry asks again; sign out revokes it.
-  - The login page says that cookies are unavailable and links to the viewer.
-    A page not served over HTTPS keeps no `Secure` cookie either: both pages
-    name HTTPS instead and offer no sign-in.
+  - The login page says that cookies are unavailable and, when the sink serves
+    the viewer, links to it. A page not served over HTTPS keeps no `Secure`
+    cookie either: both pages name HTTPS instead and offer no sign-in.
 - **Integrating `scram.js`.** A site with its own CSP can copy `scram.js` from
   `internal/sink/http/web/` into its bundle: one dependency-free ES module in
   plain JS (no WebAssembly, so no `'wasm-unsafe-eval'`), where `base` is the
@@ -1007,10 +1017,11 @@ layer.
 identities you list may connect, so one CA can serve several trust domains and
 a single peer can be withdrawn without touching the others.
 
-**`auth` with `type = "scram"`** — a password check, per listener: only the
-users in its credentials file may connect, the login cannot be relayed through
-another certificate (proxy mode, where TLS ends at the site's proxy, aside),
-and with `identity` each user is tied to its own certificate.
+**`auth` with `type = "scram"`** — a password check, per listener: only its
+users (a credentials file's, or its one `username`) may connect, the login
+cannot be relayed through another certificate (proxy mode, where TLS ends at
+the site's proxy, aside), and with `identity` each user is tied to its own
+certificate.
 
 Under either method the chain `node` label can be bound to the identity, so a
 compromised edge cannot attribute its entries to another host, and the `http`
@@ -1093,12 +1104,13 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 **Log content**
 
 Logs routinely contain secrets that were never meant to leave the host. Filters
-are the available tool:
+are the available tool; patterns are case-sensitive, so `(?i)` makes one catch
+`Authorization: Bearer` too:
 
 ```toml
 [[pipelines.flow.filters]]
 type = "exclude"
-patterns = ["password", "api[_-]?key", "authorization", "bearer ", "secret"]
+patterns = ["(?i)password|api[_-]?key|authorization|bearer |secret"]
 ```
 
 Choose a sanitizer policy that matches the sink — `json` for JSON output,

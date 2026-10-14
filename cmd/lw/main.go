@@ -1,3 +1,8 @@
+// Command lw is LogWisp: it runs the pipelines its file, LOGWISP_ variables
+// and flags describe, rebuilt on SIGHUP, SIGUSR1 or an auto_reload, or
+// composes them on screen with --tui. Its auth, tls, preset and config commands
+// manage credentials and certificates, print a preset's pipeline as TOML and
+// write the annotated configuration file.
 package main
 
 import (

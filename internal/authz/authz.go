@@ -573,7 +573,8 @@ func (p *Policy) Rejected() uint64 {
 // Stats reports policy state for a plugin's stats details map. Merge it in
 // with maps.Copy so rejections surface in the status reporter and in the
 // http sink's status endpoint. allowed counts admissions (certificate checks,
-// SCRAM logins); rejected counts every refusal.
+// SCRAM logins), rejected refusals; a throttled or busy login counts in
+// auth_throttled or auth_busy, a forwarded client the acl refuses in acl_denied.
 func (p *Policy) Stats() map[string]any {
 	if p == nil {
 		return map[string]any{"auth": MethodNone}

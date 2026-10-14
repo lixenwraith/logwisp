@@ -56,7 +56,6 @@ func NewFileSinkPlugin(
 	logger *log.Logger,
 	proxy *session.Proxy,
 ) (sink.Sink, error) {
-	// Create empty config struct
 	opts, err := config.Decode[config.FileSinkOptions]("sink", "file", configMap)
 	if err != nil {
 		return nil, err
@@ -71,7 +70,7 @@ func NewFileSinkPlugin(
 	writerConfig.RetentionPeriodHrs = opts.RetentionHours
 	writerConfig.BufferSize = opts.BufferSize
 	writerConfig.FlushIntervalMs = opts.FlushIntervalMs
-	// Sink logic
+	// The payload is already formatted: the writer adds nothing and writes the file only
 	writerConfig.EnableConsole = false
 	writerConfig.EnableFile = true
 	writerConfig.ShowTimestamp = false
@@ -97,7 +96,6 @@ func NewFileSinkPlugin(
 	}
 	fs.lastProcessed.Store(time.Time{})
 
-	// Create session for file output
 	fs.session = proxy.CreateSession(
 		fmt.Sprintf("file:///%s/%s", opts.Directory, opts.Name),
 		map[string]any{
@@ -173,12 +171,10 @@ func (fs *FileSink) Stop() {
 		<-fs.exited
 	}
 
-	// Remove session
 	if fs.session != nil {
 		fs.proxy.RemoveSession(fs.session.ID)
 	}
 
-	// Shutdown the writer with timeout
 	if err := fs.writer.Shutdown(core.LoggerShutdownTimeout); err != nil {
 		fs.logger.Error("msg", "Error shutting down file writer",
 			"component", "file_sink",

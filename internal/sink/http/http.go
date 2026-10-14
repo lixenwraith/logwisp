@@ -452,7 +452,6 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	// Connected event with metadata, parity with fasthttp sink
 	info, _ := json.Marshal(map[string]any{
 		"client_id":   strconv.FormatUint(id, 10),
 		"session_id":  sess.ID,
@@ -621,10 +620,11 @@ func (h *HTTPSink) GetStats() sink.SinkStats {
 // handlers; absent when auth is disabled
 type identityKey struct{}
 
-// authMiddleware gates every endpoint on the policy: a client certificate
-// or a bearer token. The rejection carries no detail: the status endpoint
-// already exposes host, port, and throughput counters, so a refusal should
-// not add the shape of the policy on top of that.
+// authMiddleware gates stream and status on the policy: a client
+// certificate, a bearer token or, behind a proxy, the session cookie. The
+// rejection carries no detail: the status endpoint already exposes host,
+// port, and throughput counters, so a refusal should not add the shape of
+// the policy on top of that.
 func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ident, status, err := h.auth.AuthorizeRequest(r)

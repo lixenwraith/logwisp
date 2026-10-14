@@ -24,7 +24,7 @@ make build              # bin/lw; plain `make` only lists the targets
 The Makefile works with GNU make and BSD make alike. Targets:
 
 - Build
-  - `make build`: `bin/lw`, with version, commit and build time from git
+  - `make build`: `bin/lw`, with version and commit from git, and the build time
   - `make release`: the same, static (`CGO_ENABLED=0`), `-trimpath`, stripped
   - `make dev`: built with the race detector
   - `make wasm`: `bin/lwconf/`, the configuration engine a website drops in:
@@ -36,8 +36,8 @@ The Makefile works with GNU make and BSD make alike. Targets:
     [Architecture](architecture.md#configuration-engine)
   - `make version`: the metadata a build would embed
   - `make completion`: regenerate the bash, zsh and fish completion in
-    `deploy/package/completion/` from `cmd/lw`'s `shorts` and `commands`
-    tables; `go test ./cmd/lw` fails while they differ
+    `deploy/package/completion/` from lw's own tables (its flags, commands
+    and presets); `go test ./cmd/lw` fails while they differ
   - `make clean`: remove `bin/`
 - Check
   - `make test`: the Go tests
@@ -79,8 +79,9 @@ checkout.
 first, or in one command: `make release install`. It honours `DESTDIR`,
 `PREFIX`, `SYSCONFDIR`, `BINDIR` (default `$PREFIX/bin`, the path the systemd
 unit and the rc.d script run `lw` from), `MANDIR`, `DOCDIR` and `LICENSEDIR`
-(under `$PREFIX/share` by default) and `SERVICE`; `make help` prints the
-values in effect:
+(under `$PREFIX/share` by default) and `SERVICE`; `make help` prints
+`PREFIX`, `SYSCONFDIR`, `DESTDIR`, `SERVICE` and `INSTALL_OS` as they are in
+effect:
 
 - Linux defaults: `PREFIX=/usr`, `SYSCONFDIR=/etc`. Outside a package
   manager, prefer `PREFIX=/usr/local`; systemd reads units, sysusers and
@@ -190,9 +191,11 @@ rc.conf variables:
 
 `make deb` builds a release and packages what `make install` stages, in
 Debian's layout, as `bin/logwisp_VERSION_ARCH.deb`, the architecture taken
-from the binary. A release tag gives the version; an untagged or modified
-tree's sorts below every release and by build time, so each build upgrades
-the last. `DEB_MAINTAINER` names the maintainer.
+from the binary. A release tag gives the version, and a commit past one
+sorts between it and the next release. A modified tree, or one with no tag
+in its history, adds the build time, so each rebuild upgrades the last; with
+no tag, the version sorts below every release. `DEB_MAINTAINER` names the
+maintainer.
 
 ```bash
 make deb
@@ -213,8 +216,8 @@ sudo systemctl enable --now logwisp
 
 `make arch` builds the PKGBUILD in `deploy/package/arch/` from the working
 tree, committed or not, into `bin/arch/`, then prints the `pacman -U` line
-that installs the package. It needs `base-devel` and `go`, and runs as a
-user: `makepkg` refuses root.
+that installs the package. It needs a git checkout, `base-devel`, `git` and
+`go`, and runs as a user: `makepkg` refuses root.
 
 ```bash
 make arch
@@ -343,10 +346,10 @@ docker run -d --name logwisp \
   ```
 
   Without a file lw logs less ([CLI](cli.md#built-in-defaults)): add
-  `-e LOGWISP_LOGGING_LEVEL=info -e LOGWISP_STATUS_REPORTER=true`; the image
-  sets neither, as a variable would override a mounted file's value. Without
-  `-i`, stdin is `/dev/null`, so a container needs a source other than
-  `console`.
+  `-e LOGWISP_LOGGING_LEVEL=info` (`debug`, with
+  `-e LOGWISP_STATUS_REPORTER=true`, for the 30 s statistics); the image sets
+  neither, as a variable would override a mounted file's value. Without `-i`,
+  stdin is `/dev/null`, so a container needs a source other than `console`.
 
 - Secrets: only as mounted files, at `/run/secrets` (Docker or Compose
   secrets, a Kubernetes secret volume), named by `tls.key_file`,
@@ -354,8 +357,8 @@ docker run -d --name logwisp \
   the environment: `docker inspect` and `/proc` show it. Make each file
   readable by 65532 only (`chown 65532` and mode `0400`).
 - Privileges: keep the image's non-root user, a read-only root filesystem,
-  `--cap-drop ALL` and `no-new-privileges`. Without capabilities a listener
-  needs a port of 1024 or above; publish it on any host port.
+  `--cap-drop ALL` and `no-new-privileges`. Without capabilities, a port of
+  1024 or above binds on every runtime; publish it on any host port.
 - Listeners bind `0.0.0.0` inside the container; `127.0.0.1` would be
   unreachable through `-p`.
 - Writable data: a `file` sink or `logging.file` needs a volume writable by
@@ -413,18 +416,22 @@ starting it, run `lw --check -c FILE`; see
 
 ## Test Scripts
 
-The end-to-end scripts in `test/` run against `bin/lw` and share
-`test/lib.sh`. `make e2e` runs each with `--auto` and reports it as PASS, FAIL
-or SKIP (exit 77, e.g. no IPv6 loopback); only a failure fails the target.
+The end-to-end scripts in `test/` run against `bin/lw` (`LOGWISP_BIN` names
+another) and share `test/lib.sh`. `make e2e` runs each with `--auto` and
+reports it as PASS, FAIL or SKIP (exit 77, e.g. no IPv6 loopback); only a
+failure fails the target.
 
 - Modes:
   - without flags: start the daemons, print a guide of the ports and one-line
-    commands (run `. test/run-X/env` first for `$LW`, `$CA` and the token
-    helper), and wait for Ctrl-C
+    commands (where the guide says so, run `. test/run-X/env` first for `$LW`,
+    `$CA` and the token helper), and wait for Ctrl-C. `acl-test.sh`,
+    `passthrough-test.sh`, `pipe-test.sh` and `preset-test.sh` are one-shot:
+    either mode runs the checks and exits.
   - `--auto`: run the checks and tear down; `--keep` leaves the daemons up
     after a pass
   - `--follow`: show only WARN, ERROR and key events from the daemons
-- Daemons log only to `test/run*/log/NAME.out`, never to the terminal.
+- Daemons log only to `log/NAME.out` in the run directory, never to the
+  terminal.
 - Colour only on a terminal; `NO_COLOR` turns it off, `FORCE_COLOR=1` on.
 - Exit status: 0 all passed, 1 a failure, 77 skipped.
 - Each script owns a port range and a gitignored run directory:

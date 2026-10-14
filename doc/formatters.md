@@ -11,8 +11,11 @@ flags            = 0
 timestamp_format = ""
 ```
 
-One formatter serves the whole pipeline. Sinks receive an identical payload,
-one record ending in exactly one newline; there is no per-sink formatting.
+One formatter serves the whole pipeline. Sinks receive an identical payload
+ending in a newline; under `raw` a message's own newlines stay, so a record
+can span lines. Apart from the `http` sink's SSE framing, only the console
+sink alters what it writes, escaping control characters on a terminal and
+painting level names ([console](sinks.md#console)).
 When you need two shapes of the same data, run two pipelines, or chain to a
 node that formats differently.
 
@@ -38,7 +41,10 @@ bypasses formatting and sanitization: the message reaches the sink as the
 source produced it, control characters included, with no timestamp, level or
 source prefix added, and a newline appended unless the message ends in one.
 An entry that also carries `fields` gets the fields JSON appended verbatim
-after a single space; `raw` never drops data and never re-encodes it.
+after a single space, so `FlagRaw` (`1`) never drops data or re-encodes it.
+Heartbeats format without it, so in `raw` their `include_stats` fields print
+in Go's map syntax (`heartbeat map[beat_count:0 type:heartbeat]`), as any
+entry's fields do under a non-zero `flags` without `1`.
 
 ```toml
 [pipelines.flow.format]
@@ -48,14 +54,22 @@ type = "raw"
 The closest to verbatim transport is the `console` source, or the `file`
 source with `raw = true`. The whole line, terminator removed, becomes the
 message and `fields` stays empty; `raw` writes it back with one `\n`. It is not
-byte-exact: blank lines are skipped, CRLF becomes LF, and a line over 1 MiB
-continues in the next entry. The `file` source's JSON branch splits a line
-into message and fields, so `raw` writes `<msg> <fields>` rather than the
-original object.
+byte-exact: empty lines are skipped, CRLF becomes LF, and a line over 1 MiB,
+or one the `file` source reads while it is still being written, continues in
+the next entry. The `file` source's JSON branch splits a line into message
+and fields, so `raw` writes `<msg> <fields>` rather than the original object.
 
 ### txt
 
-Human-readable line output with a timestamp and level.
+Human-readable lines, `<time> <level> <source> <message>`, any fields after
+the message. The message and the fields are each double-quoted when empty or
+holding whitespace, a non-printable character, a quote, or a shell or `=`
+character (`$`, `;`, `<`, `*`, ...), with `"` and `\` backslash-escaped
+inside; the time and source never are:
+
+```
+2026-01-02T15:04:05.123Z ERROR edge-01/app.log "connection refused"
+```
 
 ```toml
 [pipelines.flow.format]
@@ -103,8 +117,8 @@ you need to override the defaults.
 
 With `flags = 0` the formatter selects `1` for `type = "raw"` and `6`
 (timestamp + level) for every other type. `8` is added automatically whenever
-an entry carries parseable `fields` and `1` is not set (it shapes `json` only);
-`1` always wins.
+an entry's `fields` is a non-empty JSON object and `1` is not set (it shapes
+`json` only); `1` always wins.
 
 `txt` and `json` show timestamp and level unless a suppress bit says otherwise
 (suppress wins over show), so `2` and `4` alone change nothing. Examples:
@@ -123,15 +137,19 @@ Each policy, then what to use it with:
 - `txt`: writes `<` and non-printable characters as `<hex>` of their bytes
   (`<b>` becomes `<3c>b>`).
   - File and console sinks.
-- `json`: escapes control characters for safe JSON embedding.
+- `json`: writes control characters as JSON escapes (`\t`, `\u001b`) into
+  the text, which `type = "json"` quotes again: a reader that decodes the
+  record gets the escape, never the character.
   - `type = "json"`.
 - `shell`: strips shell metacharacters, whitespace, and control characters.
   - Data that will be passed to a command.
 
-Every policy but `raw` replaces invalid UTF-8 with U+FFFD. With
-`type = "raw"` and `flags = 0` no policy applies (`1` bypasses it). When
-`sanitizer_policy` is omitted, it is the policy of the same name as `type`, so
-the safe pairing is the default.
+Every policy but `raw` replaces invalid UTF-8 with U+FFFD. `type = "json"` is
+valid JSON under any policy, since its own quoting escapes control characters
+and replaces invalid UTF-8; with policy `raw` the decoded message keeps its
+control characters. With `type = "raw"` and `flags = 0` no policy applies (`1`
+bypasses it). When `sanitizer_policy` is omitted, it is the policy of the same
+name as `type`, so the safe pairing is the default.
 
 > `shell` strips dangerous characters but is **not** sufficient to make a string
 > safe for shell construction. Pass arguments through `exec` argv instead of
@@ -150,13 +168,15 @@ downstream parsers and grep patterns need to know.
 
 ## Structured Fields
 
-When an entry carries `Fields` (raw JSON) and `FlagRaw` is not set, the
-formatter parses it and adds the `StructuredJSON` flag. Fields reach a pipeline
-from the `file` source when a tailed line parses as JSON with a `fields` key,
-from the `tcp_chain` and `http_chain` sources when the upstream entry carried
-them, and from the heartbeat when `include_stats = true`. In `json` output
-such an entry is `{"time":…,"level":…,"trace":…,"message":…,"fields":{…}}`;
-without fields the message sits in `"fields":[…]`.
+When an entry's `fields` is a non-empty JSON object and `1` is not set, the
+formatter parses it and adds `8`; without `1`, any other `fields` value
+(`[1,2]`, `{}`, `"s"`) is dropped. Fields reach a pipeline from the `file`
+source when a tailed line parses as JSON with a `fields` key, from the
+`tcp_chain` and `http_chain` sources when the upstream entry carried them, and
+from the heartbeat when `include_stats = true`. In `json` output such an entry
+is `{"time":…,"level":…,"trace":…,"message":…,"fields":{…}}`; without fields
+the message sits in `"fields":[…]`. In `txt` the fields follow the message in
+Go's map syntax, keys sorted: `"disk full" "map[dev:sda pct:99]"`.
 
 ## Choosing a Configuration
 

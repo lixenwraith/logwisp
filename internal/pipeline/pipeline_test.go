@@ -143,8 +143,8 @@ func TestStopReleasesStalledBackpressureSink(t *testing.T) {
 }
 
 // The tap gets each entry's verdict under its source's id: the stage that
-// dropped it, or what the sinks got. Drops come only when All is set, and
-// heartbeats come as passed, from no source.
+// dropped it, or what dispatch offered the sinks. Drops come only when All is
+// set, and heartbeats come as passed, from no source.
 func TestTapSeesEachVerdict(t *testing.T) {
 	const n = 1000
 	verdict := func(msg string) (string, int) {

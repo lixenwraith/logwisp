@@ -13,3 +13,8 @@ deploy/lw-deploy.sh --yes ...        # no questions: defaults, or fail on a miss
 ```
 
 Roles, runtimes, scenarios and what is not covered: [doc/deployment.md](../doc/deployment.md).
+
+`package/` holds the service files (`logwisp.service`, `.sysusers`,
+`.tmpfiles`, `logwisp.rc`) that `make install` and this script install, the
+shell completions, and the deb, Arch and FreeBSD packaging:
+[doc/installation.md](../doc/installation.md#installing).

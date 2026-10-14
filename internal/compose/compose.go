@@ -1,7 +1,8 @@
 // Package compose is the configuration engine lw --tui and the website share:
-// pipelines started empty, from a preset, a configuration or a command line,
-// edited, validated, and written as a command line, environment or file. It
-// reads no file and links no network or terminal code, so it builds as WebAssembly.
+// pipelines started empty, from a preset, a configuration or a pasted form,
+// edited, validated, and written as a command line, environment or file that
+// reads back to the same pipelines; Schema is lw --schema. It reads no file and
+// links no TLS, HTTP or terminal code, so it builds as WebAssembly.
 package compose
 
 import (

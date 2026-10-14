@@ -9,7 +9,7 @@ import (
 
 // Sink represents an output data stream.
 type Sink interface {
-	// Capabilities returns a slice of supported Source capabilities
+	// Capabilities returns a slice of supported Sink capabilities
 	Capabilities() []core.Capability
 
 	// Input returns the channel for sending transport events to this sink.

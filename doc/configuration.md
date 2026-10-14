@@ -1,7 +1,8 @@
 # Configuration Reference
 
 LogWisp is configured with TOML. A complete annotated file listing every option
-and its default ships as [`config/logwisp.toml`](../config/logwisp.toml).
+and its default ships as [`config/logwisp.toml`](../config/logwisp.toml);
+`lw config init` writes it ([CLI](cli.md#lw-config)).
 
 ## Configuration Precedence
 
@@ -45,8 +46,8 @@ Top-level keys, each as type and default:
 - `auto_reload` (bool, `false`): watch the config file and reload pipelines on
   change.
 - `color` (string, `"auto"`): level names in color on console sinks, which may
-  set their own: `"auto"` (a terminal, `NO_COLOR` unset, `TERM` not `dumb`),
-  `"always"` or `"never"`; see the [console sink](sinks.md#console).
+  set their own: `"auto"` (a terminal, `NO_COLOR` empty or unset, `TERM` not
+  `dumb`), `"always"` or `"never"`; see the [console sink](sinks.md#console).
 
 `--version`, `--check`, `--dump`, `--schema` and `--tui` are switches, not
 settings; the matching variables are ignored.
@@ -80,8 +81,9 @@ retention_hours   = 168.0
 - `all`: files plus split console.
 - `none`: no application logging.
 
-`[logging.file]` applies only to the `file` and `all` modes. Its limits delete
-any `.log` file in `directory`, lw's or not: give lw a directory of its own.
+`[logging.file]` applies only to the `file` and `all` modes. Its limits, and a
+floor of 10 MB free on the disk that no key changes, delete any `.log` file in
+`directory`, lw's or not: give lw a directory of its own.
 `retention_hours = 0` keeps files. The `stdout`, `split` and `all` modes mix
 the log into a console sink's stdout. `[logging.console].target` is validated
 (`stdout`, `stderr`, `split`) but not applied: `logging.output` chooses the
@@ -220,11 +222,12 @@ pipelines[0].plugin_sinks[http].config: unknown key "tls.enabeld"
 - `auth` enums (`identity`, `node_binding`) are checked whatever `type` is; a
   block naming peers or credentials with `type` `none` or unset is refused
   ([Security](security.md#validation-1)).
-- Once the rest is valid, the file itself: the first key the schema does not
-  declare outside a plugin's `config` is refused (`config file "…": unknown
-  key "pipelines[0].plugin_sinks[0].confg"`), since a misspelled table path
-  would drop the whole table it heads. A top-level `config_file`, `version`,
-  `check` or `dump` is ignored.
+- The file itself, after the rest at start and by `lw --check` but before it
+  at a reload: the first key the schema does not declare outside a plugin's
+  `config` is refused (`config file "…": unknown key
+  "pipelines[0].plugin_sinks[0].confg"`), since a misspelled table path would
+  drop the whole table it heads. A top-level `config_file`, `version`, `check`
+  or `dump` is ignored.
 - Files a plugin names (certificates, keys, CA files, credentials, password
   files) are read when it is built: at start, at reload and by `lw --check`.
   Those failures name the pipeline and plugin.
@@ -234,14 +237,15 @@ exits 1 ([Networking](networking.md#network-plugins)).
 
 ## Hot Reload
 
-`auto_reload = true` watches the configuration file. `SIGHUP` or `SIGUSR1`
-rereads it even when watching is off and always rebuilds, so certificates and
-credentials rotate without a TOML edit. CLI and environment overrides,
-pipelines included, are captured at startup and keep their precedence. A
-discovered default file that does not exist is not an error, so an instance
-configured by flags or variables alone still rebuilds; once read, though, its
-removal fails the reload and the running service stays as it is; restart to
-run without the file.
+`auto_reload = true` watches the configuration file: lw reads it every second
+and applies a change once two reads in a row agree, so within about 2 s.
+`SIGHUP` or `SIGUSR1` rereads it even when watching is off and always
+rebuilds, so certificates and credentials rotate without a TOML edit. CLI and
+environment overrides, pipelines included, are captured at startup and keep
+their precedence. A discovered default file that does not exist is not an
+error, so an instance configured by flags or variables alone still rebuilds;
+once read, though, its removal fails the reload and the running service stays
+as it is; restart to run without the file.
 
 Reload builds a new service from a detached snapshot of the configuration,
 validated again, and shuts the old one down only if that succeeds: parse,
@@ -271,6 +275,13 @@ Each TOML type, its Go type, and its command-line / environment form:
 - Boolean (`bool`): `true` / `false`, or a bare flag for `true`.
 - Array (`[]T`): only in [pipeline specs](cli.md#pipelines), as a repeated key.
 - Table (struct): nested path with `.` (flags) or `_` (environment).
+- Path (`string`: a plugin's `directory` and `*_file` keys,
+  `logging.file.directory`): `~` alone or a leading `~/` is the home directory
+  where lw opens it (`--dump` prints it as typed); `~user` stays as typed; a
+  relative path starts at lw's working directory. The configuration file's own
+  path (`-c`, `LOGWISP_CONFIG_*`) is read as typed.
 
 Integer keys refuse fractions and out-of-range values; number keys refuse inf
-and NaN. Configuration files are TOML only.
+and NaN. A suffix names a key's unit: `_ms` milliseconds, `_mb` megabytes of
+1,000,000 bytes, `_bytes` bytes, `_hours` hours. Configuration files are TOML
+only.

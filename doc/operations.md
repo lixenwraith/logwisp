@@ -25,7 +25,8 @@ A supervisor's stdin is `/dev/null` (systemd's default, `docker run` without
 `-i`), where a console source ends at once. So a service defines its
 pipelines: a file without `[[pipelines]]` runs the built-in stdin-to-stdout
 pipeline and exits 0 at once, which `Restart=on-failure` does not restart, and
-a container configured through variables needs a `LOGWISP_SOURCE`.
+a container configured through variables needs a `LOGWISP_SOURCE`, or a
+`LOGWISP_PRESET` with a source of its own (`aggregator`, or one given a `path`).
 
 **systemd**
 
@@ -50,10 +51,12 @@ sudo service logwisp status
 auto_reload = true
 ```
 
-or send a signal:
+or send `SIGHUP` or `SIGUSR1`; the packaged unit and rc.d script send `SIGHUP`
+on reload:
 
 ```bash
 kill -HUP $(pidof lw)
+sudo systemctl reload logwisp     # rc.d: sudo service logwisp reload
 ```
 
 Signals reread the selected TOML file even when `auto_reload` is disabled.
@@ -67,10 +70,13 @@ running`.
 
 What reload does *not* do:
 
-- Re-apply `logging.*`; application logging is configured once at startup.
+- Re-apply `logging.*`, `quiet` or `auto_reload`; they take effect at startup
+  only.
 - Preserve connections. Listeners close and reopen, and every SSE, TCP, and
   chain client is disconnected. Chain sinks reconnect on their own backoff;
   browsers reconnect SSE automatically; raw TCP consumers must retry themselves.
+- Keep bearer tokens. Each reload draws a new token key, so every token is
+  revoked: run `lw auth token` again, and browser viewers log in again.
 - Notice rotated certificates on its own: certificate files are read at plugin
   construction and `auto_reload` watches only the configuration file, so
   rotation requires `SIGHUP`.
@@ -179,6 +185,11 @@ Each counter, where it is reported, and what a rise means:
 - `reconnects` (`tcp_chain` sink): an unstable link or a flapping downstream
 - `dropped_batches` (`http_chain` sink): downstream is rejecting batches
   permanently
+- `request_errors` (`http_chain` sink): failed posts, each retried under
+  backoff unless refused for good
+- `rejected_requests` (`http_chain` source): batches refused for auth,
+  protocol version or node binding, or a body over `max_body_bytes`, holding
+  a line over 1 MiB, or cut short
 - `synthesized` (chain sinks): events reach the sink without structure
 - `acl_denied`, `acl_limited` (a listener whose `acl` block sets a rule or
   limit; the `http` status always): connections or requests the address
@@ -189,10 +200,10 @@ Each counter, where it is reported, and what a rise means:
 
 LogWisp's own log goes to stderr by default. Without a configuration file lw
 logs less ([CLI](cli.md#built-in-defaults)), so a container configured only
-through variables passes `LOGWISP_LOGGING_LEVEL=info` and
-`LOGWISP_STATUS_REPORTER=true`; the image sets neither, as a variable would
-override a mounted file's value. `lw-deploy.sh` always passes `-c`, so its
-nodes log at `info`. To files:
+through variables passes `LOGWISP_LOGGING_LEVEL=info` (`debug`, with
+`LOGWISP_STATUS_REPORTER=true`, for the 30 s statistics); the image sets
+neither, as a variable would override a mounted file's value. `lw-deploy.sh`
+always passes `-c`, so its nodes log at `info`. To files:
 
 ```toml
 [logging]
@@ -268,33 +279,42 @@ pipeline `total_dropped_by_sink` (sink backed up?), sink `total_processed`.
 
 **A pipeline stalls behind a console sink**
 
-A console sink never drops: when its output is slow (a paused terminal, a full
-pipe, a stalled log collector) its pipeline waits, and the pipeline's other
-sinks with it. Stdin is read slower; other sources queue, then drop and count
-`dropped_entries`. Where a service's stdout may stall, give it a `file` sink
-instead. A closed stdout pipe ends lw with `SIGPIPE`.
+A console sink never drops while its pipeline runs: when its output is slow
+(a paused terminal, a full pipe, a stalled log collector) its pipeline waits,
+and the pipeline's other sinks with it. Stdin is read slower; other sources
+queue, then drop and count `dropped_entries`. Where a service's stdout may
+stall, give it a `file` sink instead. A closed stdout pipe ends lw with
+`SIGPIPE`.
 
 **File source reads nothing**
 
-- The watcher seeks to end-of-file on start; only content appended afterwards is
-  read. Positions are in memory, so a restart re-seeks to end and anything
-  written during the downtime is lost. `from = "start"` reads each file whole
-  instead, and replays it on every restart.
+- A watcher seeks to end-of-file when its file is first found, at start or by
+  a later scan, so a new file's lines written before that scan are not read.
+  Positions are in memory, so a restart or a reload re-seeks to end, and
+  anything written meanwhile is lost. `from = "start"` reads each file whole
+  instead, and replays it on every restart and reload.
 - `pattern` is a filename glob with `*` and `?` only, and matching is not
   recursive.
 - `check_interval_ms` governs how quickly a *new file* is noticed; tailing an
   open file polls at a fixed 100 ms.
+- lw's log says why: INFO `Waiting for directory` while the directory is
+  missing, WARN `Cannot read directory` or `Cannot read file` when permissions
+  or a service sandbox refuse it, and WARN `Not following lw's own output` for
+  the file lw's stdout or stderr goes to.
 
 **High memory use**
 
 Buffers are bounded, so unbounded growth almost always means many buffers:
-count sinks × `buffer_size`, plus clients × `client_buffer_size`. A `tcp_chain`
-sink blocked on an unreachable downstream also holds its full input queue.
+count each source's and sink's `buffer_size` (a fixed 1000 on the `file`,
+`random` and `null` sources and the `null` sink), clients ×
+`client_buffer_size`, and each `http` sink's `replay_lines`. A `tcp_chain` sink
+blocked on an unreachable downstream also holds its full input queue.
 
 **Chain link not delivering**
 
-Check `connected` and `reconnects` on a `tcp_chain` sink, `parse_errors` on the
-source, and remember `http_chain` waits up to `flush_interval_ms`. For TLS
+Check `connected` and `reconnects` on a `tcp_chain` sink, `request_errors` on
+an `http_chain` sink, `rejected_requests` (`http_chain`) and `parse_errors` on
+the source, and remember `http_chain` waits up to `flush_interval_ms`. For TLS
 problems see [Networking](networking.md#troubleshooting).
 
 **Environment variable override has no effect**
@@ -342,7 +362,9 @@ than masking parts of them. See [Filters](filters.md#common-recipes).
 
 1. Run the new binary's `lw --check -c FILE` against the current
    configuration: unknown or renamed keys fail there.
-2. Stop the old process, install the new binary, start it.
+2. Stop the old process, install the new binary, start it. A `self_signed`
+   listener makes a new key at every start: give its dialers the new
+   `pin_sha256` from its WARN line.
 3. Confirm each pipeline started and that counters are advancing.
 
 **Backup**

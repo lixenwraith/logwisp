@@ -1,8 +1,8 @@
 // Package netacl is the address seam of the network listeners, beside tlsx
-// and authz: a Policy reads the PROXY header of the proxies it trusts, then
-// refuses a peer by its client's address, or past its client's limits, before
-// TLS or a byte of the protocol is read. New returns nil when nothing is set,
-// and every method tolerates a nil receiver.
+// and authz: a Policy reads its trusted proxies' PROXY headers, refuses a peer
+// by address or connection count before TLS, and an HTTP request past its rate
+// or from a forwarded client the rules refuse. Its Table also throttles SCRAM.
+// New returns nil when nothing is set; every method tolerates a nil receiver.
 package netacl
 
 import (

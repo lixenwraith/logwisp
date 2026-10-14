@@ -231,9 +231,9 @@ func settingKeys(v reflect.Value, prefix string) []Key {
 }
 
 // Decode reads a plugin's config map into its options: unknown keys, kinds,
-// the defaults, the tag rules, the tls, auth and acl rules of its side, then the
-// options' own Check; a leading ~ in a path is the home directory. It reads no
-// file.
+// the defaults, the tag rules and the options' own Check, then the host, tls,
+// acl and auth rules of its side; a leading ~ in a path is the home directory.
+// It reads no file.
 func Decode[T any](role, typ string, m map[string]any) (*T, error) {
 	v, err := decode(role, typ, m)
 	if err != nil {
@@ -272,7 +272,8 @@ func decode(role, typ string, m map[string]any) (any, error) {
 }
 
 // Settle gives a decoded table its defaults, applies the tag rules, then its
-// own Check: Decode's last steps, for the flow stages a file decodes typed
+// own Check, as Decode does before its side's rules, for the flow stages a
+// file decodes typed
 func Settle(v any) error {
 	Fill(v)
 	if err := checkTags(reflect.ValueOf(v).Elem(), ""); err != nil {

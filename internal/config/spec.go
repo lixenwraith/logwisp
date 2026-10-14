@@ -238,7 +238,8 @@ func SpecPipelines(specs []Spec, isDir IsDir) ([]PipelineConfig, error) {
 }
 
 // buildPipelines turns specs, in order, into pipelines; specs before the first
-// --pipeline go to one named "cli". Every call returns fresh maps.
+// --pipeline go to one named after the preset that starts it, or else "cli".
+// Every call returns fresh maps.
 func buildPipelines(specs []pipelineSpec, isDir IsDir) ([]PipelineConfig, error) {
 	var pipelines []PipelineConfig
 	var seen map[*specKind]bool
