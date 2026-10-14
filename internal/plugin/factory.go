@@ -1,3 +1,6 @@
+// Package plugin maps each source and sink type to the constructor its
+// package registers in init; a type without a row in config's catalogue is
+// refused.
 package plugin
 
 import (

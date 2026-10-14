@@ -1,3 +1,8 @@
+// Package pipeline runs one pipeline: its sources through the flow to its
+// sinks, each plugin made by the factory its type registered. Sinks start
+// before the sources and stop after them, so entries in flight arrive; a full
+// sink drops its event unless it declares core.CapBackpressure. A tap gives a
+// viewer a copy of what the flow decides.
 package pipeline
 
 import (
@@ -39,7 +44,7 @@ type Pipeline struct {
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 	running      atomic.Bool
-	halt         chan struct{} // closed by Stop: backpressure sinks drop again
+	halt         chan struct{} // closed by Stop: backpressure events may then drop, room or not
 	finished     chan struct{} // closed when every source has ended
 	finishedOnce sync.Once
 }

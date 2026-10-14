@@ -83,7 +83,6 @@ func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent
 		Message: "heartbeat",
 	}
 
-	// Add stats if configured
 	if hg.config.IncludeStats {
 		fields := map[string]any{
 			"type":       "heartbeat",
@@ -98,13 +97,11 @@ func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent
 		entry.Fields = fieldsJSON
 	}
 
-	// Use formatter to generate payload
 	var payload []byte
 	var err error
 
-	// Check if we need special formatting for heartbeat
+	// Unreachable: heartbeat.format's enum (txt, json, raw) refuses "comment"
 	if hg.config.Format == "comment" {
-		// SSE comment format - bypass formatter for this special case
 		if hg.config.IncludeStats {
 			beatNum := hg.beatCount.Load()
 			payload = []byte(": heartbeat " + t.Format(time.RFC3339) +
@@ -115,7 +112,6 @@ func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent
 	} else {
 		// Use flow's formatter for consistent formatting
 		if adapter, ok := hg.formatter.(*format.FormatterAdapter); ok {
-			// Customize flags for heartbeat if needed
 			// The formatter shows a timestamp unless told otherwise
 			customFlags := formatter.FlagDefault
 			if !hg.config.IncludeTimestamp {
@@ -123,14 +119,12 @@ func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent
 			}
 			payload, err = adapter.FormatWithFlags(entry, customFlags)
 		} else {
-			// Fallback to standard format
 			payload, err = hg.formatter.Format(entry)
 		}
 
 		if err != nil {
 			hg.logger.Error("msg", "Failed to format heartbeat",
 				"error", err)
-			// Fallback to simple text
 			payload = []byte("heartbeat: " + t.Format(time.RFC3339) + "\n")
 		}
 	}

@@ -221,8 +221,8 @@ func (t *TCPSink) Start(ctx context.Context) error {
 	go t.acceptLoop()
 	go t.broadcastLoop()
 
-	// Pipeline context cancellation mirrors gnet engine stop: cease accepting
-	// and tear down existing connections
+	// Pipeline context cancellation stops accepting and tears down the
+	// connections, as Stop does
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -299,7 +299,8 @@ func (t *TCPSink) acceptLoop() {
 		}
 
 		if t.config.MaxConnections > 0 && t.activeConns.Load() >= t.config.MaxConnections {
-			// Load/admit race can over-admit by a conn under burst; acceptable
+			// The count rises only in handleConn, so a burst can over-admit by
+			// the conns accepted before their handleConn runs; acceptable
 			t.rejectedConns.Add(1)
 			conn.Close()
 			continue
@@ -328,7 +329,7 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 	defer t.wg.Done()
 	remote := conn.RemoteAddr().String()
 
-	// Counted from accept: max_connections bounds concurrent handshakes too
+	// Counted before the handshake: max_connections bounds concurrent handshakes too
 	count := t.activeConns.Add(1)
 	defer func() {
 		conn.Close()

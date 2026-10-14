@@ -158,7 +158,7 @@ func TestRemoveWatcherPreservesReplacement(t *testing.T) {
 }
 
 // A line longer than core.MaxLogEntryBytes continues in the next entry, and the
-// lines around it are read once: the watcher used to stop at it for good
+// lines around it are read once
 func TestLongLineContinuesInTheNextEntry(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
 	long := strings.Repeat("x", core.MaxLogEntryBytes+10)

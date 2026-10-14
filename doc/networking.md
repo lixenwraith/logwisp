@@ -8,8 +8,8 @@ see [Chaining](chaining.md).
 
 Every listener and dialer keeps strictly to the family of its `host`:
 
-- IPv4 literal (`127.0.0.1`, the default `0.0.0.0`): IPv4 only (`tcp4`). An
-  empty `host` is the IPv4 wildcard, as `0.0.0.0`.
+- IPv4 literal (`127.0.0.1`, the default `0.0.0.0`): IPv4 only (`tcp4`). A
+  listener's empty `host` is the IPv4 wildcard, as `0.0.0.0`.
 - IPv6 literal (`::1`, `::`, `fe80::1%eth0`): IPv6 only (`tcp6`).
   - `::` takes no IPv4 connections, on Linux and FreeBSD alike, whatever the
     system's `bindv6only` default.
@@ -38,8 +38,9 @@ Every listener and dialer keeps strictly to the family of its `host`:
   - SCRAM throttling counts an IPv6 client by its /64, so the hosts on a link
     share one link-local budget per interface (zone): each can pick any
     `fe80::/64` address.
-  - A peer with a zone never matches `auth.trusted_proxies`: put the proxy on
-    loopback or a routed address.
+  - A peer with a zone never matches `auth.trusted_proxies` or
+    `acl.proxy_from`: put the proxy on loopback or a routed address.
+    `acl.allow` and `deny` match it without its zone.
 
 ## Network Plugins
 
@@ -79,7 +80,9 @@ deadline where the default is `0` (none); elsewhere it selects the default.
     under `scram` the whole login.
   - `read_timeout_ms`, default `0` (none): idle time between entries.
 - `http_chain` source
-  - `read_timeout_ms`, default `30000`: reading a whole request body.
+  - `read_timeout_ms`, default `30000`: reading a whole request, headers and
+    body; also how long an idle keep-alive connection waits for its next
+    request.
 - `tcp_chain` sink
   - `dial_timeout_ms`, default `5000`: TCP connect.
   - `write_timeout_ms`, default `5000`: one line write.
@@ -89,14 +92,16 @@ deadline where the default is `0` (none); elsewhere it selects the default.
 
 Fixed, non-configurable bounds:
 
-- TLS handshake: 10 s, on all TLS listeners and dialers.
+- TLS handshake: 10 s, on all TLS listeners and dialers; on the `http_chain`
+  source, `read_timeout_ms` when shorter.
 - HTTP read-header timeout: 10 s, on the `http` sink and `http_chain` source.
 - HTTP server shutdown grace: 2 s on the `http_chain` source and the `http`
   sink; on the `http` sink, `write_timeout_ms` instead when set below 2 s.
 - Single entry line: at most 1 MiB, on chain listeners.
 - SCRAM login: 10 s, on the `tcp` sink, chain sinks, `lw auth`, and each
   `/auth` request.
-- SCRAM line or `/auth` body: at most 4 KiB, on `scram` listeners and dialers.
+- Hello and SCRAM lines, `/auth` bodies: at most 4 KiB, on `tcp_chain` sources
+  and on `scram` listeners and dialers.
 
 The `http` sink deliberately leaves the server's `WriteTimeout` unset, since it
 would terminate long-lived SSE streams; per-event deadlines come from
@@ -108,9 +113,10 @@ would terminate long-lived SSE streams; per-event deadlines come from
 `tcp_chain` source, and concurrent streams on the `http` sink (other requests
 are not counted); `0` means unlimited.
 
-- Admission is a load-then-check, so a burst can over-admit by roughly one.
-- On the `tcp` sink and `tcp_chain` source the count is taken at accept, so it
-  bounds concurrent TLS handshakes as well as established sessions.
+- A connection or stream counts only after the check that admits it, so a
+  burst can over-admit by several, more the larger the burst.
+- On the `tcp` sink and `tcp_chain` source a connection counts before its TLS
+  handshake, so the cap bounds handshakes in progress as well as sessions.
 - Over the limit a TCP connection is closed and counted in `rejected_conns`;
   an `http` stream request is answered `503` and counted in
   `rejected_clients`, its connection kept.
@@ -155,10 +161,11 @@ backoff_min_ms = 500
 backoff_max_ms = 30000
 ```
 
-The connection is established lazily, so an edge node starts cleanly even when
-its relay is down and connects as soon as the relay appears. The `tcp_chain`
-sink reports `connected` and `reconnects`; the `http_chain` sink reports
-`request_errors` and `dropped_batches`.
+The connection is established lazily, when the sink first has something to
+send, so an edge node starts cleanly even when its relay is down, and connects
+at its next attempt once the relay is up. The `tcp_chain` sink reports
+`connected` and `reconnects`; the `http_chain` sink reports `request_errors`
+and `dropped_batches`.
 
 Server-side sinks (`tcp`, `http`) do not reconnect; clients are expected to
 retry. Browsers reconnect SSE streams automatically.
@@ -196,7 +203,7 @@ preamble, headers, and entry encoding.
 - The listener's `acl` refused it: `acl_denied` or `acl_limited` rises, and
   its log has `Connection refused by acl` at WARN with a `reason`, once a
   minute at most. The dialer sees `EOF` or `connection reset by peer` (curl:
-  exit 52 or 56).
+  exit 52 or 56; over TLS, 35).
   - `address rules` — `allow` or `deny` excludes the client: the one a PROXY
     header names (`remote_addr`, the proxy as `peer_addr`), else the socket
     peer. Behind the `http` sink's `auth.trusted_proxies` that is the proxy:
@@ -337,7 +344,7 @@ preamble, headers, and entry encoding.
   batch is sent.
 
 **Entries arriving under an unexpected node label**
-- `auth.node_binding` defaults to `force` with any `auth` block, which
+- `auth.node_binding` defaults to `force` under `mtls` or `scram`, which
   relabels every entry with the sender's certificate identity or username. If
   a dashboard suddenly shows a different label, that is why. Use
   `node_binding = "assert"` to keep upstream origin labels on relay-to-relay

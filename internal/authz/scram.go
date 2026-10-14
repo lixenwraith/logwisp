@@ -196,7 +196,8 @@ type asked struct {
 	tty bool
 }
 
-// startupOver is set once lw's first service is built
+// startupOver is set once lw builds the service it runs, after any run on the
+// --tui screen
 var startupOver atomic.Bool
 
 // EndStartup stops reading descriptors, pipes, FIFOs and terminals: at a

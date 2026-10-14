@@ -1,4 +1,4 @@
-.Dd October 11, 2026
+.Dd October 14, 2026
 .Dt LW 1
 .Os
 .Sh NAME
@@ -53,7 +53,7 @@ joins a console source to a console sink in the raw format, without a filter
 or rate limit; a configuration file that
 defines no pipelines runs it too.
 Each line is written with one newline, whether it ended in a newline, a
-carriage return and newline, or nothing; blank lines are skipped, and a line
+carriage return and newline, or nothing; empty lines are skipped, and a line
 over 1 MiB continues in the next one.
 When standard input is a terminal,
 .Nm
@@ -74,7 +74,8 @@ Under a supervisor, standard input is usually
 .Pa /dev/null :
 a console source there ends at once.
 .Pp
-The console source and sink never drop a line.
+While their pipeline runs, the console source and sink never drop a line;
+a stop or reload can drop lines still in flight.
 A busy pipeline slows the reading of standard input; a console sink whose
 output is slow makes its pipeline wait, other sinks included.
 On a terminal the console sink writes control characters, escape sequences
@@ -133,7 +134,10 @@ The options are as follows:
 .It Fl c Ar file , Fl \-config Ar file , Fl \-config= Ns Ar file
 Read the configuration from
 .Ar file ,
-which must exist.
+which must exist; a relative path that climbs above the current directory
+with
+.Ql ..
+is refused, so give such a path absolute.
 The last one given wins.
 .It Fl t , Fl \-check
 Build every pipeline and plugin as a start would, loading options, TLS files
@@ -197,7 +201,7 @@ and the terminal reminder; console sinks still write.
 .It Fl \-color Op Ar when
 Color the level names console sinks write:
 .Cm auto
-.Pq the default: on a terminal, with Ev NO_COLOR unset and Ev TERM not Cm dumb ,
+.Pq the default: on a terminal, with Ev NO_COLOR empty or unset and Ev TERM not Cm dumb ,
 .Cm always
 .Pq what a bare Fl \-color No means
 or
@@ -562,7 +566,9 @@ and
 is required; both may be given.
 .El
 .Pp
-A listener needs no files:
+A listener with
+.Cm tls.enabled=true
+needs no files:
 .Cm tls.self_signed=true ,
 or
 .Cm tls.issuer_cert_file
@@ -601,8 +607,8 @@ when it exists; otherwise one is generated and written there, or printed
 once to standard output.
 .Fl \-generate
 replaces an existing password without reading one.
-A missing or empty credentials file is created with mode 0600; an existing
-one keeps its owner and mode.
+A missing credentials file is created with mode 0600; an existing one keeps
+its owner and mode, including an empty one made beforehand to choose them.
 .It Cm remove-user Fl \-credentials Ar file Fl u Ar name
 Remove a user.
 The last user cannot be removed.
@@ -694,16 +700,28 @@ counting from 1, adds more, as in
 .It Ev LOGWISP_FORMAT , LOGWISP_RATE_LIMIT , LOGWISP_HEARTBEAT
 The pipeline's format, rate limit and heartbeat specifications.
 .It Ev NO_COLOR , TERM
-Set to anything,
+Set to anything but the empty string,
 .Ev NO_COLOR
 turns
 .Cm auto
 color off, as does
-.Ev TERM=dumb .
+.Ev TERM=dumb ,
+which also keeps the
+.Fl \-tui
+screen from starting.
+.It Ev LC_ALL , LC_CTYPE , LANG
+The first one set names the locale; one other than UTF-8 makes the
+.Fl \-tui
+screen draw in ASCII.
 .It Ev HOME
 Where
 .Pa ~/.config/logwisp/logwisp.toml
-is looked for.
+is looked for, and what a leading
+.Ql ~
+names in a plugin's directory and file options, a preset's
+.Cm path
+and
+.Fl \-logging.file.directory .
 .El
 .Pp
 Secrets never go in the environment: TLS keys, credentials files and
@@ -761,8 +779,12 @@ a full one is renamed with its time, as
 .Nm
 exits 0 at the end of input, after a clean shutdown, and for
 .Fl \-version ,
+.Fl \-schema ,
 help,
-.Fl \-dump
+.Fl \-dump ,
+a
+.Fl \-tui
+screen left by printing or quitting,
 and a configuration
 .Fl \-check
 accepts; 1 on a failure, such as a configuration that does not load, or a
@@ -796,7 +818,9 @@ Shut down gracefully.
 .It Dv SIGHUP , SIGUSR1
 Reread the configuration file, certificates and credentials, and rebuild
 every pipeline.
-An invalid configuration leaves the running service untouched.
+An invalid configuration leaves the running service untouched; one that builds
+but fails to start, as on a port another process holds, leaves nothing running
+until a later reload succeeds.
 Before the service runs,
 .Dv SIGHUP
 is ignored, as under
@@ -831,9 +855,9 @@ $ tail \-F app.log | lw \-\-format txt
 Serve standard input as a live stream on the loopback address only, since
 the
 .Cm http
-sink listens on every address by default, and read it from another terminal
-as server-sent events; a client gets the lines that arrive while it is
-connected:
+sink listens on every IPv4 address by default, and read it from another
+terminal as server-sent events; a client gets the lines that arrive while it
+is connected:
 .Bd -literal -offset indent
 $ journalctl \-f | lw \-\-sink http:host=127.0.0.1,port=8080
 $ curl \-N http://127.0.0.1:8080/stream
@@ -924,7 +948,7 @@ generate the password into a file, then reload the server:
 .Xr daemon 8
 .Pp
 The guides to configuration, plugins, security and deployment, installed in
-.Pa share/doc/logwisp
+.Pa share/doc/logwisp/doc
 under the installation prefix and kept at
 .Lk https://github.com/lixenwraith/logwisp/tree/main/doc
 .Sh SECURITY CONSIDERATIONS

@@ -74,23 +74,24 @@ pipelines have [their own flags](#pipelines):
 - `--schema`: print every setting, pipeline flag, flow stage, plugin option,
   preset and output form as one JSON document, and exit; tools build their
   option lists from it:
-  - a key: its kind, default, rules and help; a table (`tls`, `auth`, `acl`)
-    holds its own keys, those of the plugin's side (listener or dialer),
-    HTTP's only on a plugin that speaks HTTP. Every listener lists
-    `auth.node_binding`, which only chain sources use, and every HTTP
-    listener `auth.trusted_proxies`, which only the `http` sink admits
+  - a key: its kind, default, rules and help, and a setting's `variable`; a
+    table (`tls`, `auth`, `acl`) holds its own keys, those of the plugin's
+    side (listener, chain source or dialer), HTTP's only on a plugin that
+    speaks HTTP: `auth.node_binding` only on the chain sources, and
+    `auth.trusted_proxies` on both HTTP listeners, though only the `http`
+    sink admits it
   - a flow stage: its keys, and `on`, the values that turn it on
   - a preset key: its default and help, and the choices (`enum`) and `hint`
     of the option it sets
   - `forms`: `command`, `environment` and `file`, each with its hint
 - `--color [WHEN]`, WHEN `auto`, `always` or `never`: level names in color on
-  console sinks, default `auto` (a terminal, `NO_COLOR` unset, `TERM` not
-  `dumb`); bare, `always`. A console sink's own `color` wins
+  console sinks, default `auto` (a terminal, `NO_COLOR` empty or unset,
+  `TERM` not `dumb`); bare, `always`. A console sink's own `color` wins
   ([console sink](sinks.md#console))
 - `-q`, `--quiet`: silence lw's own log and notices, default `false`;
   pipeline output still flows
-- `--status_reporter=BOOL`: periodic status logging, default `true` with a
-  configuration file, `false` without
+- `--status_reporter=BOOL`: pipeline statistics every 30 s, logged at
+  `debug`, default `true` with a configuration file, `false` without
 - `--auto_reload=BOOL`: reload when the configuration file changes, default
   `false`
 - `-V`, `--version`: print the version and exit
@@ -105,12 +106,15 @@ The last `-c` wins; a missing or empty path is an error.
   default `stderr`, so stdout carries only data
 - `--logging.level`: `debug`, `info`, `warn` or `error`, default `info` with a
   configuration file, `warn` without
-- `--logging.format`: `raw`, `txt` or `json`
-- `--logging.sanitization`: `raw`, `json`, `txt` or `shell`
-- `--logging.file.directory`: a path
-- `--logging.file.name`: a string
-- `--logging.file.max_size_mb`, `--logging.file.max_total_size_mb`: integers
-- `--logging.file.retention_hours`: a float
+- `--logging.format`: `raw`, `txt` or `json`, default `txt`
+- `--logging.sanitization`: `raw`, `json`, `txt` or `shell`, default `raw`
+- `--logging.file.directory`: a path, default `./log`; the limits below
+  delete any `.log` file in it
+  ([Application Logging](configuration.md#application-logging))
+- `--logging.file.name`: a string, default `logwisp`
+- `--logging.file.max_size_mb`, `--logging.file.max_total_size_mb`: integers,
+  default `100` and `1000`
+- `--logging.file.retention_hours`: a float, default `168`; `0` keeps files
 
 `--logging.console.target` is accepted but has no effect; the console
 destination is derived from `--logging.output`.
@@ -308,8 +312,8 @@ Any pipeline flag on the command line makes LogWisp ignore all of them.
 
 A container needs no configuration file. Without one lw logs less
 ([Built-in Defaults](#built-in-defaults)), so pass `LOGWISP_LOGGING_LEVEL=info`
-and `LOGWISP_STATUS_REPORTER=true`; the image sets neither, as a variable would
-override a mounted file's value:
+(`debug`, with `LOGWISP_STATUS_REPORTER=true`, for the 30 s statistics); the
+image sets neither, as a variable would override a mounted file's value:
 
 ```bash
 docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
@@ -318,7 +322,7 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
   -e LOGWISP_FILTER='exclude:patterns=DEBUG' \
   -e LOGWISP_SINK='http:host=0.0.0.0,port=8080' \
   -e LOGWISP_SINK_1=console \
-  -e LOGWISP_LOGGING_LEVEL=info -e LOGWISP_STATUS_REPORTER=true \
+  -e LOGWISP_LOGGING_LEVEL=info \
   logwisp:dev
 ```
 
@@ -335,8 +339,9 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
 
 ## Exit Codes
 
-- `0`: the end of input, a clean shutdown (`SIGINT`, `SIGTERM`), `--version` /
-  `--help`, `--dump`, or a valid `--check`
+- `0`: the end of input, a clean shutdown (`SIGINT`, `SIGTERM`), `--version`,
+  `--help`, `--schema`, `--dump`, a valid `--check`, or a `--tui` screen
+  closed without `r`
 - `1`: general error: a configuration load or validation failure (`--check`
   included, and a bad value on the command line), a logger init failure, a
   service bootstrap failure
@@ -360,7 +365,7 @@ lw < app.log > copy.log
 - Each line of stdin is one entry and one line of stdout.
   - The terminator (`\n` or `\r\n`) is written back as `\n`; an unterminated
     last line is kept and terminated.
-  - Blank lines are skipped.
+  - Empty lines are skipped; a line of spaces is an entry.
   - A line over 1 MiB continues in the next entry; no byte is lost.
 - Nothing is dropped: a slow reader slows the reading of stdin.
 - On a terminal, control characters are written as `<hex>` (`ESC` becomes
@@ -504,16 +509,16 @@ WebAssembly; `t` runs them under the screen and shows what flows.
   - The bar counts the shown pipeline's entries in, filtered by the flow,
     dropped by sinks, and missed by the screen: the view never slows a
     pipeline.
-- Live view: from 40 rows it sits under the diagram; shorter, it takes the
-  screen while it has the keys. `t` or Esc gives them back to the diagram
-  (Esc first closes an open detail).
-  - The canvas cursor picks its point, so the view opens on the first
-    source: a source shows its entries, a flow stage (or the filter the
-    inspector is on) what reaches it, the heartbeat its own, the sinks (or
-    no part) what they got. `v` switches between all (what the flow dropped
-    dimmed), what passed and what was dropped there, with no restart; the
-    title says which. lw's own log shows from warn up at every point; `s`
-    also offers it alone, debug too.
+- Live view: from 40 rows it sits under the diagram, unless the inspector is
+  open below the canvas; otherwise it takes the screen while it has the keys.
+  `t` or Esc gives them back to the diagram (Esc first closes an open detail).
+  - The canvas cursor picks its point, the first source until it moves: a
+    source shows its entries, a flow stage (or the filter the inspector is
+    on) what reaches it, the heartbeat its own, the sinks (or no part) what
+    the flow offered them (a full sink drops its copy alone). `v` switches
+    between all (what the flow dropped dimmed), what passed and what was
+    dropped there, with no restart; the title says which. lw's own log shows
+    from warn up at every point; `s` also offers it alone, debug too.
   - A row is the entry's time, level, tag, message and fields, read from any
     line shape: LogWisp's json, lw's own log, vif records, pino, zap, slog,
     docker, journald, ECS, GCP, logfmt, or text after an RFC3339 stamp and

@@ -22,8 +22,8 @@ streams, or downstream LogWisp nodes.
 - **A Unix filter out of the box**: with no configuration, `lw` copies stdin
   to stdout line for line and exits at the end of input; flags add filters,
   formats, sources and sinks
-- **Presets**: `tail`, `serve`, `edge` and `aggregator` build the common
-  pipelines from a few keys (`lw --preset tail:path=/var/log/app`);
+- **Presets**: `pipe`, `tail`, `serve`, `edge` and `aggregator` build the
+  common pipelines from a few keys (`lw --preset tail:path=/var/log/app`);
   `lw --dump` turns any command line into a configuration file
 - **Independent pipelines**, each `sources → flow → sinks`, running concurrently
   in one process
@@ -53,11 +53,11 @@ configuration engine the website's configurator runs as WebAssembly:
   and `t` again reruns as a reload, keeping the running pipelines when the new
   ones do not build. Listeners bind, dialers connect and files are written for
   real; a password is asked in a masked dialog
-- **Read any log**: the view parses LogWisp's JSON, lw's own log, pino, zap,
-  slog, docker, journald, ECS, GCP, logfmt and stamped text into time, level,
-  message and fields, filters them by level or pattern, and shows the payload
-  as the sinks receive it. It never slows a pipeline: what it misses is
-  counted
+- **Read any log**: the view parses LogWisp's JSON, lw's own log, vif
+  records, pino, zap, slog, docker, journald, ECS, GCP, logfmt and stamped
+  text into time, level, message and fields, filters them by level or
+  pattern, and shows the payload as the sinks receive it. It never slows a
+  pipeline: what it misses is counted
 - **Any terminal**: `cmd | lw -T` taps piped input, since the screen draws on
   the controlling terminal; colors range from true color to none, and a text
   console gets CP437 glyphs
@@ -105,13 +105,13 @@ exponential backoff and jitter.
 - Authorization by certificate identity: an `auth` block admits named peers
   (exact or RE2) rather than everything the CA issued, gates the `http` sink's
   stream and status endpoints, and lets a dialer pin the server it talks to
-- Password authentication (Argon2id-SCRAM) on the same block: listeners hold
-  verifiers, never passwords, and do no KDF work; every login outside proxy
-  mode is bound to the listener's certificate, so no relay presenting another
-  one can use it; HTTP listeners issue short-lived bearer tokens. `lw auth`
-  manages credentials files and logs viewers in; behind a site's
-  TLS-terminating proxy, browsers log in through a shipped login page and a
-  dependency-free JS client
+- Password authentication (Argon2id-SCRAM) on the same block: no login costs
+  a listener KDF work, and with a credentials file it holds verifiers, never
+  passwords; every login outside proxy mode is bound to the listener's
+  certificate, so no relay presenting another one can use it; HTTP listeners
+  issue short-lived bearer tokens. `lw auth` manages credentials files and
+  logs viewers in; behind a site's TLS-terminating proxy, browsers log in
+  through a shipped login page and a dependency-free JS client
 - Node binding: a chain source can label entries from the sender's certificate
   identity or username instead of from what the sender claims, so origin
   attribution is not forgeable
@@ -127,7 +127,7 @@ See [Security](doc/security.md) for configuration and the exact boundary, and
 ## Documentation
 
 - [Installation](doc/installation.md): building, installing, services,
-  the container image, packaging
+  the container image, packaging, the end-to-end test scripts
 - [Deployment](doc/deployment.md): `deploy/lw-deploy.sh` for edges,
   aggregators, containers, services, jails
 - [Architecture](doc/architecture.md): component model, data flow,
@@ -176,8 +176,9 @@ journalctl -f | ./bin/lw --sink http:host=127.0.0.1,port=8080
 ./bin/lw --source 'file:directory=/var/log/myapp,pattern=*.log' \
     --format json:sanitizer_policy=json > all.json
 
-# the same with a preset; on a terminal the level names are in color
-./bin/lw --preset tail:path=/var/log/myapp
+# the same files with a preset, raw to stdout; on a terminal the level
+# names are in color
+./bin/lw --preset 'tail:path=/var/log/myapp/*.log'
 
 # compose on screen from a preset menu; r runs, t taps, o prints
 ./bin/lw -T
@@ -235,8 +236,8 @@ Debian, Ubuntu and Arch. See [Installation](doc/installation.md).
 ## System Requirements
 
 - **Operating systems**: Linux (kernel 6.10+), FreeBSD (14.0+)
-- **Architecture**: amd64
-- **Go**: 1.27.2+ to build from source
+- **Architecture**: amd64; arm64 builds but is untested
+- **To build**: Go 1.27.2+, and GNU make or BSD make
 
 Network sources and sinks use IPv4 or IPv6, following the address family of
 the configured host.

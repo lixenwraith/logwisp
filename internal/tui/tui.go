@@ -1,7 +1,8 @@
 // Package tui is lw --tui: pipelines composed on a full-screen canvas drawn as
-// the website draws them, then run or written as a command line, environment
-// or file. The pipelines are a compose.Composition; this package only draws
-// them and turns keys into the engine's edits.
+// the website draws them, run in place with a live view of what their stages
+// pass and drop, then left to run or written as a command line, environment
+// or file. The pipelines are a compose.Composition; this package draws them,
+// turns keys into the engine's edits and runs them through a Runner from cmd/lw.
 package tui
 
 import (

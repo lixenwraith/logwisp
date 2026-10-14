@@ -129,9 +129,10 @@ time, which is exactly what you want in a log hot path.
 - Anchors: `^app\.log ` (the text starts with the source), `ERROR$`
 - Any characters: `.*exception.*`
 
-Remember that TOML basic strings process escapes, so a regex backslash needs
-doubling: `"\\berror\\b"`. TOML literal strings avoid the issue:
-`'\berror\b'`.
+TOML strings process escapes, so a regex backslash needs doubling:
+`"\\berror\\b"`. LogWisp's TOML reader has no literal (single-quoted)
+strings, so `'\berror\b'` does not load, and a single `\b` is TOML's
+backspace: `"\berror\b"` loads and never matches.
 
 Anchors apply to the assembled match text, which begins with the source name,
 so `^ERROR` never matches an entry that has a source; use `\bERROR\b`.
@@ -176,10 +177,11 @@ Each filter reports `type`, `logic`, `pattern_count`, `total_processed`,
 
 ## Performance
 
-Patterns compile once at startup. Every entry that reaches the filter stage is
-evaluated against every filter until one rejects it, so cost scales with the
-number of patterns and their complexity. Prefer literal substrings and simple
-alternations over broad `.*` wildcards.
+Patterns compile when a pipeline is built, at startup and on each reload.
+Every entry that reaches the filter stage is evaluated against every filter
+until one rejects it, and each filter runs all of its patterns whatever its
+`logic`, so cost scales with the number of patterns and their complexity.
+Prefer literal substrings and simple alternations over broad `.*` wildcards.
 
 Filters log every pattern match and decision at DEBUG: useful when a filter
 misbehaves, expensive on a busy pipeline, where `logging.level` stays at

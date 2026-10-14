@@ -1,3 +1,7 @@
+// Package core holds what the parts of a pipeline share: the LogEntry and the
+// TransportEvent sinks get, the Tap a viewer reads a flow's decisions from,
+// the level names, plugin capabilities, size limits and timings, and Network
+// and Listen, which keep a listener or dialer to its host's address family.
 package core
 
 import (
@@ -29,7 +33,8 @@ type TransportEvent struct {
 
 // Tapped is what a pipeline's flow decided about one entry: Stage names the
 // stage that dropped Event.Entry (rate_limit, filters at Index, format), or is
-// "" when it passed and Event.Payload is what the sinks got.
+// "" when it passed and Event.Payload is what dispatch offered the sinks; a
+// full sink input drops it for that sink only.
 type Tapped struct {
 	Pipeline string
 	Source   string // the source's id; "" for a heartbeat

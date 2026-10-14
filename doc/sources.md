@@ -6,7 +6,8 @@ type-specific `config` table. Registered types: `file`, `console`, `random`,
 `null`, `tcp_chain`, `http_chain`.
 
 Publication is non-blocking for every source but `console`: a full subscriber
-channel drops the entry and counts it in `dropped_entries`. The `console`
+channel drops the entry and counts it in `dropped_entries`. That channel holds
+`buffer_size` entries, or 1000 on a source without that option. The `console`
 source waits instead (see [console](#console)).
 
 ---
@@ -31,7 +32,7 @@ Options, each as type and default:
 
 - `directory` (string, required): directory to scan; not recursive. A leading
   `~/`, here as in every file or directory option, is the home directory; a
-  relative path starts at lw's working directory; a missing one is waited for.
+  relative path starts at lw's working directory.
 - `pattern` (string, `*`): glob over filenames; `*` and `?` only.
 - `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
   An open file is polled every 100 ms whatever this is.
@@ -44,30 +45,37 @@ Options, each as type and default:
 - Each matched file gets its own watcher, and its entries the file's base
   name as `Source`. Watchers for files that disappear are stopped and removed
   on the next scan.
+- A missing directory is waited for: INFO `Waiting for directory`, then
+  `Directory readable` once a scan reads it. A directory or file that cannot be
+  read is retried at each scan or poll, with WARN `Cannot read directory` or
+  `Cannot read file` when the failure starts or changes, not at each retry.
 - The file lw's stdout or stderr is redirected to is never followed, with a
   warning: `lw > out.log` in the directory would read its own output back.
 - A line longer than 1 MiB continues in the next entry, as on the console
-  source.
+  source; so does the rest of a line a poll reads while it is still being
+  written.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
   restart or a reload resumes from the current end of each file, and content
   written meanwhile is not read. `from = "start"` instead reads each file whole
   when its watcher is created, which a process writing beside LogWisp needs, at
   the cost of replaying files already on disk at every restart and reload.
-- Rotation is detected from size decrease, modification-time reset, a position
-  beyond end-of-file, or an inode change. An inode change where the new file is
-  at least as large as the recorded position is treated as an atomic save, not
-  a rotation, and the position is preserved. Each rotation also publishes an
-  INFO entry `Log rotation detected (#N): REASON` with the file's name as
-  `Source`; it reaches every sink, so exclude it with a filter
-  (`Log rotation detected`) where unwanted.
+- Rotation is detected from size decrease, a modification time that went back
+  without growth, a position more than 1 KiB beyond end-of-file, or an inode
+  change. An inode change where the new file is non-empty and at least as large
+  as the recorded position is treated as an atomic save, not a rotation, and
+  the position is preserved. Each rotation also publishes an INFO entry
+  `Log rotation detected (#N): REASON` with the file's name as `Source`; it
+  reaches every sink, so exclude it with a filter (`Log rotation detected`)
+  where unwanted.
 - A rotation that renames in place — what a size-capped writer does — puts the
   same inode back under a name `pattern` also matches. Its watcher resumes at
   the position the original reached, so `from = "start"` reads the tail an
   unfinished read left behind rather than the whole archive a second time.
-- A line is parsed as JSON only when it is an object whose top-level keys are
-  all drawn from `time`, `level`, `msg` and `fields` — the four an entry can
-  carry. `time` is read as RFC3339Nano. Any other key, and any non-object line,
-  is kept whole as text, because parsing it would drop the rest. `level` is
+- A line is parsed as JSON only when it is a non-empty object whose top-level
+  keys are all drawn from `time`, `level`, `msg` and `fields` (the four an
+  entry can carry), with any `level` or `msg` a string. `time` is read as
+  RFC3339Nano; the read time stands in when it is missing or does not parse.
+  Any other line is kept whole as text, so nothing in it is dropped. `level` is
   kept as written (a filter sees `Error` or `fatal` as is), and a line without
   `level` has none; only text lines get the inference below.
 - A text line's level is its first whole word, in any case, naming one:
@@ -76,20 +84,23 @@ Options, each as type and default:
   console sink paints that word and the http sink's viewer filters on it.
 - `raw = true` skips the JSON branch. The line, with its terminator (`\n` or
   `\r\n`) removed, becomes the message. `fields` stays empty, the time is the
-  read time, and the level is inferred from the text. Blank lines are skipped.
+  read time, and the level is inferred from the text. Empty lines are skipped.
   With `format.type = "raw"` each line is written back with one `\n`, which
   carries records the envelope cannot hold but is not byte-exact; see
   [Formatters](formatters.md#raw).
 
-**Statistics**: per-watcher size, position, entries read, rotation count, and
-last read time, plus `active_watchers`.
+**Statistics**: `active_watchers`, and `watchers`, one map per followed file:
+`directory` (the file's path), `size`, `position`, `entries_read`,
+`rotations`, `last_read`. The status report shows that list only as
+`watchers_count`.
 
 ---
 
 ## console
 
 Reads newline-delimited entries from standard input. It is the source of the
-built-in `pipe` pipeline, and of every spec pipeline given no `--source`.
+built-in `pipe` pipeline, and of every pipeline from flags or variables left
+without one: no `--source`, and no preset that brings one.
 
 ```toml
 [[pipelines.plugin_sources]]
@@ -106,20 +117,23 @@ Option, as type and default:
 Lines:
 - Each line is one entry, its terminator (`\n` or `\r\n`) removed; the
   formatter writes one back. An unterminated last line is kept.
-- Blank lines are skipped.
+- Empty lines are skipped; a line of spaces is an entry.
 - A line over 1 MiB continues in the next entry; no byte is lost.
 - The level is inferred from the line text, and `Source` is set to `console`.
 
 Delivery and lifetime:
-- Nothing is dropped: the source waits for its pipeline, so a slow pipeline
-  slows the reading of stdin.
+- The source drops nothing while its pipeline runs: it waits, so a slow
+  pipeline slows the reading of stdin.
 - One reader serves the process. A reload's new source continues where the old
-  one stopped; no line is read twice. Hence at most **one** console source in
-  the whole configuration, checked at validation.
+  one stopped, and no line is read twice, but lines the old pipeline still
+  holds at the reload can be lost. Hence at most **one** console source in the
+  whole configuration, checked at validation.
 - At the end of input the source ends, and with it a pipeline whose sources
   have all ended; lw exits once every pipeline has
   ([CLI](cli.md#built-in-defaults)). Under a supervisor whose stdin is
   `/dev/null` that is at once.
+
+**Statistics**: `ended`, true once standard input has ended.
 
 ---
 
@@ -151,10 +165,13 @@ Options, each as type and default:
   longer message.
 - `special` (bool, `false`): with `length` ≥ 3, mix in up to one control byte
   (`\n` and `\r` among them) and a few non-ASCII bytes, often invalid UTF-8.
-  `raw` and `txt` carry them as they are; `json` escapes them inside its
-  message.
+  `raw` and `txt` carry them as they are; `json` escapes the control byte and
+  replaces each invalid byte with U+FFFD.
 
 Levels (`txt` and `json` only) are random among DEBUG, INFO, WARN, ERROR.
+`Source` is `random_ID`, ID being the source's `id`.
+
+**Statistics**: `format`, `interval_ms`, `jitter_ms`, `length`, `special`.
 
 ---
 
@@ -295,7 +312,9 @@ node_binding = "force"
 
 Options, each as type and default:
 
-- `host`, `port`, `trust_node`, `tls`, `auth`: as on [tcp_chain](#tcp_chain).
+- `host`, `port`, `trust_node`, `tls`: as on [tcp_chain](#tcp_chain).
+- `auth` (table): as on `tcp_chain`, plus `token_lifetime_ms`, the `scram`
+  bearer token lifetime: 10 s to 24 h, `0` = 15 minutes.
 - `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
   `/auth` is reserved for the login.
 - `buffer_size` (int, `1000`): subscriber channel depth.
