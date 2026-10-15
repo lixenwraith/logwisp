@@ -217,8 +217,9 @@ pipelines[0].plugin_sinks[http].config: unknown key "tls.enabeld"
   key's default, or the meaning its help gives zero (off, none, unlimited). A
   number below its key's minimum is refused, a negative one included where
   zero means the default (`buffer_size = -1`).
-- Flow stages are checked whether enabled or not: kinds, enums and ranges,
-  and filter patterns must compile ([Filters](filters.md)).
+- Flow stages are checked whether enabled or not: kinds, enums and ranges;
+  a filter needs at least one pattern, and each must compile
+  ([Filters](filters.md)).
 - `auth` enums (`identity`, `node_binding`) are checked whatever `type` is; a
   block naming peers or credentials with `type` `none` or unset is refused
   ([Security](security.md#validation-1)).
