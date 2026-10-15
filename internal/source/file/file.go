@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/config"
@@ -276,6 +275,7 @@ func (fs *FileSource) ensureWatcher(path string) {
 	}
 
 	w := newFileWatcher(path, fs.config.Raw, fs.config.From == "start", fs.publish, fs.logger)
+	w.others = fs.othersOf(w)
 	// A rotation renames the file out from under its watcher, so the same inode
 	// reappears here under the archive name. Resume where it was left: from the
 	// start would re-emit every record the file has already delivered.
@@ -304,20 +304,42 @@ func (fs *FileSource) ensureWatcher(path string) {
 // readPosition reports how far a running watcher has read the file now at path.
 // Callers hold fs.mu.
 func (fs *FileSource) readPosition(path string) (int64, bool) {
-	info, err := os.Stat(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return 0, false
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
 		return 0, false
 	}
+	return fs.readFile(file, info, nil)
+}
+
+// readFile reports how far a running watcher other than but read the file, by
+// its inode, if it still holds what that one read last before there: an inode
+// can be reused, and more than one watcher can claim it. Callers hold fs.mu.
+func (fs *FileSource) readFile(file *os.File, info os.FileInfo, but *fileWatcher) (int64, bool) {
 	for _, w := range fs.watchers {
-		if position, ok := w.readTo(stat.Ino); ok {
+		if w == but {
+			continue
+		}
+		if position, tail, ok := w.readTo(inodeOf(info)); ok && leads(file, position, info.Size(), tail) {
 			return position, true
 		}
 	}
 	return 0, false
+}
+
+// othersOf asks the source's other watchers, from w's goroutine, how far they
+// read a file: w holds no lock of its own then, so the order is fs.mu, then a
+// watcher's mu, as everywhere.
+func (fs *FileSource) othersOf(w *fileWatcher) func(*os.File, os.FileInfo) (int64, bool) {
+	return func(file *os.File, info os.FileInfo) (int64, bool) {
+		fs.mu.RLock()
+		defer fs.mu.RUnlock()
+		return fs.readFile(file, info, w)
+	}
 }
 
 // removeWatcher removes only the watcher that finished. A deleted file can be
