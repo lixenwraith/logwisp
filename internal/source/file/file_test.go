@@ -241,9 +241,9 @@ func tailFrom(t *testing.T, path string) func() []string {
 	}
 }
 
-// An edited file is still the file being read, however it is saved: reading
-// resumes after the last line read, wherever the edit moved it, or at the end
-// where the edit removed it, and replays nothing
+// An edited file is still the file being read, however it is saved and
+// wherever lines are deleted or inserted: reading resumes after the last line
+// read, or at the end where the edit removed it, and replays nothing
 func TestEditedFileResumesAfterTheLastLineRead(t *testing.T) {
 	saves := map[string]func(t *testing.T, check func() []string, path, text string){
 		"by rename": func(t *testing.T, _ func() []string, path, text string) {
@@ -275,6 +275,8 @@ func TestEditedFileResumesAfterTheLastLineRead(t *testing.T) {
 				{base, nil}, // the line read last, deleted
 				{base + "after\n", []string{"after"}},
 				{lines(14, 0, 15) + lines(14, 16, 20) + "after\nmore\n", []string{"more"}}, // a line before it deleted
+				{lines(14, 0, 5) + "inserted\n" + lines(14, 5, 15) + lines(14, 16, 20) + "after\nmore\nagain\n", []string{"again"}},
+				{lines(14, 10, 15) + lines(14, 16, 20) + "after\nmore\nagain\nlast\n", []string{"last"}}, // the top trimmed
 			}
 			for i, step := range steps {
 				save(t, check, path, step.text)

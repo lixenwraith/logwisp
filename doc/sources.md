@@ -59,22 +59,26 @@ Options, each as type and default:
   written meanwhile is not read. `from = "start"` instead reads each file whole
   when its watcher is created, which a process writing beside LogWisp needs, at
   the cost of replaying files already on disk at every restart and reload.
-- A file is known by its first 256 bytes, not its inode or size. While it
-  starts as before, reading resumes after the line read last, found again
-  where an edit moved it, or at the file's end where the edit deleted it, so a
-  save from an editor, in place or by rename, replays nothing.
-- A file that starts anew is a rotation (logrotate's `create` or
-  `copytruncate`, a file emptied and written again) and is read from its
-  start; an emptied file, or one cut within its first 256 bytes, waits for what
-  is written next to say which. Each rotation also publishes an INFO entry
-  `Log rotation detected (#N): the file starts anew` with the file's name as
-  `Source`; it reaches every sink, so exclude it with a filter
+- A file is followed by its content, not its inode or size: lw keeps its
+  first 256 bytes and the line read last (256 bytes at most). When an edit
+  rewrites the file, in place or by an editor's rename, reading resumes after
+  that line, searched for in the file's last 64 KiB, wherever lines were
+  deleted or inserted before it; lines inserted before it are not read. Where
+  the edit deleted that line and the file starts as before, reading resumes at
+  its end. Either way nothing already read is replayed.
+- A file that starts anew without that line is a rotation (logrotate's
+  `create` or `copytruncate`, a file emptied and written again) and is read
+  from its start; an emptied file, or one cut within its first 256 bytes,
+  waits for what is written next to say which. Each rotation also publishes an
+  INFO entry `Log rotation detected (#N): the file starts anew` with the
+  file's name as `Source`; it reaches every sink, so exclude it with a filter
   (`Log rotation detected`) where unwanted.
-  - An edit within the first 256 bytes makes the file start anew, so it is
-    read again whole; files that share their first 256 bytes (a long fixed
-    header) are taken for one another, so a rotation skips the new file's
-    lines up to the next poll; and a rewrite in place that a poll catches
-    partway can re-read what it writes after that poll.
+  - A save that changes the first 256 bytes and deletes the line read last
+    reads the file again whole; one that appends more than 64 KiB after that
+    line resumes at the end, skipping them; files that share their first 256
+    bytes (a long fixed header) are taken for one another, so a rotation skips
+    the new file's lines up to the next poll; and a rewrite in place that a
+    poll catches partway can re-read what it writes after that poll.
 - A rotation that renames in place — what a size-capped writer does — puts the
   same inode back under a name `pattern` also matches. Its watcher resumes at
   the position the original reached, so `from = "start"` reads the tail an
