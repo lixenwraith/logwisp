@@ -6,10 +6,12 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 // The drop-in directory make wasm writes over an earlier one's, served as a
-// site serves it (?type= another content type) and loaded through lwconf.js;
+// site serves it (?type= another content type, ?held the second half of a file
+// once rest settles) and loaded through lwconf.js;
 // wasm_exec.js is imported first, as a page's script element runs it. make runs
 // on its own, with make verify's toolchain: a GNU make's flags stop a BSD one.
 const root = join(import.meta.dirname, "../..");
@@ -22,17 +24,22 @@ const wasm = (bin, ...vars) => execFileSync("make", ["-s", "wasm", `BIN_DIR=${bi
 mkdirSync(dir);
 writeFileSync(join(dir, "stale.js"), "");
 wasm(tmp);
-const server = createServer((req, res) => {
+let rest = Promise.resolve();
+const server = createServer(async (req, res) => {
   const { pathname, searchParams } = new URL(req.url, "http://localhost");
   const file = join(dir, basename(pathname));
   if (!existsSync(file)) return res.writeHead(404).end();
   res.setHeader("content-type", searchParams.get("type") ?? (file.endsWith(".wasm") ? "application/wasm" : "text/javascript"));
-  res.end(readFileSync(file));
+  const body = readFileSync(file);
+  if (!searchParams.has("held")) return res.end(body);
+  res.write(body.subarray(0, body.length >> 1));
+  await rest;
+  res.end(body.subarray(body.length >> 1));
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 after(() => { server.close(); rmSync(tmp, { recursive: true, force: true }); });
 const url = file => `http://127.0.0.1:${server.address().port}/${file}`;
-const sri = file => "sha256-" + createHash("sha256").update(readFileSync(join(dir, file))).digest("base64");
+const sri = (file, alg = "sha256") => `${alg}-` + createHash(alg).update(readFileSync(join(dir, file))).digest("base64");
 
 const { load, fields, value, at, group } = await import(pathToFileURL(join(dir, "lwconf.js")));
 await import(pathToFileURL(join(dir, "wasm_exec.js")));
@@ -56,20 +63,45 @@ test("make wasm writes a commit's files the same at any time", () => {
   assert.equal(readFileSync(join(tmp, "again/lwconf/lwconf.json"), "utf8"), readFileSync(join(dir, "lwconf.json"), "utf8"));
 });
 
-test("load refuses an engine its integrity does not match, or a server does not have", async () => {
-  await assert.rejects(load({ wasmURL: url("lwconf.wasm"), wasmSRI: sri("schema.json") }));
-  await assert.rejects(load({ wasmURL: url("missing.wasm") }), { message: `${url("missing.wasm")}: 404` });
-});
-
-test("load takes an engine a server sends as plain bytes", async () => {
+// load again, as a page loads its engine
+async function fresh(opts) {
   const api = globalThis.lwconf;
   delete globalThis.lwconf;
   try {
-    const bytes = await load({ wasmURL: url("lwconf.wasm?type=application/octet-stream"), wasmSRI: sri("lwconf.wasm") });
-    assert.deepEqual(bytes.schema().value, schema);
+    return await load(opts);
   } finally {
     globalThis.lwconf = api;
   }
+}
+
+// By the strongest algorithm integrity names; where a page has no SubtleCrypto
+// (not on https: crypto.getRandomValues, which Go's runtime needs, stays) fetch checks
+test("load refuses an engine its integrity does not match, or a server does not have", async () => {
+  const wasmURL = url("lwconf.wasm");
+  await assert.rejects(fresh({ wasmURL, wasmSRI: sri("schema.json") }), { message: `${wasmURL}: not the file its integrity names` });
+  await assert.rejects(fresh({ wasmURL, wasmSRI: `${sri("lwconf.wasm")} ${sri("schema.json", "sha512")}` }));
+  assert.deepEqual((await fresh({ wasmURL, wasmSRI: `${sri("schema.json")} ${sri("lwconf.wasm", "sha512")}` })).schema().value, schema);
+  Object.defineProperty(globalThis.crypto, "subtle", { value: undefined, configurable: true });
+  try {
+    await assert.rejects(fresh({ wasmURL, wasmSRI: sri("schema.json") }));
+    assert.deepEqual((await fresh({ wasmURL, wasmSRI: sri("lwconf.wasm") })).schema().value, schema);
+  } finally {
+    delete globalThis.crypto.subtle;
+  }
+  await assert.rejects(load({ wasmURL: url("missing.wasm") }), { message: `${url("missing.wasm")}: 404` });
+});
+
+// The second half is sent once the first is counted, or two seconds on
+test("load takes an engine a server sends as plain bytes, counting them as they arrive", async () => {
+  const heard = [];
+  let first, sent = false, early = false;
+  rest = Promise.race([new Promise(resolve => { first = resolve; }), delay(2000, undefined, { ref: false })]).then(() => { sent = true; });
+  const again = await fresh({ wasmURL: url("lwconf.wasm?type=application/octet-stream&held"), wasmSRI: sri("lwconf.wasm"),
+    progress: n => { heard.push(n); early ||= !sent; first(); } });
+  assert.deepEqual(again.schema().value, schema);
+  assert.ok(early, "counted before the last byte was sent");
+  assert.ok(heard.every((n, i) => i === 0 || n > heard[i - 1]));
+  assert.equal(heard.at(-1), readFileSync(join(dir, "lwconf.wasm")).length);
 });
 
 // A path neither ending in '/' nor holding a glob is a question, in a preset

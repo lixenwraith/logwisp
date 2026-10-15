@@ -370,15 +370,15 @@ func setDefault(f reflect.Value, o option) {
 }
 
 // checkTags applies the tag rules to a table's own keys, naming each by
-// prefix and key. A zero number is the default or its zero meaning, and
-// meets the range unless required; an empty enum is one only by its zero
-// or default.
+// prefix and key. A required list needs an entry. A zero number is the
+// default or its zero meaning, and meets the range unless required; an empty
+// enum is one only by its zero or default.
 func checkTags(v reflect.Value, prefix string) error {
 	for _, o := range options(v.Type()) {
 		f := v.Field(o.index)
 		var err error
 		switch {
-		case o.Required && (f.IsZero() || f.Kind() == reflect.String && strings.TrimSpace(f.String()) == ""):
+		case o.Required && (f.IsZero() || f.Kind() == reflect.String && strings.TrimSpace(f.String()) == "" || f.Kind() == reflect.Slice && f.Len() == 0):
 			err = errors.New("must be set")
 		case f.Kind() == reflect.String && len(o.Enum) > 0 && (f.String() != "" || o.Zero == "" && o.Default == "") && !slices.Contains(o.Enum, f.String()):
 			err = fmt.Errorf("must be one of %s, got %q", strings.Join(o.Enum, ", "), f.String())

@@ -26,7 +26,7 @@ func TestEveryRowDecodesFromItsRequiredKeys(t *testing.T) {
 			t.Errorf("%s %s from %v: %v", p.Type, p.Role, m, err)
 		}
 	}
-	for _, stage := range []any{&HeartbeatConfig{}, &RateLimitConfig{}, &FormatConfig{}, &FilterConfig{}} {
+	for _, stage := range []any{&HeartbeatConfig{}, &RateLimitConfig{}, &FormatConfig{}, &FilterConfig{Patterns: []string{"1"}}} {
 		if err := Settle(stage); err != nil {
 			t.Errorf("%T: %v", stage, err)
 		}
