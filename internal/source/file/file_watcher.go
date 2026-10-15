@@ -2,6 +2,7 @@ package file
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,14 @@ type WatcherInfo struct {
 	Rotations    int64
 }
 
+// markBytes is how much of a file's start, and of the line read last, is kept
+// to know the file again when an edit or a rotation swaps its inode or size
+const markBytes = 256
+
+// findWithin is how far either side of the old position an edit may move the
+// line read last and still have it found
+const findWithin = 1 << 20
+
 // fileWatcher tails a single file, handles rotations, and sends new lines to a callback
 type fileWatcher struct {
 	directory    string
@@ -48,6 +57,7 @@ type fileWatcher struct {
 	lastReadTime atomic.Value // time.Time
 	logger       *log.Logger
 	failed       string // the last check's error, "" for none; watch's
+	head, tail   []byte // the file's first bytes and its line before position (lastLine); watch's
 }
 
 // newFileWatcher creates a new watcher for a specific file path.
@@ -127,7 +137,11 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 	return info
 }
 
-// checkFile examines the file for changes, rotations, or new content
+// checkFile reads what the file has gained. It is the file being read while it
+// starts as before, whatever its inode or size: reading resumes after the line
+// read last, found again where an edit moved it, else at its end, so an edit
+// replays nothing. A file that starts anew, a rotation, is read from its start;
+// one emptied or cut within its start waits for what is written next to say.
 func (w *fileWatcher) checkFile() error {
 	file, err := os.Open(w.directory)
 	if err != nil {
@@ -143,166 +157,146 @@ func (w *fileWatcher) checkFile() error {
 	if err != nil {
 		return err
 	}
+	size, ino := info.Size(), inodeOf(info)
 
 	w.mu.Lock()
-	oldPos := w.position
-	oldSize := w.size
-	oldInode := w.inode
-	oldModTime := w.modTime
+	pos := w.position
+	same := size == w.size && ino == w.inode && info.ModTime().Equal(w.modTime)
+	if ino != w.inode && w.inode != 0 {
+		// Retained for the source: a rotation's renamed file is about to be
+		// discovered under its archive name, and only this says how much of it was read.
+		w.prevInode, w.prevPosition = w.inode, w.position
+	}
+	w.inode, w.size, w.modTime = ino, size, info.ModTime()
 	w.mu.Unlock()
-
-	currentSize := info.Size()
-	currentModTime := info.ModTime()
-	var currentInode uint64
-
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		currentInode = stat.Ino
+	if same && pos >= size {
+		return nil
 	}
 
-	// Handle first time seeing a file that didn't exist before
-	if oldInode == 0 && currentInode != 0 {
-		// File just appeared, don't treat as rotation
-		w.mu.Lock()
-		w.inode = currentInode
-		w.size = currentSize
-		w.modTime = currentModTime
-		// Position stays at 0 for new files
-		w.mu.Unlock()
-		// Don't return here - continue to read content
+	head, err := readAt(file, 0, min(size, markBytes))
+	if err != nil {
+		return err
+	}
+	n := min(len(head), len(w.head))
+	switch {
+	case !bytes.Equal(head[:n], w.head[:n]):
+		pos = 0
+		w.rotated()
+	case size < int64(len(w.head)):
+		return nil
+	case !w.follows(file, pos, size):
+		was := pos
+		pos = w.find(file, pos, size)
+		w.logger.Info("msg", "File rewritten; resuming after the last line read, or at its end",
+			"component", "file_watcher", "path", w.directory, "position", was, "resumed_at", pos, "size", size)
+	}
+	w.head = head
+
+	if _, err := file.Seek(pos, io.SeekStart); err != nil {
+		return err
+	}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
+	scanner.Split(scanLinesCapped)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		entry := w.parseLine(line)
+		entry.RawSize = int64(len(line))
+
+		w.callback(entry)
+		w.entriesRead.Add(1)
+		w.lastReadTime.Store(time.Now())
+	}
+	if err := scanner.Err(); err != nil {
+		return err
 	}
 
-	// Check for rotation
-	rotated := false
-	rotationReason := ""
-	startPos := oldPos
-
-	// Rotation detection
-	if currentSize < oldSize {
-		// File was truncated
-		rotated = true
-		rotationReason = "size decrease"
-	} else if currentModTime.Before(oldModTime) && currentSize <= oldSize {
-		// Modification time went backwards (logrotate behavior)
-		rotated = true
-		rotationReason = "modification time reset"
-	} else if oldPos > currentSize+1024 {
-		// Our position is way beyond file size
-		rotated = true
-		rotationReason = "position beyond file size"
-	} else if oldInode != 0 && currentInode != 0 && currentInode != oldInode {
-		// Inode changed - distinguish between rotation and atomic save
-		if currentSize == 0 {
-			// Empty file with new inode = likely rotation
-			rotated = true
-			rotationReason = "inode change with empty file"
-		} else if currentSize < oldPos {
-			// New file is smaller than our position = rotation
-			rotated = true
-			rotationReason = "inode change with size less than position"
-		} else {
-			// Inode changed but file has content and size >= position
-			// This is likely an atomic save by an editor
-			// Update inode but keep position
-			w.mu.Lock()
-			w.inode = currentInode
-			w.mu.Unlock()
-
-			w.logger.Debug("msg", "Atomic file update detected",
-				"component", "file_watcher",
-				"directory", w.directory,
-				"old_inode", oldInode,
-				"new_inode", currentInode,
-				"position", oldPos,
-				"size", currentSize)
-		}
+	end, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		w.logger.Warn("msg", "Failed to get file position", "error", err)
+		end = max(pos, size)
 	}
-
-	if rotated {
-		startPos = 0
-		w.mu.Lock()
-		w.rotationSeq++
-		seq := w.rotationSeq
-		// Retained for the source: the renamed file is about to be discovered
-		// under its archive name, and only this says how much of it was read.
-		w.prevInode, w.prevPosition = oldInode, oldPos
-		w.inode = currentInode
-		w.position = 0 // Reset position on rotation
-		w.mu.Unlock()
-
-		w.callback(core.LogEntry{
-			Time:    time.Now(),
-			Source:  filepath.Base(w.directory),
-			Level:   "INFO",
-			Message: fmt.Sprintf("Log rotation detected (#%d): %s", seq, rotationReason),
-		})
-
-		w.logger.Info("msg", "Log rotation detected",
-			"component", "file_watcher",
-			"directory", w.directory,
-			"sequence", seq,
-			"reason", rotationReason)
+	if w.tail, err = lastLine(file, end); err != nil {
+		return err
 	}
-
-	// Read if there's new content OR if we need to continue from position
-	if currentSize > startPos {
-		if _, err := file.Seek(startPos, io.SeekStart); err != nil {
-			return err
-		}
-
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
-		scanner.Split(scanLinesCapped)
-
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				continue
-			}
-
-			rawSize := int64(len(line))
-			entry := w.parseLine(line)
-			entry.RawSize = rawSize
-
-			w.callback(entry)
-			w.entriesRead.Add(1)
-			w.lastReadTime.Store(time.Now())
-		}
-
-		if err := scanner.Err(); err != nil {
-			return err
-		}
-
-		// Update position after successful read
-		currentPos, err := file.Seek(0, io.SeekCurrent)
-		if err != nil {
-			// Log error but don't fail - best effort position tracking
-			w.logger.Warn("msg", "Failed to get file position", "error", err)
-			// Use size as fallback position
-			currentPos = currentSize
-		}
-
-		w.mu.Lock()
-		w.position = currentPos
-		w.size = currentSize
-		w.modTime = currentModTime
-		if !rotated && currentInode != 0 {
-			w.inode = currentInode
-		}
-		w.mu.Unlock()
-
-		return scanner.Err()
-	}
-
-	// Update metadata even if no new content
 	w.mu.Lock()
-	w.size = currentSize
-	w.modTime = currentModTime
-	if currentInode != 0 {
-		w.inode = currentInode
-	}
+	w.position = end
 	w.mu.Unlock()
-
 	return nil
+}
+
+// rotated counts a rotation and says so, in lw's log and to the pipeline
+func (w *fileWatcher) rotated() {
+	w.mu.Lock()
+	w.rotationSeq++
+	seq := w.rotationSeq
+	w.mu.Unlock()
+
+	w.callback(core.LogEntry{
+		Time:    time.Now(),
+		Source:  filepath.Base(w.directory),
+		Level:   "INFO",
+		Message: fmt.Sprintf("Log rotation detected (#%d): the file starts anew", seq),
+	})
+	w.logger.Info("msg", "Log rotation detected",
+		"component", "file_watcher",
+		"directory", w.directory,
+		"sequence", seq)
+}
+
+// follows reports whether the line before pos is still the one read last
+func (w *fileWatcher) follows(file *os.File, pos, size int64) bool {
+	if pos > size {
+		return false
+	}
+	got, err := readAt(file, pos-int64(len(w.tail)), int64(len(w.tail)))
+	return err == nil && bytes.Equal(got, w.tail)
+}
+
+// find is where reading resumes in a file an edit rewrote: after the last copy
+// near pos of the line read last, or at its end where the edit removed it
+func (w *fileWatcher) find(file *os.File, pos, size int64) int64 {
+	lo, hi := max(0, pos-findWithin), min(size, pos+findWithin)
+	if len(w.tail) == 0 || lo >= hi {
+		return size
+	}
+	buf, err := readAt(file, lo, hi-lo)
+	if i := bytes.LastIndex(buf, w.tail); err == nil && i >= 0 {
+		return lo + int64(i+len(w.tail))
+	}
+	return size
+}
+
+// lastLine is the line that ends at end, with the newline before it, so that
+// it is found only whole: markBytes at most, a longer line's end
+func lastLine(file *os.File, end int64) ([]byte, error) {
+	buf, err := readAt(file, end-min(end, markBytes), min(end, markBytes))
+	if i := bytes.LastIndexByte(buf[:max(0, len(buf)-1)], '\n'); i >= 0 {
+		buf = buf[i:]
+	}
+	return buf, err
+}
+
+// readAt reads n bytes at off, fewer where the file ends first
+func readAt(file *os.File, off, n int64) ([]byte, error) {
+	buf := make([]byte, n)
+	got, err := file.ReadAt(buf, off)
+	if err == io.EOF {
+		err = nil
+	}
+	return buf[:got], err
+}
+
+// inodeOf is the file's inode, 0 where the platform gives none
+func inodeOf(info os.FileInfo) uint64 {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return stat.Ino
+	}
+	return 0
 }
 
 // scanLinesCapped is bufio.ScanLines, except that a line longer than
@@ -316,8 +310,8 @@ func scanLinesCapped(data []byte, atEOF bool) (int, []byte, error) {
 	return advance, token, err
 }
 
-// initPosition records the file's metadata and, unless the watcher was created
-// to read from the start, sets the initial read position to the end.
+// initPosition records the file's metadata and its marks and, unless the
+// watcher was created to read from the start, sets the read position to the end.
 func (w *fileWatcher) initPosition() error {
 	file, err := os.Open(w.directory)
 	if err != nil {
@@ -352,11 +346,12 @@ func (w *fileWatcher) initPosition() error {
 
 	w.size = info.Size()
 	w.modTime = info.ModTime()
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		w.inode = stat.Ino
+	w.inode = inodeOf(info)
+	if w.head, err = readAt(file, 0, min(w.size, markBytes)); err != nil {
+		return err
 	}
-
-	return nil
+	w.tail, err = lastLine(file, w.position)
+	return err
 }
 
 // readTo reports how far this watcher read the given inode: the file it tails

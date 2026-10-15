@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -208,5 +209,122 @@ func TestRotatedFileResumesInsteadOfReplaying(t *testing.T) {
 	unrelated := &FileSource{watchers: map[string]*fileWatcher{active: {inode: 99}}}
 	if _, ok := unrelated.readPosition(archive); ok {
 		t.Error("a file no watcher has read was treated as rotated")
+	}
+}
+
+// lines are log lines stamped with day, from line first up to but not
+// including last
+func lines(day, first, last int) string {
+	var b strings.Builder
+	for i := first; i < last; i++ {
+		fmt.Fprintf(&b, "Oct %d 00:00:%02d host app[1]: line %d\n", day, i%60, i)
+	}
+	return b.String()
+}
+
+// tailFrom starts a watcher at the file's end; each call of the check it
+// returns polls once and gives the messages read
+func tailFrom(t *testing.T, path string) func() []string {
+	t.Helper()
+	var got []string
+	w := newFileWatcher(path, true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	if err := w.initPosition(); err != nil {
+		t.Fatal(err)
+	}
+	return func() []string {
+		t.Helper()
+		got = nil
+		if err := w.checkFile(); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+}
+
+// An edited file is still the file being read, however it is saved: reading
+// resumes after the last line read, wherever the edit moved it, or at the end
+// where the edit removed it, and replays nothing
+func TestEditedFileResumesAfterTheLastLineRead(t *testing.T) {
+	saves := map[string]func(t *testing.T, check func() []string, path, text string){
+		"by rename": func(t *testing.T, _ func() []string, path, text string) {
+			testutil.WriteFile(t, path+".tmp", text)
+			if err := os.Rename(path+".tmp", path); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"in place": func(t *testing.T, _ func() []string, path, text string) { testutil.WriteFile(t, path, text) },
+		"in place, polled while empty": func(t *testing.T, check func() []string, path, text string) {
+			testutil.WriteFile(t, path, "")
+			if got := check(); len(got) != 0 {
+				t.Fatalf("read %q from the emptied file", got)
+			}
+			testutil.WriteFile(t, path, text)
+		},
+	}
+	for name, save := range saves {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "messages")
+			base := lines(14, 0, 20)
+			testutil.WriteFile(t, path, base)
+			check := tailFrom(t, path)
+			steps := []struct {
+				text string
+				want []string
+			}{
+				{base + "ssh in\n", []string{"ssh in"}},
+				{base, nil}, // the line read last, deleted
+				{base + "after\n", []string{"after"}},
+				{lines(14, 0, 15) + lines(14, 16, 20) + "after\nmore\n", []string{"more"}}, // a line before it deleted
+			}
+			for i, step := range steps {
+				save(t, check, path, step.text)
+				if got := check(); !slices.Equal(got, step.want) {
+					t.Fatalf("save %d read %q, want %q", i+1, got, step.want)
+				}
+			}
+		})
+	}
+}
+
+// A file that starts anew is a rotation: it is read from its start, after the
+// entry saying so, however it was replaced and whatever its size
+func TestRotatedFileIsReadFromItsStart(t *testing.T) {
+	fresh := lines(15, 0, 3)
+	rotations := map[string]func(t *testing.T, check func() []string, path string){
+		"truncated and written again": func(t *testing.T, _ func() []string, path string) { testutil.WriteFile(t, path, fresh) },
+		"renamed away and made anew": func(t *testing.T, _ func() []string, path string) {
+			if err := os.Rename(path, path+".1"); err != nil {
+				t.Fatal(err)
+			}
+			testutil.WriteFile(t, path, fresh)
+		},
+		"made anew past the position read": func(t *testing.T, _ func() []string, path string) {
+			testutil.WriteFile(t, path, fresh+lines(15, 3, 60))
+		},
+		"emptied, polled, then written": func(t *testing.T, check func() []string, path string) {
+			testutil.WriteFile(t, path, "")
+			if got := check(); len(got) != 0 {
+				t.Fatalf("read %q from the emptied file", got)
+			}
+			testutil.WriteFile(t, path, fresh)
+		},
+	}
+	for name, rotate := range rotations {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "messages")
+			testutil.WriteFile(t, path, lines(14, 0, 20))
+			check := tailFrom(t, path)
+			rotate(t, check, path)
+			got := check()
+			want := slices.Collect(strings.Lines(fresh))
+			if len(got) < len(want)+1 || !strings.HasPrefix(got[0], "Log rotation detected (#1)") {
+				t.Fatalf("read %q, want the rotation entry, then the new file from its start", got)
+			}
+			for i, line := range want {
+				if got[i+1] != strings.TrimSuffix(line, "\n") {
+					t.Fatalf("read %q, want the new file from its start", got)
+				}
+			}
+		})
 	}
 }

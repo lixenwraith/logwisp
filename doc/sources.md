@@ -59,14 +59,22 @@ Options, each as type and default:
   written meanwhile is not read. `from = "start"` instead reads each file whole
   when its watcher is created, which a process writing beside LogWisp needs, at
   the cost of replaying files already on disk at every restart and reload.
-- Rotation is detected from size decrease, a modification time that went back
-  without growth, a position more than 1 KiB beyond end-of-file, or an inode
-  change. An inode change where the new file is non-empty and at least as large
-  as the recorded position is treated as an atomic save, not a rotation, and
-  the position is preserved. Each rotation also publishes an INFO entry
-  `Log rotation detected (#N): REASON` with the file's name as `Source`; it
-  reaches every sink, so exclude it with a filter (`Log rotation detected`)
-  where unwanted.
+- A file is known by its first 256 bytes, not its inode or size. While it
+  starts as before, reading resumes after the line read last, found again
+  where an edit moved it, or at the file's end where the edit deleted it, so a
+  save from an editor, in place or by rename, replays nothing.
+- A file that starts anew is a rotation (logrotate's `create` or
+  `copytruncate`, a file emptied and written again) and is read from its
+  start; an emptied file, or one cut within its first 256 bytes, waits for what
+  is written next to say which. Each rotation also publishes an INFO entry
+  `Log rotation detected (#N): the file starts anew` with the file's name as
+  `Source`; it reaches every sink, so exclude it with a filter
+  (`Log rotation detected`) where unwanted.
+  - An edit within the first 256 bytes makes the file start anew, so it is
+    read again whole; files that share their first 256 bytes (a long fixed
+    header) are taken for one another, so a rotation skips the new file's
+    lines up to the next poll; and a rewrite in place that a poll catches
+    partway can re-read what it writes after that poll.
 - A rotation that renames in place — what a size-capped writer does — puts the
   same inode back under a name `pattern` also matches. Its watcher resumes at
   the position the original reached, so `from = "start"` reads the tail an
