@@ -31,13 +31,22 @@ type WatcherInfo struct {
 	Rotations    int64
 }
 
-// markBytes is how much of a file's start, and of the line read last, is kept
-// to know the file again when an edit or a rotation swaps its inode or size
+// markBytes is how much of a file's start is kept: a rotation starts anew, an
+// edit keeps it
 const markBytes = 256
 
-// findWithin is how much of a rewritten file's end is searched for the line
-// read last: what a save may append after it, and the most read to find it
-const findWithin = 64 << 10
+// The lines read last that are kept, to find the place again in a file an edit
+// rewrote, newest first, are tailLines and tailBytes at most; findWithin is how
+// much of its end is searched, what a save may append after them
+const (
+	tailLines  = 8
+	tailBytes  = 1 << 10
+	findWithin = 64 << 10
+)
+
+// settleChecks is how many checks a file whose line read last is missing may go
+// on changing, a slow rewrite still being written, before lw decides
+const settleChecks = 20
 
 // fileWatcher tails a single file, handles rotations, and sends new lines to a callback
 type fileWatcher struct {
@@ -57,7 +66,8 @@ type fileWatcher struct {
 	lastReadTime atomic.Value // time.Time
 	logger       *log.Logger
 	failed       string // the last check's error, "" for none; watch's
-	head, tail   []byte // the file's first bytes and its line before position (lastLine); watch's
+	head, tail   []byte // the file's first bytes and its lines before position (lastLines); watch's
+	holds        int    // checks waited for the file to settle; watch's
 }
 
 // newFileWatcher creates a new watcher for a specific file path.
@@ -138,10 +148,10 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 }
 
 // checkFile reads what the file has gained, whatever its inode or size. Where
-// an edit rewrote it, reading resumes after the line read last, found near its
-// end, or where that line is gone and the file starts as before, at its end, so
-// an edit replays nothing; a file starting anew, a rotation, reads from its
-// start. One emptied or cut within its start waits for what is written next.
+// an edit rewrote it, reading resumes after the newest line read it still holds,
+// or, none left and the file starting as before, at its end; one that starts
+// anew is a rotation, read from its start. While the line read last is missing
+// and the file still changes, it is held, up to settleChecks.
 func (w *fileWatcher) checkFile() error {
 	file, err := os.Open(w.directory)
 	if err != nil {
@@ -169,7 +179,7 @@ func (w *fileWatcher) checkFile() error {
 	}
 	w.inode, w.size, w.modTime = ino, size, info.ModTime()
 	w.mu.Unlock()
-	if same && pos >= size {
+	if same && pos >= size && w.holds == 0 {
 		return nil
 	}
 
@@ -177,23 +187,25 @@ func (w *fileWatcher) checkFile() error {
 	if err != nil {
 		return err
 	}
-	n := min(len(head), len(w.head))
-	sameStart := bytes.Equal(head[:n], w.head[:n])
-	switch {
-	case sameStart && size < int64(len(w.head)):
-		return nil
-	case w.follows(file, pos, size):
-	default:
-		at, found := w.find(file, size)
-		if !found && !sameStart {
-			pos = 0
+	if !w.follows(file, pos, size) {
+		at, which := w.find(file, size)
+		n := min(len(head), len(w.head))
+		switch {
+		case which != 0 && !same && w.holds < settleChecks:
+			w.holds++
+			return nil
+		case which < 0 && (len(head) == 0 || !bytes.Equal(head[:n], w.head[:n])):
 			w.rotated()
-			break
+		default:
+			if which < 0 {
+				at = size
+			}
+			w.logger.Info("msg", "File rewritten; resuming after the newest line read it holds, or at its end",
+				"component", "file_watcher", "path", w.directory, "position", pos, "resumed_at", at, "size", size)
 		}
-		w.logger.Info("msg", "File rewritten; resuming after the last line read, or at its end",
-			"component", "file_watcher", "path", w.directory, "position", pos, "resumed_at", at, "size", size)
 		pos = at
 	}
+	w.holds = 0
 	w.head = head
 
 	if _, err := file.Seek(pos, io.SeekStart); err != nil {
@@ -224,7 +236,7 @@ func (w *fileWatcher) checkFile() error {
 		w.logger.Warn("msg", "Failed to get file position", "error", err)
 		end = max(pos, size)
 	}
-	if w.tail, err = lastLine(file, end); err != nil {
+	if w.tail, err = lastLines(file, end); err != nil {
 		return err
 	}
 	w.mu.Lock()
@@ -252,7 +264,7 @@ func (w *fileWatcher) rotated() {
 		"sequence", seq)
 }
 
-// follows reports whether the line before pos is still the one read last
+// follows reports whether the lines before pos are still those read last
 func (w *fileWatcher) follows(file *os.File, pos, size int64) bool {
 	if pos > size {
 		return false
@@ -261,29 +273,46 @@ func (w *fileWatcher) follows(file *os.File, pos, size int64) bool {
 	return err == nil && bytes.Equal(got, w.tail)
 }
 
-// find is where reading resumes in a file an edit rewrote: after the line
-// read last, which stays near the end whatever was deleted or added before it,
-// or, not found, at the end
-func (w *fileWatcher) find(file *os.File, size int64) (int64, bool) {
-	if len(w.tail) == 0 {
-		return size, false
-	}
+// find is where reading resumes in a file an edit rewrote: after the newest of
+// the lines read last that its last findWithin bytes still hold. which counts
+// back from the newest, -1 where none is
+func (w *fileWatcher) find(file *os.File, size int64) (at int64, which int) {
 	lo := max(0, size-findWithin)
 	buf, err := readAt(file, lo, size-lo)
-	if i := bytes.LastIndex(buf, w.tail); err == nil && i >= 0 {
-		return lo + int64(i+len(w.tail)), true
+	if err != nil {
+		return 0, -1
 	}
-	return size, false
+	for end := len(w.tail); end > 0; which++ {
+		start := bytes.LastIndexByte(w.tail[:end-1], '\n')
+		line := w.tail[max(0, start):end]
+		if len(bytes.TrimSpace(line)) > 0 {
+			if i := bytes.LastIndex(buf, line); i >= 0 {
+				return lo + int64(i+len(line)), which
+			}
+		}
+		end = start + 1
+	}
+	return 0, -1
 }
 
-// lastLine is the line that ends at end, with the newline before it, so that
-// it is found only whole: markBytes at most, a longer line's end
-func lastLine(file *os.File, end int64) ([]byte, error) {
-	buf, err := readAt(file, end-min(end, markBytes), min(end, markBytes))
-	if i := bytes.LastIndexByte(buf[:max(0, len(buf)-1)], '\n'); i >= 0 {
-		buf = buf[i:]
+// lastLines are the lines that end at end, tailLines and tailBytes at most,
+// each with the newline before it so that it is found only whole
+func lastLines(file *os.File, end int64) ([]byte, error) {
+	n := min(end, tailBytes)
+	buf, err := readAt(file, end-n, n)
+	cut := 0
+	if end > n { // the first line is cut: from the newline after it
+		cut = max(0, bytes.IndexByte(buf[:max(0, len(buf)-1)], '\n'))
 	}
-	return buf, err
+	for i, lines := len(buf)-2, 0; i > cut; i-- {
+		if buf[i] == '\n' {
+			if lines++; lines == tailLines {
+				cut = i
+				break
+			}
+		}
+	}
+	return buf[cut:], err
 }
 
 // readAt reads n bytes at off, fewer where the file ends first
@@ -355,7 +384,7 @@ func (w *fileWatcher) initPosition() error {
 	if w.head, err = readAt(file, 0, min(w.size, markBytes)); err != nil {
 		return err
 	}
-	w.tail, err = lastLine(file, w.position)
+	w.tail, err = lastLines(file, w.position)
 	return err
 }
 

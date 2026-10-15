@@ -59,26 +59,30 @@ Options, each as type and default:
   written meanwhile is not read. `from = "start"` instead reads each file whole
   when its watcher is created, which a process writing beside LogWisp needs, at
   the cost of replaying files already on disk at every restart and reload.
-- A file is followed by its content, not its inode or size: lw keeps its
-  first 256 bytes and the line read last (256 bytes at most). When an edit
-  rewrites the file, in place or by an editor's rename, reading resumes after
-  that line, searched for in the file's last 64 KiB, wherever lines were
-  deleted or inserted before it; lines inserted before it are not read. Where
-  the edit deleted that line and the file starts as before, reading resumes at
-  its end. Either way nothing already read is replayed.
-- A file that starts anew without that line is a rotation (logrotate's
-  `create` or `copytruncate`, a file emptied and written again) and is read
-  from its start; an emptied file, or one cut within its first 256 bytes,
-  waits for what is written next to say which. Each rotation also publishes an
-  INFO entry `Log rotation detected (#N): the file starts anew` with the
-  file's name as `Source`; it reaches every sink, so exclude it with a filter
-  (`Log rotation detected`) where unwanted.
-  - A save that changes the first 256 bytes and deletes the line read last
-    reads the file again whole; one that appends more than 64 KiB after that
-    line resumes at the end, skipping them; files that share their first 256
-    bytes (a long fixed header) are taken for one another, so a rotation skips
-    the new file's lines up to the next poll; and a rewrite in place that a
-    poll catches partway can re-read what it writes after that poll.
+- A file is followed by its content, not its inode or size. lw keeps its first
+  256 bytes and the last 8 lines read (1 KiB at most), and assumes lines are
+  mostly distinct, as timestamped logs are; runs of identical lines can make
+  it resume after a later copy.
+  - Appended to, it reads on.
+  - Rewritten, in place or by an editor's rename: reading resumes after the
+    newest of those lines still in the file's last 64 KiB, wherever lines were
+    deleted or inserted before it; inserted lines are not read. None left and
+    the file starting as before, it resumes at the end. Nothing read is
+    replayed.
+  - Starting anew without them (logrotate's `create` or `copytruncate`, a file
+    emptied and written again, or an edit that lost both its start and those
+    lines) is a rotation: read from its start, after an INFO entry
+    `Log rotation detected (#N): the file starts anew` with the file's name as
+    `Source`, which reaches every sink (filter `Log rotation detected` out
+    where unwanted).
+  - While the line read last is missing and the file still changes between
+    polls, as when a slow save is rewriting it in place, lw holds that file,
+    for 2 s at most, and decides once it settles.
+  - Limits: a save appending more than 64 KiB after those lines resumes at its
+    end, skipping them; a rewrite still being written after 2 s can replay
+    what it writes after that; files sharing their first 256 bytes (a long
+    fixed header) are taken for one another, so a rotation then skips what the
+    new file held when it settled.
 - A rotation that renames in place — what a size-capped writer does — puts the
   same inode back under a name `pattern` also matches. Its watcher resumes at
   the position the original reached, so `from = "start"` reads the tail an

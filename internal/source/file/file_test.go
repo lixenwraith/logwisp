@@ -260,6 +260,13 @@ func TestEditedFileResumesAfterTheLastLineRead(t *testing.T) {
 			}
 			testutil.WriteFile(t, path, text)
 		},
+		"in place, polled partway": func(t *testing.T, check func() []string, path, text string) {
+			testutil.WriteFile(t, path, text[:len(text)/2])
+			if got := check(); len(got) != 0 {
+				t.Fatalf("read %q from the file half written", got)
+			}
+			testutil.WriteFile(t, path, text)
+		},
 	}
 	for name, save := range saves {
 		t.Run(name, func(t *testing.T) {
@@ -280,7 +287,8 @@ func TestEditedFileResumesAfterTheLastLineRead(t *testing.T) {
 			}
 			for i, step := range steps {
 				save(t, check, path, step.text)
-				if got := check(); !slices.Equal(got, step.want) {
+				// a missing line read last holds the file for one check, until it settles
+				if got := append(check(), check()...); !slices.Equal(got, step.want) {
 					t.Fatalf("save %d read %q, want %q", i+1, got, step.want)
 				}
 			}
@@ -289,7 +297,8 @@ func TestEditedFileResumesAfterTheLastLineRead(t *testing.T) {
 }
 
 // A file that starts anew is a rotation: it is read from its start, after the
-// entry saying so, however it was replaced and whatever its size
+// entry saying so and once it settles, however it was replaced and whatever
+// its size
 func TestRotatedFileIsReadFromItsStart(t *testing.T) {
 	fresh := lines(15, 0, 3)
 	rotations := map[string]func(t *testing.T, check func() []string, path string){
@@ -317,7 +326,7 @@ func TestRotatedFileIsReadFromItsStart(t *testing.T) {
 			testutil.WriteFile(t, path, lines(14, 0, 20))
 			check := tailFrom(t, path)
 			rotate(t, check, path)
-			got := check()
+			got := append(check(), check()...)
 			want := slices.Collect(strings.Lines(fresh))
 			if len(got) < len(want)+1 || !strings.HasPrefix(got[0], "Log rotation detected (#1)") {
 				t.Fatalf("read %q, want the rotation entry, then the new file from its start", got)
