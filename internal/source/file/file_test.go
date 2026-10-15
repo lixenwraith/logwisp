@@ -319,6 +319,11 @@ func TestRotatedFileIsReadFromItsStart(t *testing.T) {
 			}
 			testutil.WriteFile(t, path, fresh)
 		},
+		// copytruncate under a writer that does not append: it goes on at its
+		// offset, past a hole of NULs, which is no entry
+		"truncated under a writer at its offset": func(t *testing.T, _ func() []string, path string) {
+			testutil.WriteFile(t, path, strings.Repeat("\x00", len(lines(14, 0, 20)))+fresh)
+		},
 	}
 	for name, rotate := range rotations {
 		t.Run(name, func(t *testing.T) {
@@ -337,5 +342,50 @@ func TestRotatedFileIsReadFromItsStart(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// readTo answers only for files the watcher has read: never the inode an
+// editor's save freed, and while a check holds a replaced file, the one renamed
+// away, not its replacement
+func TestReadToAnswersOnlyForFilesRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages")
+	inode := func(name string) uint64 {
+		info, err := os.Stat(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inodeOf(info)
+	}
+	text := lines(14, 0, 20)
+	testutil.WriteFile(t, path, text)
+	w := newFileWatcher(path, true, false, func(core.LogEntry) {}, log.NewLogger())
+	if err := w.initPosition(); err != nil {
+		t.Fatal(err)
+	}
+
+	freed := inode(path)
+	text += "edited\n"
+	testutil.WriteFile(t, path+".tmp", text)
+	if err := errors.Join(os.Rename(path+".tmp", path), w.checkFile()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := w.readTo(freed); ok {
+		t.Error("the inode an editor's save freed is taken for an archive")
+	}
+
+	archive := path + ".1"
+	if err := os.Rename(path, archive); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, path, "")
+	if err := w.checkFile(); err != nil {
+		t.Fatal(err)
+	}
+	if position, ok := w.readTo(inode(archive)); !ok || position != int64(len(text)) {
+		t.Errorf("held: the renamed file read to %d, %v; want %d, true", position, ok, len(text))
+	}
+	if _, ok := w.readTo(inode(path)); ok {
+		t.Error("held: the replacement is answered for before it is judged")
 	}
 }
