@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -208,5 +209,267 @@ func TestRotatedFileResumesInsteadOfReplaying(t *testing.T) {
 	unrelated := &FileSource{watchers: map[string]*fileWatcher{active: {inode: 99}}}
 	if _, ok := unrelated.readPosition(archive); ok {
 		t.Error("a file no watcher has read was treated as rotated")
+	}
+}
+
+// lines are log lines stamped with day, from line first up to but not
+// including last
+func lines(day, first, last int) string {
+	var b strings.Builder
+	for i := first; i < last; i++ {
+		fmt.Fprintf(&b, "Oct %d 00:00:%02d host app[1]: line %d\n", day, i%60, i)
+	}
+	return b.String()
+}
+
+// appendFile adds text to the file's end, as a writer would
+func appendFile(t *testing.T, path, text string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tailFrom starts a watcher at the file's end; each call of the check it
+// returns polls once and gives the messages read
+func tailFrom(t *testing.T, path string) func() []string {
+	t.Helper()
+	var got []string
+	w := newFileWatcher(path, true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	if err := w.initPosition(); err != nil {
+		t.Fatal(err)
+	}
+	return func() []string {
+		t.Helper()
+		got = nil
+		if err := w.checkFile(); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+}
+
+// An edited file is still the file being read, however it is saved and
+// wherever lines are deleted or inserted: reading resumes after the newest
+// line read that it still holds, and replays nothing
+func TestEditedFileResumesAfterTheLastLineRead(t *testing.T) {
+	saves := map[string]func(t *testing.T, check func() []string, path, text string){
+		"by rename": func(t *testing.T, _ func() []string, path, text string) {
+			testutil.WriteFile(t, path+".tmp", text)
+			if err := os.Rename(path+".tmp", path); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"in place": func(t *testing.T, _ func() []string, path, text string) { testutil.WriteFile(t, path, text) },
+		"in place, polled while empty": func(t *testing.T, check func() []string, path, text string) {
+			testutil.WriteFile(t, path, "")
+			if got := check(); len(got) != 0 {
+				t.Fatalf("read %q from the emptied file", got)
+			}
+			testutil.WriteFile(t, path, text)
+		},
+		"in place, polled partway": func(t *testing.T, check func() []string, path, text string) {
+			testutil.WriteFile(t, path, text[:len(text)/2])
+			if got := check(); len(got) != 0 {
+				t.Fatalf("read %q from the file half written", got)
+			}
+			testutil.WriteFile(t, path, text)
+		},
+	}
+	for name, save := range saves {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "messages")
+			base := lines(14, 0, 20)
+			testutil.WriteFile(t, path, base)
+			check := tailFrom(t, path)
+			steps := []struct {
+				text string
+				want []string
+			}{
+				{base + "ssh in\n", []string{"ssh in"}},
+				{base, nil}, // the line read last, deleted
+				{base + "after\n", []string{"after"}},
+				{lines(14, 0, 15) + lines(14, 16, 20) + "after\nmore\n", []string{"more"}}, // a line before it deleted
+				{lines(14, 0, 5) + "inserted\n" + lines(14, 5, 15) + lines(14, 16, 20) + "after\nmore\nagain\n", []string{"again"}},
+				{lines(14, 10, 15) + lines(14, 16, 20) + "after\nmore\nagain\nlast\n", []string{"last"}},   // the top trimmed
+				{lines(14, 10, 15) + lines(14, 16, 20) + "after\nmore\nagain\nfinal\n", []string{"final"}}, // the line read last replaced
+				{"final\nend\n", []string{"end"}}, // trimmed down to the line read last
+			}
+			for i, step := range steps {
+				save(t, check, path, step.text)
+				// a missing line read last holds the file for one check, until it settles
+				if got := append(check(), check()...); !slices.Equal(got, step.want) {
+					t.Fatalf("save %d read %q, want %q", i+1, got, step.want)
+				}
+			}
+		})
+	}
+}
+
+// A file that starts anew is a rotation: it is read from its start, after the
+// entry saying so and once it settles, however it was replaced, whatever its
+// size, and wherever in a line the last read ended
+func TestRotatedFileIsReadFromItsStart(t *testing.T) {
+	fresh := lines(15, 0, 3)
+	rotations := map[string]func(t *testing.T, check func() []string, path string){
+		"truncated and written again": func(t *testing.T, _ func() []string, path string) { testutil.WriteFile(t, path, fresh) },
+		"renamed away and made anew": func(t *testing.T, _ func() []string, path string) {
+			if err := os.Rename(path, path+".1"); err != nil {
+				t.Fatal(err)
+			}
+			testutil.WriteFile(t, path, fresh)
+		},
+		"made anew past the position read": func(t *testing.T, _ func() []string, path string) {
+			testutil.WriteFile(t, path, fresh+lines(15, 3, 60))
+		},
+		"emptied, polled, then written": func(t *testing.T, check func() []string, path string) {
+			testutil.WriteFile(t, path, "")
+			if got := check(); len(got) != 0 {
+				t.Fatalf("read %q from the emptied file", got)
+			}
+			testutil.WriteFile(t, path, fresh)
+		},
+		// a block-buffered writer leaves a line half written: no mark, though
+		// the new lines start as it does
+		"after a line read half written": func(t *testing.T, check func() []string, path string) {
+			appendFile(t, path, "Oct 1")
+			check()
+			testutil.WriteFile(t, path, fresh)
+		},
+		// copytruncate under a writer that does not append: it goes on at its
+		// offset, past a hole of NULs, which is no entry
+		"truncated under a writer at its offset": func(t *testing.T, _ func() []string, path string) {
+			testutil.WriteFile(t, path, strings.Repeat("\x00", len(lines(14, 0, 20)))+fresh)
+		},
+	}
+	for name, rotate := range rotations {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "messages")
+			testutil.WriteFile(t, path, lines(14, 0, 20))
+			check := tailFrom(t, path)
+			rotate(t, check, path)
+			got := append(check(), check()...)
+			want := slices.Collect(strings.Lines(fresh))
+			if len(got) < len(want)+1 || !strings.HasPrefix(got[0], "Log rotation detected (#1)") {
+				t.Fatalf("read %q, want the rotation entry, then the new file from its start", got)
+			}
+			for i, line := range want {
+				if got[i+1] != strings.TrimSuffix(line, "\n") {
+					t.Fatalf("read %q, want the new file from its start", got)
+				}
+			}
+		})
+	}
+}
+
+// readTo answers only for files the watcher has read: never the inode an
+// editor's save freed, and while a check holds a replaced file, the one renamed
+// away, not its replacement
+func TestReadToAnswersOnlyForFilesRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages")
+	inode := func(name string) uint64 {
+		info, err := os.Stat(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inodeOf(info)
+	}
+	text := lines(14, 0, 20)
+	testutil.WriteFile(t, path, text)
+	w := newFileWatcher(path, true, false, func(core.LogEntry) {}, log.NewLogger())
+	if err := w.initPosition(); err != nil {
+		t.Fatal(err)
+	}
+
+	freed := inode(path)
+	text += "edited\n"
+	testutil.WriteFile(t, path+".tmp", text)
+	if err := errors.Join(os.Rename(path+".tmp", path), w.checkFile()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := w.readTo(freed); ok {
+		t.Error("the inode an editor's save freed is taken for an archive")
+	}
+
+	archive := path + ".1"
+	if err := os.Rename(path, archive); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, path, "")
+	if err := w.checkFile(); err != nil {
+		t.Fatal(err)
+	}
+	if position, _, ok := w.readTo(inode(archive)); !ok || position != int64(len(text)) {
+		t.Errorf("held: the renamed file read to %d, %v; want %d, true", position, ok, len(text))
+	}
+	if _, _, ok := w.readTo(inode(path)); ok {
+		t.Error("held: the replacement is answered for before it is judged")
+	}
+	if err := w.checkFile(); err != nil {
+		t.Fatal(err)
+	}
+	if position, _, ok := w.readTo(inode(archive)); !ok || position != int64(len(text)) {
+		t.Errorf("judged: the renamed file read to %d, %v; want %d, true", position, ok, len(text))
+	}
+}
+
+// A rotation shifts archives along their names (app.log to app.log.1, that to
+// app.log.2): each watcher finds the file the one before it read and goes on
+// from where that one got, so nothing is replayed and what it left is read
+// once. An inode reused, claimed by a watcher of a deleted file, is not it.
+func TestShiftedArchiveResumesWhereItWasRead(t *testing.T) {
+	for name, order := range map[string][]int{"the archive's watcher first": {1, 0}, "the file's watcher first": {0, 1}} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			paths := []string{filepath.Join(dir, "app.log"), filepath.Join(dir, "app.log.1"), filepath.Join(dir, "app.log.2")}
+			testutil.WriteFile(t, paths[0], lines(15, 0, 20))
+			testutil.WriteFile(t, paths[1], lines(14, 0, 20))
+			var got []string
+			source := &FileSource{watchers: map[string]*fileWatcher{}}
+			watchers := make([]*fileWatcher, 2)
+			for i := range watchers {
+				w := newFileWatcher(paths[i], true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+				w.others = source.othersOf(w)
+				if err := w.initPosition(); err != nil {
+					t.Fatal(err)
+				}
+				source.watchers[paths[i]], watchers[i] = w, w
+			}
+
+			appendFile(t, paths[0], "unread\n")
+			for i := 1; i >= 0; i-- {
+				if err := os.Rename(paths[i], paths[i+1]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			testutil.WriteFile(t, paths[0], "fresh\n")
+			info, err := os.Stat(paths[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.watchers["deleted"] = &fileWatcher{inode: inodeOf(info), position: 3, tail: []byte("ab\n")}
+			source.watchers["deleted too"] = &fileWatcher{prevInode: watchers[0].inode, prevPosition: 3, prevTail: []byte("ab\n")}
+			for range 2 {
+				for _, i := range order {
+					if err := watchers[i].checkFile(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			want := []string{"Log rotation detected (#1): the file starts anew", "fresh", "unread"}
+			if slices.Sort(got); !slices.Equal(got, want) {
+				t.Errorf("read %q, want %q", got, want)
+			}
+			if position, ok := source.readPosition(paths[2]); !ok || position != int64(len(lines(14, 0, 20))) {
+				t.Errorf("app.log.2 read to %d, %v; want %d, true", position, ok, len(lines(14, 0, 20)))
+			}
+		})
 	}
 }
