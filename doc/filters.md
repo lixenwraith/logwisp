@@ -16,10 +16,10 @@ patterns = ["ERROR", "WARN"]
   `exclude` (matches are dropped).
 - `logic`, string, default `or`: `or` (any pattern matches) or `and` (every
   pattern matches).
-- `patterns`, []string, default `[]`: Go RE2 regular expressions.
+- `patterns`, []string, required: Go RE2 regular expressions.
 
-A filter with no patterns passes everything. An invalid pattern is refused
-when the configuration loads, named by its path
+A filter needs at least one pattern. A filter without one, or with an invalid
+pattern, is refused when the configuration loads, named by its path
 (`pipelines[0].flow.filters[0].patterns[1]`).
 
 ## What Gets Matched

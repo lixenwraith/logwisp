@@ -58,14 +58,6 @@ func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 func (f *Filter) Apply(entry core.LogEntry) bool {
 	f.totalProcessed.Add(1)
 
-	// No patterns means pass everything
-	if len(f.patterns) == 0 {
-		f.logger.Debug("msg", "No patterns configured, passing entry",
-			"component", "filter",
-			"type", f.config.Type)
-		return true
-	}
-
 	// Check against all fields that might contain the log content
 	text := entry.Message
 	if entry.Level != "" {

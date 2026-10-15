@@ -79,7 +79,7 @@
 # [[pipelines.flow.filters]]
 # type = "include"                      # include|exclude
 # logic = "or"                          # or|and: any pattern, or all
-# patterns = []                         # RE2, e.g. [".*ERROR.*", ".*WARN.*"]; none passes every entry
+# patterns = []                         # RE2, at least one, e.g. [".*ERROR.*", ".*WARN.*"]
 
 # [pipelines.flow.format]
 # type = "raw"                          # raw|txt|json
