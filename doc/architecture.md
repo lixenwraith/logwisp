@@ -265,8 +265,9 @@ so the page needs only `'wasm-unsafe-eval'` in its `script-src`.
 `lwconf.js` is one dependency-free ES module that knows the calls and shapes,
 never a key:
 
-- `load({execURL, execSRI, wasmURL, wasmSRI})` fetches both by their
-  integrity and resolves to the engine.
+- `load({execURL, execSRI, wasmURL, wasmSRI, progress})` fetches both by
+  their integrity and resolves to the engine; `progress` hears the module's
+  bytes as they arrive, which fetch's own integrity check would hold back.
 - `fields(schema, role, type)` is a node's form rows, a table's a group.
 - `value`, `at` and `group` read a node's value and sort problems by node.
 

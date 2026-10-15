@@ -4,21 +4,43 @@
 // a rule, so the page draws whatever the engine it loads describes.
 
 // load starts the engine: the toolchain's wasm_exec.js by a script element
-// (outside a page the caller imports it first), the module fetched with its
-// integrity, then its main, which sets globalThis.lwconf
-export async function load({ execURL, execSRI, wasmURL, wasmSRI }) {
+// (outside a page the caller imports it first), the module fetched and held to
+// its integrity, then its main, which sets globalThis.lwconf; progress, if
+// given, hears the module's bytes received so far as they arrive
+export async function load({ execURL, execSRI, wasmURL, wasmSRI, progress }) {
   if (!globalThis.Go) await script(execURL, execSRI);
   const go = new globalThis.Go();
-  const fetched = async () => {
-    const res = await fetch(wasmURL, { integrity: wasmSRI });
-    if (!res.ok) throw new Error(`${wasmURL}: ${res.status}`);
-    return res;
-  };
-  const { instance } = await WebAssembly.instantiateStreaming(fetched(), go.importObject)
-    .catch(async () => WebAssembly.instantiate(await (await fetched()).arrayBuffer(), go.importObject)); // a server's wrong type
+  const { instance } = await WebAssembly.instantiate(await fetchHeld(wasmURL, wasmSRI, progress), go.importObject);
   go.run(instance);
   if (!globalThis.lwconf) throw new Error("lwconf.wasm did not start");
   return new Engine(globalThis.lwconf);
+}
+
+// fetchHeld counts a file as it arrives, then holds it to its integrity:
+// fetch's own check would keep the body back until its last byte. Without
+// SubtleCrypto (a page not on https) fetch checks it, and progress hears the end.
+async function fetchHeld(url, integrity, progress) {
+  const subtle = integrity && globalThis.crypto?.subtle;
+  const res = await fetch(url, subtle ? {} : { integrity });
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  let received = 0;
+  const counted = res.body.pipeThrough(new TransformStream({
+    transform(chunk, out) { received += chunk.byteLength; progress?.(received); out.enqueue(chunk); },
+  }));
+  const bytes = await new Response(counted).arrayBuffer();
+  if (subtle && !(await held(subtle, bytes, integrity))) throw new Error(`${url}: not the file its integrity names`);
+  return bytes;
+}
+
+// held reads integrity as a browser does: of its hashes in the strongest
+// algorithm it names, one must be the file's; naming none refuses the file
+async function held(subtle, bytes, integrity) {
+  const algs = { sha256: "SHA-256", sha384: "SHA-384", sha512: "SHA-512" }; // weakest first
+  const hashes = integrity.trim().split(/\s+/).map(h => h.split("?")[0].split("-")).filter(([alg]) => alg in algs);
+  const alg = Object.keys(algs).findLast(a => hashes.some(([b]) => b === a));
+  if (!alg) return false;
+  const digest = btoa(String.fromCharCode(...new Uint8Array(await subtle.digest(algs[alg], bytes))));
+  return hashes.some(([a, value]) => a === alg && value === digest);
 }
 
 function script(src, integrity) {

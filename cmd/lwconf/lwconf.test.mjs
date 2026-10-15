@@ -61,12 +61,15 @@ test("load refuses an engine its integrity does not match, or a server does not 
   await assert.rejects(load({ wasmURL: url("missing.wasm") }), { message: `${url("missing.wasm")}: 404` });
 });
 
-test("load takes an engine a server sends as plain bytes", async () => {
+test("load takes an engine a server sends as plain bytes, counting them as they arrive", async () => {
   const api = globalThis.lwconf;
   delete globalThis.lwconf;
   try {
-    const bytes = await load({ wasmURL: url("lwconf.wasm?type=application/octet-stream"), wasmSRI: sri("lwconf.wasm") });
+    const heard = [];
+    const bytes = await load({ wasmURL: url("lwconf.wasm?type=application/octet-stream"), wasmSRI: sri("lwconf.wasm"), progress: n => heard.push(n) });
     assert.deepEqual(bytes.schema().value, schema);
+    assert.ok(heard.every((n, i) => i === 0 || n > heard[i - 1]));
+    assert.equal(heard.at(-1), readFileSync(join(dir, "lwconf.wasm")).length);
   } finally {
     globalThis.lwconf = api;
   }
