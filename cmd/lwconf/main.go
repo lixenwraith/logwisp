@@ -47,7 +47,12 @@ var calls = map[string]struct {
 		if err != nil {
 			return nil, err
 		}
-		return pipelines(f.Read(a[0], isDir))
+		c, err := f.Parse(a[0], isDir)
+		value, err := pipelines(c, err)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"pipelines": value, "left_out": append([]string{}, c.LeftOut...)}, nil
 	}},
 	"validate": {[]string{"pipelines"}, func(a []string) (any, error) {
 		c, err := compose.FromJSON([]byte(a[0]))

@@ -48,8 +48,9 @@ var specKinds = []specKind{
 		p.PluginSources = append(p.PluginSources, PluginSourceConfig{ID: id, Type: typ, Config: opts})
 		return cmp.Or(err, Coerce("source", typ, opts))
 	}, func(p *PipelineConfig) (specs []string) {
+		var ids []string
 		for _, s := range p.PluginSources {
-			specs = append(specs, formatSpec(s.Type, map[string]any{"id": s.ID}, s.Config))
+			specs, ids = append(specs, formatSpec(s.Type, givenID(s.ID, s.Type, ids), s.Config)), append(ids, s.ID)
 		}
 		return specs
 	}},
@@ -62,8 +63,9 @@ var specKinds = []specKind{
 		p.PluginSinks = append(p.PluginSinks, PluginSinkConfig{ID: id, Type: typ, Config: opts})
 		return cmp.Or(err, Coerce("sink", typ, opts))
 	}, func(p *PipelineConfig) (specs []string) {
+		var ids []string
 		for _, s := range p.PluginSinks {
-			specs = append(specs, formatSpec(s.Type, map[string]any{"id": s.ID}, s.Config))
+			specs, ids = append(specs, formatSpec(s.Type, givenID(s.ID, s.Type, ids), s.Config)), append(ids, s.ID)
 		}
 		return specs
 	}},
@@ -75,7 +77,6 @@ var specKinds = []specKind{
 		return err
 	}, func(p *PipelineConfig) (specs []string) {
 		for _, f := range p.Flow.Filters {
-			Fill(&f)
 			specs = append(specs, typedSpec(&f))
 		}
 		return specs
@@ -89,7 +90,6 @@ var specKinds = []specKind{
 			return nil
 		}
 		format := *p.Flow.Format
-		Fill(&format)
 		return []string{typedSpec(&format)}
 	}},
 	{"rate-limit", false, false, false, func(p *PipelineConfig, _ string, opts map[string]any, _ IsDir) error {
@@ -100,8 +100,10 @@ var specKinds = []specKind{
 			return nil
 		}
 		rate := *p.Flow.RateLimit
-		Fill(&rate) // the policy, whose default here is drop
-		return []string{formatSpec("", Values(&rate))}
+		m := Values(&rate)
+		Fill(&rate)
+		m["policy"] = rate.Policy // a spec's default is drop, a file's pass
+		return []string{formatSpec("", m)}
 	}},
 	{"heartbeat", false, false, false, func(p *PipelineConfig, _ string, opts map[string]any, _ IsDir) error {
 		p.Flow.Heartbeat = &HeartbeatConfig{}
@@ -111,7 +113,6 @@ var specKinds = []specKind{
 			return nil
 		}
 		beat := *p.Flow.Heartbeat
-		Fill(&beat)
 		m := Values(&beat)
 		m["enabled"] = beat.Enabled
 		return []string{formatSpec("", m)}
@@ -135,6 +136,18 @@ func StageOn(stage string, opts map[string]any) map[string]any {
 	maps.Copy(on, stageOn[stage])
 	maps.Copy(on, opts)
 	return on
+}
+
+// FillOn gives the keys a spec of the stage turns on their file defaults
+// where unset, as that spec writes them: a stage from a file and from its
+// spec are then one
+func FillOn(stage string, v any) {
+	rv := reflect.ValueOf(v).Elem()
+	for _, o := range options(rv.Type()) {
+		if _, on := stageOn[stage][o.Name]; on && o.Default != "" && rv.Field(o.index).IsZero() {
+			setDefault(rv.Field(o.index), o)
+		}
+	}
 }
 
 // Spec is one pipeline flag: its name without dashes, and its value.
@@ -219,13 +232,22 @@ func envPipelineSpecs(environ []string) []pipelineSpec {
 }
 
 // EnvPipelines builds the pipeline of LOGWISP_ variables, NAME=value each, as
-// Load does without pipeline flags
-func EnvPipelines(environ []string, isDir IsDir) ([]PipelineConfig, error) {
+// Load does without pipeline flags; unread are the other LOGWISP_ variables
+// set, sorted: settings, or names no flag has
+func EnvPipelines(environ []string, isDir IsDir) (pipelines []PipelineConfig, unread []string, err error) {
 	specs := envPipelineSpecs(environ)
-	if len(specs) == 0 {
-		return nil, errors.New("no LOGWISP_ pipeline variables")
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "LOGWISP_") && value != "" && !slices.ContainsFunc(specs, func(s pipelineSpec) bool { return s.name == name }) {
+			unread = append(unread, name)
+		}
 	}
-	return buildPipelines(specs, isDir)
+	slices.Sort(unread)
+	if len(specs) == 0 {
+		return nil, unread, errors.New("no LOGWISP_ pipeline variables")
+	}
+	pipelines, err = buildPipelines(specs, isDir)
+	return pipelines, unread, err
 }
 
 // SpecPipelines builds the pipelines of command-line specs, as Load does
@@ -280,8 +302,9 @@ func buildPipelines(specs []pipelineSpec, isDir IsDir) ([]PipelineConfig, error)
 }
 
 // PipelineSpecs writes pipelines as the flags that build them: --pipeline,
-// ids, flow stage defaults and heartbeat's enabled explicit, as some flags'
-// defaults differ from a file's
+// the ids and keys set, and a typed stage's type, the rate limit's policy and
+// the heartbeat's enabled explicit, as those flags' defaults differ from a
+// file's
 func PipelineSpecs(pipelines []PipelineConfig) []Spec {
 	var specs []Spec
 	for _, p := range pipelines {
@@ -298,12 +321,28 @@ func PipelineSpecs(pipelines []PipelineConfig) []Spec {
 	return specs
 }
 
-// typedSpec writes a stage whose type key is its spec's TYPE
+// typedSpec writes a stage whose type key is its spec's TYPE: the type set,
+// or its default
 func typedSpec(stage any) string {
 	m := Values(stage)
+	if _, set := m["type"]; !set {
+		filled := reflect.New(reflect.TypeOf(stage).Elem())
+		filled.Elem().Set(reflect.ValueOf(stage).Elem())
+		Fill(filled.Interface())
+		m["type"] = Values(filled.Interface())["type"]
+	}
 	typ, _ := m["type"].(string)
 	delete(m, "type")
 	return formatSpec(typ, m)
+}
+
+// givenID is an instance's id as its spec gives it: none for the one
+// instanceID would take, after the instances before
+func givenID(id, typ string, before []string) map[string]any {
+	if id == FreeID(typ, before) {
+		return nil
+	}
+	return map[string]any{"id": id}
 }
 
 // formatSpec writes TYPE[:key=value,...] or key=value,...: tables as dotted

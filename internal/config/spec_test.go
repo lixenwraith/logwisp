@@ -216,16 +216,21 @@ func TestReloadKeepsSpecPipelines(t *testing.T) {
 	}
 }
 
-// Written specs build the pipelines a file would: each flow stage with its
-// defaults, so the rate limit keeps its file policy and the heartbeat its off
+// Written specs build the pipelines a file would, with the keys it set: a
+// typed stage names its type, the rate limit keeps its file policy and the
+// heartbeat its off, and an id is written only where a spec would not take it
 func TestWrittenSpecsBuildWhatAFileWould(t *testing.T) {
 	p := PipelineConfig{Name: "p", Flow: &FlowConfig{Format: &FormatConfig{}, RateLimit: &RateLimitConfig{EntriesPerSecond: 5}, Heartbeat: &HeartbeatConfig{}},
 		PluginSources: []PluginSourceConfig{{ID: "in", Type: "null", Config: map[string]any{}}},
-		PluginSinks:   []PluginSinkConfig{{ID: "out", Type: "null", Config: map[string]any{}}}}
-	got, err := SpecPipelines(PipelineSpecs([]PipelineConfig{p}), nil)
-	p.Flow = &FlowConfig{Format: &FormatConfig{Type: "raw"}, RateLimit: &RateLimitConfig{EntriesPerSecond: 5, Policy: "pass"},
-		Heartbeat: &HeartbeatConfig{IntervalMS: 1000, Format: "txt"}}
+		PluginSinks:   []PluginSinkConfig{{ID: "null_2", Type: "null", Config: map[string]any{}}, {ID: "null", Type: "null", Config: map[string]any{}}}}
+	specs := PipelineSpecs([]PipelineConfig{p})
+	got, err := SpecPipelines(specs, nil)
+	p.Flow = &FlowConfig{Format: &FormatConfig{Type: "raw"}, RateLimit: &RateLimitConfig{EntriesPerSecond: 5, Policy: "pass"}, Heartbeat: &HeartbeatConfig{}}
 	if err != nil || !reflect.DeepEqual(got, []PipelineConfig{p}) {
 		t.Fatalf("got %+v %v\nwant %+v", got, err, p)
+	}
+	if want := []Spec{{"pipeline", "p"}, {"source", "null:id=in"}, {"sink", "null:id=null_2"}, {"sink", "null"}, {"format", "raw"},
+		{"rate-limit", "entries_per_second=5,policy=pass"}, {"heartbeat", "enabled=false"}}; !reflect.DeepEqual(specs, want) {
+		t.Fatalf("specs %v, want %v", specs, want)
 	}
 }

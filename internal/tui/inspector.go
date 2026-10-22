@@ -52,12 +52,18 @@ func (a *app) lines() []line {
 	filters := a.pipeline().Flow.Filters
 	for i, f := range filters {
 		fn := compose.Node{Role: "filters", Index: i}
-		out = append(out, line{node: fn, group: fmt.Sprintf("%d %s", i+1, f.Type), item: -1})
+		out = append(out, line{node: fn, group: fmt.Sprintf("%d %s", i+1, filled(f).Type), item: -1})
 		if a.insp.open[a.foldKey(fn, "")] {
 			out = a.keyLines(out, fn, a.keys(n), "", 1)
 		}
 	}
 	return append(out, line{node: compose.Node{Role: "filters", Index: len(filters)}, item: -1, add: true})
+}
+
+// filled is a filter as it runs: an unset type or logic its default
+func filled(f config.FilterConfig) config.FilterConfig {
+	config.Fill(&f)
+	return f
 }
 
 func (a *app) keyLines(out []line, n compose.Node, keys []config.Key, prefix string, depth int) []line {
@@ -285,7 +291,7 @@ func choice(k config.Key, cur any) int {
 // keys, a filter's logic and patterns
 func (a *app) groupSummary(l line) string {
 	if l.key.Name == "" {
-		f := a.pipeline().Flow.Filters[l.node.Index]
+		f := filled(a.pipeline().Flow.Filters[l.node.Index])
 		return string(f.Logic) + "  " + strings.Join(f.Patterns, " ")
 	}
 	switch v := a.value(l.node, l.key.Name).(type) {

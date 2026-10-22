@@ -192,8 +192,10 @@ and variables replace the file's whole, and an array-indexed path such as
 ## Validation
 
 The configuration is checked offline when it loads, at every reload and by
-`lw --check`. Each check reports the first problem of each table (the top
-level, `logging`, each flow stage, each source and sink) by its key's path:
+`lw --check`. Each check reports every key's problem and the first broken
+rule between a table's keys, in every table (the top level, `logging`, each
+flow stage, each source and sink), by its key's path, a list entry's by its
+index (`acl.allow[1]`):
 
 ```
 Error: Failed to load config: invalid configuration:

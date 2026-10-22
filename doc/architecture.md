@@ -278,10 +278,14 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
 - `schema()`: what `lw --schema` prints.
 - `preset(name, values, dirs)`: a preset's pipelines; `values` maps a key to
   a string, a list key to strings.
-- `parse(text, form, dirs)`: the pipelines of a form's pasted text.
+- `parse(text, form, dirs)`: `{pipelines, left_out}`, the pipelines of a
+  form's pasted text and the names of what it held besides them: a file's
+  settings, an environment's `LOGWISP_` variables no pipeline flag has. Text
+  in another form's shape is refused naming that form.
 - `validate(pipelines)`: `{pipelines, problems}`, the pipelines settled
-  (defaults, kinds, ids) and the first problem of each part (a value of the
-  wrong kind too) as `{path, pipeline, node, key, text}`.
+  (kinds, ids) and every problem of each part, each key's and the first rule
+  between a table's keys (a value of the wrong kind too), as `{path,
+  pipeline, node, key, text}`.
 - `emit(pipelines, form)`: the text of `command`, `environment` or `file`.
 - `edit(pipelines, op)`: `{pipelines, node}`, the node left chosen. `op` is
   `{op, pipeline, ...}`:
@@ -298,7 +302,10 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
   `{role, id, index}`: `source` or `sink` by its id, `filters` by its index,
   or the flow stage `rate_limit`, `format` or `heartbeat`, which `set` turns
   on and `remove` off; `add` takes `source`, `sink`, or `filters` with the
-  type `include` or `exclude`.
+  type `include`, `exclude` or `""` for the default.
+- Stages and options hold the keys set, so the forms carry no default an
+  edit did not set: a stage key's zero is unset, and an option's zero is
+  unset where it takes the key's default.
 
 ## Resource Management
 

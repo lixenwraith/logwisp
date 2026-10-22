@@ -123,9 +123,9 @@ test("a preset's pipeline, a single file answered by dirs, reads back from every
   const { value: pipelines } = engine.preset("serve", { ...path, allow: ["192.0.2.0/24", "198.51.100.7"] }, dirs);
   assert.deepEqual(value(pipelines, 0, { role: "source", id: "file" }), { directory: "/var/log", pattern: "app.log", from: "end" });
   assert.deepEqual(value(pipelines, 0, { role: "sink", id: "http" }, "acl.allow"), ["192.0.2.0/24", "198.51.100.7"]);
-  assert.deepEqual(engine.parse("lw -p serve:path=/var/log/app.log,allow=192.0.2.0/24,allow=198.51.100.7", "command", dirs).value, pipelines);
+  assert.deepEqual(engine.parse("lw -p serve:path=/var/log/app.log,allow=192.0.2.0/24,allow=198.51.100.7", "command", dirs).value.pipelines, pipelines);
   for (const { name } of schema.forms) {
-    assert.deepEqual(engine.parse(engine.emit(pipelines, name).value, name).value, pipelines, name);
+    assert.deepEqual(engine.parse(engine.emit(pipelines, name).value, name).value, { pipelines, left_out: [] }, name);
   }
   assert.deepEqual(engine.validate(pipelines).value, { pipelines, problems: [] });
 });

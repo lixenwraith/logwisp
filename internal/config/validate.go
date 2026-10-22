@@ -24,9 +24,9 @@ import (
 
 // ValidateConfig checks a configuration without reading a file it names:
 // the settings, then each pipeline's flow stages, and its sources and sinks
-// decoded in full. Its error joins every problem, one a part, each a
-// *KeyError naming the refused key's path, save "no pipelines configured".
-// lw --check opens the files.
+// decoded in full. Its error joins every problem, each a *KeyError naming the
+// refused key's path, save "no pipelines configured". lw --check opens the
+// files.
 func ValidateConfig(cfg *Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
@@ -99,8 +99,8 @@ func ValidatePipelines(pipelines []PipelineConfig) error {
 	return errors.Join(errs...)
 }
 
-// checkFlow settles copies of a pipeline's flow stages, which keep their
-// defaults for the dump: a problem a stage
+// checkFlow settles copies of a pipeline's flow stages, which keep the keys
+// set for the dump
 func checkFlow(f *FlowConfig, path string) error {
 	if f == nil {
 		return nil
@@ -126,8 +126,16 @@ func checkFlow(f *FlowConfig, path string) error {
 	return errors.Join(errs...)
 }
 
-// At addresses err to the path of the table it was found in
+// At addresses err to the path of the table it was found in, each problem of
+// a joined one
 func At(path string, err error) error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var errs []error
+		for _, e := range joined.Unwrap() {
+			errs = append(errs, At(path, e))
+		}
+		return errors.Join(errs...)
+	}
 	if ke, ok := errors.AsType[*KeyError](err); ok {
 		return &KeyError{path + "." + ke.Key, ke.Err}
 	}
@@ -167,19 +175,17 @@ func (o *HTTPChainSinkOptions) network() (string, *TLSOptions, *AuthOptions, *AC
 	return o.Host, o.TLS, o.Auth, nil
 }
 
-// checkNetwork applies the host, tls, acl and auth rules of the plugin's side
+// checkNetwork applies the host, tls, acl and auth rules of the plugin's
+// side, joining their problems; acl entries are read by the host's family
 func (p Plugin) checkNetwork(n networked) error {
 	host, t, a, acl := n.network()
+	var errs []error
 	if _, err := core.Network(host); err != nil {
-		return &KeyError{"host", err}
+		errs = append(errs, &KeyError{"host", err})
+	} else {
+		errs = append(errs, table("acl", acl.Check(host, p.HTTP, a != nil && len(a.TrustedProxies) > 0)))
 	}
-	if err := t.Check(p.Side != Dialer); err != nil {
-		return table("tls", err)
-	}
-	if err := acl.Check(host, p.HTTP, a != nil && len(a.TrustedProxies) > 0); err != nil {
-		return table("acl", err)
-	}
-	return table("auth", a.Check(p.Side, p.HTTP, t.State()))
+	return errors.Join(append(errs, table("tls", t.Check(p.Side != Dialer)), table("auth", a.Check(p.Side, p.HTTP, t.State())))...)
 }
 
 // Check holds the rules between tls keys on a listener or a dialer; a table
@@ -221,8 +227,9 @@ func (o *TLSOptions) Check(listener bool) error {
 		return fmt.Errorf("tls: cert_file and key_file must be set together")
 	}
 	if o.PinSHA256 != "" {
-		_, err := ParsePins(o.PinSHA256)
-		return err
+		if _, err := ParsePins(o.PinSHA256); err != nil {
+			return &KeyError{"tls.pin_sha256", err}
+		}
 	}
 	return nil
 }
@@ -237,7 +244,7 @@ func ParsePins(s string) ([][]byte, error) {
 		b64, ok := strings.CutPrefix(strings.TrimSpace(p), PinPrefix)
 		h, err := base64.StdEncoding.DecodeString(b64)
 		if !ok || err != nil || len(h) != sha256.Size {
-			return nil, fmt.Errorf("tls: pin_sha256 %q: want %sBASE64 of a SHA-256, ';' between several", p, PinPrefix)
+			return nil, fmt.Errorf("pin %q: want %sBASE64 of a SHA-256, ';' between several", p, PinPrefix)
 		}
 		pins = append(pins, h)
 	}
@@ -290,7 +297,7 @@ func (o *AuthOptions) Check(side Side, http bool, t TLSState) error {
 	case o.Type == "mtls":
 		for i, pattern := range o.AllowPatterns {
 			if _, err := regexp.Compile(pattern); err != nil {
-				return fmt.Errorf("auth: allow_patterns[%d] %q: %w", i, pattern, err)
+				return &KeyError{fmt.Sprintf("auth.allow_patterns[%d]", i), fmt.Errorf("%q: %w", pattern, err)}
 			}
 		}
 		return nil
@@ -320,9 +327,9 @@ func (o *AuthOptions) Check(side Side, http bool, t TLSState) error {
 		// Binds the certificate to the user: a peer needs its own of both
 		return fmt.Errorf("auth: identity under type %q binds the client certificate to the user and requires tls.client_auth", "scram")
 	}
-	for _, e := range o.TrustedProxies {
+	for i, e := range o.TrustedProxies {
 		if _, err := ParsePrefix(e, "tcp"); err != nil {
-			return fmt.Errorf("auth: trusted_proxies entry %q: %w", e, err)
+			return &KeyError{fmt.Sprintf("auth.trusted_proxies[%d]", i), fmt.Errorf("%q: %w", e, err)}
 		}
 	}
 	return nil
@@ -357,7 +364,8 @@ func (o *AuthOptions) scramKey() string {
 
 // Check holds the acl rules of a listener on host, http for one serving
 // requests, proxied for one behind auth.trusted_proxies, whose rules take
-// clients of either family, as does a PROXY header
+// clients of either family, as does a PROXY header; an entry's problem is
+// at its key
 func (o *ACLOptions) Check(host string, http, proxied bool) error {
 	if o == nil {
 		return nil
@@ -384,17 +392,18 @@ func (o *ACLOptions) Check(host string, http, proxied bool) error {
 	if header || proxied {
 		clients = "tcp"
 	}
+	var errs []error
 	for _, list := range []struct {
 		key, network string
 		entries      []string
 	}{{"proxy_from", network, o.ProxyFrom}, {"allow", clients, o.Allow}, {"deny", clients, o.Deny}} {
-		for _, e := range list.entries {
+		for i, e := range list.entries {
 			if _, err := ParsePrefix(e, list.network); err != nil {
-				return fmt.Errorf("acl: %s entry %q: %w", list.key, e, err)
+				errs = append(errs, &KeyError{fmt.Sprintf("acl.%s[%d]", list.key, i), fmt.Errorf("%q: %w", e, err)})
 			}
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // httpKey names the first key of table v tagged http that is set
@@ -537,8 +546,8 @@ func Scan(configMap map[string]any, target any) error {
 	return lconfig.ScanMap(configMap, target)
 }
 
-// checkKeys walks nested tables against the toml tags of t, refusing unknown
-// keys. Map-typed fields hold free-form keys and are not descended into.
+// checkKeys walks nested tables against the toml tags of t, refusing every
+// unknown key. Map-typed fields hold free-form keys and are not descended into.
 func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
 		t = t.Elem()
@@ -552,17 +561,17 @@ func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 			fields[name] = f.Type
 		}
 	}
+	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(m)) {
 		ft, ok := fields[key]
 		if !ok {
-			return fmt.Errorf("unknown key %q", prefix+key)
+			errs = append(errs, fmt.Errorf("unknown key %q", prefix+key))
+			continue
 		}
 		var tables []map[string]any
 		switch v := m[key].(type) {
 		case map[string]any:
-			if err := checkKeys(v, ft, prefix+key+"."); err != nil {
-				return err
-			}
+			errs = append(errs, checkKeys(v, ft, prefix+key+"."))
 		case []map[string]any:
 			tables = v
 		case []any:
@@ -573,12 +582,10 @@ func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 			}
 		}
 		for i, table := range tables {
-			if err := checkKeys(table, ft, fmt.Sprintf("%s%s[%d].", prefix, key, i)); err != nil {
-				return err
-			}
+			errs = append(errs, checkKeys(table, ft, fmt.Sprintf("%s%s[%d].", prefix, key, i)))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // checkFileKeys rejects keys the configuration file declares that Config does
@@ -600,14 +607,27 @@ func checkFileKeys(path string) error {
 }
 
 // ParseFile reads a configuration file's text, refusing the keys lw refuses
-// there, and opens nothing it names
-func ParseFile(data []byte) (*Config, error) {
+// there, and opens nothing it names; settings are the paths it sets outside
+// the pipelines, sorted
+func ParseFile(data []byte) (cfg *Config, settings []string, err error) {
 	root, err := fileTable(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	cfg := &Config{}
-	return cfg, Scan(root, cfg)
+	var walk func(m map[string]any, prefix string)
+	walk = func(m map[string]any, prefix string) {
+		for k, v := range m {
+			if sub, ok := v.(map[string]any); ok {
+				walk(sub, prefix+k+".")
+			} else if prefix != "" || k != "pipelines" {
+				settings = append(settings, prefix+k)
+			}
+		}
+	}
+	walk(root, "")
+	slices.Sort(settings)
+	cfg = &Config{}
+	return cfg, settings, Scan(root, cfg)
 }
 
 // fileTable is a file's root table without the keys lw ignores there
