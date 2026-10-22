@@ -338,7 +338,7 @@ func (a *app) summary(n compose.Node) string {
 	if n.Role == "filters" {
 		var out []string
 		for _, f := range a.pipeline().Flow.Filters {
-			sign := map[config.FilterType]string{"include": "+", "exclude": "-"}[f.Type]
+			sign := map[config.FilterType]string{"include": "+", "exclude": "-"}[filled(f).Type]
 			out = append(out, sign+strings.Join(f.Patterns, "|"))
 		}
 		return strings.Join(out, " ")

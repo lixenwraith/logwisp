@@ -80,7 +80,7 @@ pipelines have [their own flags](#pipelines):
     speaks HTTP: `auth.node_binding` only on the chain sources, and
     `auth.trusted_proxies` on both HTTP listeners, though only the `http`
     sink admits it
-  - a flow stage: its keys, and `on`, the values that turn it on
+  - a flow stage: its keys, a `summary`, and `on`, the values that turn it on
   - a preset key: its default and help, and the choices (`enum`) and `hint`
     of the option it sets
   - `forms`: `command`, `environment` and `file`, each with its hint
@@ -419,10 +419,11 @@ lw -c dev.toml --logging.level=debug
 `lw --check` validates without running: it builds every pipeline and plugin as
 a start would (options, TLS files, credentials files, startup warnings), but
 binds no port, reads no stdin, and opens, reads or creates no log file; it
-prints `configuration ok: N pipeline(s)` and exits 0. Otherwise it prints the
-first problem of each setting, flow stage, source, sink and pipeline, a line
-each named by its key's path, or else the first file that fails to open, and
-exits 1 (2 when a named file is missing, see [Exit Codes](#exit-codes)):
+prints `configuration ok: N pipeline(s)` and exits 0. Otherwise it prints
+every key's problem of each setting, flow stage, source, sink and pipeline,
+and the first broken rule between a table's keys, a line each named by its
+key's path, or else the first file that fails to open, and exits 1 (2 when a
+named file is missing, see [Exit Codes](#exit-codes)):
 
 ```bash
 lw --check -c /etc/logwisp/logwisp.toml

@@ -206,8 +206,8 @@ func TestShellFormsRefuseControlCharacters(t *testing.T) {
 }
 
 // Set refuses a value of the wrong kind, a plugin's and a stage's alike, and
-// leaves the key as it was; Unset returns a key to its default, dropping a
-// table it leaves empty
+// leaves the key as it was; Unset leaves a key unset, dropping a table it
+// leaves empty
 func TestSetKeepsAKeyItCannotTake(t *testing.T) {
 	c := &Composition{}
 	if err := c.AddPipeline("p"); err != nil {
@@ -228,7 +228,7 @@ func TestSetKeepsAKeyItCannotTake(t *testing.T) {
 		}
 	}
 	if m, beat := c.Pipelines[0].PluginSinks[0].Config, c.Pipelines[0].Flow.Heartbeat; !reflect.DeepEqual(m, map[string]any{"port": int64(8080)}) ||
-		beat.IntervalMS != 1000 {
+		beat.IntervalMS != 0 {
 		t.Fatalf("options %v, heartbeat %+v", m, beat)
 	}
 }
@@ -325,18 +325,67 @@ func TestPipelineNamesAreUnique(t *testing.T) {
 }
 
 // A stage an edit turns on does what its spec would: a rate limit drops what
-// passes its rate, a heartbeat beats
+// passes its rate, a heartbeat beats. A stage and a filter hold only the keys
+// set, so the forms carry no default the edit did not set.
 func TestAStageTurnsOnAsItsSpecDoes(t *testing.T) {
 	c := &Composition{}
 	if err := c.AddPipeline("p"); err != nil {
 		t.Fatal(err)
 	}
-	for _, err := range []error{c.Set(0, Node{Role: "rate_limit"}, "entries_per_second", "5"), c.Set(0, Node{Role: "heartbeat"}, "interval_ms", "500")} {
+	_, err := c.Add(0, "filters", "")
+	for _, err := range []error{err, c.Set(0, Node{Role: "rate_limit"}, "entries_per_second", "5"), c.Set(0, Node{Role: "heartbeat"}, "interval_ms", "500"),
+		c.Set(0, Node{Role: "filters"}, "patterns", "x")} {
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if f := c.Pipelines[0].Flow; f.RateLimit.Policy != "drop" || !f.Heartbeat.Enabled {
-		t.Fatalf("%+v %+v", f.RateLimit, f.Heartbeat)
+	f := c.Pipelines[0].Flow
+	if *f.RateLimit != (config.RateLimitConfig{EntriesPerSecond: 5, Policy: "drop"}) || *f.Heartbeat != (config.HeartbeatConfig{Enabled: true, IntervalMS: 500}) ||
+		!reflect.DeepEqual(f.Filters, []config.FilterConfig{{Patterns: []string{"x"}}}) {
+		t.Fatalf("%+v %+v %+v", f.RateLimit, f.Heartbeat, f.Filters)
+	}
+}
+
+// A zero where zero takes the key's default is unset, as lw reads it; where
+// zero means something of its own (retention_hours 0 keeps files), it stays
+func TestAZeroTakingTheDefaultIsUnset(t *testing.T) {
+	c, err := FromJSON([]byte(`[{"name":"p","plugin_sources":[{"type":"file","config":{"directory":"/x","check_interval_ms":0}}],
+		"plugin_sinks":[{"type":"file","config":{"directory":"/y","name":"n","retention_hours":0}}]}]`))
+	if err == nil {
+		err = c.Set(0, Node{Role: "sink", ID: "file"}, "buffer_size", "0")
+	}
+	if src, sink := c.Pipelines[0].PluginSources[0].Config, c.Pipelines[0].PluginSinks[0].Config; err != nil ||
+		!reflect.DeepEqual(src, map[string]any{"directory": "/x"}) || !reflect.DeepEqual(sink, map[string]any{"directory": "/y", "name": "n", "retention_hours": 0.0}) {
+		t.Fatalf("%v %v %v", src, sink, err)
+	}
+}
+
+// Text pasted as one form that has another's shape is refused as that form;
+// text in no form's shape, or in this one's, gets this form's own refusal.
+// The settings a file holds, and an environment's LOGWISP_ variables no
+// pipeline flag has, are left out by name.
+func TestAPasteIsReadAsItsForm(t *testing.T) {
+	form := map[string]Form{}
+	for _, f := range Forms() {
+		form[f.Name] = f
+	}
+	for text, want := range map[[2]string]string{
+		{"file", "lw --source null --sink null"}:         "this is an lw command line, not the pipelines of a configuration file: read it as the command form",
+		{"command", "LOGWISP_SOURCE='null'\n"}:           "this is LOGWISP_ variables for one pipeline, not an lw command line: read it as the environment form",
+		{"environment", "[[pipelines]]\nname = \"p\"\n"}: "this is the pipelines of a configuration file, not LOGWISP_ variables for one pipeline: read it as the file form",
+		{"command", "lw -c lw.toml"}:                     "-c: not a pipeline flag",
+		{"file", "hello world"}:                          "expected '=' after key",
+	} {
+		if _, err := form[text[0]].Parse(text[1], nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s %q: %v", text[0], text[1], err)
+		}
+	}
+	file, err := form["file"].Parse("quiet = true\n[logging]\nlevel = \"info\"\n[[pipelines]]\nname = \"p\"\n", nil)
+	if err != nil || !slices.Equal(file.LeftOut, []string{"logging.level", "quiet"}) {
+		t.Fatalf("file: %+v %v", file, err)
+	}
+	env, err := form["environment"].Parse("LOGWISP_SORCE_1='null'\nLOGWISP_QUIET=true\nLOGWISP_SINK=''\nLOGWISP_SOURCE_1=null\nHOME=/root\n", nil)
+	if err != nil || !slices.Equal(env.LeftOut, []string{"LOGWISP_QUIET", "LOGWISP_SORCE_1"}) {
+		t.Fatalf("environment: %+v %v", env, err)
 	}
 }

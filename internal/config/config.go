@@ -69,28 +69,31 @@ type PipelineConfig struct {
 // --- Flow ---
 
 // FlowConfig holds the stages between sources and sinks, in the order entries
-// pass them; the heartbeat runs beside them
+// pass them; the heartbeat runs beside them. Help is each stage's summary.
 type FlowConfig struct {
-	RateLimit *RateLimitConfig `toml:"rate_limit"`
-	Filters   []FilterConfig   `toml:"filters,omitempty"`
-	Format    *FormatConfig    `toml:"format"`
-	Heartbeat *HeartbeatConfig `toml:"heartbeat"`
+	RateLimit *RateLimitConfig `toml:"rate_limit" help:"Drop entries beyond a rate, and those over a size"`
+	Filters   []FilterConfig   `toml:"filters,omitempty" help:"Pass or drop entries by RE2 patterns, in order"`
+	Format    *FormatConfig    `toml:"format" help:"How entries are written: raw, txt or json"`
+	Heartbeat *HeartbeatConfig `toml:"heartbeat" help:"A keep-alive entry on a timer, beside the entries"`
 }
 
 // --- Flow stages ---
+//
+// A stage key's zero is its unset, the default or what zero means there, so
+// a stage is written with the keys set alone.
 
 // HeartbeatConfig defines settings for periodic keep-alive or status messages
 type HeartbeatConfig struct {
-	Enabled          bool   `toml:"enabled" help:"send heartbeats; false keeps these settings and sends none"`
-	IntervalMS       int64  `toml:"interval_ms" default:"1000" lw:"min=100" help:"milliseconds between heartbeats"`
-	IncludeTimestamp bool   `toml:"include_timestamp" help:"stamp each heartbeat with its time"`
-	IncludeStats     bool   `toml:"include_stats" help:"add type, beat_count and, from the second beat, the measured interval_ms"`
-	Format           string `toml:"format" default:"txt" lw:"enum=txt|json|raw" help:"kept for older files; heartbeats are written in the flow's format"`
+	Enabled          bool   `toml:"enabled,omitempty" help:"send heartbeats; false keeps these settings and sends none"`
+	IntervalMS       int64  `toml:"interval_ms,omitempty" default:"1000" lw:"min=100" help:"milliseconds between heartbeats"`
+	IncludeTimestamp bool   `toml:"include_timestamp,omitempty" help:"stamp each heartbeat with its time"`
+	IncludeStats     bool   `toml:"include_stats,omitempty" help:"add type, beat_count and, from the second beat, the measured interval_ms"`
+	Format           string `toml:"format,omitempty" default:"txt" lw:"enum=txt|json|raw" help:"kept for older files; heartbeats are written in the flow's format"`
 }
 
 // FormatConfig is how a pipeline writes its entries
 type FormatConfig struct {
-	Type            string `toml:"type" default:"raw" lw:"enum=raw|txt|json" help:"raw writes each message as it came, txt a line with time and level, json one object an entry"`
+	Type            string `toml:"type,omitempty" default:"raw" lw:"enum=raw|txt|json" help:"raw writes each message as it came, txt a line with time and level, json one object an entry"`
 	Flags           int64  `toml:"flags,omitempty" lw:"zero=by type" help:"for experts, a sum of bits over the type's choice: 1 writes messages verbatim, 16 drops the time, 32 the level"`
 	TimestampFormat string `toml:"timestamp_format,omitempty" lw:"zero=RFC 3339 with nanoseconds" help:"timestamp layout: the reference time 2006-01-02 15:04:05 written as timestamps should look, such as 02 Jan 15:04"`
 	SanitizerPolicy string `toml:"sanitizer_policy,omitempty" lw:"enum=raw|json|txt|shell,zero=by type" help:"how control characters are escaped"`
@@ -108,10 +111,10 @@ const (
 
 // RateLimitConfig defines the configuration for pipeline-level rate limiting
 type RateLimitConfig struct {
-	EntriesPerSecond  float64 `toml:"entries_per_second" lw:"min=0,zero=off" help:"entries a second let through; unset, the stage limits nothing, sizes included"`
-	BurstEntries      float64 `toml:"burst_entries" lw:"min=0,zero=one second's worth" help:"entries that may pass in a burst before entries_per_second holds them back"`
-	Policy            string  `toml:"policy" default:"pass" lw:"enum=pass|drop" help:"drop enforces entries_per_second and max_entry_size_bytes; pass lets every entry through"`
-	MaxEntrySizeBytes int64   `toml:"max_entry_size_bytes" lw:"min=0,zero=unlimited" help:"drop larger entries; needs entries_per_second and policy drop"`
+	EntriesPerSecond  float64 `toml:"entries_per_second,omitempty" lw:"min=0,zero=off" help:"entries a second let through; unset, the stage limits nothing, sizes included"`
+	BurstEntries      float64 `toml:"burst_entries,omitempty" lw:"min=0,zero=one second's worth" help:"entries that may pass in a burst before entries_per_second holds them back"`
+	Policy            string  `toml:"policy,omitempty" default:"pass" lw:"enum=pass|drop" help:"drop enforces entries_per_second and max_entry_size_bytes; pass lets every entry through"`
+	MaxEntrySizeBytes int64   `toml:"max_entry_size_bytes,omitempty" lw:"min=0,zero=unlimited" help:"drop larger entries; needs entries_per_second and policy drop"`
 }
 
 // FilterType represents the filter's behavior (include or exclude)
@@ -136,8 +139,8 @@ const (
 
 // FilterConfig represents the configuration for a single filter
 type FilterConfig struct {
-	Type     FilterType  `toml:"type" default:"include" lw:"enum=include|exclude" help:"pass only matching entries, or drop them"`
-	Logic    FilterLogic `toml:"logic" default:"or" lw:"enum=or|and" help:"match any pattern, or all"`
+	Type     FilterType  `toml:"type,omitempty" default:"include" lw:"enum=include|exclude" help:"pass only matching entries, or drop them"`
+	Logic    FilterLogic `toml:"logic,omitempty" default:"or" lw:"enum=or|and" help:"match any pattern, or all"`
 	Patterns []string    `toml:"patterns,omitempty" lw:"required,hint=regex" help:"RE2 patterns"`
 }
 

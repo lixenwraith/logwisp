@@ -145,10 +145,10 @@ and credentials files and printing startup warnings, without binding a port
 or opening, reading or creating a log file; print
 .Dq configuration ok
 and exit 0.
-Otherwise print the first problem of each setting, flow stage, source, sink
-and pipeline, a line each named by its key's path, or else the first file
-that fails to open, and exit 1, or 2 when a named configuration file is
-missing
+Otherwise print every key's problem of each setting, flow stage, source,
+sink and pipeline, and the first broken rule between a table's keys, a line
+each named by its key's path, or else the first file that fails to open, and
+exit 1, or 2 when a named configuration file is missing
 .Pq see Sx EXIT STATUS .
 .It Fl \-dump
 Print the effective configuration, with the options, environment and
