@@ -93,7 +93,7 @@ func TestCoerceGivesTheDeclaredKinds(t *testing.T) {
 
 // ValidateConfig decodes every plugin and flow stage without opening a file,
 // and names the path of what it refuses: a rule between a table's keys by
-// the table's
+// the table's, a list entry by its index
 func TestValidateConfigNamesThePath(t *testing.T) {
 	valid := func() *Config {
 		return &Config{Color: "auto", Pipelines: []PipelineConfig{{
@@ -113,6 +113,9 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 		},
 		"pipelines[0].plugin_sinks[out].config.tls: client_auth requires client_ca_file": func(c *Config) {
 			c.Pipelines[0].PluginSinks[0].Config["tls"].(map[string]any)["client_auth"] = true
+		},
+		`pipelines[0].plugin_sinks[out].config.acl.allow[1]: "10.0.0.0.1": not an IP address or CIDR; host names and IPv6 zones are not accepted`: func(c *Config) {
+			c.Pipelines[0].PluginSinks[0].Config["acl"] = map[string]any{"allow": []any{"10.0.0.0/8", "10.0.0.0.1"}}
 		},
 		"pipelines[0].plugin_sinks[out].config.acl: requests_per_second_per_client applies only to HTTP listeners": func(c *Config) {
 			c.Pipelines[0].PluginSinks[0].Type = "tcp"
@@ -152,19 +155,25 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 	}
 }
 
-// A configuration that does not load names every problem, a line each, each
-// part's first: the settings, each flow stage, each plugin, each pipeline
+// A configuration that does not load names every problem, a line each: the
+// settings, each flow stage, each plugin and each pipeline, every key's of a
+// part, and the first rule between a table's keys
 func TestLoadReportsEveryProblemALine(t *testing.T) {
 	isolateConfig(t)
-	_, err := Load(Args{Overrides: []string{"--color=bogus"}, Specs: specs("pipeline", "a", "source", "file",
-		"sink", "tcp:port=70000", "rate-limit", "policy=bogus", "filter", "include:patterns=(",
+	_, err := Load(Args{Overrides: []string{"--color=bogus"}, Specs: specs("pipeline", "a", "source", "file:from=middle",
+		"sink", "tcp:port=70000,buffer_size=-1,tls.enabled=true,acl.allow=x", "rate-limit", "policy=bogus", "filter", "include:patterns=(,logic=nor",
 		"pipeline", "a", "sink", "null")})
 	want := strings.Join([]string{"invalid configuration:",
 		`color: must be one of auto, always, never, got "bogus"`,
 		`pipelines[0].flow.rate_limit.policy: must be one of pass, drop, got "bogus"`,
+		`pipelines[0].flow.filters[0].logic: must be one of or, and, got "nor"`,
 		"pipelines[0].flow.filters[0].patterns[0]: \"(\": error parsing regexp: missing closing ): `(`",
 		"pipelines[0].plugin_sources[file].config.directory: must be set",
+		`pipelines[0].plugin_sources[file].config.from: must be one of start, end, got "middle"`,
 		"pipelines[0].plugin_sinks[tcp].config.port: must be from 1 to 65535, got 70000",
+		"pipelines[0].plugin_sinks[tcp].config.buffer_size: must be at least 1, got -1",
+		`pipelines[0].plugin_sinks[tcp].config.acl.allow[0]: "x": not an IP address or CIDR; host names and IPv6 zones are not accepted`,
+		"pipelines[0].plugin_sinks[tcp].config.tls: listeners need cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file",
 		`pipelines[1].name: duplicate name "a"`,
 	}, "\n")
 	if err == nil || err.Error() != want {

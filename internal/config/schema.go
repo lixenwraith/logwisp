@@ -172,14 +172,15 @@ type Key struct {
 var kinds = map[reflect.Kind]string{reflect.String: "string", reflect.Int64: "integer",
 	reflect.Float64: "number", reflect.Bool: "bool", reflect.Slice: "list", reflect.Pointer: "table"}
 
-// Stage is a flow stage: its key in the flow table, whether it is a list (the
-// filters), its options, and the values that turn it on, which a file's
-// defaults leave off
+// Stage is a flow stage: its key in the flow table, what it does, whether it
+// is a list (the filters), its options, and the values that turn it on, which
+// a file's defaults leave off
 type Stage struct {
-	Key  string         `json:"key"`
-	List bool           `json:"list,omitempty"`
-	Keys []Key          `json:"keys"`
-	On   map[string]any `json:"on,omitempty"`
+	Key     string         `json:"key"`
+	Summary string         `json:"summary"`
+	List    bool           `json:"list,omitempty"`
+	Keys    []Key          `json:"keys"`
+	On      map[string]any `json:"on,omitempty"`
 }
 
 // FlowStages lists the flow table's stages, in the order entries pass them
@@ -188,7 +189,7 @@ func FlowStages() []Stage {
 	t := reflect.TypeFor[FlowConfig]()
 	for _, o := range options(t) {
 		ft := t.Field(o.index).Type
-		out = append(out, Stage{o.Name, ft.Kind() == reflect.Slice, keys(ft.Elem()), maps.Clone(stageOn[o.Name])})
+		out = append(out, Stage{o.Name, o.Help, ft.Kind() == reflect.Slice, keys(ft.Elem()), maps.Clone(stageOn[o.Name])})
 	}
 	return out
 }
@@ -232,8 +233,8 @@ func settingKeys(v reflect.Value, prefix string) []Key {
 
 // Decode reads a plugin's config map into its options: unknown keys, kinds,
 // the defaults, the tag rules and the options' own Check, then the host, tls,
-// acl and auth rules of its side; a leading ~ in a path is the home directory.
-// It reads no file.
+// acl and auth rules of its side, its error joining every problem found; a
+// leading ~ in a path is the home directory. It reads no file.
 func Decode[T any](role, typ string, m map[string]any) (*T, error) {
 	v, err := decode(role, typ, m)
 	if err != nil {
@@ -259,30 +260,27 @@ func decode(role, typ string, m map[string]any) (any, error) {
 	if err := lconfig.ScanMap(m, v.Interface()); err != nil {
 		return nil, err
 	}
-	if err := Settle(v.Interface()); err != nil {
-		return nil, err
-	}
+	errs := []error{Settle(v.Interface())}
 	expandPaths(v.Elem())
 	if n, ok := v.Interface().(networked); ok {
-		if err := p.checkNetwork(n); err != nil {
-			return nil, err
-		}
+		errs = append(errs, p.checkNetwork(n))
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
 	}
 	return v.Interface(), nil
 }
 
-// Settle gives a decoded table its defaults, applies the tag rules, then its
-// own Check, as Decode does before its side's rules, for the flow stages a
-// file decodes typed
+// Settle gives a decoded table its defaults, applies the tag rules and its own
+// Check, as Decode does before its side's rules, for the flow stages a file
+// decodes typed; its error joins every problem
 func Settle(v any) error {
 	Fill(v)
-	if err := checkTags(reflect.ValueOf(v).Elem(), ""); err != nil {
-		return err
-	}
+	err := checkTags(reflect.ValueOf(v).Elem(), "")
 	if c, ok := v.(interface{ Check() error }); ok {
-		return c.Check()
+		err = errors.Join(err, c.Check())
 	}
-	return nil
+	return err
 }
 
 // Fill gives a table its defaults and checks nothing: Settle's first step
@@ -369,11 +367,12 @@ func setDefault(f reflect.Value, o option) {
 	}
 }
 
-// checkTags applies the tag rules to a table's own keys, naming each by
-// prefix and key. A required list needs an entry. A zero number is the
-// default or its zero meaning, and meets the range unless required; an empty
-// enum is one only by its zero or default.
+// checkTags applies the tag rules to a table's own keys, joining a problem a
+// key, each named by prefix and key. A required list needs an entry. A zero
+// number is the default or its zero meaning, and meets the range unless
+// required; an empty enum is one only by its zero or default.
 func checkTags(v reflect.Value, prefix string) error {
+	var errs []error
 	for _, o := range options(v.Type()) {
 		f := v.Field(o.index)
 		var err error
@@ -404,10 +403,10 @@ func checkTags(v reflect.Value, prefix string) error {
 			}
 		}
 		if err != nil {
-			return &KeyError{prefix + o.Name, err}
+			errs = append(errs, &KeyError{prefix + o.Name, err})
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func num(n float64) string { return strconv.FormatFloat(n, 'f', -1, 64) }
@@ -425,7 +424,8 @@ func sideKeys(t reflect.Type, side string) []string {
 
 // Coerce gives command-line and environment values, which are strings, and
 // JSON's floats the kinds a plugin's options declare, so a dump prints them
-// typed. Keys and types it does not know are Decode's to refuse.
+// typed; its error joins a key each it cannot. Keys and types it does not
+// know are Decode's to refuse.
 func Coerce(role, typ string, m map[string]any) error {
 	p, ok := LookupPlugin(role, typ)
 	if !ok {
@@ -435,6 +435,7 @@ func Coerce(role, typ string, m map[string]any) error {
 }
 
 func coerce(t reflect.Type, m map[string]any, prefix string) error {
+	var errs []error
 	for _, o := range options(t) {
 		value, ok := m[o.Name]
 		if !ok {
@@ -445,18 +446,17 @@ func coerce(t reflect.Type, m map[string]any, prefix string) error {
 			ft = ft.Elem()
 		}
 		if sub, ok := value.(map[string]any); ok && ft.Kind() == reflect.Struct {
-			if err := coerce(ft, sub, prefix+o.Name+"."); err != nil {
-				return err
-			}
+			errs = append(errs, coerce(ft, sub, prefix+o.Name+"."))
 			continue
 		}
 		v, err := coerceValue(ft.Kind(), value)
 		if err != nil {
-			return &KeyError{prefix + o.Name, err}
+			errs = append(errs, &KeyError{prefix + o.Name, err})
+			continue
 		}
 		m[o.Name] = v
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // coerceValue converts text, a JSON float for an integer and a TOML integer

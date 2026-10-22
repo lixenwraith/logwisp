@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,11 +23,13 @@ import (
 	"github.com/lixenwraith/toml"
 )
 
-// Composition is the pipelines being composed. Its flow stages hold their
-// defaults and its plugin options the kinds they declare, so each form it
-// writes loads back to the same pipelines.
+// Composition is the pipelines being composed. Its flow stages and plugin
+// options hold the keys set, the options in the kinds they declare, so each
+// form it writes loads back to the same pipelines. LeftOut is what a pasted
+// form held besides pipelines: a file's settings, other LOGWISP_ variables.
 type Composition struct {
 	Pipelines []config.PipelineConfig
+	LeftOut   []string
 }
 
 // Node is a part of a pipeline: a source or sink by its id, or a flow stage
@@ -112,9 +115,10 @@ func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 	return c, c.settle()
 }
 
-// settle gives every flow stage its defaults, every plugin's options their
-// kinds and every source and sink an id; the rules are Validate's. Its error
-// joins a plugin's each holding a value of the wrong kind, kept as given.
+// settle gives every stage the values its spec writes out (FillOn), every
+// plugin's options their kinds, unsetting a zero that takes its key's
+// default, and every source and sink an id; the rules are Validate's. Its
+// error joins a plugin's each holding a value of the wrong kind, kept as given.
 func (c *Composition) settle() error {
 	var errs []error
 	for i := range c.Pipelines {
@@ -126,28 +130,51 @@ func (c *Composition) settle() error {
 			func(j int) string { return p.PluginSources[j].Type })
 		name(len(p.PluginSinks), func(j int) *string { return &p.PluginSinks[j].ID },
 			func(j int) string { return p.PluginSinks[j].Type })
-		for _, stage := range stages(p.Flow) {
+		for key, stage := range stages(p.Flow) {
 			if !stage.IsNil() {
-				config.Fill(stage.Interface())
+				config.FillOn(key, stage.Interface())
 			}
-		}
-		for j := range p.Flow.Filters {
-			config.Fill(&p.Flow.Filters[j])
 		}
 		for j, s := range p.PluginSources {
 			p.PluginSources[j].Config = orEmpty(s.Config)
-			if err := config.Coerce("source", s.Type, p.PluginSources[j].Config); err != nil {
+			if err := coerce("source", s.Type, p.PluginSources[j].Config); err != nil {
 				errs = append(errs, config.At(Node{Role: "source", ID: s.ID}.Path(i), err))
 			}
 		}
 		for j, s := range p.PluginSinks {
 			p.PluginSinks[j].Config = orEmpty(s.Config)
-			if err := config.Coerce("sink", s.Type, p.PluginSinks[j].Config); err != nil {
+			if err := coerce("sink", s.Type, p.PluginSinks[j].Config); err != nil {
 				errs = append(errs, config.At(Node{Role: "sink", ID: s.ID}.Path(i), err))
 			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// coerce gives a plugin's options their kinds, then unsets a number at zero
+// where zero takes the key's default: lw reads it so, and the options then
+// show the default rather than a 0 that means it
+func coerce(role, typ string, m map[string]any) error {
+	err := config.Coerce(role, typ, m)
+	if p, ok := config.LookupPlugin(role, typ); ok {
+		unsetDefaults(p.Keys(), m)
+	}
+	return err
+}
+
+func unsetDefaults(keys []config.Key, m map[string]any) {
+	for _, k := range keys {
+		switch v := m[k.Name]; v {
+		case int64(0), 0.0:
+			if k.Default != "" && k.Zero == "" {
+				delete(m, k.Name)
+			}
+		default:
+			if sub, ok := v.(map[string]any); ok {
+				unsetDefaults(k.Keys, sub)
+			}
+		}
+	}
 }
 
 // name gives the parts a file left unnamed the ids their specs would get: the
@@ -236,7 +263,8 @@ func (c *Composition) RemovePipeline(i int) error {
 }
 
 // Add appends a source or sink of a catalogue type under config.FreeID, or a
-// filter of type include or exclude, and returns its node
+// filter of type include or exclude, or of the default for "", and returns
+// its node
 func (c *Composition) Add(pi int, role, typ string) (Node, error) {
 	p, err := c.pipeline(pi)
 	if err != nil {
@@ -253,9 +281,7 @@ func (c *Composition) Add(pi int, role, typ string) (Node, error) {
 			ids = append(ids, s.ID)
 		}
 	case "filters":
-		f := config.FilterConfig{Type: config.FilterType(typ)}
-		config.Fill(&f)
-		p.Flow.Filters = append(p.Flow.Filters, f)
+		p.Flow.Filters = append(p.Flow.Filters, config.FilterConfig{Type: config.FilterType(typ)})
 		return Node{Role: role, Index: len(p.Flow.Filters) - 1}, nil
 	default:
 		return Node{}, fmt.Errorf("cannot add to %s", role)
@@ -392,7 +418,8 @@ func (c *Composition) MoveFilter(pi, from, to int) error {
 
 // Set gives a key at a dotted path its values: one, or several for a list. A
 // flow stage that is off turns on. A value of the wrong kind leaves the key as
-// it was; any other rule is Validate's.
+// it was, and a zero that takes the key's default unsets it; any other rule
+// is Validate's.
 func (c *Composition) Set(pi int, n Node, key string, values ...string) error {
 	return c.edit(pi, n, func(m map[string]any) error {
 		unset(m, strings.Split(key, "."))
@@ -435,7 +462,7 @@ func (c *Composition) edit(pi int, n Node, change func(map[string]any) error) er
 		if err := change(next); err != nil {
 			return err
 		}
-		if err := config.Coerce(n.Role, typ, next); err != nil {
+		if err := coerce(n.Role, typ, next); err != nil {
 			return err
 		}
 		*m = next
@@ -462,7 +489,8 @@ func (c *Composition) edit(pi int, n Node, change func(map[string]any) error) er
 }
 
 // editStage edits a stage's keys as a spec sets them; the table they scan into
-// replaces the stage, which turns on as a spec turns it on
+// replaces the stage, which turns on as a spec turns it on and holds the keys
+// set, a key at its zero unset
 func editStage(stage reflect.Value, key string, change func(map[string]any) error) error {
 	m := config.StageOn(key, nil)
 	if !stage.IsNil() {
@@ -475,7 +503,7 @@ func editStage(stage reflect.Value, key string, change func(map[string]any) erro
 	if err := config.Scan(m, next.Interface()); err != nil {
 		return err
 	}
-	config.Fill(next.Interface())
+	config.FillOn(key, next.Interface())
 	stage.Set(next)
 	return nil
 }
@@ -639,21 +667,40 @@ func (c *Composition) File() ([]byte, error) {
 }
 
 // Form is a way to write a composition, named for what it is, and to read it
-// back to the same pipelines
+// back to the same pipelines; looks matches text in its shape
 type Form struct {
 	Name  string                                           `json:"name"`
 	Hint  string                                           `json:"hint"`
 	Write func(*Composition) (string, error)               `json:"-"`
 	Read  func(string, config.IsDir) (*Composition, error) `json:"-"`
+	looks *regexp.Regexp
 }
 
 var forms = []Form{
-	{"command", "an lw command line", (*Composition).CommandLine, FromCommandLine},
-	{"environment", "LOGWISP_ variables for one pipeline", (*Composition).Environment, FromEnvironment},
+	{"command", "an lw command line", (*Composition).CommandLine, FromCommandLine,
+		regexp.MustCompile(`^\s*(\S*/)?lw(\s|$)|(^|\s)(--[a-z]|-p\s)`)},
+	{"environment", "LOGWISP_ variables for one pipeline", (*Composition).Environment, FromEnvironment,
+		regexp.MustCompile(`(?m)^\s*(export\s+)?LOGWISP_[A-Z0-9_]*=`)},
 	{"file", "the pipelines of a configuration file", func(c *Composition) (string, error) {
 		data, err := c.File()
 		return string(data), err
-	}, func(text string, _ config.IsDir) (*Composition, error) { return FromFile([]byte(text)) }},
+	}, func(text string, _ config.IsDir) (*Composition, error) { return FromFile([]byte(text)) },
+		regexp.MustCompile(`(?m)^\s*(\[\[?pipelines\b|pipelines\s*=)`)},
+}
+
+// Parse reads text pasted as the form. Refused, text in another form's shape
+// and not in this one's is refused as that form, which reads it.
+func (f Form) Parse(text string, isDir config.IsDir) (*Composition, error) {
+	c, err := f.Read(text, isDir)
+	if err == nil || f.looks.MatchString(text) {
+		return c, err
+	}
+	for _, g := range forms {
+		if g.looks.MatchString(text) {
+			return nil, fmt.Errorf("this is %s, not %s: read it as the %s form", g.Hint, f.Hint, g.Name)
+		}
+	}
+	return nil, err
 }
 
 // Forms are what a composition writes and reads: lw --tui prints one, the
@@ -662,7 +709,8 @@ func Forms() []Form { return slices.Clone(forms) }
 
 // FromEnvironment starts from NAME='value' lines as an environment file holds
 // them, quoted as a POSIX shell reads them: '#' starts a comment line, a word
-// without '=', such as export, assigns nothing, and a later assignment wins
+// without '=', such as export, assigns nothing, and a later assignment wins.
+// LeftOut names the LOGWISP_ variables no pipeline flag has.
 func FromEnvironment(text string, isDir config.IsDir) (*Composition, error) {
 	vars := map[string]string{}
 	for line := range strings.Lines(text) {
@@ -683,26 +731,28 @@ func FromEnvironment(text string, isDir config.IsDir) (*Composition, error) {
 	for name, value := range vars {
 		environ = append(environ, name+"="+value)
 	}
-	pipelines, err := config.EnvPipelines(environ, isDir)
+	pipelines, unread, err := config.EnvPipelines(environ, isDir)
 	if err != nil {
 		return nil, err
 	}
-	c := &Composition{Pipelines: pipelines}
+	c := &Composition{Pipelines: pipelines, LeftOut: unread}
 	return c, c.settle()
 }
 
 // FromFile starts from a configuration file's pipelines, refusing a misspelled
-// key as lw does; its settings are the host's and its console sinks keep the
-// color they name
+// key as lw does; its settings are the host's, which LeftOut names, and its
+// console sinks keep the color they name
 func FromFile(data []byte) (*Composition, error) {
-	cfg, err := config.ParseFile(data)
+	cfg, settings, err := config.ParseFile(data)
 	if err != nil {
 		return nil, err
 	}
 	if len(cfg.Pipelines) == 0 {
 		return nil, errors.New("no [[pipelines]]")
 	}
-	return FromConfig(&config.Config{Pipelines: cfg.Pipelines})
+	c, err := FromConfig(&config.Config{Pipelines: cfg.Pipelines})
+	c.LeftOut = settings
+	return c, err
 }
 
 // FromJSON starts from pipelines as the website keeps them: a JSON list of

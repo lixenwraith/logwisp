@@ -761,7 +761,7 @@ func (a *app) verdict(w *row) string {
 		text := fmt.Sprintf("dropped by filter %d", w.index+1)
 		if pi := a.pipeIndex(w.pipe); pi >= 0 {
 			if fs := a.comp.Pipelines[pi].Flow.Filters; w.index < len(fs) {
-				text += " (" + string(fs[w.index].Type) + " " + strings.Join(fs[w.index].Patterns, " | ") + ")"
+				text += " (" + string(filled(fs[w.index]).Type) + " " + strings.Join(fs[w.index].Patterns, " | ") + ")"
 			}
 		}
 		return text
