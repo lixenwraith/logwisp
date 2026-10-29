@@ -1,6 +1,6 @@
 module github.com/lixenwraith/logwisp
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/lixenwraith/auth v0.5.1
