@@ -4,11 +4,11 @@ go 1.27.3
 
 require (
 	github.com/lixenwraith/auth v0.5.1
-	github.com/lixenwraith/color v0.1.3
+	github.com/lixenwraith/color v0.1.5
 	github.com/lixenwraith/config v0.2.2
 	github.com/lixenwraith/log v0.1.13
-	github.com/lixenwraith/terminal v0.6.1
-	github.com/lixenwraith/toml v0.4.0
+	github.com/lixenwraith/terminal v0.6.5
+	github.com/lixenwraith/toml v0.5.0
 	golang.org/x/term v0.47.0
 )
 
