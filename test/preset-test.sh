@@ -162,9 +162,13 @@ if command -v script >/dev/null && command -v setsid >/dev/null; then
 	setsid -w "$BIN" --check --preset aggregator:listen=127.0.0.1:15898,user=gen </dev/null >"$LOG/no-tty.out" 2>&1
 	check "with no terminal to ask on, a listener's user fails closed" "$(grep -q 'no terminal to ask on' "$LOG/no-tty.out" && echo 1 || echo 0)"
 	# script(1) is lw's terminal, what lw shows there lands in agg-gen-tty.out;
-	# not spawn, whose background command would read /dev/null, not the Enter
-	script -qefc "$(printf '%q ' "$BIN" --preset "aggregator:listen=127.0.0.1:15898,transport=http,user=gen,format=raw,out=$RUN/out/gen")2>$(printf %q "$LOG/agg-gen.out")" /dev/null \
-		< <(printf '\n') >"$LOG/agg-gen-tty.out" 2>&1 &
+	# not spawn, whose background command would read /dev/null, not the Enter.
+	# The Enter is a here-string: a <(...) feeder would be script's child, and
+	# util-linux 2.39 script spins on the exit of a child it did not start. lw
+	# is script's child (exec), which passes it the TERM of stop_all: a shell
+	# between them would die and leave lw to read the hangup as a reload.
+	script -qefc "exec $(printf '%q ' "$BIN" --preset "aggregator:listen=127.0.0.1:15898,transport=http,user=gen,format=raw,out=$RUN/out/gen")2>$(printf %q "$LOG/agg-gen.out")" /dev/null \
+		<<<'' >"$LOG/agg-gen-tty.out" 2>&1 &
 	PIDS+=($!) DAEMONS+=(agg-gen-tty)
 	wait_until 10 logged agg-gen-tty 'generated password'
 	GEN=$(grep -o 'shown once: [A-Z2-7]*' "$LOG/agg-gen-tty.out" | cut -d' ' -f3)
