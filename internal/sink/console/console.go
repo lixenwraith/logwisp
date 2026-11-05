@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,7 +40,7 @@ type ConsoleSink struct {
 	// Configuration
 	config  *config.ConsoleSinkOptions
 	escape  bool
-	painter *inline.Printer // paints level names; nil when color is off
+	palette *palette // nil when color is off
 
 	// Application
 	input  chan core.TransportEvent
@@ -58,14 +59,22 @@ type ConsoleSink struct {
 	lastProcessed  atomic.Value // time.Time
 }
 
-// levelStyles colors the levels in ANSI 16, so the terminal's theme picks the
-// shades and a text console renders them; cyan, not blue, stays readable on black
+// levelStyles and markStyles are ANSI 16, so the terminal's theme picks the
+// shades and a text console renders them: cyan, not blue, reads on black;
+// grey sets the stamp and punctuation back from the text, magenta the tag
 var levelStyles = map[string]inline.Style{
 	"ERROR": inline.FgANSI(color.ANSIRed).Bold(),
 	"WARN":  inline.FgANSI(color.ANSIYellow),
 	"INFO":  inline.FgANSI(color.ANSIGreen),
 	"DEBUG": inline.FgANSI(color.ANSICyan),
 	"TRACE": inline.FgANSI(color.ANSIBrightBlack),
+}
+
+var markStyles = [...]inline.Style{
+	logline.MarkTime:  inline.FgANSI(color.ANSIBrightBlack),
+	logline.MarkTag:   inline.FgANSI(color.ANSIMagenta),
+	logline.MarkKey:   inline.FgANSI(color.ANSICyan),
+	logline.MarkPunct: inline.FgANSI(color.ANSIBrightBlack),
 }
 
 // NewConsoleSinkPlugin creates a console sink through plugin factory
@@ -88,9 +97,9 @@ func NewConsoleSinkPlugin(
 	if opts.Color != "auto" {
 		printer.SetColor(opts.Color == "always")
 	}
-	var painter *inline.Printer
+	var pal *palette
 	if printer.Paint("x", inline.Style{}) != "x" {
-		painter = printer
+		pal = newPalette(printer)
 	}
 
 	// Create and return plugin instance
@@ -99,7 +108,7 @@ func NewConsoleSinkPlugin(
 		proxy:   proxy,
 		config:  opts,
 		escape:  opts.Escape == "always" || opts.Escape == "auto" && term.IsTerminal(int(output.Fd())),
-		painter: painter,
+		palette: pal,
 		input:   make(chan core.TransportEvent, opts.BufferSize),
 		output:  output,
 		done:    make(chan struct{}),
@@ -123,7 +132,7 @@ func NewConsoleSinkPlugin(
 		"instance_id", id,
 		"target", opts.Target,
 		"escape", cs.escape,
-		"color", painter != nil,
+		"color", pal != nil,
 	)
 
 	return cs, nil
@@ -195,7 +204,7 @@ func (cs *ConsoleSink) GetStats() sink.SinkStats {
 			"target":      cs.config.Target,
 			"buffer_size": cs.config.BufferSize,
 			"escape":      cs.escape,
-			"color":       cs.painter != nil,
+			"color":       cs.palette != nil,
 		},
 	}
 }
@@ -233,8 +242,8 @@ func (cs *ConsoleSink) write(event core.TransportEvent) {
 	if cs.escape {
 		payload = logline.EscapeControls(payload)
 	}
-	if cs.painter != nil {
-		payload = paintLevel(cs.painter, payload, event.Entry.Level)
+	if cs.palette != nil {
+		payload = cs.palette.paint(payload, event.Entry)
 	}
 	if _, err := cs.output.Write(payload); err != nil {
 		cs.logger.Error("msg", "Failed to write to console",
@@ -247,19 +256,43 @@ func (cs *ConsoleSink) write(event core.TransportEvent) {
 	cs.lastProcessed.Store(time.Now())
 }
 
-// paintLevel colors the first word naming the entry's level, after escaping:
-// the escape sequences are the sink's own
-func paintLevel(p *inline.Printer, payload []byte, level string) []byte {
-	level, _, _ = core.LevelWord(level, "")
-	style, ok := levelStyles[level]
-	if !ok {
-		return payload
+// palette holds each style's opening and closing codes, rendered once
+type palette struct {
+	marks  [len(markStyles)][2]string
+	levels map[string][2]string
+}
+
+func newPalette(p *inline.Printer) *palette {
+	codes := func(st inline.Style) [2]string {
+		open, end, _ := strings.Cut(p.Paint("\x00", st), "\x00")
+		return [2]string{open, end}
 	}
-	if _, i, j := core.LevelWord(payload, level); i < j {
-		out := make([]byte, 0, len(payload)+16)
-		out = append(out, payload[:i]...)
-		out = append(out, p.Paint(string(payload[i:j]), style)...)
-		return append(out, payload[j:]...)
+	pal := &palette{levels: make(map[string][2]string, len(levelStyles))}
+	for kind, st := range markStyles {
+		pal.marks[kind] = codes(st)
 	}
-	return payload
+	for level, st := range levelStyles {
+		pal.levels[level] = codes(st)
+	}
+	return pal
+}
+
+// paint colors the parts of the line logline marks, after escaping: the
+// escape sequences are the sink's own
+func (pal *palette) paint(payload []byte, e core.LogEntry) []byte {
+	s := string(payload)
+	out := make([]byte, 0, len(s)+len(s)/2)
+	at := 0
+	logline.Marks(s, e, func(m logline.Mark) {
+		c, ok := pal.marks[m.Kind], m.Kind != logline.MarkLevel
+		if !ok {
+			c, ok = pal.levels[m.Level]
+		}
+		if ok && m.Start >= at {
+			out = append(append(out, s[at:m.Start]...), c[0]...)
+			out = append(append(out, s[m.Start:m.End]...), c[1]...)
+			at = m.End
+		}
+	})
+	return append(out, s[at:]...)
 }
