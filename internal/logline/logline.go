@@ -1,8 +1,8 @@
 // Package logline reads a log line of any shape (vif records, LogWisp's json,
 // lw's own log, pino, zap, slog, logfmt, docker, journald, ECS, GCP, plain
-// text) into one set of roles, and names the runes a terminal would act on. It
-// links no terminal code, so a viewer, a sink and the configuration page can
-// share it.
+// text) into one set of roles, marks where a written line puts them, and names
+// the runes a terminal would act on. It links no terminal code, so a viewer, a
+// sink and the configuration page can share it.
 package logline
 
 import (

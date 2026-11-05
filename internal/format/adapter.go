@@ -84,7 +84,7 @@ func (a *FormatterAdapter) serialize(entry core.LogEntry, flags int64) []byte {
 	args, flags := formatArgs(entry, flags)
 
 	a.mu.Lock()
-	out := a.formatter.Format(flags, entry.Time, mapLevel(entry.Level), sourceLabel(entry), args)
+	out := a.formatter.Format(flags, entry.Time, mapLevel(entry.Level), entry.Label(), args)
 	record := make([]byte, len(out), len(out)+1)
 	copy(record, out)
 	a.mu.Unlock()
@@ -134,12 +134,4 @@ func mapLevel(level string) int64 {
 	default:
 		return 0
 	}
-}
-
-// sourceLabel prefixes origin node onto source (syslog HOSTNAME + TAG convention)
-func sourceLabel(entry core.LogEntry) string {
-	if entry.Node == "" {
-		return entry.Source
-	}
-	return entry.Node + "/" + entry.Source
 }

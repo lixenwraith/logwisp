@@ -165,3 +165,82 @@ func TestEscapeControlsKeepsOnlyLayout(t *testing.T) {
 		}
 	}
 }
+
+// marked writes each mark as its kind's letter (T time, L:level, G tag, K key,
+// P punctuation) around the text it covers
+func marked(s string, e core.LogEntry) string {
+	var b strings.Builder
+	at := 0
+	Marks(s, e, func(m Mark) {
+		b.WriteString(s[at:m.Start])
+		kind := string(" TLGKP"[m.Kind])
+		if m.Kind == MarkLevel {
+			kind += ":" + m.Level
+		}
+		fmt.Fprintf(&b, "%s(%s)", kind, s[m.Start:m.End])
+		at = m.End
+	})
+	return b.String() + s[at:]
+}
+
+// Each role is marked where the line writes it: the stamp and level word it
+// starts with, then the source label as txt writes it or syslog's host and
+// program, else the first word naming the entry's level; keys, punctuation and
+// the time, level and tag values of a JSON object or key=value pairs.
+func TestMarksNameEachRoleWhereTheLineWritesIt(t *testing.T) {
+	for _, c := range []struct {
+		in    string
+		entry core.LogEntry
+		want  string
+	}{
+		// txt: stamp, level, label; pairs in the quoted message, its first too
+		{`2026-11-05T07:51:43.123Z INFO console "server started addr=0.0.0.0:8080 n=4"`, core.LogEntry{Level: "info", Source: "console"},
+			`T(2026-11-05T07:51:43.123Z) L:INFO(INFO) G(console) "server started K(addr)P(=)0.0.0.0:8080 K(n)P(=)4"`},
+		{`2026-11-05 07:51:44,001 WARN edge-01/app "time=07:51:44 level=warn msg=\"slow\""`, core.LogEntry{Level: "WARN", Node: "edge-01", Source: "app"},
+			`T(2026-11-05 07:51:44,001) L:WARN(WARN) G(edge-01/app) "K(time)P(=)T(07:51:44) K(level)P(=)L:WARN(warn) K(msg)P(=)\"slow\""`},
+		{`Nov  5 07:51:45 edge-01 sshd[2211]: error: auth failed`, core.LogEntry{Level: "ERROR", Source: "messages"},
+			`T(Nov  5 07:51:45) G(edge-01 sshd[2211]): L:ERROR(error): auth failed`},
+		// JSON: a level value reads as its writer's scale; nested keys name no role
+		{`{"level":30,"ts":1762329103.88,"msg":"a","n":[1,{"logger":"x"}],"logger":"db"}`, core.LogEntry{Level: "INFO"},
+			`P({)K("level")P(:)L:INFO(30)P(,)K("ts")P(:)T(1762329103.88)P(,)K("msg")P(:)"a"P(,)K("n")P(:)P([)1P(,)P({)K("logger")P(:)"x"P(})P(])P(,)K("logger")P(:)G("db")P(})`},
+		// LogWisp json writes TRACE as INFO: the line's level is marked, not the trace key
+		{`{"time":"2026-11-05T07:51:43Z","level":"INFO","trace":"console","fields":["TRACE x"]}`, core.LogEntry{Level: "TRACE", Source: "console"},
+			`P({)K("time")P(:)T("2026-11-05T07:51:43Z")P(,)K("level")P(:)L:INFO("INFO")P(,)K("trace")P(:)G("console")P(,)K("fields")P(:)P([)"TRACE x"P(])P(})`},
+		// without a level at its start, the first whole word naming the entry's
+		{`[warning] disk`, core.LogEntry{Level: "WARN"}, `[L:WARN(warning)] disk`},
+		{`INFO: WARN disk`, core.LogEntry{Level: "warning"}, `INFO: L:WARN(WARN) disk`},
+		{`2026 ERROR boom ERROR`, core.LogEntry{Level: "ERROR"}, `2026 L:ERROR(ERROR) boom ERROR`},
+		{`terror_x code=ERR:1`, core.LogEntry{Level: "ERROR"}, `terror_x K(code)P(=)L:ERROR(ERR):1`},
+		{`INFOS informal`, core.LogEntry{Level: "INFO"}, `INFOS informal`},
+		{`boom ERROR, entry without level`, core.LogEntry{}, `boom ERROR, entry without level`},
+		// braces that are no JSON are text; a JSON object after text is marked
+		{`2026/11/05 07:51:48 DEBUG Foo { a: 1 } done {"id":7}`, core.LogEntry{Level: "DEBUG"},
+			`T(2026/11/05 07:51:48) L:DEBUG(DEBUG) Foo { a: 1 } done P({)K("id")P(:)7P(})`},
+		// the label follows a stamp or level; a stamp is a word of its own
+		{`[2026-11-05 07:51:44] app ready`, core.LogEntry{Source: "app"}, `T([2026-11-05 07:51:44]) G(app) ready`},
+		{`app ready`, core.LogEntry{Source: "app"}, `app ready`},
+		{`12:30 lunch x=1`, core.LogEntry{}, `12:30 lunch K(x)P(=)1`},
+		{`2026-11-05T07:51:43Zjunk x`, core.LogEntry{}, `2026-11-05T07:51:43Zjunk x`},
+	} {
+		if got := marked(c.in, c.entry); got != c.want {
+			t.Errorf("%s\n got: %s\nwant: %s", c.in, got, c.want)
+		}
+	}
+}
+
+// Marks of any line, its level any word, are in order, apart and in bounds
+func FuzzMarksStayInOrderWithinTheLine(f *testing.F) {
+	f.Add(`2026-11-05 07:51:44,001 WARN edge-01/app "time=07:51:44 level=warn msg=\"slow\""`, "WARN")
+	f.Add(`Nov  5 07:51:45 edge-01 sshd[2211]: error: auth failed`, "ERROR")
+	f.Add(`{"level":30,"ts":1.5,"n":[1,{"k":"x"}],"logger":"db"} tail {"a":`, "INFO")
+	f.Add(`[warning] k="unterminated \"`, "warning")
+	f.Fuzz(func(t *testing.T, s, level string) {
+		at := 0
+		Marks(s, core.LogEntry{Level: level, Source: "app"}, func(m Mark) {
+			if m.Start < at || m.End <= m.Start || m.End > len(s) {
+				t.Fatalf("%q: mark %+v after %d", s, m, at)
+			}
+			at = m.End
+		})
+	})
+}
