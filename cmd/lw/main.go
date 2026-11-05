@@ -1,6 +1,6 @@
 // Command lw is LogWisp: it runs the pipelines its file, LOGWISP_ variables
-// and flags describe, rebuilt on SIGHUP, SIGUSR1 or an auto_reload, or
-// composes them on screen with --tui. Its auth, tls, preset and config commands
+// and flags describe, rebuilt on SIGHUP, SIGUSR1 or an auto_reload (which
+// swaps flows alone in place), or composes them on screen with --tui. Its auth, tls, preset and config commands
 // manage credentials and certificates, print a preset's pipeline as TOML and
 // write the annotated configuration file.
 package main
@@ -154,9 +154,21 @@ func main() {
 			return
 		}
 		// Watch events are hints and may be duplicated or concern startup-only
-		// settings. Signals always rebuild, including for certificate rotation.
-		if !fromDisk && cfg.StatusReporter == next.StatusReporter && reflect.DeepEqual(cfg.Pipelines, next.Pipelines) {
-			return
+		// settings; an edit of flows alone swaps them in place. Signals always
+		// rebuild, including for certificate and credential rotation.
+		if !fromDisk && cfg.StatusReporter == next.StatusReporter {
+			if reflect.DeepEqual(cfg.Pipelines, next.Pipelines) {
+				return
+			}
+			switch patched, err := svc.Patch(next); {
+			case err != nil:
+				logger.Error("msg", "Invalid flow in reload configuration, keeping current service", "error", oneLine(err))
+				return
+			case patched:
+				cfg = next
+				logger.Info("msg", "Configuration reload swapped flows in place")
+				return
+			}
 		}
 		newSvc, newCfg, newStatusCancel, err := handleReload(ctx, next, svc, statusReporterCancel, nil)
 		switch {

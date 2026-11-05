@@ -14,27 +14,27 @@ import (
 )
 
 // Flow takes a pipeline's entries through rate limit, filters and format to
-// the TransportEvent its sinks get
+// the TransportEvent its sinks get. A built flow does not change: a pipeline
+// edits its flow by swapping in another, which goes on with its totals.
 type Flow struct {
 	rateLimiter *RateLimiter
 	filterChain *filter.Chain
 	formatter   format.Formatter
 	heartbeat   *HeartbeatGenerator
 	logger      *log.Logger
-
-	totalProcessed atomic.Uint64
-	totalDropped   atomic.Uint64
-	totalFormatted atomic.Uint64
+	totals      *totals
 }
+
+// totals count every entry the flow took, those a stage dropped, those the
+// filters dropped among them, and those formatted
+type totals struct{ processed, dropped, filtered, formatted atomic.Uint64 }
 
 func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 	if cfg == nil {
 		cfg = &config.FlowConfig{}
 	}
 
-	f := &Flow{
-		logger: logger,
-	}
+	f := &Flow{logger: logger, totals: new(totals)}
 
 	if cfg.RateLimit != nil {
 		limiter, err := NewRateLimiter(*cfg.RateLimit, logger)
@@ -80,14 +80,15 @@ func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 // Process applies the flow's stages to an entry and returns the event for the
 // sinks, or the stage that dropped it and, for filters, which one
 func (f *Flow) Process(entry core.LogEntry) (event core.TransportEvent, stage string, index int) {
-	f.totalProcessed.Add(1)
+	f.totals.processed.Add(1)
 	if f.rateLimiter != nil && !f.rateLimiter.Allow(entry) {
-		f.totalDropped.Add(1)
+		f.totals.dropped.Add(1)
 		return core.TransportEvent{Entry: entry}, "rate_limit", 0
 	}
 	if f.filterChain != nil {
 		if i := f.filterChain.Apply(entry); i >= 0 {
-			f.totalDropped.Add(1)
+			f.totals.dropped.Add(1)
+			f.totals.filtered.Add(1)
 			return core.TransportEvent{Entry: entry}, "filters", i
 		}
 	}
@@ -96,13 +97,16 @@ func (f *Flow) Process(entry core.LogEntry) (event core.TransportEvent, stage st
 		f.logger.Error("msg", "Failed to format log entry",
 			"component", "flow",
 			"error", err)
-		f.totalDropped.Add(1)
+		f.totals.dropped.Add(1)
 		return core.TransportEvent{Entry: entry}, "format", 0
 	}
-	f.totalFormatted.Add(1)
+	f.totals.formatted.Add(1)
 	// The structured entry rides along so chain sinks are format-independent
 	return core.TransportEvent{Time: entry.Time, Payload: formatted, Entry: entry}, "", 0
 }
+
+// Continue has f count on prev's totals, before f takes prev's place
+func (f *Flow) Continue(prev *Flow) { f.totals = prev.totals }
 
 // StartHeartbeat returns the heartbeat events until ctx ends, or nil without
 // a heartbeat
@@ -115,9 +119,10 @@ func (f *Flow) StartHeartbeat(ctx context.Context) <-chan core.TransportEvent {
 
 func (f *Flow) GetStats() map[string]any {
 	stats := map[string]any{
-		"total_processed": f.totalProcessed.Load(),
-		"total_dropped":   f.totalDropped.Load(),
-		"total_formatted": f.totalFormatted.Load(),
+		"total_processed": f.totals.processed.Load(),
+		"total_dropped":   f.totals.dropped.Load(),
+		"total_filtered":  f.totals.filtered.Load(),
+		"total_formatted": f.totals.formatted.Load(),
 	}
 
 	if f.rateLimiter != nil {

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/flow"
 	"github.com/lixenwraith/logwisp/internal/plugin"
 	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/sink"
@@ -18,12 +20,14 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// finiteSource publishes n entries as soon as it starts, then ends, once hold
-// closes when there is one. Entries carry its id as their Source.
+// finiteSource publishes n entries as soon as it starts, then those feed
+// sends when there is one, and ends once feed and hold close, when there are
+// those. Entries carry its id as their Source.
 type finiteSource struct {
 	id   string
 	n    int
 	hold chan struct{}
+	feed chan string
 	subs []chan core.LogEntry
 }
 
@@ -38,6 +42,15 @@ func (s *finiteSource) Start() error {
 		for i := range s.n {
 			for _, ch := range s.subs {
 				msg := strconv.Itoa(i)
+				ch <- core.LogEntry{Time: time.Now(), Source: s.id, Message: msg, RawSize: int64(len(msg))}
+			}
+		}
+		for s.feed != nil {
+			msg, ok := <-s.feed
+			if !ok {
+				break
+			}
+			for _, ch := range s.subs {
 				ch <- core.LogEntry{Time: time.Now(), Source: s.id, Message: msg, RawSize: int64(len(msg))}
 			}
 		}
@@ -75,7 +88,17 @@ func (s *slowSink) Start(context.Context) error {
 func (s *slowSink) Stop()                    {}
 func (s *slowSink) GetStats() sink.SinkStats { return sink.SinkStats{} }
 
-var testSinks = map[string]*slowSink{}
+// fullSink declares no backpressure and never reads its unbuffered input:
+// dispatch drops every event for it
+type fullSink struct{ in chan core.TransportEvent }
+
+func (s *fullSink) Capabilities() []core.Capability   { return nil }
+func (s *fullSink) Input() chan<- core.TransportEvent { return s.in }
+func (s *fullSink) Start(context.Context) error       { return nil }
+func (s *fullSink) Stop()                             {}
+func (s *fullSink) GetStats() sink.SinkStats          { return sink.SinkStats{} }
+
+var testSinks = map[string]sink.Sink{}
 
 // The fakes take catalogue types that no plugin package registers in this
 // test binary
@@ -83,7 +106,8 @@ func init() {
 	plugin.RegisterSource("random", func(id string, cfg map[string]any, _ *log.Logger, _ *session.Proxy) (source.Source, error) {
 		n, _ := strconv.Atoi(fmt.Sprint(cfg["n"]))
 		hold, _ := cfg["hold"].(chan struct{})
-		return &finiteSource{id: id, n: n, hold: hold}, nil
+		feed, _ := cfg["feed"].(chan string)
+		return &finiteSource{id: id, n: n, hold: hold, feed: feed}, nil
 	})
 	plugin.RegisterSink("null", func(id string, _ map[string]any, _ *log.Logger, _ *session.Proxy) (sink.Sink, error) {
 		return testSinks[id], nil
@@ -263,5 +287,137 @@ func TestFullTapNeverStallsAPipeline(t *testing.T) {
 	p.Shutdown()
 	if tap.Dropped() != n-1 {
 		t.Fatalf("tap dropped %d, want %d", tap.Dropped(), n-1)
+	}
+}
+
+// SetFlow swaps the flow under running sources: the next entry takes the new
+// stages, the heartbeat follows the flow, and the flow's totals go on while
+// its filters' start over
+func TestSetFlowSwapsTheFlowInPlace(t *testing.T) {
+	feed := make(chan string)
+	testSinks[t.Name()] = &slowSink{in: make(chan core.TransportEvent, 64)}
+	exclude := func(pattern string) []config.FilterConfig {
+		return []config.FilterConfig{{Type: "exclude", Patterns: []string{pattern}}}
+	}
+	p, err := NewPipeline(&config.PipelineConfig{
+		Name:          t.Name(),
+		Flow:          &config.FlowConfig{Filters: exclude("a")},
+		PluginSources: []config.PluginSourceConfig{{ID: "src", Type: "random", Config: map[string]any{"feed": feed}}},
+		PluginSinks:   []config.PluginSinkConfig{{ID: t.Name(), Type: "null"}},
+	}, log.NewLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tap := core.NewTap(64)
+	tap.All.Store(true)
+	p.SetTap(tap)
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(feed); p.Shutdown() }()
+	beats := 0
+	next := func() core.Tapped {
+		t.Helper()
+		for {
+			select {
+			case r := <-tap.Records():
+				if r.Source != "" {
+					return r
+				}
+				beats++
+			case <-time.After(5 * time.Second):
+				t.Fatal("nothing reached the tap")
+			}
+		}
+	}
+	verdicts := func() (out []string) {
+		t.Helper()
+		for _, msg := range []string{"a", "b"} {
+			feed <- msg
+			r := next()
+			out = append(out, r.Event.Entry.Message+":"+r.Stage)
+		}
+		return out
+	}
+	swap := func(cfg *config.FlowConfig) {
+		t.Helper()
+		f, err := flow.NewFlow(cfg, log.NewLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.SetFlow(cfg, f)
+		if p.Config.Flow != cfg {
+			t.Fatal("the pipeline's configuration kept the earlier flow")
+		}
+	}
+
+	if got := verdicts(); !slices.Equal(got, []string{"a:filters", "b:"}) {
+		t.Fatalf("before the swap: %v", got)
+	}
+	swap(&config.FlowConfig{Filters: exclude("b"), Heartbeat: &config.HeartbeatConfig{Enabled: true, IntervalMS: 100}})
+	if got := verdicts(); !slices.Equal(got, []string{"a:", "b:filters"}) {
+		t.Fatalf("after the swap: %v", got)
+	}
+	for deadline := time.Now().Add(5 * time.Second); beats == 0; {
+		select {
+		case r := <-tap.Records():
+			if r.Source == "" {
+				beats++
+			}
+		case <-time.After(time.Until(deadline)):
+			t.Fatal("the swapped-in flow's heartbeat never beat")
+		}
+	}
+	stats := p.GetStats()
+	flowStats := stats["flow"].(map[string]any)
+	filters := flowStats["filters"].(map[string]any)
+	if stats["total_processed"] != uint64(4) || stats["total_filtered"] != uint64(2) || flowStats["total_dropped"] != uint64(2) || filters["total_processed"] != uint64(2) {
+		t.Fatalf("totals: processed %v, filtered %v, flow dropped %v, the new filters took %v",
+			stats["total_processed"], stats["total_filtered"], flowStats["total_dropped"], filters["total_processed"])
+	}
+
+	swap(&config.FlowConfig{})
+	time.Sleep(20 * time.Millisecond) // a beat already sent may still arrive
+	for len(tap.Records()) > 0 {
+		<-tap.Records()
+	}
+	time.Sleep(250 * time.Millisecond)
+	for len(tap.Records()) > 0 {
+		if r := <-tap.Records(); r.Source == "" {
+			t.Fatal("the heartbeat outlived its flow")
+		}
+	}
+}
+
+// A full sink's drops count for it alone; the pipeline's total is their sum
+func TestDispatchCountsEachSinksDrops(t *testing.T) {
+	const n = 200
+	full, slow := t.Name()+"/full", t.Name()+"/slow"
+	testSinks[full] = &fullSink{in: make(chan core.TransportEvent)}
+	got := &slowSink{in: make(chan core.TransportEvent, 1), out: make(chan string, n)}
+	testSinks[slow] = got
+	p, err := NewPipeline(&config.PipelineConfig{
+		Name:          t.Name(),
+		PluginSources: []config.PluginSourceConfig{{ID: "src", Type: "random", Config: map[string]any{"n": n}}},
+		PluginSinks:   []config.PluginSinkConfig{{ID: full, Type: "null"}, {ID: slow, Type: "null"}},
+	}, log.NewLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	<-p.Finished()
+	for range n {
+		<-got.out
+	}
+	p.Shutdown()
+	stats := p.GetStats()
+	dropped := map[string]any{}
+	for _, s := range stats["sinks"].([]map[string]any) {
+		dropped[s["id"].(string)] = s["dropped_entries"]
+	}
+	if dropped[full] != uint64(n) || dropped[slow] != uint64(0) || stats["total_dropped_by_sink"] != uint64(n) {
+		t.Fatalf("dropped %v, in all %v", dropped, stats["total_dropped_by_sink"])
 	}
 }

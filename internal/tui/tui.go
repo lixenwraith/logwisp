@@ -72,6 +72,10 @@ func Run(c *compose.Composition, color string, runner Runner) (Result, error) {
 			cells = make([]terminal.Cell, w*h)
 		case terminal.EventClosed:
 			return Result{}, errors.New("the terminal closed")
+		case terminal.EventError:
+			// The terminal hung up without SIGHUP: no key comes after a
+			// failed read, so stop what runs and leave as SIGHUP does
+			a.leave(Result{})
 		default:
 			a.handle(ev)
 		}
@@ -296,7 +300,9 @@ func (a *app) globalKey(ev terminal.Event) {
 	case is(ev, terminal.KeyNone, "r"):
 		a.run()
 	case is(ev, terminal.KeyNone, "t"):
-		a.tap()
+		a.tap(false)
+	case is(ev, terminal.KeyNone, "T"):
+		a.tap(true)
 	case is(ev, terminal.KeyNone, "]") && n > 0:
 		a.pi, a.row, a.inspect = (a.pi+1)%n, [3]int{}, false
 	case is(ev, terminal.KeyNone, "[") && n > 0:
@@ -627,7 +633,7 @@ func (a *app) bottom(w int) ([]string, ui.Style) {
 func (a *app) hints(w int) string {
 	keys := "a add  d delete  " + a.font.space + " on/off  t tap  p preset  o output  ? help"
 	if a.viewing {
-		keys = "/ filter  0-5 level  v mode  s point  " + a.font.enter + " detail  t back  ? help"
+		keys = "/ filter  0-5 level  v mode  s point  " + a.font.space + " pin  " + a.font.enter + " detail  t back  ? help"
 	}
 	if ui.RuneLen(keys) > w {
 		keys = "? help"

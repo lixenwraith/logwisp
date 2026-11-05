@@ -90,6 +90,7 @@ type font struct {
 	arrow, down rune        // into the flow box and a sink; between stacked parts
 	bar, barOn  rune        // a node, and the chosen node
 	dot         rune        // before a column's title
+	pin         rune        // before a pinned row of the live view
 	newline     rune        // a line break in a row of the live view
 	odd         rune        // in the live view, a rune a cell cannot show
 	valid       string
@@ -115,12 +116,12 @@ func (f font) fold(r rune) rune {
 // fonts: Unicode, a text console's CP437, and ASCII outside UTF-8
 var (
 	unicodeFont = font{Glyphs: ui.GlyphsUnicode, box: ui.LineDashed,
-		arrow: '►', down: '▼', bar: '▌', barOn: '█', dot: '●', newline: '↵', odd: '\uFFFD', valid: "✓", invalid: "✗", enter: "⏎", space: "␣"}
+		arrow: '►', down: '▼', bar: '▌', barOn: '█', dot: '●', pin: '◆', newline: '↵', odd: '\uFFFD', valid: "✓", invalid: "✗", enter: "⏎", space: "␣"}
 	cp437Font = font{Glyphs: ui.GlyphsCP437, box: ui.LineSingle,
-		arrow: '►', down: '▼', bar: '▌', barOn: '█', dot: '•', newline: '¶', odd: '?', valid: "√", invalid: "x", enter: "enter", space: "space",
+		arrow: '►', down: '▼', bar: '▌', barOn: '█', dot: '•', pin: '♦', newline: '¶', odd: '?', valid: "√", invalid: "x", enter: "enter", space: "space",
 		folds: map[rune]rune{'…': '.'}}
 	asciiFont = font{Glyphs: ui.GlyphsASCII, box: ui.LineASCII,
-		arrow: '>', down: 'v', bar: '|', barOn: '#', dot: '*', newline: '|', odd: '?', valid: "ok", invalid: "x", enter: "enter", space: "space",
+		arrow: '>', down: 'v', bar: '|', barOn: '#', dot: '*', pin: '*', newline: '|', odd: '?', valid: "ok", invalid: "x", enter: "enter", space: "space",
 		folds: map[rune]rune{'…': '.', '·': '-'}, ascii: true}
 )
 

@@ -2,8 +2,12 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +16,7 @@ import (
 
 	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/logline"
 
 	"github.com/lixenwraith/terminal"
 	ui "github.com/lixenwraith/terminal/tui"
@@ -41,7 +46,7 @@ func watching(c *compose.Composition, l look) *app {
 func shown(a *app) []string {
 	var out []string
 	for _, seq := range a.view.shown {
-		out = append(out, a.view.rows[seq-a.view.rows[0].seq].Message)
+		out = append(out, a.view.at(seq).Message)
 	}
 	return out
 }
@@ -619,7 +624,7 @@ func TestDroppedRowsAreMutedInAll(t *testing.T) {
 		}
 	}
 	a.view.mode = modeAll
-	if a.choose(compose.Node{Role: "sink", ID: "null"}); !strings.Contains(text(render(a, 80, 24), 80)[1], "sinks · all they got ─") {
+	if a.choose(compose.Node{Role: "sink", ID: "null"}); !strings.Contains(text(render(a, 80, 24), 80)[1], "sinks · all offered them ─") {
 		t.Errorf("at the sinks: %q", text(render(a, 80, 24), 80)[1])
 	}
 }
@@ -670,5 +675,192 @@ func TestTheChooserPicksThePoint(t *testing.T) {
 		if press(a, leave...); a.point().own {
 			t.Fatalf("%v left the point on lw's own log", leave)
 		}
+	}
+}
+
+// A flow swapped in place keeps the tap: what it held came through the
+// earlier flows and goes above the rule, what follows under it. T reruns the
+// pipelines whole, edited or not.
+func TestASwapAndAWholeRerunMarkTheRows(t *testing.T) {
+	f := &fakeRunner{}
+	a := running(t, pipeline(t, []string{"null"}, []string{"null"}), f)
+	tap := core.NewTap(4)
+	a.live.tap = tap
+	tap.Offer(tapped("p", "null", "", 0, "before"))
+	f.start = func(Ask) (*core.Tap, error) { return tap, nil }
+	a.edit(a.comp.Set(0, compose.Node{Role: "format"}, "type", "txt"))
+	press(a, "t")
+	await(t, a)
+	tap.Offer(tapped("p", "null", "", 0, "after"))
+	press(a, terminal.KeyNone)
+	next := core.NewTap(4)
+	f.start = func(Ask) (*core.Tap, error) { return next, nil }
+	press(a, "T")
+	await(t, a)
+	var got []string
+	for _, r := range a.view.rows {
+		got = append(got, r.Message+strings.Join(strings.Fields(r.mark)[:max(0, len(strings.Fields(r.mark))-1)], " "))
+	}
+	if strings.Join(got, ",") != "before,flows swapped,after,rerun" || !slices.Equal(f.whole, []bool{false, false, true}) {
+		t.Fatalf("%q, whole %v", got, f.whole)
+	}
+}
+
+// pinMarked reports whether the screen row holding msg starts with the pin
+func pinMarked(a *app, msg string) bool {
+	for _, r := range text(render(a, 80, 24), 80) {
+		if strings.Contains(r, msg) {
+			return strings.HasPrefix(r, string(unicodeFont.pin))
+		}
+	}
+	return false
+}
+
+// Space pins a row, or unpins it, and moves down; P shows the pins alone, at
+// any point and verdict, the level and pattern still applying; v, s and C
+// leave them; c lets the rows go but the pins, and C clears those
+func TestPinsShowAloneOnP(t *testing.T) {
+	a := watching(pipeline(t, []string{"null"}, []string{"null"}), looks[terminal.ColorModeNone])
+	for i, l := range []string{"WARN", "INFO", "INFO", "INFO", "ERROR"} {
+		r := tapped("p", "null", "", 0, fmt.Sprintf("row %d", i))
+		r.Event.Entry.Level = l
+		a.view.take(r)
+	}
+	a.view.take(tapped("p", "null", "filters", 0, "dropped"))
+	render(a, 80, 24)
+	press(a, "g", " ", "j", " ")
+	if !pinMarked(a, "row 0") || pinMarked(a, "row 1") || !pinMarked(a, "row 2") || a.view.focused().Message != "row 3" {
+		t.Fatalf("pinned %v, on %q", a.view.pins, a.view.focused().Message)
+	}
+	press(a, "v", "v") // what was dropped, where no pin shows
+	for _, c := range []struct {
+		keys []any
+		want string
+	}{
+		{[]any{"P"}, "row 0|row 2"},
+		{[]any{"4"}, "row 0"},
+		{[]any{"0/2", terminal.KeyEnter}, "row 2"},
+		{[]any{"/", terminal.KeyBackspace, terminal.KeyEnter}, "row 0|row 2"},
+		{[]any{"v"}, "row 0|row 1|row 2|row 3|row 4|dropped"},
+		{[]any{"P"}, "row 0|row 2"},
+	} {
+		if press(a, c.keys...); render(a, 80, 24) != nil && strings.Join(shown(a), "|") != c.want {
+			t.Errorf("after %v: %q, want %q", c.keys, shown(a), c.want)
+		}
+	}
+	if title := text(render(a, 80, 24), 80)[1]; !strings.Contains(title, "pins · 2") {
+		t.Errorf("title %q", title)
+	}
+	press(a, "G", " ") // unpins row 2, which P lets go
+	if render(a, 80, 24); strings.Join(shown(a), "|") != "row 0" {
+		t.Errorf("unpinned under P: %q", shown(a))
+	}
+	press(a, "c")
+	if render(a, 80, 24); strings.Join(shown(a), "|") != "row 0" || len(a.view.rows) != 0 {
+		t.Errorf("c: %q, %d rows", shown(a), len(a.view.rows))
+	}
+	press(a, "C")
+	if render(a, 80, 24); len(shown(a)) != 0 || a.view.pinsOnly || a.view.pinBytes != 0 || a.note != "1 pins cleared" {
+		t.Errorf("C: %q, P %v, %d bytes, %q", shown(a), a.view.pinsOnly, a.view.pinBytes, a.note)
+	}
+	if press(a, "P"); a.view.pinsOnly || !strings.Contains(a.note, "no row is pinned") {
+		t.Errorf("P without pins: %v %q", a.view.pinsOnly, a.note)
+	}
+}
+
+// A pin outlives the rows that let it go, and pins hold at most pinMax
+func TestPinsOutliveTheRing(t *testing.T) {
+	a := watching(pipeline(t, []string{"null"}, []string{"null"}), looks[terminal.ColorModeNone])
+	big := strings.Repeat("x", 1<<20)
+	add := func(n int) {
+		for range n {
+			a.view.take(tapped("p", "null", "", 0, fmt.Sprintf("%03d %s", a.view.next, big)))
+		}
+	}
+	add(3)
+	press(a, "g", " ")
+	add(60)
+	if render(a, 80, 24); a.view.rows[0].Message[:3] == "000" || len(a.view.held) != 1 {
+		t.Fatalf("the oldest kept %s, %d held", a.view.rows[0].Message[:3], len(a.view.held))
+	}
+	if press(a, "P"); render(a, 80, 24) != nil && (len(shown(a)) != 1 || shown(a)[0][:3] != "000") {
+		t.Fatalf("P: %d shown", len(shown(a)))
+	}
+	press(a, "P", "g")
+	for a.note == "" {
+		press(a, " ")
+	}
+	if a.view.pinBytes > pinMax || !strings.Contains(a.note, "C clears them") || len(a.view.pins) < 2 {
+		t.Fatalf("%d pins hold %d bytes: %q", len(a.view.pins), a.view.pinBytes, a.note)
+	}
+}
+
+// x writes the pins, or without pins the entries shown, a line of LogWisp
+// json each that reads back as the row was read, to a new file, never one
+// that exists; a name without an extension takes .jsonl
+func TestXExportsThePinsOrTheRowsShown(t *testing.T) {
+	dir := t.TempDir()
+	a := watching(pipeline(t, []string{"null"}, []string{"null"}), looks[terminal.ColorModeNone])
+	lines := []string{`{"time":"2026-11-05T01:02:03.5Z","level":"warn","logger":"disk","msg":"full <90%>","dev":"sda","free":{"mb":0}}`, "plain \x01 text"}
+	for _, l := range lines {
+		a.view.take(tapped("p", "null", "", 0, l))
+	}
+	a.view.mark("rerun 00:00:00")
+	render(a, 80, 24)
+	export := func(name string) error {
+		t.Helper()
+		press(a, "x")
+		f, ok := a.dialog.(*form)
+		if !ok {
+			t.Fatalf("x: %T, %q", a.dialog, a.note)
+		}
+		f.fields[0] = ui.NewTextFieldState(filepath.Join(dir, name))
+		press(a, terminal.KeyEnter)
+		if a.dialog != nil {
+			a.dialog = nil
+			return errors.New(f.err)
+		}
+		return nil
+	}
+	read := func(name string) []string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		info, _ := os.Stat(filepath.Join(dir, name))
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s: %v, %v", name, err, info)
+		}
+		return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	}
+	if err := export("shown"); err != nil || !strings.Contains(a.note, "2 rows shown written to "+filepath.Join(dir, "shown.jsonl")) {
+		t.Fatalf("%v, %q", err, a.note)
+	}
+	got := read("shown.jsonl")
+	if len(got) != 2 {
+		t.Fatalf("%q", got)
+	}
+	for i, l := range got {
+		was, back := a.view.rows[i].Line, logline.Read(core.LogEntry{Message: l})
+		if !json.Valid([]byte(l)) || back.Message != was.Message || back.Level != was.Level || back.Tag != was.Tag ||
+			!slices.Equal(back.Fields, was.Fields) || !back.Time.Equal(a.view.rows[i].at) {
+			t.Errorf("line %d %s\nreads back %+v\nwas        %+v", i, l, back, was)
+		}
+	}
+	if err := export("shown.jsonl"); !errors.Is(err, fs.ErrExist) && (err == nil || !strings.Contains(err.Error(), "exists")) {
+		t.Fatalf("over an existing file: %v", err)
+	}
+	press(a, "g", " ")
+	if err := export("pins.log"); err != nil || len(read("pins.log")) != 1 || !strings.Contains(a.note, "1 pins written") {
+		t.Fatalf("%v, %q", err, a.note)
+	}
+}
+
+// A sink's drops show on its node while it runs
+func TestASinksDropsShowOnItsNode(t *testing.T) {
+	f := &fakeRunner{}
+	a := running(t, pipeline(t, []string{"null"}, []string{"null"}), f)
+	a.live.state = RunState{Counts: map[string]Counts{"p": {SinksDropped: 7, Sinks: map[string]uint64{"null": 7}}}}
+	screen := strings.Join(text(render(a, 120, 30), 120), "\n")
+	if !strings.Contains(screen, "null  7 dropped") {
+		t.Fatalf("%s", screen)
 	}
 }

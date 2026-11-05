@@ -109,8 +109,9 @@ jobs:
           test -f /etc/logwisp/logwisp.toml
           sudo apt-get purge -y logwisp
           test ! -e /etc/logwisp/logwisp.toml
-  # BSD make on FreeBSD: build, install twice keeping an edited configuration,
-  # run the rc.d service once the configuration has a pipeline, uninstall
+  # BSD make on FreeBSD: build, run lw --tui on a pseudo-terminal, install
+  # twice keeping an edited configuration, run the rc.d service once the
+  # configuration has a pipeline, uninstall
   freebsd:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -124,6 +125,8 @@ jobs:
           run: |
             set -e
             make release
+            go127 test -run '^TestOnATerminal' ./cmd/lw
+            go127 test ./internal/tui
             make install
             echo '# edited' >> /usr/local/etc/logwisp/logwisp.toml
             make install

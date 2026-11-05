@@ -22,6 +22,7 @@ type FormatterAdapter struct {
 
 // NewFormatterAdapter creates adapter from config
 func NewFormatterAdapter(cfg *config.FormatConfig) (*FormatterAdapter, error) {
+	cfg = new(*cfg) // settled as a copy: the configuration keeps the keys set
 	if err := config.Settle(cfg); err != nil {
 		return nil, err
 	}

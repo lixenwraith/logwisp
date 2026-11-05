@@ -1,16 +1,20 @@
 // Package service holds the pipelines of one configuration: it builds all of
-// them or none, starts and stops them together, gives a viewer's tap to each,
-// and reports when every one has finished.
+// them or none, starts and stops them together, swaps their flows in place
+// when nothing else changed, gives a viewer's tap to each, and reports when
+// every one has finished.
 package service
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/flow"
 	"github.com/lixenwraith/logwisp/internal/pipeline"
 
 	"github.com/lixenwraith/log"
@@ -27,6 +31,7 @@ type Service struct {
 	shutdownOnce sync.Once
 	watchOnce    sync.Once
 	done         chan struct{} // closed when every pipeline has finished
+	closed       atomic.Bool   // shutdown began: nothing is patched
 }
 
 func NewService(ctx context.Context, cfg *config.Config, logger *log.Logger) (*Service, error) {
@@ -105,6 +110,46 @@ func (svc *Service) Start(names ...string) error {
 	})
 
 	return errs
+}
+
+// Patch puts cfg's flows in place of the running ones when cfg differs from
+// what runs in flows alone, and reports whether it did: sources and sinks run
+// on, their clients, sessions and file positions kept. Every changed flow is
+// built before any is swapped, so an error changes nothing. False, with no
+// error, changes nothing either: the pipelines differ in more than their
+// flows, or the service shut down, and the caller rebuilds.
+func (svc *Service) Patch(cfg *config.Config) (bool, error) {
+	svc.mu.Lock() // SetFlow sets a pipeline's Config.Flow, which Patch reads
+	defer svc.mu.Unlock()
+	if svc.closed.Load() || len(cfg.Pipelines) != len(svc.pipelines) {
+		return false, nil
+	}
+	type swap struct {
+		p   *pipeline.Pipeline
+		cfg *config.FlowConfig
+		f   *flow.Flow
+	}
+	var swaps []swap
+	for i := range cfg.Pipelines {
+		next := &cfg.Pipelines[i]
+		p, ok := svc.pipelines[next.Name]
+		switch {
+		case !ok || !p.SameParts(next):
+			return false, nil
+		case reflect.DeepEqual(p.Config.Flow, next.Flow):
+			continue
+		}
+		f, err := flow.NewFlow(next.Flow, svc.logger)
+		if err != nil {
+			return false, fmt.Errorf("pipeline %s: %w", next.Name, err)
+		}
+		swaps = append(swaps, swap{p, next.Flow, f})
+	}
+	for _, s := range swaps {
+		s.p.SetFlow(s.cfg, s.f)
+		svc.logger.Info("msg", "Pipeline flow swapped in place", "pipeline", s.p.Config.Name)
+	}
+	return true, nil
 }
 
 // SetTap gives every pipeline the viewer's tap; nil takes it away
@@ -200,6 +245,7 @@ func (svc *Service) Shutdown() {
 }
 
 func (svc *Service) shutdown() {
+	svc.closed.Store(true)
 	svc.logger.Info("msg", "Service shutdown initiated")
 
 	svc.mu.Lock()

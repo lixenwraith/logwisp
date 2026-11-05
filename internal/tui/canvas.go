@@ -234,9 +234,9 @@ func join(g ui.Wires, l layout, col int) {
 }
 
 // drawNode draws a source or sink: a tinted bar, its type and whether it
-// listens or dials, then its text. The chosen node is a bar across its rows,
-// head wide on the first, whose tint block keeps its color; a node a problem
-// names has its tint in the error style.
+// listens or dials, a sink's drops while it runs, then its text. The chosen
+// node is a bar across its rows, head wide on the first, whose tint block
+// keeps its color; a node a problem names has its tint in the error style.
 func (a *app) drawNode(r ui.Region, s spot, head int, n compose.Node, tint ui.Style, chosen bool) {
 	th := a.th
 	bg, bar := th.Text, a.font.bar
@@ -266,7 +266,22 @@ func (a *app) drawNode(r ui.Region, s spot, head int, n compose.Node, tint ui.St
 		typ := ui.Truncate(p.Type, room)
 		row.TextStyled(2, 0, typ, th.Text.On(bg))
 		row.TextStyled(4+ui.RuneLen(typ), 0, verb, th.Muted.On(bg))
+		if drops := a.sinkDrops(n); drops != "" {
+			x := 4 + ui.RuneLen(typ) + ui.RuneLen(verb) + min(2, ui.RuneLen(verb))
+			row.TextStyled(x, 0, ui.Truncate(drops, max(0, row.W-x-1)), th.Error.On(bg))
+		}
 	}
+}
+
+// sinkDrops counts what a running sink's full input dropped, "" for none
+func (a *app) sinkDrops(n compose.Node) string {
+	if n.Role != "sink" || a.live.specs == nil {
+		return ""
+	}
+	if d := a.live.state.Counts[a.pipeline().Name].Sinks[n.ID]; d > 0 {
+		return fmt.Sprintf("%d dropped", d)
+	}
+	return ""
 }
 
 // ways say whether a source or sink listens or dials, by its side

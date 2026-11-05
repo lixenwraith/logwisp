@@ -1,13 +1,15 @@
 // Package pipeline runs one pipeline: its sources through the flow to its
 // sinks, each plugin made by the factory its type registered. Sinks start
 // before the sources and stop after them, so entries in flight arrive; a full
-// sink drops its event unless it declares core.CapBackpressure. A tap gives a
-// viewer a copy of what the flow decides.
+// sink drops its event unless it declares core.CapBackpressure, and each
+// sink's drops are counted apart. A tap gives a viewer a copy of what the
+// flow decides; SetFlow swaps the flow in place.
 package pipeline
 
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,12 +33,13 @@ type Pipeline struct {
 	Sinks    map[string]sink.Sink
 	Sessions *session.Manager
 
-	Flow   *flow.Flow
 	Stats  *PipelineStats
 	logger *log.Logger
 
-	// Sinks that stall dispatch rather than drop (core.CapBackpressure)
-	backpressure map[string]bool
+	flow    atomic.Pointer[flow.Flow]
+	swapped chan struct{} // a flow set that the heartbeat has not taken up
+
+	outlets []*outlet // the sinks as dispatch offers them events, in order
 
 	tap atomic.Pointer[core.Tap] // a viewer's copy of what the flow decides
 
@@ -50,11 +53,18 @@ type Pipeline struct {
 }
 
 type PipelineStats struct {
-	StartTime                 time.Time
-	TotalEntriesDroppedBySink atomic.Uint64
-	SourceStats               []source.SourceStats
-	SinkStats                 []sink.SinkStats
-	FlowStats                 map[string]any
+	StartTime   time.Time
+	SourceStats []source.SourceStats
+	SinkStats   []sink.SinkStats
+	FlowStats   map[string]any
+}
+
+// outlet is a sink as dispatch offers it events
+type outlet struct {
+	id           string
+	sink         sink.Sink
+	backpressure bool          // it stalls dispatch rather than drop (core.CapBackpressure)
+	dropped      atomic.Uint64 // the events dispatch dropped for it
 }
 
 func NewPipeline(
@@ -76,8 +86,8 @@ func NewPipeline(
 		ctx:      pipelineCtx,
 		cancel:   pipelineCancel,
 
-		backpressure: make(map[string]bool),
-		finished:     make(chan struct{}),
+		finished: make(chan struct{}),
+		swapped:  make(chan struct{}, 1),
 	}
 
 	flowProcessor, err := flow.NewFlow(cfg.Flow, logger)
@@ -86,7 +96,7 @@ func NewPipeline(
 		sessionManager.Stop()
 		return nil, fmt.Errorf("failed to create flow processor: %w", err)
 	}
-	pipeline.Flow = flowProcessor
+	pipeline.flow.Store(flowProcessor)
 
 	if err := pipeline.initializeComponents(); err != nil {
 		pipelineCancel()
@@ -138,11 +148,13 @@ func (p *Pipeline) initializeComponents() error {
 				return p.part("sink", sinkCfg.ID, err) // the registry names the plugin
 			}
 
-			if err := p.initSinkCapabilities(snk, sinkCfg); err != nil {
+			out := &outlet{id: sinkCfg.ID, sink: snk}
+			if err := p.initSinkCapabilities(out, sinkCfg); err != nil {
 				return p.part("sink", sinkCfg.ID, fmt.Errorf("failed to initiate capabilities for sink %s: %w", sinkCfg.ID, err))
 			}
 
 			p.Sinks[sinkCfg.ID] = snk
+			p.outlets = append(p.outlets, out)
 		}
 	} else {
 		return fmt.Errorf("no plugin sinks defined")
@@ -202,12 +214,12 @@ func checkAuthCapability(hasTLS, hasAuth bool) error {
 	return nil
 }
 
-func (p *Pipeline) initSinkCapabilities(s sink.Sink, cfg config.PluginSinkConfig) error {
+func (p *Pipeline) initSinkCapabilities(out *outlet, cfg config.PluginSinkConfig) error {
 	var hasTLS, hasAuth bool
-	for _, c := range s.Capabilities() {
+	for _, c := range out.sink.Capabilities() {
 		switch c {
 		case core.CapBackpressure:
-			p.backpressure[cfg.ID] = true
+			out.backpressure = true
 
 		case core.CapNetLimit:
 			continue
@@ -246,7 +258,7 @@ func (p *Pipeline) run(ids []string, subscriptions []<-chan core.LogEntry) {
 			defer componentWg.Done()
 			// Range drains in-flight entries once the source closes the channel
 			for entry := range ch {
-				event, stage, index := p.Flow.Process(entry)
+				event, stage, index := p.flow.Load().Process(entry)
 				if t := p.tap.Load(); t != nil {
 					t.Offer(core.Tapped{Pipeline: p.Config.Name, Source: ids[i], Stage: stage, Index: index, Event: event})
 				}
@@ -259,49 +271,80 @@ func (p *Pipeline) run(ids []string, subscriptions []<-chan core.LogEntry) {
 
 	// Sinks keep p.ctx until Stop, so the heartbeat ends on its own context
 	hbCtx, hbCancel := context.WithCancel(p.ctx)
-	var hbWg sync.WaitGroup
-	if heartbeatCh := p.Flow.StartHeartbeat(hbCtx); heartbeatCh != nil {
-		hbWg.Add(1)
-		go func() {
-			defer hbWg.Done()
-			for {
-				select {
-				case event, ok := <-heartbeatCh:
-					if !ok {
-						return
-					}
-					if t := p.tap.Load(); t != nil {
-						t.Offer(core.Tapped{Pipeline: p.Config.Name, Event: event})
-					}
-					p.dispatch(event)
-				case <-hbCtx.Done():
-					return
-				}
-			}
-		}()
-	}
+	beating := make(chan struct{})
+	go func() {
+		defer close(beating)
+		for hbCtx.Err() == nil {
+			p.beat(hbCtx)
+		}
+	}()
 
 	componentWg.Wait()
 	hbCancel()
-	hbWg.Wait()
+	<-beating
 }
 
-// dispatch sends to every sink. A full sink drops the event so it cannot
-// stall its siblings, except a backpressure sink, which waits until Stop.
+// beat dispatches the flow's heartbeats until ctx ends or a flow is set
+func (p *Pipeline) beat(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	beats := p.flow.Load().StartHeartbeat(ctx) // nil without a heartbeat
+	for {
+		select {
+		case event, ok := <-beats:
+			if !ok {
+				return
+			}
+			if t := p.tap.Load(); t != nil {
+				t.Offer(core.Tapped{Pipeline: p.Config.Name, Event: event})
+			}
+			p.dispatch(event)
+		case <-p.swapped:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// SameParts reports whether cfg has the name, sources and sinks the pipeline
+// was built with, so that its flow alone may differ, which SetFlow takes
+func (p *Pipeline) SameParts(cfg *config.PipelineConfig) bool {
+	was, next := *p.Config, *cfg
+	was.Flow, next.Flow = nil, nil
+	return reflect.DeepEqual(was, next)
+}
+
+// SetFlow puts f, built from cfg, in the flow's place: entries take its
+// stages from the next one on, its heartbeat replaces the one before, and its
+// totals go on from the earlier flow's. One goroutine sets flows at a time.
+func (p *Pipeline) SetFlow(cfg *config.FlowConfig, f *flow.Flow) {
+	f.Continue(p.flow.Load())
+	p.flow.Store(f)
+	p.Config.Flow = cfg
+	select {
+	case p.swapped <- struct{}{}:
+	default:
+	}
+}
+
+// dispatch sends to every sink. A full sink drops the event, counted for it
+// alone, so it cannot stall its siblings, except a backpressure sink, which
+// waits until Stop.
 func (p *Pipeline) dispatch(event core.TransportEvent) {
-	for id, snk := range p.Sinks {
-		if p.backpressure[id] {
+	for _, o := range p.outlets {
+		if o.backpressure {
 			select {
-			case snk.Input() <- event:
+			case o.sink.Input() <- event:
 			case <-p.halt:
-				p.Stats.TotalEntriesDroppedBySink.Add(1)
+				o.dropped.Add(1)
 			}
 			continue
 		}
 		select {
-		case snk.Input() <- event:
+		case o.sink.Input() <- event:
 		default:
-			p.Stats.TotalEntriesDroppedBySink.Add(1)
+			o.dropped.Add(1)
 		}
 	}
 }
@@ -437,16 +480,18 @@ func (p *Pipeline) GetStats() map[string]any {
 		})
 	}
 
-	sinks := make([]map[string]any, 0, len(p.Sinks))
-	for _, snk := range p.Sinks {
-		if snk == nil {
-			continue
-		}
-		s := snk.GetStats()
+	// A sink's dropped_entries are those dispatch dropped for it, its input
+	// full; the pipeline's total_dropped_by_sink is their sum
+	sinks := make([]map[string]any, 0, len(p.outlets))
+	var droppedBySink uint64
+	for _, o := range p.outlets {
+		s, dropped := o.sink.GetStats(), o.dropped.Load()
+		droppedBySink += dropped
 		sinks = append(sinks, map[string]any{
-			"id":                 s.ID,
+			"id":                 o.id,
 			"type":               s.Type,
 			"total_processed":    s.TotalProcessed,
+			"dropped_entries":    dropped,
 			"active_connections": s.ActiveConnections,
 			"start_time":         s.StartTime,
 			"last_processed":     s.LastProcessed,
@@ -454,25 +499,10 @@ func (p *Pipeline) GetStats() map[string]any {
 		})
 	}
 
-	var flowStats map[string]any
-	var totalFiltered uint64
-	var totalProcessed uint64
-
-	if p.Flow != nil {
-		flowStats = p.Flow.GetStats()
-
-		if tp, ok := flowStats["total_processed"].(uint64); ok {
-			totalProcessed = tp
-		}
-
-		if filters, ok := flowStats["filters"].(map[string]any); ok {
-			if totalPassed, ok := filters["total_passed"].(uint64); ok {
-				if tProc, ok := filters["total_processed"].(uint64); ok {
-					totalFiltered = tProc - totalPassed
-				}
-			}
-		}
-	}
+	// The flow's totals go on across a SetFlow; its filters' start over
+	flowStats := p.flow.Load().GetStats()
+	totalProcessed, _ := flowStats["total_processed"].(uint64)
+	totalFiltered, _ := flowStats["total_filtered"].(uint64)
 
 	var uptime int
 	if p.running.Load() && !p.Stats.StartTime.IsZero() {
@@ -485,7 +515,7 @@ func (p *Pipeline) GetStats() map[string]any {
 		"uptime_seconds":        uptime,
 		"total_processed":       totalProcessed,
 		"total_filtered":        totalFiltered,
-		"total_dropped_by_sink": p.Stats.TotalEntriesDroppedBySink.Load(),
+		"total_dropped_by_sink": droppedBySink,
 		"source_count":          len(p.Sources),
 		"sources":               sources,
 		"sink_count":            len(p.Sinks),

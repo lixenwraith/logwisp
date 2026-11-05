@@ -29,7 +29,7 @@ func NewHeartbeatGenerator(cfg *config.HeartbeatConfig, formatter format.Formatt
 	if cfg == nil || !cfg.Enabled {
 		return nil, nil
 	}
-
+	cfg = new(*cfg) // settled as a copy: the configuration keeps the keys set
 	if err := config.Settle(cfg); err != nil {
 		return nil, err
 	}

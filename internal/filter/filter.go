@@ -3,7 +3,6 @@ package filter
 import (
 	"fmt"
 	"regexp"
-	"sync"
 	"sync/atomic"
 
 	"github.com/lixenwraith/logwisp/internal/config"
@@ -12,11 +11,11 @@ import (
 	"github.com/lixenwraith/log"
 )
 
-// Filter applies regex-based filtering to log entries
+// Filter applies regex-based filtering to log entries. It does not change
+// once built: a pipeline swaps its whole flow to edit one.
 type Filter struct {
 	config   config.FilterConfig
 	patterns []*regexp.Regexp
-	mu       sync.RWMutex
 	logger   *log.Logger
 
 	// Statistics
@@ -125,31 +124,6 @@ func (f *Filter) GetStats() map[string]any {
 		"total_matched":   f.totalMatched.Load(),
 		"total_dropped":   f.totalDropped.Load(),
 	}
-}
-
-// UpdatePatterns replaces the patterns under f.mu, which Apply does not take:
-// it is safe only before entries flow
-func (f *Filter) UpdatePatterns(patterns []string) error {
-	compiled := make([]*regexp.Regexp, 0, len(patterns))
-
-	// Compiled before the swap, so a bad pattern leaves the filter as it was
-	for i, pattern := range patterns {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			return fmt.Errorf("invalid regex pattern[%d] '%s': %w", i, pattern, err)
-		}
-		compiled = append(compiled, re)
-	}
-
-	f.mu.Lock()
-	f.patterns = compiled
-	f.config.Patterns = patterns
-	f.mu.Unlock()
-
-	f.logger.Info("msg", "Filter patterns updated",
-		"component", "filter",
-		"pattern_count", len(patterns))
-	return nil
 }
 
 // matches checks if the given text matches the filter's patterns according to its logic

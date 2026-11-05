@@ -23,14 +23,15 @@ import (
 type fakeRunner struct {
 	mu    sync.Mutex
 	specs [][]config.Spec
+	whole []bool
 	stops int
 	state RunState
 	start func(ask Ask) (*core.Tap, error)
 }
 
-func (f *fakeRunner) Start(specs []config.Spec, ask Ask) (*core.Tap, error) {
+func (f *fakeRunner) Start(specs []config.Spec, whole bool, ask Ask) (*core.Tap, error) {
 	f.mu.Lock()
-	f.specs = append(f.specs, specs)
+	f.specs, f.whole = append(f.specs, specs), append(f.whole, whole)
 	start := f.start
 	f.mu.Unlock()
 	if start != nil {
