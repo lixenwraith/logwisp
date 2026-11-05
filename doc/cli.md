@@ -74,12 +74,12 @@ pipelines have [their own flags](#pipelines):
 - `--schema`: print every setting, pipeline flag, flow stage, plugin option,
   preset and output form as one JSON document, and exit; tools build their
   option lists from it:
-  - a key: its kind, default, rules and help, and a setting's `variable`; a
-    table (`tls`, `auth`, `acl`) holds its own keys, those of the plugin's
-    side (listener, chain source or dialer), HTTP's only on a plugin that
-    speaks HTTP: `auth.node_binding` only on the chain sources, and
-    `auth.trusted_proxies` on both HTTP listeners, though only the `http`
-    sink admits it
+  - a key: its kind, default, rules and help, a setting's `variable`, and
+    `sides`, the plugin sides that take it when not all do (`listener`, the
+    `tcp` and `http` sinks; `chain_listener`; `dialer`); a table (`tls`,
+    `auth`, `acl`) holds the keys of the plugin's side, HTTP's only on a
+    plugin that speaks HTTP: `auth.node_binding` only on the chain sources,
+    `auth.trusted_proxies` only on the `http` sink
   - a flow stage: its keys, a `summary`, and `on`, the values that turn it on
   - a preset key: its default and help, and the choices (`enum`) and `hint`
     of the option it sets

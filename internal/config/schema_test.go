@@ -181,9 +181,8 @@ func TestLoadReportsEveryProblemALine(t *testing.T) {
 	}
 }
 
-// A plugin lists the table keys that apply to it: those of its side, a chain
-// source's being a listener's and its own, and the HTTP ones only when it
-// speaks HTTP
+// A plugin lists the table keys that apply to it: those tagged for its side
+// or for none, and the HTTP ones only when it speaks HTTP
 func TestTableKeysFollowThePlugin(t *testing.T) {
 	has := func(role, typ, path string) bool {
 		p, _ := LookupPlugin(role, typ)
@@ -203,6 +202,7 @@ func TestTableKeysFollowThePlugin(t *testing.T) {
 		"source tcp_chain auth.node_binding": true, "sink http auth.node_binding": false, "sink tcp_chain auth.credentials_file": false,
 		"sink tcp acl.requests_per_second_per_client": false, "sink tcp auth.token_lifetime_ms": false,
 		"sink http acl.requests_per_second_per_client": true, "sink http auth.trusted_proxies": true,
+		"source http_chain auth.trusted_proxies": false, "source http_chain auth.token_lifetime_ms": true,
 	} {
 		f := strings.Fields(path)
 		if has(f[0], f[1], f[2]) != want {
