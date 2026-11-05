@@ -29,7 +29,7 @@
 
 # quiet = false                         # No log of lw's own; pipeline output still flows
 # status_reporter = true                # Periodic status logging (30s, DEBUG level); false without a file
-# auto_reload = false                   # Watch file; read at startup (signals always reread it)
+# auto_reload = false                   # Watch file; an edit of flows alone swaps them in place. Read at startup (signals always reread it and rebuild)
 # color = "auto"                        # auto|always|never: level names on console sinks; auto on a terminal, NO_COLOR empty or unset, TERM not dumb
 
 ###############################################################################

@@ -172,16 +172,21 @@ out to *all* sinks in a pipeline; there is no conditional routing.
 
 Each filter reports `type`, `logic`, `pattern_count`, `total_processed`,
 `total_matched`, and `total_dropped`. The chain reports `filter_count`,
-`total_processed`, and `total_passed`; the pipeline derives
-`total_filtered` as the difference.
+`total_processed`, and `total_passed`. The flow counts the entries its
+filters dropped as `total_filtered`, which the pipeline reports too. A flow
+swapped in place ([Hot Reload](configuration.md#hot-reload), or `t` on the
+`lw --tui` screen) brings new filters whose counters start at zero, while the
+flow's and the pipeline's go on.
 
 ## Performance
 
-Patterns compile when a pipeline is built, at startup and on each reload.
-Every entry that reaches the filter stage is evaluated against every filter
-until one rejects it, and each filter runs all of its patterns whatever its
-`logic`, so cost scales with the number of patterns and their complexity.
-Prefer literal substrings and simple alternations over broad `.*` wildcards.
+Patterns compile when a flow is built: at startup, on each reload, and when
+an edit of flows alone swaps them in place. A filter never changes once
+built; an edit builds a new one. Every entry that reaches the filter stage is
+evaluated against every filter until one rejects it, and each filter runs all
+of its patterns whatever its `logic`, so cost scales with the number of
+patterns and their complexity. Prefer literal substrings and simple
+alternations over broad `.*` wildcards.
 
 Filters log every pattern match and decision at DEBUG: useful when a filter
 misbehaves, expensive on a busy pipeline, where `logging.level` stays at

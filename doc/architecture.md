@@ -97,9 +97,9 @@ instance of a single type fails, naming both pipelines.
    since stdin can simply be read later.
 2. **Flow** applies, in order: rate limit → filter chain → formatter. A rate
    limit or filter drop ends the entry's life and increments
-   `flow.total_dropped`. The verdict, passed or the stage that dropped it (a
-   filter by its index), goes to the pipeline's tap when a viewer set one, as
-   `lw --tui`'s live view does.
+   `flow.total_dropped`, a filter's also `flow.total_filtered`. The verdict,
+   passed or the stage that dropped it (a filter by its index), goes to the
+   pipeline's tap when a viewer set one, as `lw --tui`'s live view does.
 3. The formatter output becomes a `core.TransportEvent`, which carries both the
    formatted `Payload` and the original structured `Entry`.
 4. **Dispatch** sends the event to every sink's input channel with a
@@ -134,10 +134,12 @@ loses nothing. Each stage drops and counts instead of waiting:
 - Source → subscriber: a full channel drops the entry; source
   `dropped_entries`. The console source waits instead and reads stdin later.
 - Flow: the rate limiter or a filter rejection drops it; `flow.total_dropped`.
-- Pipeline → sink: a full sink input drops it for that sink only; pipeline
-  `total_dropped_by_sink`. A sink declaring `core.CapBackpressure`, the console
-  and null sinks, makes dispatch wait instead, so a filter loses no line to a
-  slow reader and its pipeline runs at the reader's pace; `Stop` ends the wait.
+- Pipeline → sink: a full sink input drops it for that sink only; the sink's
+  `dropped_entries` in the pipeline's `sinks`, summed as the pipeline's
+  `total_dropped_by_sink`, and shown on the sink's node by `lw --tui` while
+  it runs. A sink declaring `core.CapBackpressure`, the console and null
+  sinks, makes dispatch wait instead, so a filter loses no line to a slow
+  reader and its pipeline runs at the reader's pace; `Stop` ends the wait.
 - TCP/HTTP sink → client queue: a full queue drops it for that client only;
   sink `dropped_writes`.
 - Flow → tap: a full tap drops the record, copying nothing, which the live
@@ -233,19 +235,34 @@ session exists only for a peer that was already admitted. See
 
 ## Configuration Reload
 
-Reload (signal or file watch) rebuilds the entire service:
+A signal rebuilds the entire service; a file watch swaps flows in place when
+they are all that changed, and rebuilds otherwise:
 
 1. Signals (`SIGHUP`, `SIGUSR1`) reread the file; a watch takes the published
    snapshot. Every candidate is validated again.
-2. Build a **new** service from it. If construction fails, the old service keeps
-   running untouched.
-3. Shut the old service down, start the new one, and restart the status
+2. A watch whose candidate differs from what runs in flows alone (the same
+   pipelines by name, each with the same sources and sinks and their options,
+   and the same status reporter) goes to `Service.Patch`. It builds every
+   edited flow, then stores each in its pipeline's `atomic.Pointer`, so the
+   next entry takes the new flow while sources, sinks, their clients and
+   tokens, and file positions run on. A flow that does not build changes
+   nothing, and the error is logged.
+3. Otherwise build a **new** service from it. If construction fails, the old
+   service keeps running untouched.
+4. Shut the old service down, start the new one, and restart the status
    reporter if it is enabled.
 
-Because this is a full rebuild, listening sockets close and reopen and all
-clients are disconnected. Application logging is configured once at startup and
-is **not** re-applied on reload. `t` on the `lw --tui` screen reruns through
-the same path, giving each new service the screen's tap before it starts.
+A swapped flow continues the totals of the one it replaces (`Flow.Continue`),
+so the pipeline's `total_processed` and `total_filtered` go on; the new rate
+limiter starts with a full bucket, the new filters' own counters at zero, and
+the heartbeat restarts its interval.
+
+A rebuild is total: listening sockets close and reopen, all clients are
+disconnected, and a file source reads from where its `from` says again.
+Application logging is configured once at startup and is **not** re-applied
+on reload. The `lw --tui` screen takes the same paths, giving each new
+service the screen's tap before it starts: `t` after an edit swaps flows as a
+watch does, and `T` rebuilds as a signal does.
 
 Watch errors do not rebuild services. Queued changes are combined, and an
 unchanged pipeline/status snapshot is skipped. Signals always rebuild for

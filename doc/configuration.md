@@ -241,14 +241,16 @@ exits 1 ([Networking](networking.md#network-plugins)).
 ## Hot Reload
 
 `auto_reload = true` watches the configuration file: lw reads it every second
-and applies a change once two reads in a row agree, so within about 2 s.
-`SIGHUP` or `SIGUSR1` rereads it even when watching is off and always
-rebuilds, so certificates and credentials rotate without a TOML edit. CLI and
-environment overrides, pipelines included, are captured at startup and keep
-their precedence. A discovered default file that does not exist is not an
-error, so an instance configured by flags or variables alone still rebuilds;
-once read, though, its removal fails the reload and the running service stays
-as it is; restart to run without the file.
+and applies a change once two reads in a row agree, so within about 2 s. A
+change to flows alone (`rate_limit`, `filters`, `format`, `heartbeat`) swaps
+them in place; any other change rebuilds the service. `SIGHUP` or `SIGUSR1`
+rereads it even when watching is off and always rebuilds, so certificates and
+credentials rotate without a TOML edit. CLI and environment overrides,
+pipelines included, are captured at startup and keep their precedence. A
+discovered default file that does not exist is not an error, so an instance
+configured by flags or variables alone still rebuilds; once read, though, its
+removal fails the reload and the running service stays as it is; restart to
+run without the file.
 
 Reload builds a new service from a detached snapshot of the configuration,
 validated again, and shuts the old one down only if that succeeds: parse,
@@ -266,7 +268,12 @@ remaining sources on the next successful load.
   (the watcher is not restarted)
 
 The rebuild is total: listeners close and reopen, every connected client is
-disconnected, and chain sinks reconnect on their own backoff schedule.
+disconnected, and chain sinks reconnect on their own backoff schedule. A swap
+in place keeps them all, and file sources read on from where they were: the
+next entry takes the new flows, the flow's counters go on, and the new rate
+limiter starts with a full bucket
+([Architecture](architecture.md#configuration-reload)). A flow that does not
+build is logged and changes nothing.
 
 ## Type Reference
 

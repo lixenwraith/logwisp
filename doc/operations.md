@@ -59,24 +59,31 @@ kill -HUP $(pidof lw)
 sudo systemctl reload logwisp     # rc.d: sudo service logwisp reload
 ```
 
-Signals reread the selected TOML file even when `auto_reload` is disabled.
-Reload validates a detached snapshot and builds a new service **before**
-tearing the old one down, so a bad configuration leaves the running service
-intact. An invalid one logs `Failed to read reload configuration` with the
-validator's `validate configuration: <key path>: ...` error. One whose files
-fail when its plugins are built (a missing certificate, an unreadable
-credentials file) logs `Failed to bootstrap new service, keeping old service
-running`.
+Signals reread the selected TOML file even when `auto_reload` is disabled,
+and always rebuild the service. A watched change to flows alone
+(`rate_limit`, `filters`, `format`, `heartbeat`) swaps them in place instead,
+logging `Configuration reload swapped flows in place`: sources, sinks, their
+clients and tokens, and file positions stay, and the next entry takes the new
+flows. A flow that does not build logs `Invalid flow in reload configuration,
+keeping current service`. A rebuild validates a detached snapshot and builds
+a new service **before** tearing the old one down, so a bad configuration
+leaves the running service intact. An invalid one logs `Failed to read reload
+configuration` with the validator's `validate configuration: <key path>: ...`
+error. One whose files fail when its plugins are built (a missing
+certificate, an unreadable credentials file) logs `Failed to bootstrap new
+service, keeping old service running`.
 
 What reload does *not* do:
 
 - Re-apply `logging.*`, `quiet` or `auto_reload`; they take effect at startup
   only.
-- Preserve connections. Listeners close and reopen, and every SSE, TCP, and
-  chain client is disconnected. Chain sinks reconnect on their own backoff;
-  browsers reconnect SSE automatically; raw TCP consumers must retry themselves.
-- Keep bearer tokens. Each reload draws a new token key, so every token is
-  revoked: run `lw auth token` again, and browser viewers log in again.
+- Preserve connections, unless it only swaps flows. Listeners close and
+  reopen, and every SSE, TCP, and chain client is disconnected. Chain sinks
+  reconnect on their own backoff; browsers reconnect SSE automatically; raw
+  TCP consumers must retry themselves.
+- Keep bearer tokens, unless it only swaps flows. Each rebuild draws a new
+  token key, so every token is revoked: run `lw auth token` again, and
+  browser viewers log in again.
 - Notice rotated certificates on its own: certificate files are read at plugin
   construction and `auto_reload` watches only the configuration file, so
   rotation requires `SIGHUP`.
@@ -170,9 +177,14 @@ Each counter, where it is reported, and what a rise means:
 - `dropped_entries` (source): downstream cannot keep up with the source; the
   console source never drops, it reads stdin slower
 - `total_dropped` (flow): the rate limit or filters are discarding entries,
-  often by intent
+  often by intent; `total_filtered` (flow and pipeline) is the filters' share.
+  Both go on across a flow swapped in place, while each filter's own counters
+  start over
 - `total_dropped_by_sink` (pipeline): a sink's input queue is full; a console
-  sink waits instead, so its entries count only when shutdown cuts the wait
+  sink waits instead, so its entries count only when shutdown cuts the wait.
+  Each sink in the pipeline's `sinks` reports its share as `dropped_entries`,
+  the status reporter logs it on the sink's line, and `lw --tui` shows it on
+  the sink's node
 - `dropped_writes` (`tcp` and `http` sinks): a client's queue overflowed,
   because it is too slow or one burst exceeded `client_buffer_size`
 - `rejected_conns` (`tcp` sink, `tcp_chain` source), `rejected_clients`
@@ -275,7 +287,8 @@ freshness, raise `max_batch_count` and `max_batch_bytes` for throughput. Use
 
 Walk the pipeline in order and read the counters: source `total_entries` (is
 anything being produced?), flow `total_dropped` (filters or rate limit?),
-pipeline `total_dropped_by_sink` (sink backed up?), sink `total_processed`.
+pipeline `total_dropped_by_sink` and each sink's `dropped_entries` (which
+sink backed up?), sink `total_processed`.
 
 **A pipeline stalls behind a console sink**
 
