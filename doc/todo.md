@@ -61,28 +61,3 @@ release tag, and both skeletons download the tagged source.
 5. With a tag, the packaging workflow's FreeBSD job can build the port itself
    from a ports tree (`make stage check-plist` in a `cp -RL` copy of
    `deploy/package/freebsd/`), rather than BSD make on the checkout.
-
-## 2. What `lw --tui` and its engine leave for later
-
-`lw --tui` ([CLI](cli.md#lw---tui)) and the configuration engine it shares
-with the website ([Architecture](architecture.md#configuration-engine)) are
-in place. Not yet:
-- Pins and export in the live view, as vif-log has them: pinned rows survive
-  filter changes and show alone on a key; the pins or the shown rows go to a
-  new file.
-- Per-sink taps: what each sink took, where the tap at the flow's exit shows
-  what dispatch offered (a full sink input drops for that sink only).
-- Live filter patching: a filter edited while `t` runs takes effect through
-  `Filter.UpdatePatterns` (unused, and racing `Apply`, which reads the
-  patterns without `f.mu`), not a rerun that rebinds every listener.
-- The wide-rune table `internal/tui/view.go` copies from
-  `lixenwraith/terminal`'s one-cell rule goes once terminal exports that rule.
-- A scripted session on a pseudo-terminal for Run, each output and `t` (keys,
-  the password dialog, `SIGHUP`), on a text console and over ssh.
-- The schema lists `auth.trusted_proxies` on both HTTP listeners, though
-  `AuthOptions.Check` refuses it off the `http` sink; a side tag for the
-  `http` sink would filter it as `chain_listener` keeps `node_binding` to the
-  chain sources.
-- Optional, in `lixenwraith/color`: export the 16 xterm reference shades
-  (`RGBTo16` maps the site's hues badly, so the 16-color tier is chosen by
-  hand).

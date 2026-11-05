@@ -25,8 +25,7 @@ system requirements.
   [`lw.1`](lw.1)
 - [Operations](operations.md): running, monitoring, tuning,
   troubleshooting
-- [To Do](todo.md): the maintainer's release and packaging steps, and
-  what `lw --tui` and the schema leave for later
+- [To Do](todo.md): the maintainer's release and packaging steps
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](../config/logwisp.toml).

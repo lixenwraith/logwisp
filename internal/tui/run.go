@@ -24,10 +24,12 @@ import (
 // block: the screen makes Start and Stop one at a time on a goroutine of its
 // own, and reads State from another.
 type Runner interface {
-	// Start runs specs in place of what runs, as a reload does, and returns
-	// the tap of what runs then: on an error the earlier run's when the new
-	// pipelines did not build, nil when nothing runs
-	Start(specs []config.Spec, ask Ask) (*core.Tap, error)
+	// Start runs specs in place of what runs, as the daemon's reloads do: an
+	// edit of flows alone swapped in place, sources and sinks running on,
+	// unless whole; anything else rebuilt. It returns the tap of what runs
+	// then, the same after a swap: on an error the earlier run's when the
+	// new pipelines did not build, nil when nothing runs.
+	Start(specs []config.Spec, whole bool, ask Ask) (*core.Tap, error)
 	Stop()
 	State() RunState
 }
@@ -44,11 +46,16 @@ type RunState struct {
 }
 
 // Counts are a pipeline's entries: in from its sources, dropped by its flow,
-// and dropped by sinks that could not take them
-type Counts struct{ In, Filtered, SinksDropped uint64 }
+// and dropped by sinks that could not take them, in all and by sink id
+type Counts struct {
+	In, Filtered, SinksDropped uint64
+	Sinks                      map[string]uint64 // those that dropped any
+}
 
 func (s RunState) same(o RunState) bool {
-	return s.Ended == o.Ended && s.Log == o.Log && maps.Equal(s.Counts, o.Counts)
+	return s.Ended == o.Ended && s.Log == o.Log && maps.EqualFunc(s.Counts, o.Counts, func(a, b Counts) bool {
+		return a.In == b.In && a.Filtered == b.Filtered && a.SinksDropped == b.SinksDropped && maps.Equal(a.Sinks, b.Sinks)
+	})
 }
 
 // run is the screen's side of a Runner. A worker makes the calls; what they
@@ -201,8 +208,10 @@ func (a *app) tick() {
 
 // tap runs the pipelines here, the screen staying, and gives the view the
 // keys: t. After an edit it runs them again in place of the earlier ones, as
-// a reload does.
-func (a *app) tap() {
+// an auto_reload does: an edit of flows alone swaps them in place. whole, T,
+// rebuilds them as SIGHUP does, edited or not, so a file read from its start
+// is read again.
+func (a *app) tap(whole bool) {
 	r := a.live
 	switch {
 	case r.runner == nil:
@@ -216,30 +225,39 @@ func (a *app) tap() {
 		return
 	}
 	specs := config.PipelineSpecs(a.comp.Pipelines)
-	if r.specs != nil && slices.Equal(specs, r.specs) {
+	if r.specs != nil && slices.Equal(specs, r.specs) && !whole {
 		a.viewing = true
 		return
 	}
 	r.op = "starting"
 	r.do(func() {
-		tap, err := r.runner.Start(specs, r.ask)
+		tap, err := r.runner.Start(specs, whole, r.ask)
 		r.send(func(a *app) { a.started(specs, tap, err) })
 	})
 }
 
 // started applies Start's outcome: what runs, and the view, or why the new
-// pipelines do not, on the part that failed. An earlier run that stopped is
-// read whole first, so a rule in the view marks where the next began.
+// pipelines do not, on the part that failed. The tap is read whole first, so
+// a rule in the view marks where the next run began, or the flows swapped:
+// every row under it took the new flows.
 func (a *app) started(specs []config.Spec, tap *core.Tap, err error) {
 	r := a.live
 	if r.leaving {
 		return
 	}
-	if old := r.tap; old != nil && old != tap {
-		a.drain(math.MaxInt, old)
+	if old := r.tap; old != nil && (old != tap || err == nil) {
 		mark := "rerun "
-		if tap == nil {
+		switch {
+		case old == tap: // fed on: what it holds came through the earlier flows
+			for range len(old.Records()) {
+				a.view.take(<-old.Records())
+			}
+			mark = "flows swapped "
+		case tap == nil:
+			a.drain(math.MaxInt, old)
 			mark = "stopped "
+		default:
+			a.drain(math.MaxInt, old)
 		}
 		a.view.mark(mark + time.Now().Format("15:04:05"))
 	}

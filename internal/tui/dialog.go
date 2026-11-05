@@ -365,7 +365,7 @@ func (a *app) outputMenu() dialog {
 				a.run()
 				return
 			case 1:
-				a.tap()
+				a.tap(false)
 				return
 			}
 			text, err := forms[i-2].Write(a.comp)
@@ -566,7 +566,8 @@ func help(f font, viewing bool) dialog {
 		{"p", "start over from a preset"},
 		{"r", "run the pipelines"},
 		{"o", "run, tap, or print a command line, environment or file"},
-		{"t", "tap: run here and watch what flows; it runs for real: binds, dials, writes files"},
+		{"t", "tap: run here and watch what flows; it runs for real: binds, dials, writes files. While it runs, an edit of flows alone swaps them in place, as an auto_reload does"},
+		{"T", "tap, rebuilding what runs, edited or not, as SIGHUP does: a file read from its start is read again"},
 		{"!", "every problem, moving to the first"},
 		{"paste", "an lw command line replaces the pipelines"},
 		{"q", "quit"},
@@ -582,7 +583,12 @@ func help(f font, viewing bool) dialog {
 			{"v", "all that reaches the point, the dropped dimmed; what passed it; what it dropped"},
 			{"s", "look at a source, a flow stage, the sinks or lw's own log"},
 			{"e", "edit the stage that dropped the row"},
-			{"c", "clear the rows"},
+			{f.space, "pin the row, or unpin it, and move down: pins outlive filters, points and c"},
+			{"P", "the pins alone, at every point; the level and pattern still apply"},
+			{"C", "clear the pins"},
+			{"x", "export the pins, or without pins the rows shown, to a new file of LogWisp json lines"},
+			{"c", "clear the rows, but the pins"},
+			{"T", "rerun the pipelines whole, as SIGHUP does"},
 			{"t esc", "back to the diagram; the pipelines keep running"},
 			{"q", "stop the pipelines and quit"},
 		}

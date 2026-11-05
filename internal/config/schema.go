@@ -66,7 +66,7 @@ func (p Plugin) Keys() []Key { return p.applying(keys(p.options)) }
 func (p Plugin) applying(all []Key) []Key {
 	out := []Key{}
 	for _, k := range all {
-		if (k.Side == "" || k.Side == sideNames[p.Side] || k.Side == "listener" && p.Side == ChainListener) && (!k.HTTP || p.HTTP) {
+		if (len(k.Sides) == 0 || slices.Contains(k.Sides, sideNames[p.Side])) && (!k.HTTP || p.HTTP) {
 			if k.Keys != nil {
 				k.Keys = p.applying(k.Keys)
 			}
@@ -98,8 +98,8 @@ func (e *KeyError) Unwrap() error { return e.Err }
 // option is one key of an options table, from its field's tags: toml names
 // it, default: holds the default as a command line types it, help: says what
 // it does, lw: lists its rules: required, enum=a|b, min=N, max=N, zero=MEANING
-// (a value, not the default), hint=KIND, a side (listener, a chain source's
-// too; chain_listener; dialer), and http (only plugins that speak HTTP take it).
+// (a value, not the default), hint=KIND, the sides that take it (listener,
+// chain_listener, dialer; none for all), and http (only plugins that speak HTTP).
 type option struct {
 	Key
 	index int
@@ -123,7 +123,7 @@ func options(t reflect.Type) []option {
 			case "required":
 				o.Required = true
 			case "listener", "chain_listener", "dialer":
-				o.Side = name
+				o.Sides = append(o.Sides, name)
 			case "http":
 				o.HTTP = true
 			case "enum":
@@ -164,7 +164,7 @@ type Key struct {
 	Max      *float64 `json:"max,omitempty"`
 	Zero     string   `json:"zero,omitempty"`
 	Hint     string   `json:"hint,omitempty"`
-	Side     string   `json:"side,omitempty"`
+	Sides    []string `json:"sides,omitempty"`
 	HTTP     bool     `json:"http,omitempty"`
 	Keys     []Key    `json:"keys,omitempty"`
 }
@@ -411,11 +411,11 @@ func checkTags(v reflect.Value, prefix string) error {
 
 func num(n float64) string { return strconv.FormatFloat(n, 'f', -1, 64) }
 
-// sideKeys lists, in order, the keys of a table that apply to one side only
+// sideKeys lists, in order, the keys of a table tagged for side
 func sideKeys(t reflect.Type, side string) []string {
 	var keys []string
 	for _, o := range options(t) {
-		if o.Side == side {
+		if slices.Contains(o.Sides, side) {
 			keys = append(keys, o.Name)
 		}
 	}

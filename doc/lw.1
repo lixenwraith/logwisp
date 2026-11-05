@@ -178,6 +178,19 @@ from warnings up;
 shows an entry full screen and
 .Ic e
 edits the stage that dropped it.
+After an edit,
+.Ic t
+runs them again as a watched reload does, swapping an edit of flows alone in
+place, and
+.Ic T
+rebuilds them as
+.Dv SIGHUP
+does.
+Space pins an entry,
+.Ic P
+shows the pins alone, and
+.Ic x
+writes the pins, or the entries shown, to a new file as JSON lines.
 A console sink writing to the terminal runs as a null sink there, and a
 console source needs piped input.
 The screen draws on the controlling terminal, so standard input and output
@@ -238,7 +251,9 @@ Log pipeline statistics every 30 seconds at the debug level
 .Pq default true with a configuration file, false without .
 .It Fl \-auto_reload= Ns Ar bool
 Reload when the configuration file changes
-.Pq default false .
+.Pq default false :
+an edit of flows alone swaps them in place, sources and sinks running on,
+and any other rebuilds every pipeline.
 .It Fl \-logging.output= Ns Ar mode
 Where the log of
 .Nm
@@ -817,7 +832,8 @@ do the same: 0 on success or help, 1 on failure, and 2 on a usage error.
 Shut down gracefully.
 .It Dv SIGHUP , SIGUSR1
 Reread the configuration file, certificates and credentials, and rebuild
-every pipeline.
+every pipeline, even for an edit of flows alone, which a watched reload swaps
+in place.
 An invalid configuration leaves the running service untouched; one that builds
 but fails to start, as on a port another process holds, leaves nothing running
 until a later reload succeeds.
@@ -835,7 +851,8 @@ and
 .Dv SIGHUP
 close it, stopping what it runs, and
 .Nm
-exits 0.
+exits 0, as on a hangup that sends no signal, when the screen's terminal is
+not the controlling one.
 .Sh EXAMPLES
 Copy a file line by line:
 .Bd -literal -offset indent

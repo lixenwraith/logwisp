@@ -74,12 +74,12 @@ pipelines have [their own flags](#pipelines):
 - `--schema`: print every setting, pipeline flag, flow stage, plugin option,
   preset and output form as one JSON document, and exit; tools build their
   option lists from it:
-  - a key: its kind, default, rules and help, and a setting's `variable`; a
-    table (`tls`, `auth`, `acl`) holds its own keys, those of the plugin's
-    side (listener, chain source or dialer), HTTP's only on a plugin that
-    speaks HTTP: `auth.node_binding` only on the chain sources, and
-    `auth.trusted_proxies` on both HTTP listeners, though only the `http`
-    sink admits it
+  - a key: its kind, default, rules and help, a setting's `variable`, and
+    `sides`, the plugin sides that take it when not all do (`listener`, the
+    `tcp` and `http` sinks; `chain_listener`; `dialer`); a table (`tls`,
+    `auth`, `acl`) holds the keys of the plugin's side, HTTP's only on a
+    plugin that speaks HTTP: `auth.node_binding` only on the chain sources,
+    `auth.trusted_proxies` only on the `http` sink
   - a flow stage: its keys, a `summary`, and `on`, the values that turn it on
   - a preset key: its default and help, and the choices (`enum`) and `hint`
     of the option it sets
@@ -335,7 +335,8 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
 - `SIGHUP` before the signal handler is installed is ignored, so LogWisp
   survives a terminal hang-up like `nohup`
 - On the `lw --tui` screen, `SIGTERM` and `SIGHUP` close it, stopping what
-  `t` runs, and lw exits 0
+  `t` runs, and lw exits 0; so does a hangup no signal reports, where the
+  screen's terminal is not lw's controlling one and its read fails
 
 ## Exit Codes
 
@@ -484,8 +485,8 @@ WebAssembly; `t` runs them under the screen and shows what flows.
   and moves to a filter's (in the inspector) or the format's `type` row; `d`
   deletes, or returns a value to its default; Space turns a flow stage on or
   off; `J`/`K` move a filter; `[` `]` switch pipelines; `p` presets; `!` shows
-  every problem, moving to the first; `r` runs; `t` taps; `o` output; `?`
-  keys; `q` or Ctrl-C quits.
+  every problem, moving to the first; `r` runs; `t` taps, `T` taps anew; `o`
+  output; `?` keys; `q` or Ctrl-C quits.
 - Pipelines: Up from a column's top row reaches the bar, where `[` `]` or
   Left/Right switch, `a` adds one (empty or from a preset), Enter renames and
   `d` deletes, asking first when it has parts.
@@ -502,14 +503,20 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     source needs piped input (`cmd | lw -T`); lw's own log, when it writes to
     the terminal, shows in the view as source `lw`; a password the terminal
     would be asked for is asked in a masked dialog.
-  - Leaving the view keeps the pipelines running. `t` after an edit reruns
-    them as a reload does: when the new ones do not build, the earlier ones
-    keep running and the error chooses the part it names. `q` asks before it
+  - Leaving the view keeps the pipelines running. `t` after an edit runs
+    them again as an `auto_reload` does: an edit of flows alone swaps them
+    in place, the sources and sinks running on with their connections and
+    file positions, and any other edit rebuilds them. `T` rebuilds them as
+    `SIGHUP` does, edited or not, so a file read from its start is read
+    again. A rule in the view marks where the swapped flows or the new run
+    begin. When the new pipelines do not build, the earlier ones keep
+    running and the error chooses the part it names. `q` asks before it
     stops them, `r` and `o`'s choices stop them first, and `SIGTERM` or
-    `SIGHUP` (an ssh session's end) stops them and closes the screen.
+    `SIGHUP` (an ssh session's end) stops them and closes the screen, as
+    does a hangup no signal reports.
   - The bar counts the shown pipeline's entries in, filtered by the flow,
     dropped by sinks, and missed by the screen: the view never slows a
-    pipeline.
+    pipeline. A sink that dropped entries shows how many on its node.
 - Live view: from 40 rows it sits under the diagram, unless the inspector is
   open below the canvas; otherwise it takes the screen while it has the keys.
   `t` or Esc gives them back to the diagram (Esc first closes an open detail).
@@ -532,8 +539,18 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     edits the stage that dropped the row; `/` only rows matching a pattern,
     ignoring case when it is all lower case (clearing it, or a level, keeps
     the focused row in place, paused there unless it is the newest); `1`-`5`
-    trace to error and up, `0` all; `s` chooses the point; `c` clears; `q`,
-    Ctrl-C, `?`, `r`, `o`, `[` and `]` act as on the diagram.
+    trace to error and up, `0` all; `s` chooses the point; `c` clears the
+    rows but the pins; `q`, Ctrl-C, `?`, `r`, `o`, `T`, `[` and `]` act as
+    on the diagram.
+  - Pins, with vif-log's keys: Space pins the focused row, or unpins it, and
+    moves down; `P` shows the pins alone, whatever point and verdict they
+    came from (the level and pattern still apply; `v` and `s` leave it);
+    `C` clears them. A pinned row outlives the rows' memory, up to 16 MiB of
+    pins. `x` writes the pins, or with none the rows shown, to a new file,
+    mode 0600 and `.jsonl` added to a name without an extension, never
+    replacing one: a line of LogWisp json each, the row's time, level, tag
+    as `source`, message and fields as the view read them, which it reads
+    back the same.
   - The detail, beside the rows from 160 columns and under them otherwise:
     time and the stamp as written, level, origin (the source's type, and its
     id when another), the flow (passed every stage, or the stage that

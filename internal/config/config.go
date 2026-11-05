@@ -324,10 +324,10 @@ type AuthOptions struct {
 	Allow           []string `toml:"allow" help:"mtls: identities admitted; with neither this nor allow_patterns set, any the CA issued"`
 	AllowPatterns   []string `toml:"allow_patterns" lw:"hint=regex" help:"mtls: RE2 patterns of identities admitted; anchor them"`
 	NodeBinding     string   `toml:"node_binding" lw:"chain_listener,enum=none|assert|force,zero=force" help:"chain sources: force labels every entry with the peer's identity, assert refuses a peer declaring another node, none leaves it to trust_node"`
-	CredentialsFile string   `toml:"credentials_file" lw:"listener,hint=file" help:"scram: file of the users who may log in, made by lw auth add-user"`
+	CredentialsFile string   `toml:"credentials_file" lw:"listener,chain_listener,hint=file" help:"scram: file of the users who may log in, made by lw auth add-user"`
 	// exp has whole seconds, a sub-second expires_in reads as unknown, and 10 s
 	// leaves room for renewal ahead of expiry
-	TokenLifetimeMS int64    `toml:"token_lifetime_ms" lw:"listener,http,min=10000,max=86400000,zero=15 minutes" help:"scram on HTTP: bearer token lifetime"`
+	TokenLifetimeMS int64    `toml:"token_lifetime_ms" lw:"listener,chain_listener,http,min=10000,max=86400000,zero=15 minutes" help:"scram on HTTP: bearer token lifetime"`
 	TrustedProxies  []string `toml:"trusted_proxies" lw:"listener,http,hint=cidr" help:"scram on the http sink: addresses or CIDRs of the proxies that end browsers' TLS, through which browsers then log in"`
 	Username        string   `toml:"username" help:"scram: the user a dialer logs in as, or a listener's one user"`
 	PasswordFile    string   `toml:"password_file" lw:"hint=file" help:"scram: file holding the password; /dev/fd/N or a pipe is read once, /dev/tty asks"`
@@ -357,12 +357,12 @@ type TLSOptions struct {
 	Enabled            bool     `toml:"enabled" help:"use TLS"`
 	CertFile           string   `toml:"cert_file" lw:"hint=file" help:"certificate file this end presents; a dialer's, for a listener with client_auth"`
 	KeyFile            string   `toml:"key_file" lw:"hint=file" help:"key of cert_file"`
-	SelfSigned         bool     `toml:"self_signed" lw:"listener" help:"a self-signed certificate on a key made at startup"`
-	IssuerCertFile     string   `toml:"issuer_cert_file" lw:"listener,hint=file" help:"CA certificate file (lw tls ca) that signs a certificate made at startup"`
-	IssuerKeyFile      string   `toml:"issuer_key_file" lw:"listener,hint=file" help:"key of issuer_cert_file"`
-	Hosts              []string `toml:"hosts" lw:"listener" help:"more names and addresses for a certificate made at startup, which always carries host, this machine's name and localhost"`
-	ClientAuth         bool     `toml:"client_auth" lw:"listener" help:"require and verify client certificates"`
-	ClientCAFile       string   `toml:"client_ca_file" lw:"listener,hint=file" help:"CA bundle verifying client certificates"`
+	SelfSigned         bool     `toml:"self_signed" lw:"listener,chain_listener" help:"a self-signed certificate on a key made at startup"`
+	IssuerCertFile     string   `toml:"issuer_cert_file" lw:"listener,chain_listener,hint=file" help:"CA certificate file (lw tls ca) that signs a certificate made at startup"`
+	IssuerKeyFile      string   `toml:"issuer_key_file" lw:"listener,chain_listener,hint=file" help:"key of issuer_cert_file"`
+	Hosts              []string `toml:"hosts" lw:"listener,chain_listener" help:"more names and addresses for a certificate made at startup, which always carries host, this machine's name and localhost"`
+	ClientAuth         bool     `toml:"client_auth" lw:"listener,chain_listener" help:"require and verify client certificates"`
+	ClientCAFile       string   `toml:"client_ca_file" lw:"listener,chain_listener,hint=file" help:"CA bundle verifying client certificates"`
 	CAFile             string   `toml:"ca_file" lw:"dialer,hint=file,zero=the system roots" help:"CA bundle verifying the server"`
 	ServerName         string   `toml:"server_name" lw:"dialer,zero=the host" help:"name the server's certificate must carry"`
 	InsecureSkipVerify bool     `toml:"insecure_skip_verify" lw:"dialer" help:"verify nothing of the server; never in production"`

@@ -32,7 +32,8 @@ streams, or downstream LogWisp nodes.
   than stalling the pipeline or its sibling sinks; only the console sink
   waits, so a filter loses no line to a slow reader
 - **Hot reload** via `SIGHUP`/`SIGUSR1` or a config file watch, with the new
-  configuration validated before the old service is torn down
+  configuration validated before the old service is torn down; a watched edit
+  of flows alone swaps them in place, connections and file positions kept
 
 ### On screen
 
@@ -50,9 +51,13 @@ configuration engine the website's configurator runs as WebAssembly:
   (`lw -T > pipelines.toml`)
 - **Tap**: `t` runs them in place and opens a live view of every entry with its
   fate, passed or the stage or filter that dropped it; `e` edits that stage,
-  and `t` again reruns as a reload, keeping the running pipelines when the new
-  ones do not build. Listeners bind, dialers connect and files are written for
-  real; a password is asked in a masked dialog
+  and `t` again applies the edit as a watched reload does, swapping flows in
+  place and keeping the running pipelines when the new ones do not build.
+  Listeners bind, dialers connect and files are written for real; a password
+  is asked in a masked dialog, and each sink shows what it dropped
+- **Pin and export**: Space pins a row, kept through filter changes and past
+  the view's memory; `P` shows the pins alone, from any point, and `x` writes
+  them, or the rows shown, to a new file as JSON lines
 - **Read any log**: the view parses LogWisp's JSON, lw's own log, vif
   records, pino, zap, slog, docker, journald, ECS, GCP, logfmt and stamped
   text into time, level, message and fields, filters them by level or
@@ -148,8 +153,7 @@ See [Security](doc/security.md) for configuration and the exact boundary, and
   [`doc/lw.1`](doc/lw.1)
 - [Operations](doc/operations.md): running, monitoring, tuning,
   troubleshooting
-- [To Do](doc/todo.md): the maintainer's release and packaging steps, and
-  what `lw --tui` and the schema leave for later
+- [To Do](doc/todo.md): the maintainer's release and packaging steps
 
 A fully annotated configuration covering every option ships as
 [`config/logwisp.toml`](config/logwisp.toml).

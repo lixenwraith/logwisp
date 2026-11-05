@@ -1,7 +1,12 @@
 package tui
 
 import (
+	"bytes"
+	"cmp"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -70,8 +75,8 @@ type view struct {
 	rows    []row
 	bytes   int
 	next    uint64
-	shown   []uint64
-	cursor  int // in shown
+	shown   []uint64 // in the rows, or with P among the held pins too
+	cursor  int      // in shown
 	scroll  int
 	paused  bool // the cursor keeps its row; else it is on the newest
 	detail  bool
@@ -84,13 +89,25 @@ type view struct {
 	pat     pattern
 	prompt  *ui.TextFieldState // the pattern being typed
 	built   query              // what shown holds
+
+	// Pins, as vif-log's: rows kept across every filter and point, shown
+	// alone on P, written by x; held are those the rows let go, oldest first
+	pins     map[uint64]bool
+	held     []row
+	pinBytes int  // what the pinned rows hold, held or not, at most pinMax
+	pinsOnly bool // P
+	pinGen   int  // counts the pins' changes, which P's rows follow
 }
+
+// pinMax is what the pins may hold: half of the rows'
+const pinMax = ringBytes / 2
 
 // query is what picks the rows shown
 type query struct {
 	at          point
 	mode, floor int
 	pattern     string
+	pins        int // 0, or with P the pins' count of changes, from 1
 }
 
 // verdicts are what the view shows at its point: all that reaches it, what
@@ -151,7 +168,7 @@ func (p point) needsDrops(mode int) bool {
 // point is where the canvas cursor looks: a source, a flow stage or the
 // filter the inspector is on, the heartbeat, or the sinks
 func (a *app) point() point {
-	p := point{name: "sinks", all: "all they got", reach: passed, hi: passed - 1}
+	p := point{name: "sinks", all: "all offered them", reach: passed, hi: passed - 1}
 	switch {
 	case a.view.own:
 		return point{name: "lw's own log", own: true, reach: passed, lo: passed, hi: passed - 1}
@@ -230,8 +247,9 @@ func (r *row) dropped() bool { return r.stage != "" }
 // mark draws a rule across the rows, which every filter shows
 func (v *view) mark(text string) { v.add(row{mark: text, level: -1, size: rowBytes}) }
 
-// add appends r, then evicts the oldest rows past ringBytes; the cursor
-// keeps its row, or takes the oldest kept when its own went
+// add appends r, then evicts the oldest rows past ringBytes, a pinned one to
+// the held; the cursor keeps its row, or takes the oldest kept when its own
+// went
 func (v *view) add(r row) {
 	r.seq = v.next
 	v.next++
@@ -242,24 +260,41 @@ func (v *view) add(r row) {
 	}
 	for v.bytes > ringBytes && len(v.rows) > 1 {
 		old := v.rows[0].seq
+		if v.pins[old] {
+			v.held = append(v.held, v.rows[0])
+		}
 		v.bytes -= v.rows[0].size
 		v.rows[0] = row{} // the array keeps no evicted text
 		v.rows = v.rows[1:]
-		if len(v.shown) > 0 && v.shown[0] == old {
+		if !v.pinsOnly && len(v.shown) > 0 && v.shown[0] == old {
 			v.shown = v.shown[1:]
 			v.cursor, v.scroll = max(0, v.cursor-1), max(0, v.scroll-1)
 		}
 	}
 }
 
-// passes reports whether the query shown was built for shows r; a rule shows
-// always
+// at is the row seq names, in the rows or among the held pins; nil for none
+func (v *view) at(seq uint64) *row {
+	if len(v.rows) > 0 && seq >= v.rows[0].seq {
+		return &v.rows[seq-v.rows[0].seq]
+	}
+	if i, ok := slices.BinarySearchFunc(v.held, seq, func(r row, seq uint64) int { return cmp.Compare(r.seq, seq) }); ok {
+		return &v.held[i]
+	}
+	return nil
+}
+
+// passes reports whether the query shown was built for shows r: a rule
+// always, but with P, which shows the pins alone at any point and verdict;
+// the level and pattern apply to the pins too
 func (v *view) passes(r *row) bool {
 	q := v.built
 	switch {
+	case q.pins > 0 && (r.mark != "" || !v.pins[r.seq]):
+		return false
 	case r.mark != "":
 		return true
-	case !q.at.shows(r, q.mode), q.floor > 0 && r.level < q.floor-1:
+	case q.pins == 0 && !q.at.shows(r, q.mode), q.floor > 0 && r.level < q.floor-1:
 		return false
 	}
 	return v.pat.match(r.Message) || v.pat.match(r.fields) || v.pat.match(r.Tag)
@@ -273,7 +308,10 @@ func (v *view) sync(at point, tap *core.Tap) {
 	if tap != nil {
 		tap.All.Store(at.needsDrops(v.mode))
 	}
-	q, was := query{at, v.mode, v.floor, v.pat.src}, v.built
+	q, was := query{at, v.mode, v.floor, v.pat.src, 0}, v.built
+	if v.pinsOnly {
+		q.pins = v.pinGen + 1
+	}
 	if q == was {
 		return
 	}
@@ -281,12 +319,17 @@ func (v *view) sync(at point, tap *core.Tap) {
 	f := v.focused()
 	line := v.cursor - v.scroll
 	v.shown = v.shown[:0]
+	for i := range v.held {
+		if q.pins > 0 && v.passes(&v.held[i]) {
+			v.shown = append(v.shown, v.held[i].seq)
+		}
+	}
 	for i := range v.rows {
 		if v.passes(&v.rows[i]) {
 			v.shown = append(v.shown, v.rows[i].seq)
 		}
 	}
-	if f != nil && (v.paused || q.pattern != was.pattern || q.floor != was.floor) {
+	if f != nil && (v.paused || q.pattern != was.pattern || q.floor != was.floor || q.pins != was.pins) {
 		v.cursor, _ = slices.BinarySearch(v.shown, f.seq)
 		v.scroll = v.cursor - line
 		v.paused = v.paused || v.cursor < len(v.shown)-1
@@ -315,7 +358,7 @@ func (v *view) focused() *row {
 		return nil
 	}
 	v.settle()
-	return &v.rows[v.shown[v.cursor]-v.rows[0].seq]
+	return v.at(v.shown[v.cursor])
 }
 
 // focusedEntry is the cursor's row when it is an entry, nil on a rule or none
@@ -326,8 +369,161 @@ func (v *view) focusedEntry() *row {
 	return nil
 }
 
+// clear lets every row go but the pins, which it holds
 func (v *view) clear() {
+	for i := range v.rows {
+		if v.pins[v.rows[i].seq] {
+			v.held = append(v.held, v.rows[i])
+		}
+	}
 	v.rows, v.shown, v.bytes, v.cursor, v.scroll, v.paused = nil, nil, 0, 0, 0, false
+	v.built = query{} // P shows the held
+}
+
+// pin pins the focused entry, or unpins it, then moves down a row, so a run
+// of rows takes a key each, as vif-log's Space does
+func (a *app) pin() {
+	v := &a.view
+	w := v.focusedEntry()
+	switch {
+	case w == nil:
+		a.note = a.font.space + " pins an entry"
+		return
+	case v.pins[w.seq]:
+		delete(v.pins, w.seq)
+		v.pinBytes -= w.size
+		if i, ok := slices.BinarySearchFunc(v.held, w.seq, func(r row, seq uint64) int { return cmp.Compare(r.seq, seq) }); ok {
+			v.held = slices.Delete(v.held, i, i+1)
+		}
+	case v.pinBytes+w.size > pinMax:
+		a.note = fmt.Sprintf("the pins hold %d MiB already: C clears them", pinMax>>20)
+		return
+	default:
+		if v.pins == nil {
+			v.pins = map[uint64]bool{}
+		}
+		v.pins[w.seq] = true
+		v.pinBytes += w.size
+	}
+	v.pinGen++
+	if len(v.pins) == 0 {
+		v.pinsOnly = false
+	}
+	if !v.pinsOnly {
+		v.move(1)
+	}
+	v.sync(a.point(), a.live.tap) // P lets an unpinned row go now
+}
+
+// pinsAlone shows the pins alone, or every row again: P
+func (a *app) pinsAlone() {
+	v := &a.view
+	if !v.pinsOnly && len(v.pins) == 0 {
+		a.note = "no row is pinned: " + a.font.space + " pins one"
+		return
+	}
+	v.pinsOnly = !v.pinsOnly
+	v.sync(a.point(), a.live.tap)
+}
+
+// unpinAll lets every pin go: C
+func (a *app) unpinAll() {
+	v := &a.view
+	n := len(v.pins)
+	v.pins, v.held, v.pinBytes, v.pinsOnly = nil, nil, 0, false
+	v.pinGen++
+	v.sync(a.point(), a.live.tap)
+	a.note = fmt.Sprintf("%d pins cleared", n)
+}
+
+// pinned is the pins, oldest first: the held, then those in the rows
+func (v *view) pinned() []row {
+	out := slices.Clone(v.held)
+	for i := range v.rows {
+		if v.pins[v.rows[i].seq] {
+			out = append(out, v.rows[i])
+		}
+	}
+	return out
+}
+
+// export writes the pins, or without pins the entries shown, to a new file
+// as LogWisp json lines: x
+func (a *app) export() {
+	v := &a.view
+	rows, what := v.pinned(), "pins"
+	if len(rows) == 0 {
+		rows, what = nil, "rows shown"
+		for _, seq := range v.shown {
+			if r := v.at(seq); r != nil && r.mark == "" {
+				rows = append(rows, *r)
+			}
+		}
+	}
+	if len(rows) == 0 {
+		a.note = "nothing to export: no pins, no rows shown"
+		return
+	}
+	f := &form{title: fmt.Sprintf("Export %d %s", len(rows), what),
+		summary: "Each row a line of LogWisp json: its time, level, tag as source, message and fields as the view reads them.",
+		params:  []config.PresetParam{{Name: "file", Required: true, Help: "a new file: an existing one is never replaced; without an extension, .jsonl"}},
+		apply: func(a *app, values map[string]string) error {
+			path := config.ExpandHome(values["file"])
+			switch {
+			case path == "":
+				return errors.New("name the file")
+			case filepath.Ext(path) == "":
+				path += ".jsonl"
+			}
+			if err := config.WriteNew(path, jsonLines(rows), 0o600); err != nil {
+				return err
+			}
+			if abs, err := filepath.Abs(path); err == nil {
+				path = abs
+			}
+			a.note = fmt.Sprintf("%d %s written to %s", len(rows), what, path)
+			return nil
+		}}
+	f.fill(map[string]string{"file": "lw-" + time.Now().Format("150405") + ".jsonl"})
+	a.dialog = f
+}
+
+// jsonLines is rows as LogWisp json, a line each, which lw reads back as
+// they were read: the time, the tag as source, level, message and the fields
+// in their order, each value a string
+func jsonLines(rows []row) []byte {
+	var b bytes.Buffer
+	put := func(v string) {
+		q, _ := json.Marshal(v) // invalid UTF-8 as U+FFFD
+		b.Write(q)
+	}
+	for i := range rows {
+		r := &rows[i]
+		b.WriteString(`{"time":`)
+		put(r.at.Format(time.RFC3339Nano))
+		for _, kv := range [][2]string{{"source", r.Tag}, {"level", r.Level}} {
+			if kv[1] != "" {
+				b.WriteString(`,"` + kv[0] + `":`)
+				put(kv[1])
+			}
+		}
+		b.WriteString(`,"message":`)
+		put(r.Message)
+		if len(r.Fields) > 0 {
+			b.WriteString(`,"fields":{`)
+			for j, f := range r.Fields {
+				if j > 0 {
+					b.WriteByte(',')
+				}
+				put(f.Key)
+				b.WriteByte(':')
+				put(f.Value)
+			}
+			b.WriteByte('}')
+		}
+		b.WriteString("}\n")
+	}
+	return b.Bytes()
 }
 
 // drain reads taps into the view until they are empty or it read budget
@@ -385,11 +581,21 @@ func (a *app) viewKey(ev terminal.Event) {
 	case is(ev, terminal.KeyNone, "012345"):
 		v.floor = int(ev.Rune - '0')
 	case is(ev, terminal.KeyNone, "v"):
-		v.mode = (v.mode + 1) % len(verdicts)
+		v.mode, v.pinsOnly = (v.mode+1)%len(verdicts), false
 	case is(ev, terminal.KeyNone, "s"):
 		a.dialog = a.pointMenu()
 	case is(ev, terminal.KeyNone, "c"):
 		v.clear()
+	case is(ev, terminal.KeySpace, " "):
+		a.pin()
+	case is(ev, terminal.KeyNone, "P"):
+		a.pinsAlone()
+	case is(ev, terminal.KeyNone, "C"):
+		a.unpinAll()
+	case is(ev, terminal.KeyNone, "x"):
+		a.export()
+	case is(ev, terminal.KeyNone, "T"):
+		a.tap(true)
 	case is(ev, terminal.KeyNone, "i") && v.focusedEntry() != nil:
 		a.dialog = &entry{row: *v.focusedEntry()}
 	case is(ev, terminal.KeyNone, "e"):
@@ -481,7 +687,7 @@ func (a *app) pointMenu() dialog {
 			}
 			add(s, hint, flowCol, compose.Node{Role: s})
 		}
-		add("sinks", "what the sinks got", sinksCol, compose.Node{})
+		add("sinks", "what the flow offered them; a full one drops its copy", sinksCol, compose.Node{})
 	}
 	if a.live.state.Log != nil {
 		options = append(options, ui.Option{Name: "lw's own log", Hint: "its records alone, debug too"})
@@ -489,7 +695,7 @@ func (a *app) pointMenu() dialog {
 	}
 	return &chooser{title: "Look at", list: ui.NewOptionListState(options), pick: func(a *app, i int) {
 		t := ats[i]
-		if a.view.own = t.own; t.own {
+		if a.view.own, a.view.pinsOnly = t.own, false; t.own {
 			return
 		}
 		a.pi, a.col, a.row, a.inspect, a.bar = t.pi, t.col, [3]int{}, false, false
@@ -508,6 +714,8 @@ func (a *app) drawView(r ui.Region) {
 	at := v.built.at
 	title, more, dimmed, rest := at.name, "", "", ""
 	switch {
+	case v.built.pins > 0:
+		title = fmt.Sprintf("pins · %d", len(v.pins))
 	case at.own:
 	case v.mode == modeAll:
 		title, more = title+" · all", strings.TrimPrefix(at.all, "all")
@@ -517,7 +725,7 @@ func (a *app) drawView(r ui.Region) {
 	default:
 		title += " · " + verdicts[v.mode]
 	}
-	if len(a.comp.Pipelines) > 1 && at.pipe != "" {
+	if len(a.comp.Pipelines) > 1 && at.pipe != "" && v.built.pins == 0 {
 		title = at.pipe + " · " + title
 	}
 	if v.floor > 0 {
@@ -569,10 +777,9 @@ func (a *app) drawRows(r ui.Region) {
 	v.settle()
 	v.scroll = ui.AdjustScroll(v.cursor, ui.ClampScroll(v.scroll, r.H, len(v.shown)), r.H, len(v.shown))
 	tw, lw, gw := v.widths(r.W)
-	first := v.rows[0].seq
 	for y := 0; y < r.H && v.scroll+y < len(v.shown); y++ {
 		i := v.scroll + y
-		a.drawRow(r.Sub(0, y, r.W, 1), &v.rows[v.shown[i]-first], tw, lw, gw, i == v.cursor)
+		a.drawRow(r.Sub(0, y, r.W, 1), v.at(v.shown[i]), tw, lw, gw, i == v.cursor)
 	}
 }
 
@@ -616,6 +823,9 @@ func (a *app) drawRow(r ui.Region, w *row, tw, lw, gw int, cursor bool) {
 	if cursor {
 		r.FillStyle(th.Text.On(th.Selected))
 		r.TextStyled(0, 0, string(th.Glyphs.Pointer), th.Accent.On(th.Selected))
+	}
+	if a.view.pins[w.seq] && w.mark == "" {
+		r.TextStyled(0, 0, string(f.pin), on(th.Accent))
 	}
 	if w.mark != "" {
 		dash := "─"
@@ -707,6 +917,9 @@ func (a *app) details(w *row, width int) []dline {
 	if w.pipe != "" {
 		put("flow", 8, a.verdict(w), th.Text)
 	}
+	if a.view.pins[w.seq] {
+		put("pinned", 8, "yes: P shows the pins alone, x writes them", th.Accent)
+	}
 	put("layout", 8, w.Layout, th.Muted)
 	put("message", 8, w.Message, th.Text)
 	keyW := 8
@@ -770,13 +983,9 @@ func (a *app) verdict(w *row) string {
 }
 
 // oneCell reports whether a cell shows the rune r, decoded from size bytes,
-// as itself: not one a terminal acts on (logline.Control), and one taking a
-// column of its own
+// as itself: a valid one the terminal draws in a column of its own
 func oneCell(r rune, size int) bool {
-	if r >= ' ' && r < 0x7f {
-		return true
-	}
-	return !logline.Control(r, size) && !unicode.In(r, unicode.Cc, unicode.Cf, unicode.Mn, unicode.Me, unicode.Mc, wideOrJoining)
+	return r >= ' ' && r < 0x7f || (r != utf8.RuneError || size > 1) && terminal.OneColumn(r)
 }
 
 // flat is s on one row of at most w cells: a line break as the font's mark,
@@ -881,39 +1090,4 @@ func lower(c byte) byte {
 		return c + 'a' - 'A'
 	}
 	return c
-}
-
-// wideOrJoining is what a terminal draws in two columns, East Asian wide and
-// fullwidth and emoji presentation as of Unicode 17, and the letters a
-// grapheme cluster joins to a neighbour (Hangul jamo, Prepend, SpacingMark and
-// Extend ones); a range spans the unassigned code points between its runes
-var wideOrJoining = &unicode.RangeTable{
-	R16: []unicode.Range16{
-		{0x0D4E, 0x0D4E, 1}, {0x0E33, 0x0E33, 1}, {0x0EB3, 0x0EB3, 1},
-		{0x1100, 0x11FF, 1}, {0x231A, 0x231B, 1}, {0x2329, 0x232A, 1}, {0x23E9, 0x23EC, 1},
-		{0x23F0, 0x23F0, 1}, {0x23F3, 0x23F3, 1}, {0x25FD, 0x25FE, 1}, {0x2614, 0x2615, 1},
-		{0x2630, 0x2637, 1}, {0x2648, 0x2653, 1}, {0x267F, 0x267F, 1}, {0x268A, 0x268F, 1},
-		{0x2693, 0x2693, 1}, {0x26A1, 0x26A1, 1}, {0x26AA, 0x26AB, 1}, {0x26BD, 0x26BE, 1},
-		{0x26C4, 0x26C5, 1}, {0x26CE, 0x26CE, 1}, {0x26D4, 0x26D4, 1}, {0x26EA, 0x26EA, 1},
-		{0x26F2, 0x26F3, 1}, {0x26F5, 0x26F5, 1}, {0x26FA, 0x26FA, 1}, {0x26FD, 0x26FD, 1},
-		{0x2705, 0x2705, 1}, {0x270A, 0x270B, 1}, {0x2728, 0x2728, 1}, {0x274C, 0x274C, 1},
-		{0x274E, 0x274E, 1}, {0x2753, 0x2755, 1}, {0x2757, 0x2757, 1}, {0x2795, 0x2797, 1},
-		{0x27B0, 0x27B0, 1}, {0x27BF, 0x27BF, 1}, {0x2B1B, 0x2B1C, 1}, {0x2B50, 0x2B50, 1},
-		{0x2B55, 0x2B55, 1}, {0x2E80, 0x303E, 1}, {0x3041, 0x3247, 1}, {0x3250, 0xA4C6, 1},
-		{0xA960, 0xA97C, 1}, {0xAC00, 0xD7FF, 1}, {0xF900, 0xFAFF, 1}, {0xFE10, 0xFE19, 1},
-		{0xFE30, 0xFE6B, 1}, {0xFF01, 0xFF60, 1}, {0xFF9E, 0xFF9F, 1}, {0xFFE0, 0xFFE6, 1},
-	},
-	R32: []unicode.Range32{
-		{0x111C2, 0x111C3, 1}, {0x113D1, 0x113D1, 1}, {0x1193F, 0x1193F, 1}, {0x11941, 0x11941, 1},
-		{0x11A84, 0x11A89, 1}, {0x11D46, 0x11D46, 1}, {0x11F02, 0x11F02, 1},
-		{0x16FE0, 0x1B2FB, 1}, {0x1D300, 0x1D376, 1}, {0x1F004, 0x1F004, 1}, {0x1F0CF, 0x1F0CF, 1},
-		{0x1F18E, 0x1F18E, 1}, {0x1F191, 0x1F19A, 1}, {0x1F1E6, 0x1F320, 1}, {0x1F32D, 0x1F335, 1},
-		{0x1F337, 0x1F37C, 1}, {0x1F37E, 0x1F393, 1}, {0x1F3A0, 0x1F3CA, 1}, {0x1F3CF, 0x1F3D3, 1},
-		{0x1F3E0, 0x1F3F0, 1}, {0x1F3F4, 0x1F3F4, 1}, {0x1F3F8, 0x1F43E, 1}, {0x1F440, 0x1F440, 1},
-		{0x1F442, 0x1F4FC, 1}, {0x1F4FF, 0x1F53D, 1}, {0x1F54B, 0x1F54E, 1}, {0x1F550, 0x1F567, 1},
-		{0x1F57A, 0x1F57A, 1}, {0x1F595, 0x1F596, 1}, {0x1F5A4, 0x1F5A4, 1}, {0x1F5FB, 0x1F64F, 1},
-		{0x1F680, 0x1F6C5, 1}, {0x1F6CC, 0x1F6CC, 1}, {0x1F6D0, 0x1F6D2, 1}, {0x1F6D5, 0x1F6DF, 1},
-		{0x1F6EB, 0x1F6EC, 1}, {0x1F6F4, 0x1F6FC, 1}, {0x1F7E0, 0x1F7F0, 1}, {0x1F90C, 0x1F93A, 1},
-		{0x1F93C, 0x1F945, 1}, {0x1F947, 0x1F9FF, 1}, {0x1FA70, 0x1FAF8, 1}, {0x20000, 0x3FFFF, 1},
-	},
 }

@@ -125,7 +125,7 @@ func TestAStartErrorNamesItsPart(t *testing.T) {
 		"does not start": fmt.Sprintf("tcp:host=127.0.0.1,port=%d", held.Addr().(*net.TCPAddr).Port),
 	} {
 		r, specs := screenRunnerFor(t, "--quiet")
-		_, err := r.Start(specs("--source", "null", "--sink", "null", "--sink", sink), nil)
+		_, err := r.Start(specs("--source", "null", "--sink", "null", "--sink", sink), false, nil)
 		if pi, n, _, _, ok := compose.Locate(err); !ok || pi != 0 || n != (compose.Node{Role: "sink", ID: "tcp"}) {
 			t.Errorf("a sink that %s: %+v in %v", name, n, err)
 		}
@@ -163,7 +163,7 @@ func TestTheScreenAsksInTheTerminalsPlace(t *testing.T) {
 	started := make(chan struct{})
 	go func() {
 		defer close(started)
-		r.Start(specs("--preset", "edge:path="+t.TempDir()+",to=127.0.0.1:9,pin=sha256//"+strings.Repeat("A", 43)+"=,user=on-screen,password_file=/dev/ptmx"), ask)
+		r.Start(specs("--preset", "edge:path="+t.TempDir()+",to=127.0.0.1:9,pin=sha256//"+strings.Repeat("A", 43)+"=,user=on-screen,password_file=/dev/ptmx"), false, ask)
 	}()
 	select {
 	case user := <-asked:
@@ -198,7 +198,7 @@ func TestARunOnScreenHasNoStatusReporter(t *testing.T) {
 func TestTheStateCountsInFilteredAndSinkDrops(t *testing.T) {
 	testLogger(t)
 	r, specs := screenRunnerFor(t, "--quiet")
-	if _, err := r.Start(specs("--source", "random:interval_ms=1", "--filter", "exclude:patterns=.", "--sink", "null"), nil); err != nil {
+	if _, err := r.Start(specs("--source", "random:interval_ms=1", "--filter", "exclude:patterns=.", "--sink", "null"), false, nil); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
@@ -218,7 +218,7 @@ func TestTheStateCountsInFilteredAndSinkDrops(t *testing.T) {
 func TestARerunKeepsWhatRunsUntilTheNewPipelinesBuild(t *testing.T) {
 	testLogger(t)
 	r, specs := screenRunnerFor(t, "--quiet")
-	tap, err := r.Start(specs("--source", "random:interval_ms=1", "--sink", "null"), nil)
+	tap, err := r.Start(specs("--source", "random:interval_ms=1", "--sink", "null"), false, nil)
 	if err != nil || tap == nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestARerunKeepsWhatRunsUntilTheNewPipelinesBuild(t *testing.T) {
 	}
 	missing := filepath.Join(t.TempDir(), "missing")
 	bad := fmt.Sprintf("tcp:host=127.0.0.1,port=9,tls.enabled=true,tls.cert_file=%s.pem,tls.key_file=%s.key", missing, missing)
-	if kept, err := r.Start(specs("--source", "null", "--sink", bad), nil); kept != tap || err == nil || len(r.State().Counts) != 1 {
+	if kept, err := r.Start(specs("--source", "null", "--sink", bad), false, nil); kept != tap || err == nil || len(r.State().Counts) != 1 {
 		t.Fatalf("a rerun that does not build: %v, kept %v", err, kept == tap)
 	}
 	held, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -241,7 +241,7 @@ func TestARerunKeepsWhatRunsUntilTheNewPipelinesBuild(t *testing.T) {
 	}
 	defer held.Close()
 	taken := fmt.Sprintf("tcp:host=127.0.0.1,port=%d", held.Addr().(*net.TCPAddr).Port)
-	if kept, err := r.Start(specs("--source", "null", "--sink", taken), nil); kept != nil || err == nil || len(r.State().Counts) != 0 {
+	if kept, err := r.Start(specs("--source", "null", "--sink", taken), false, nil); kept != nil || err == nil || len(r.State().Counts) != 0 {
 		t.Fatalf("a rerun that does not start: %v, %v", err, r.State())
 	}
 }
@@ -251,7 +251,7 @@ func TestARerunKeepsWhatRunsUntilTheNewPipelinesBuild(t *testing.T) {
 func TestARunsTapTakesDropsFromItsStart(t *testing.T) {
 	testLogger(t)
 	r, specs := screenRunnerFor(t, "--quiet")
-	tap, err := r.Start(specs("--source", "random:interval_ms=1", "--filter", "exclude:patterns=.", "--sink", "null"), nil)
+	tap, err := r.Start(specs("--source", "random:interval_ms=1", "--filter", "exclude:patterns=.", "--sink", "null"), false, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -302,8 +302,45 @@ func screenLog(t *testing.T) *core.Tap {
 	logger = nil
 	r, specs := screenRunnerFor(t, "--logging.output=stderr", "--logging.level=info")
 	t.Cleanup(func() { r.close(); logger = was })
-	if _, err := r.Start(specs("--source", "null", "--sink", "null"), nil); err != nil {
+	if _, err := r.Start(specs("--source", "null", "--sink", "null"), false, nil); err != nil {
 		t.Fatal(err)
 	}
 	return r.State().Log
+}
+
+// An edit of flows alone swaps them in place, as an auto_reload does: the tap
+// and the counts go on. Whole, the same pipelines are rebuilt, as SIGHUP
+// does, with a tap of their own.
+func TestAFlowEditSwapsInPlaceUnlessWhole(t *testing.T) {
+	testLogger(t)
+	r, specs := screenRunnerFor(t, "--quiet")
+	run := func(filter string) []config.Spec {
+		return specs("--source", "random:interval_ms=1", "--filter", "exclude:patterns="+filter, "--sink", "null")
+	}
+	tap, err := r.Start(run("x"), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := func() uint64 {
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			if n := r.State().Counts["p"].In; n > 0 || time.Now().After(deadline) {
+				return n
+			}
+		}
+	}
+	before := in()
+	if kept, err := r.Start(run("."), false, nil); kept != tap || err != nil || in() < before {
+		t.Fatalf("a flow edit: kept the tap %v, %v; %d in, %d before", kept == tap, err, in(), before)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if rec := <-tap.Records(); rec.Stage == "filters" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the swapped filter drops nothing")
+		}
+	}
+	if fresh, err := r.Start(run("."), true, nil); fresh == tap || fresh == nil || err != nil {
+		t.Fatalf("whole: a new tap %v, %v", fresh != tap, err)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 )
 
@@ -119,30 +120,12 @@ func writePair(dir, name string, cert *x509.Certificate, key crypto.PrivateKey) 
 			return fmt.Errorf("%s exists; remove it to replace it", p)
 		}
 	}
-	if err := writeNew(keyPath, keyPEM, 0o600); err != nil {
+	if err := config.WriteNew(keyPath, keyPEM, 0o600); err != nil {
 		return err
 	}
-	if err := writeNew(certPath, tlsx.EncodeCert(cert), 0o644); err != nil {
+	if err := config.WriteNew(certPath, tlsx.EncodeCert(cert), 0o644); err != nil {
 		os.Remove(keyPath)
 		return err
 	}
 	return nil
-}
-
-func writeNew(path string, data []byte, mode os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		os.Remove(path)
-	}
-	return err
 }

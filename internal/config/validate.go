@@ -203,7 +203,7 @@ func (o *TLSOptions) Check(listener bool) error {
 		other = "listener"
 	}
 	for _, opt := range options(v.Type()) {
-		if f := v.Field(opt.index); opt.Side == other && !f.IsZero() && (f.Kind() != reflect.Slice || f.Len() > 0) {
+		if f := v.Field(opt.index); slices.Contains(opt.Sides, other) && !f.IsZero() && (f.Kind() != reflect.Slice || f.Len() > 0) {
 			return fmt.Errorf("tls: %s apply to %ss", and(sideKeys(v.Type(), other)), other)
 		}
 	}

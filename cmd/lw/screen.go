@@ -29,7 +29,8 @@ const (
 
 // screenRunner runs lw --tui's pipelines while the screen owns the terminal.
 // Start loads them as r would, through the file, environment and overrides,
-// and replaces what runs as a reload does.
+// and replaces what runs as the daemon's reloads do: an edit of flows alone
+// in place, as an auto_reload; anything else, or whole, rebuilt, as SIGHUP.
 type screenRunner struct {
 	load config.Args
 	mu   sync.Mutex // svc, tap and log, which State reads from another goroutine
@@ -38,13 +39,21 @@ type screenRunner struct {
 	log  *core.Tap
 }
 
-func (r *screenRunner) Start(specs []config.Spec, ask tui.Ask) (*core.Tap, error) {
+func (r *screenRunner) Start(specs []config.Spec, whole bool, ask tui.Ask) (*core.Tap, error) {
 	cfg, err := r.config(specs)
 	if err == nil {
 		err = r.startLogger(cfg)
 	}
 	if err != nil {
 		return r.tap, err
+	}
+	if r.svc != nil && !whole {
+		switch patched, err := r.svc.Patch(cfg); {
+		case err != nil:
+			return r.tap, err
+		case patched:
+			return r.tap, nil
+		}
 	}
 	authz.SetAsker(ask)
 	tap := core.NewTap(runTapRecords)
@@ -124,6 +133,16 @@ func (r *screenRunner) State() tui.RunState {
 		c.In, _ = flow["total_processed"].(uint64)
 		c.Filtered, _ = flow["total_dropped"].(uint64)
 		c.SinksDropped, _ = p["total_dropped_by_sink"].(uint64)
+		sinks, _ := p["sinks"].([]map[string]any)
+		for _, s := range sinks {
+			id, _ := s["id"].(string)
+			if n, _ := s["dropped_entries"].(uint64); n > 0 {
+				if c.Sinks == nil {
+					c.Sinks = map[string]uint64{}
+				}
+				c.Sinks[id] = n
+			}
+		}
 		st.Counts[name] = c
 	}
 	return st

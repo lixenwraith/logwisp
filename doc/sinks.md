@@ -10,8 +10,9 @@ Registered types: `console`, `file`, `http`, `tcp`, `null`, `tcp_chain`,
 
 Dispatch waits for a `console` sink, so a slow reader paces the whole pipeline,
 sibling sinks included (`null` waits too but discards at once). Any other sink
-whose input queue is full drops the event for itself only
-(`total_dropped_by_sink`).
+whose input queue is full drops the event for itself only, counted as its
+`dropped_entries` in the pipeline's statistics and summed as the pipeline's
+`total_dropped_by_sink`.
 
 ---
 
