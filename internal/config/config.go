@@ -12,7 +12,7 @@ type Config struct {
 	Quiet bool `toml:"quiet" help:"silence lw's own log and notices; pipeline output still flows"`
 
 	// "auto" is a terminal with NO_COLOR unset and TERM not dumb
-	Color string `toml:"color" lw:"enum=auto|always|never" help:"level names in color on console sinks without their own"`
+	Color string `toml:"color" lw:"enum=auto|always|never" help:"stamps, levels, sources and fields in color on console sinks without their own"`
 
 	StatusReporter   bool `toml:"status_reporter" help:"log pipeline statistics every 30 s at debug; without a file, off"`
 	ConfigAutoReload bool `toml:"auto_reload" help:"reload when the file changes"`
@@ -228,7 +228,7 @@ type ConsoleSinkOptions struct {
 	Target     string `toml:"target" default:"stdout" lw:"enum=stdout|stderr" help:"stream written to"`
 	BufferSize int64  `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
 	Escape     string `toml:"escape" default:"auto" lw:"enum=auto|always|never" help:"write control characters as <hex>; auto on a terminal"`
-	Color      string `toml:"color" default:"auto" lw:"enum=auto|always|never" help:"level names in color; unset, the top-level color"`
+	Color      string `toml:"color" default:"auto" lw:"enum=auto|always|never" help:"stamps, levels, sources and fields in color; unset, the top-level color"`
 }
 
 // FileSinkOptions defines settings for a file-based sink

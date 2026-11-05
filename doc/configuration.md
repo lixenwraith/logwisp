@@ -45,8 +45,8 @@ Top-level keys, each as type and default:
   a status report every 30 s, shown only at `logging.level = "debug"`.
 - `auto_reload` (bool, `false`): watch the config file and reload pipelines on
   change.
-- `color` (string, `"auto"`): level names in color on console sinks, which may
-  set their own: `"auto"` (a terminal, `NO_COLOR` empty or unset, `TERM` not
+- `color` (string, `"auto"`): stamps, levels, sources and fields in color on
+  console sinks, which may set their own: `"auto"` (a terminal, `NO_COLOR` empty or unset, `TERM` not
   `dumb`), `"always"` or `"never"`; see the [console sink](sinks.md#console).
 
 `--version`, `--check`, `--dump`, `--schema` and `--tui` are switches, not

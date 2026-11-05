@@ -95,9 +95,14 @@ Its
 .Cm color
 option, by default the top-level
 .Cm color ,
-paints the level name in each line: debug cyan, info green, warn yellow,
-error bold red, trace grey, in the 16 colors every terminal and text console
-renders, with the terminal theme choosing the shades.
+paints each line's parts where the format wrote them: the stamp it starts
+with and time values grey; the level debug cyan, info green, warn yellow,
+error bold red, trace grey; the source, as txt writes it or syslog's host and
+program, magenta; the keys of key=value pairs and JSON objects cyan, their
+punctuation grey.
+Messages and other values keep the terminal's color.
+The 16 colors every terminal and text console renders are used, with the
+terminal theme choosing the shades.
 .Pp
 .Nm
 stays in the foreground and logs to standard error; run a configuration as a
@@ -212,13 +217,16 @@ Turn off the log of
 .Nm
 and the terminal reminder; console sinks still write.
 .It Fl \-color Op Ar when
-Color the level names console sinks write:
+Color the stamps, levels, sources and fields console sinks write:
 .Cm auto
 .Pq the default: on a terminal, with Ev NO_COLOR empty or unset and Ev TERM not Cm dumb ,
 .Cm always
 .Pq what a bare Fl \-color No means
 or
 .Cm never .
+.Cm always
+also writes the codes into a pipe and overrides
+.Ev NO_COLOR .
 A console sink's own
 .Cm color
 option takes precedence.
@@ -890,8 +898,7 @@ $ lw \-\-source 'file:directory=/var/log/app,pattern=*.log,raw=true' \e
     > all.log
 .Ed
 .Pp
-Follow every file in a directory, with the level names in color on a
-terminal:
+Follow every file in a directory, in color on a terminal:
 .Bd -literal -offset indent
 $ lw \-\-preset tail:path=/var/log/app
 .Ed
