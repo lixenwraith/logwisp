@@ -84,10 +84,11 @@ pipelines have [their own flags](#pipelines):
   - a preset key: its default and help, and the choices (`enum`) and `hint`
     of the option it sets
   - `forms`: `command`, `environment` and `file`, each with its hint
-- `--color [WHEN]`, WHEN `auto`, `always` or `never`: level names in color on
-  console sinks, default `auto` (a terminal, `NO_COLOR` empty or unset,
-  `TERM` not `dumb`); bare, `always`. A console sink's own `color` wins
-  ([console sink](sinks.md#console))
+- `--color [WHEN]`, WHEN `auto`, `always` or `never`: stamps, levels,
+  sources and fields in color on console sinks, default `auto` (a terminal,
+  `NO_COLOR` empty or unset, `TERM` not `dumb`); bare, `always`, which also
+  writes the codes into a pipe and overrides `NO_COLOR`. A console sink's
+  own `color` wins ([console sink](sinks.md#console))
 - `-q`, `--quiet`: silence lw's own log and notices, default `false`;
   pipeline output still flows
 - `--status_reporter=BOOL`: pipeline statistics every 30 s, logged at
@@ -250,7 +251,7 @@ The presets, each with its keys:
   - `out`: a directory for `aggregate*.log` files; default stdout
 
 ```bash
-# follow a directory, level names in color on a terminal
+# follow a directory, in color on a terminal
 lw --preset tail:path=/var/log/app
 
 # serve it to a browser at http://127.0.0.1:8080/
@@ -370,8 +371,10 @@ lw < app.log > copy.log
   - A line over 1 MiB continues in the next entry; no byte is lost.
 - Nothing is dropped: a slow reader slows the reading of stdin.
 - On a terminal, control characters are written as `<hex>` (`ESC` becomes
-  `<1b>`) and level names are in color; pipes and files get the bytes
-  unchanged ([console sink](sinks.md#console)).
+  `<1b>`) and stamps, levels, sources and fields are in color; pipes and
+  files get the bytes unchanged ([console sink](sinks.md#console)). So a
+  downstream `lw` on a terminal shows an upstream `--color`'s codes as
+  `<1b>`; `less -R`, or `--sink console:escape=never` there, shows them.
 - When a console source reads a terminal, lw says so once on stderr, unless
   `--quiet`: `lw: reading standard input; Ctrl-D ends it (lw --help for usage)`.
 

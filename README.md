@@ -78,8 +78,8 @@ until one is chosen), and the chain ingest listeners `tcp_chain` and
 
 ### Outputs
 
-`console` (level names in color and control characters escaped on a
-terminal), `file` (rotating with
+`console` (stamps, levels, sources and fields in color and control
+characters escaped on a terminal), `file` (rotating with
 retention), `http` (Server-Sent Events, a JSON status endpoint and a browser
 viewer), `tcp` (broadcast server), `null` (discards; holds a sink's place
 until one is chosen), and the chain forwarders `tcp_chain` and `http_chain`.
@@ -180,8 +180,7 @@ journalctl -f | ./bin/lw --sink http:host=127.0.0.1,port=8080
 ./bin/lw --source 'file:directory=/var/log/myapp,pattern=*.log' \
     --format json:sanitizer_policy=json > all.json
 
-# the same files with a preset, raw to stdout; on a terminal the level
-# names are in color
+# the same files with a preset, raw to stdout; on a terminal in color
 ./bin/lw --preset 'tail:path=/var/log/myapp/*.log'
 
 # compose on screen from a preset menu; r runs, t taps, o prints

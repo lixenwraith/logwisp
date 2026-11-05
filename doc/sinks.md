@@ -41,9 +41,9 @@ Options, each as type and default:
 - `escape` (string, `auto`): write control characters as `<hex>` of their
   bytes, `ESC` as `<1b>`: `auto` when the output is a terminal, `always`, or
   `never`.
-- `color` (string, the top-level `color`, itself `auto`): paint level names:
-  `auto` on a terminal with `NO_COLOR` empty or unset and `TERM` not `dumb`,
-  `always`, or `never`.
+- `color` (string, the top-level `color`, itself `auto`): paint each line's
+  stamp, level, source and fields: `auto` on a terminal with `NO_COLOR` empty
+  or unset and `TERM` not `dumb`, `always`, or `never`.
 
 Payloads are written as the formatter made them, one record per line.
 
@@ -54,14 +54,27 @@ Payloads are written as the formatter made them, one record per line.
   characters, such as the joiners emoji and Indic scripts need, are kept.
   `never` keeps an application's own ANSI colours; under `auto`, pipes and
   files get the bytes unchanged.
-- Color: the first word in a line naming the entry's level, by the names the
-  [sources](sources.md#file) read, is painted: `DEBUG` cyan (blue is hard to
-  read on black), `INFO` green, `WARN` yellow, `ERROR` bold red, `TRACE`
-  grey. The colors are ANSI 16, so the terminal's theme picks the
-  shades and a Linux or BSD text console renders them; the codes are the
-  sink's own, written after escaping. A line whose source found no level
-  stays plain. The codes go into whatever the format makes, JSON included:
-  for output another program parses keep `auto` or `never`, not `always`.
+- Color: the parts of a line that name its roles are painted where the
+  format, raw, txt or json, wrote them; messages and other values keep the
+  terminal's color.
+  - Time, grey: the stamp a line starts with (RFC 3339, `2006-01-02
+    15:04:05,000`, Go's `2006/01/02 15:04:05`, syslog's `Jan _2 15:04:05`, a
+    time of day) and a time key's value.
+  - Level, by the names the [sources](sources.md#file) read: the word after
+    the stamp when it names one, a level key's value, else the first word
+    naming the entry's level. `DEBUG` cyan (blue is hard to read on black),
+    `INFO` green, `WARN` yellow, `ERROR` bold red, `TRACE` grey.
+  - Source, magenta: the label txt writes after the level (`node/source`),
+    syslog's `host program[pid]`, a tag key's value.
+  - Fields of key=value pairs and JSON objects: keys cyan, `=` and JSON's
+    punctuation grey. Time, level and tag keys are those the live view reads
+    (`ts`, `severity`, `logger`, ...).
+  - The colors are ANSI 16, so the terminal's theme picks the shades and a
+    Linux or BSD text console renders them; grey is color 8, which a theme
+    such as Solarized dark draws in its background color.
+  - The codes are the sink's own, written after escaping, into whatever the
+    format makes, JSON included: for output another program parses keep
+    `auto` or `never`, not `always`.
 - Backpressure: the sink never drops while its pipeline runs; a stop or
   reload can drop entries still in flight (`total_dropped_by_sink`). When its
   output is slow (a slow reader, a paused terminal, a stalled log collector)

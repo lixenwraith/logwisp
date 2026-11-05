@@ -66,7 +66,8 @@ Package map:
 - `internal/tui`: `lw --tui`, the diagram and the live view of what `t`
   runs; `cmd/lw/screen.go` runs the pipelines for it.
 - `internal/logline`: reads a line of any common shape into time, level,
-  tag, message and fields for the live view; holds the one rule for runes a
+  tag, message and fields for the live view, and marks where a written line
+  puts them for the console sink's colors; holds the one rule for runes a
   terminal acts on, which the console sink shares.
 - `internal/version`: version, commit and build time, stamped at build.
 - `internal/testutil`: fixtures for tests only.

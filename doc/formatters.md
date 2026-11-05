@@ -15,7 +15,7 @@ One formatter serves the whole pipeline. Sinks receive an identical payload
 ending in a newline; under `raw` a message's own newlines stay, so a record
 can span lines. Apart from the `http` sink's SSE framing, only the console
 sink alters what it writes, escaping control characters on a terminal and
-painting level names ([console](sinks.md#console)).
+painting stamps, levels, sources and fields ([console](sinks.md#console)).
 When you need two shapes of the same data, run two pipelines, or chain to a
 node that formats differently.
 

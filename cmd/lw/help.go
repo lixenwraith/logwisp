@@ -39,9 +39,9 @@ Short options do not combine. lw takes options only.
                                 or a preset; then run them, or print them
   -q, --quiet                   Silence lw's own log and notices; pipeline
                                 output still flows
-      --color [WHEN]            Level names in color on console sinks: auto
-                                (on a terminal; default), always (a bare
-                                --color) or never
+      --color [WHEN]            Stamps, levels, sources and fields in color
+                                on console sinks: auto (on a terminal;
+                                default), always (a bare --color) or never
   -V, --version                 Print the version and exit
       --schema                  Print every setting, flag, plugin option and
                                 preset as JSON, exit

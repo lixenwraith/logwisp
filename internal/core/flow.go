@@ -22,6 +22,15 @@ type LogEntry struct {
 	RawSize int64           `json:"-"`
 }
 
+// Label is the entry's source as formats write it, prefixed with its origin
+// node as syslog prefixes a tag with the host
+func (e LogEntry) Label() string {
+	if e.Node == "" {
+		return e.Source
+	}
+	return e.Node + "/" + e.Source
+}
+
 // TransportEvent contains the final payload and minimal metadata needed by sinks
 type TransportEvent struct {
 	Time time.Time

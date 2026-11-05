@@ -30,7 +30,7 @@
 # quiet = false                         # No log of lw's own; pipeline output still flows
 # status_reporter = true                # Periodic status logging (30s, DEBUG level); false without a file
 # auto_reload = false                   # Watch file; an edit of flows alone swaps them in place. Read at startup (signals always reread it and rebuild)
-# color = "auto"                        # auto|always|never: level names on console sinks; auto on a terminal, NO_COLOR empty or unset, TERM not dumb
+# color = "auto"                        # auto|always|never: stamps, levels, sources and fields on console sinks; auto on a terminal, NO_COLOR empty or unset, TERM not dumb
 
 ###############################################################################
 ### Logging (lw's own log)
@@ -331,7 +331,7 @@
 # target = "stdout"                     # stdout|stderr ("split" NOT supported)
 # buffer_size = 1000
 # escape = "auto"                       # auto|always|never: control characters as <hex>, auto on a terminal
-# color = "auto"                        # auto|always|never: level names in color (default: top-level color)
+# color = "auto"                        # auto|always|never: stamps, levels, sources and fields in color (default: top-level color)
 
 ## File sink (rotating)
 # [[pipelines.plugin_sinks]]

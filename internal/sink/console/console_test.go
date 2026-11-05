@@ -4,25 +4,29 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lixenwraith/logwisp/internal/core"
 	"github.com/lixenwraith/terminal/inline"
 )
 
-// The entry's level, under any of its names, is painted where its line first
-// names it as a whole word, in any case; other words and levels stay plain.
-func TestPaintLevelColorsTheFirstWholeName(t *testing.T) {
+// Each mark is painted in its kind's style, a level in its level's, one
+// without a style (PROC) left plain; the text between marks stays as written.
+func TestPaintStylesEachMarkAndKeepsTheText(t *testing.T) {
 	p := inline.New(io.Discard)
 	p.SetColor(true)
-	red, yellow := "\x1b[0;1;31m", "\x1b[0;33m"
-	for _, c := range []struct{ in, level, want string }{
-		{"2026 ERROR boom ERROR\n", "ERROR", "2026 " + red + "ERROR\x1b[0m boom ERROR\n"},
-		{"[warning] disk\n", "WARN", "[" + yellow + "warning\x1b[0m] disk\n"},
-		{"INFO: WARN disk\n", "warning", "INFO: " + yellow + "WARN\x1b[0m disk\n"},
-		{"terror_x ERR:1\n", "ERROR", "terror_x " + red + "ERR\x1b[0m:1\n"},
-		{"INFOS informal\n", "INFO", "INFOS informal\n"},
-		{"ERROR without level\n", "", "ERROR without level\n"},
+	grey, red, magenta, cyan := "\x1b[0;90m", "\x1b[0;1;31m", "\x1b[0;35m", "\x1b[0;36m"
+	end := "\x1b[0m"
+	for _, c := range []struct {
+		in    string
+		entry core.LogEntry
+		want  string
+	}{
+		{"2026-11-05T07:51:43Z ERROR app \"disk full\" dev=sda\n", core.LogEntry{Level: "ERROR", Source: "app"},
+			grey + "2026-11-05T07:51:43Z" + end + " " + red + "ERROR" + end + " " + magenta + "app" + end + " \"disk full\" " + cyan + "dev" + end + grey + "=" + end + "sda\n"},
+		{"{\"level\":\"PROC\"}\n", core.LogEntry{Level: "PROC"},
+			grey + "{" + end + cyan + "\"level\"" + end + grey + ":" + end + "\"PROC\"" + grey + "}" + end + "\n"},
 	} {
-		if got := string(paintLevel(p, []byte(c.in), c.level)); got != c.want {
-			t.Errorf("%q %s: got %q, want %q", c.in, c.level, got, c.want)
+		if got := string(newPalette(p).paint([]byte(c.in), c.entry)); got != c.want {
+			t.Errorf("%q:\n got %q\nwant %q", c.in, got, c.want)
 		}
 	}
 }
