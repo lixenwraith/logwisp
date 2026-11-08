@@ -536,7 +536,7 @@ func (p *Policy) exchangeTCP(a *Admission, cs *tls.ConnectionState) (Identity, [
 		if !settled {
 			p.listener.limit.Done(ip, challenge.FullNonce)
 			if s := p.listener.server.Load(); s != nil {
-				s.ProcessClientFinalMessage(challenge.FullNonce, "")
+				s.Abandon(challenge.FullNonce)
 			}
 		}
 	}()
