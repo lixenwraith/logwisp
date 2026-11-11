@@ -56,7 +56,9 @@ Options, each as type and default:
   written.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
   restart or a reload resumes from the current end of each file, and content
-  written meanwhile is not read. `from = "start"` instead reads each file whole
+  written meanwhile is not read. A file created while lw runs gets its watcher
+  at the next scan, so what it gained before then, `check_interval_ms` at
+  most, is not read either. `from = "start"` instead reads each file whole
   when its watcher is created, which a process writing beside LogWisp needs, at
   the cost of replaying files already on disk at every restart and reload.
 - A file is followed by its content, not its inode or size. lw keeps the last

@@ -183,11 +183,12 @@ flow's and the pipeline's go on.
 Patterns compile when a flow is built: at startup, on each reload, and when
 an edit of flows alone swaps them in place. A filter never changes once
 built; an edit builds a new one. Every entry that reaches the filter stage is
-evaluated against every filter until one rejects it, and each filter runs all
-of its patterns whatever its `logic`, so cost scales with the number of
-patterns and their complexity. Prefer literal substrings and simple
+evaluated against every filter until one rejects it, and each filter runs its
+patterns in order until one decides: `or` stops at the first match, `and` at
+the first miss. Cost scales with the patterns run and their complexity, so
+put the likeliest decider first, and prefer literal substrings and simple
 alternations over broad `.*` wildcards.
 
-Filters log every pattern match and decision at DEBUG: useful when a filter
-misbehaves, expensive on a busy pipeline, where `logging.level` stays at
-`info` or higher.
+At `logging.level = "debug"` each filter also runs every pattern again to log
+its result, and logs its decision: useful when a filter misbehaves, expensive
+on a busy pipeline. At `info` or higher none of that runs.

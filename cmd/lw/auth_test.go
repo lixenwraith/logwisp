@@ -11,6 +11,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/authz"
 
 	"github.com/lixenwraith/auth"
+	"github.com/lixenwraith/toml"
 )
 
 func runAuthTest(t *testing.T, args ...string) (code int, stdout, stderr string) {
@@ -167,6 +168,55 @@ func TestAddUserFillsAnEmptyFile(t *testing.T) {
 	}
 	if c, err := authz.LoadCredentials(creds); err != nil || len(c.Users) != 1 {
 		t.Fatalf("credentials after add-user: %v", err)
+	}
+}
+
+// Notes written above each user stay with that user through an added user, a
+// replaced password and a removed user; the file's own comments stay put
+func TestRewriteKeepsEachUsersComments(t *testing.T) {
+	dir := t.TempDir()
+	creds, pass := filepath.Join(dir, "users.toml"), filepath.Join(dir, "edge.pass")
+	writeCredentials(t, creds, "edge-01", "edge-02")
+	data, err := os.ReadFile(creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := strings.Replace(string(data), "[[users]]", "# the relay\n[[users]]", 1)
+	last := strings.LastIndex(notes, "[[users]]")
+	notes = "# owned by ops\n\n" + notes[:last] + "# a viewer\n" + notes[last:]
+	if err := os.WriteFile(creds, []byte(notes), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pass, []byte("correct horse battery\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"add-user", "-credentials", creds, "-user", "edge-03", "-password-file", pass},
+		{"add-user", "-credentials", creds, "-user", "edge-01", "-password-file", pass},
+		{"remove-user", "-credentials", creds, "-user", "edge-02"},
+	} {
+		if code, _, stderr := runAuthTest(t, args...); code != 0 {
+			t.Fatalf("%v: exit %d; stderr: %s", args, code, stderr)
+		}
+	}
+	data, err = os.ReadFile(creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := toml.ParseDocument(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := authz.ParseCredentials(data)
+	if err != nil || len(c.Users) != 2 || c.Users[0].Username != "edge-01" || c.Users[1].Username != "edge-03" {
+		t.Fatalf("users after the edits (%v):\n%s", err, data)
+	}
+	own := doc.Comments(toml.Key{"users"})
+	if len(own) != 2 || string(own[0]) != "# the relay\n" || own[1] != nil {
+		t.Fatalf("comments above the users %q:\n%s", own, data)
+	}
+	if !strings.HasPrefix(string(data), "# owned by ops\n\n# logwisp SCRAM verifiers") || strings.Contains(string(data), "# a viewer") {
+		t.Fatalf("the file's comments moved, or a removed user's stayed:\n%s", data)
 	}
 }
 

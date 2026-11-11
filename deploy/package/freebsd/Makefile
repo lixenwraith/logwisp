@@ -5,7 +5,7 @@
 
 PORTNAME=	logwisp
 DISTVERSIONPREFIX=	v
-DISTVERSION=	0.21.0
+DISTVERSION=	0.40.0
 CATEGORIES=	sysutils
 
 MAINTAINER=	maintainer@example.org

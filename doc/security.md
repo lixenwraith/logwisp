@@ -725,7 +725,8 @@ stored_key = "<base64>"
 username = "edge-01"
 ```
 
-Write it with [`lw auth add-user`](cli.md#lw-auth) rather than by hand. A
+Write it with [`lw auth add-user`](cli.md#lw-auth) rather than by hand; a
+note in a comment above a user's `[[users]]` header stays with that user. A
 username, in the file or in `auth.username`, is 1 to 256 bytes of UTF-8
 without `,`, `=` or a control character. The whole file is validated when the
 plugin is built: a `decoy_key` of at least 32 bytes, at least one user, unique

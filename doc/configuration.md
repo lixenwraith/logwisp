@@ -24,7 +24,8 @@ and its default ships as [`config/logwisp.toml`](../config/logwisp.toml);
 The path is resolved before any other configuration is read:
 
 1. `-c <path>`, `--config <path>`, or their `=<path>` forms (last one wins)
-2. `$LOGWISP_CONFIG_FILE`, joined onto `$LOGWISP_CONFIG_DIR` when both are set
+2. `$LOGWISP_CONFIG_FILE`, joined onto `$LOGWISP_CONFIG_DIR` when both are set,
+   even when it is absolute
 3. `$LOGWISP_CONFIG_DIR/logwisp.toml`
 4. `~/.config/logwisp/logwisp.toml`, if it exists
 5. `./logwisp.toml`

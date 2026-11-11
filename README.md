@@ -234,7 +234,8 @@ completion, a systemd unit or FreeBSD rc.d script and its configuration.
 Without root, `make release install` installs `lw`, its manual, completion and
 documentation under `~/.local`, and no service; `lw config init` writes the
 annotated configuration it reads. `make deb` and `make arch` package them for
-Debian, Ubuntu and Arch. See [Installation](doc/installation.md).
+Debian, Ubuntu and Arch, and on Arch the `logwisp` AUR package builds a
+release. See [Installation](doc/installation.md).
 
 ## System Requirements
 

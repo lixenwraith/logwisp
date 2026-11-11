@@ -212,6 +212,19 @@ sudo systemctl enable --now logwisp
 - Removing stops and disables the service. The account, its directories
   and any credentials in `/etc/logwisp` stay, as with `make uninstall`.
 
+### Arch Linux (AUR)
+
+The `logwisp` package in the AUR builds a release tag with the PKGBUILD in
+`deploy/package/arch/`; an AUR helper does the same.
+
+```bash
+git clone https://aur.archlinux.org/logwisp.git
+cd logwisp
+makepkg -si
+```
+
+It installs what `make arch` builds, below, and behaves as that does.
+
 ### Arch Linux (makepkg)
 
 `make arch` builds the PKGBUILD in `deploy/package/arch/` from the working
@@ -382,8 +395,8 @@ In place:
 - `make install` with `DESTDIR`, `PREFIX`, `SYSCONFDIR` and `SERVICE`, the
   manual, shell completion and the service files in `deploy/package/`
 - `make deb`, and `make arch` building the PKGBUILD from the working tree
-- skeletons: `deploy/package/arch/PKGBUILD` and a `sysutils/logwisp` port in
-  `deploy/package/freebsd/`
+- recipes naming the 0.40.0 tag: `deploy/package/arch/PKGBUILD`, the AUR
+  package's, and a `sysutils/logwisp` port in `deploy/package/freebsd/`
 - `.github/workflows/package.yml`, on changes to them:
   - Arch container: `make arch`, installed over an edited configuration,
     reinstalled keeping it, removed
@@ -396,9 +409,9 @@ In place:
     configuration, and running the rc.d service
   - `make image image-check`
 
-Still missing: release tags, which both skeletons download; submitting the
-AUR package and the port; a Debian source package for a PPA or the archive.
-[To Do](todo.md) has the steps.
+Still missing: the release tag, which both recipes download; publishing the
+AUR package and submitting the port; a Debian source package for a PPA or the
+archive. [To Do](todo.md) has the steps.
 
 ## Verification
 

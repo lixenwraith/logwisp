@@ -13,7 +13,8 @@ they belong to.
 `github.com/lixenwraith/logwisp`.
 
 What remains is the maintainer's: it needs push rights, an identity or a
-release tag, and both skeletons download the tagged source.
+release tag, and both recipes download the tagged source; they name 0.40.0,
+the first release.
 
 1. Tag the release on the merged main commit, `vX.Y.Z`:
    ```
@@ -24,15 +25,34 @@ release tag, and both skeletons download the tagged source.
      `go install github.com/lixenwraith/logwisp/cmd/lw@vX.Y.Z` works.
    - A GitHub release for the tag is optional; the tag alone serves
      `archive/vX.Y.Z.tar.gz`, which the PKGBUILD downloads.
-2. Arch (AUR), `deploy/package/arch/PKGBUILD`:
-   - `pkgver=X.Y.Z` and the `# Maintainer: Name <email>` line.
-   - `updpkgsums` (pacman-contrib) replaces `sha256sums=('SKIP')` with the
-     tarball's checksum.
-   - `namcap PKGBUILD`, then `makepkg -si` (builds, runs `check()`,
-     installs), then `makepkg --printsrcinfo > .SRCINFO`.
-   - Push `PKGBUILD` and `.SRCINFO` to
-     `ssh://aur@aur.archlinux.org/logwisp.git`; optionally a `logwisp-git`
-     package built from the main branch.
+2. Arch (AUR), from `deploy/package/arch/PKGBUILD`:
+   - Once: an account on aur.archlinux.org holding the public half of an SSH
+     key (`ssh-keygen -f ~/.ssh/aur`), and in `~/.ssh/config`:
+     ```
+     Host aur.archlinux.org
+       IdentityFile ~/.ssh/aur
+       User aur
+     ```
+   - Clone the package's repository, empty until the first push creates the
+     package; the AUR takes only the `master` branch:
+     ```
+     git -c init.defaultBranch=master clone ssh://aur@aur.archlinux.org/logwisp.git ~/aur/logwisp
+     cp deploy/package/arch/PKGBUILD ~/aur/logwisp/
+     ```
+   - In the copy: the `# Maintainer: Name <email>` line, `pkgver=X.Y.Z` and
+     `pkgrel=1`, then `updpkgsums` (pacman-contrib), which replaces
+     `sha256sums=('SKIP')` with the tag tarball's sum. The repository's
+     PKGBUILD keeps `SKIP`: `make arch` builds it from the working tree.
+   - `makepkg -si` builds, runs `check()` and installs; `namcap PKGBUILD` and
+     `namcap logwisp-X.Y.Z-1-x86_64.pkg.tar.zst` lint the recipe and the
+     package. A clean chroot (`extra-x86_64-build`, from devtools) shows a
+     missing dependency.
+   - `makepkg --printsrcinfo > .SRCINFO`, after every change to the
+     PKGBUILD; `git add PKGBUILD .SRCINFO`, commit, `git push`. Commit only
+     those two: the build leaves `src/`, `pkg/` and the tarballs beside them.
+   - A later release repeats the copy's steps with its version; a fix to the
+     recipe alone raises `pkgrel`. Optionally a `logwisp-git` package built
+     from the main branch.
 3. FreeBSD, `deploy/package/freebsd/` (`sysutils/logwisp`), copied into a
    ports tree with `cp -RL` (`files/logwisp.in` links to
    `deploy/package/logwisp.rc`):

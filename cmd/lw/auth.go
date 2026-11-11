@@ -49,7 +49,7 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	passwordFile := fs.String("password-file", "", "read the password from `file` when it exists, else write a generated one there")
 	generate := fs.Bool("generate", false, "generate a new password, replacing any --password-file; needed to rotate without one")
 	return func(stdout, stderr io.Writer) error {
-		creds, err := authz.LoadCredentials(*path)
+		creds, prev, err := authz.ReadCredentials(*path)
 		// An empty file is one created beforehand to choose its owner
 		if fi, serr := os.Stat(*path); errors.Is(err, os.ErrNotExist) || serr == nil && fi.Size() == 0 {
 			creds, err = &authz.Credentials{DecoyKey: make([]byte, 32)}, nil
@@ -99,7 +99,7 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 		} else {
 			creds.Users = append(creds.Users, cred)
 		}
-		data, err := encodeCredentials(creds)
+		data, err := encodeCredentials(creds, prev)
 		if err != nil {
 			return err
 		}
@@ -127,7 +127,7 @@ func defineRemoveUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	path := fs.String("credentials", "", "credentials `file`")
 	user := fs.String("user", "", "user `name`")
 	return func(_, stderr io.Writer) error {
-		creds, err := authz.LoadCredentials(*path)
+		creds, prev, err := authz.ReadCredentials(*path)
 		if err != nil {
 			return err
 		}
@@ -140,7 +140,7 @@ func defineRemoveUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			return fmt.Errorf("refusing to remove %q, the last user: remove the listener's auth block instead", *user)
 		}
 		creds.Users = slices.Delete(creds.Users, i, i+1)
-		data, err := encodeCredentials(creds)
+		data, err := encodeCredentials(creds, prev)
 		if err == nil {
 			err = writeAtomic(*path, data)
 		}
@@ -266,9 +266,10 @@ func dialPolicy(o *config.TLSOptions, host, user, passwordFile string, transport
 	return tlsCfg, policy, nil
 }
 
-// encodeCredentials renders creds and refuses what the daemon would not load
-func encodeCredentials(creds *authz.Credentials) ([]byte, error) {
-	data, err := creds.Marshal()
+// encodeCredentials renders creds over prev, the file they were read from,
+// keeping its comments, and refuses what the daemon would not load
+func encodeCredentials(creds *authz.Credentials, prev []byte) ([]byte, error) {
+	data, err := creds.Rewrite(prev)
 	if err == nil {
 		_, err = authz.ParseCredentials(data)
 	}

@@ -81,15 +81,21 @@ var credentialKeys = map[string]bool{
 
 // LoadCredentials reads and validates a credentials file
 func LoadCredentials(path string) (*Credentials, error) {
+	c, _, err := ReadCredentials(path)
+	return c, err
+}
+
+// ReadCredentials is LoadCredentials returning the file as read, for Rewrite
+func ReadCredentials(path string) (*Credentials, []byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("auth: credentials_file: %w", err)
+		return nil, nil, fmt.Errorf("auth: credentials_file: %w", err)
 	}
 	c, err := ParseCredentials(data)
 	if err != nil {
-		return nil, fmt.Errorf("auth: credentials_file %s: %w", path, err)
+		return nil, nil, fmt.Errorf("auth: credentials_file %s: %w", path, err)
 	}
-	return c, nil
+	return c, data, nil
 }
 
 // ParseCredentials validates a whole file: a decoy key, at least one user,
@@ -164,6 +170,50 @@ func (c *Credentials) Marshal() ([]byte, error) {
 	}
 	header := "# logwisp SCRAM verifiers, written by `lw auth add-user`. Keep it private.\n"
 	return append([]byte(header), body...), nil
+}
+
+// Rewrite renders c over prev, the file it was read from: what prev holds
+// outside the users' tables stays as written, and the comments above each
+// [[users]] header stay with that user, matched by name; a comment inside a
+// user's table is not kept. New users go last. An empty prev gives Marshal.
+func (c *Credentials) Rewrite(prev []byte) ([]byte, error) {
+	if len(bytes.TrimSpace(prev)) == 0 {
+		return c.Marshal()
+	}
+	doc, err := toml.ParseDocument(prev)
+	if err != nil {
+		return nil, err
+	}
+	own := map[string][]byte{}
+	if users, ok := doc.Tree()["users"].([]map[string]any); ok {
+		for i, comments := range doc.Comments(toml.Key{"users"}) {
+			name, _ := users[i]["username"].(string)
+			own[name] = comments
+		}
+	}
+	if _, err := doc.Delete(toml.Key{"users"}); err != nil {
+		return nil, err
+	}
+	if err := doc.Set(toml.Key{"decoy_key"}, base64.StdEncoding.EncodeToString(c.DecoyKey)); err != nil {
+		return nil, err
+	}
+	// Each table under one blank line, its comments above its header, is how
+	// toml's Comments reads them back as that table's
+	out := bytes.TrimRight(bytes.Clone(doc.Bytes()), "\n")
+	if len(out) > 0 {
+		out = append(out, '\n')
+	}
+	for _, u := range c.Users {
+		table, err := toml.Marshal(map[string]any{"users": []map[string]any{u.Export()}})
+		if err != nil {
+			return nil, err
+		}
+		if len(out) > 0 {
+			out = append(out, '\n')
+		}
+		out = append(append(out, own[u.Username]...), table...)
+	}
+	return out, nil
 }
 
 // processDecoy is the decoy key of listeners without a credentials file:

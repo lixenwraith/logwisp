@@ -294,7 +294,7 @@ export LOGWISP_LOGGING_FILE_DIRECTORY=/var/log/logwisp
 The path resolver reads two more:
 
 - `LOGWISP_CONFIG_FILE`: the configuration file path, joined onto
-  `LOGWISP_CONFIG_DIR` when both are set
+  `LOGWISP_CONFIG_DIR` when both are set, even when it is absolute
 - `LOGWISP_CONFIG_DIR`: the configuration directory; alone, it implies
   `<dir>/logwisp.toml`
 
@@ -613,10 +613,12 @@ cannot replace a working password; `--generate` always generates, overwriting
 Both file commands rewrite atomically (a temporary file in the same directory
 as the file, or a symlink's target, then a rename), create files `0600`, keep an
 existing file's mode and owner, and refuse to write anything the daemon would
-not load. A change that cannot keep the owner fails: run it as root or as the
-owner. A symlink to a missing file is refused: create the target first.
-Neither touches a running LogWisp: send `SIGHUP`, since `auto_reload` does not
-watch the credentials file.
+not load. Comments above a user's `[[users]]` header stay with that user, and
+those outside the users' tables stay where they are; a comment inside a user's
+table is dropped, and a new user goes last. A change that cannot keep the
+owner fails: run it as root or as the owner. A symlink to a missing file is
+refused: create the target first. Neither touches a running LogWisp: send
+`SIGHUP`, since `auto_reload` does not watch the credentials file.
 
 **`token`** and **`stream`** build the same TLS and SCRAM client as a chain
 sink. `--password-file` defaults to `/dev/tty`: the password is asked without
