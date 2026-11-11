@@ -294,7 +294,7 @@ export LOGWISP_LOGGING_FILE_DIRECTORY=/var/log/logwisp
 The path resolver reads two more:
 
 - `LOGWISP_CONFIG_FILE`: the configuration file path, joined onto
-  `LOGWISP_CONFIG_DIR` when both are set
+  `LOGWISP_CONFIG_DIR` when both are set, even when it is absolute
 - `LOGWISP_CONFIG_DIR`: the configuration directory; alone, it implies
   `<dir>/logwisp.toml`
 
