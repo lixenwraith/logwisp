@@ -45,10 +45,12 @@ func (c *Chain) Apply(entry core.LogEntry) int {
 	c.totalProcessed.Add(1)
 	for i, filter := range c.filters {
 		if !filter.Apply(entry) {
-			c.logger.Debug("msg", "Entry filtered out",
-				"component", "filter_chain",
-				"filter_index", i,
-				"filter_type", filter.config.Type)
+			if c.logger.Enabled(log.LevelDebug) {
+				c.logger.Debug("msg", "Entry filtered out",
+					"component", "filter_chain",
+					"filter_index", i,
+					"filter_type", filter.config.Type)
+			}
 			return i
 		}
 	}

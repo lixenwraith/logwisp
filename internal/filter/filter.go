@@ -66,32 +66,40 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 		text = entry.Source + " " + text
 	}
 
-	f.logger.Debug("msg", "Filter checking entry",
-		"component", "filter",
-		"type", f.config.Type,
-		"logic", f.config.Logic,
-		"entry_level", entry.Level,
-		"entry_source", entry.Source,
-		"entry_message", entry.Message[:min(100, len(entry.Message))],
-		"text_to_match", text[:min(150, len(text))],
-		"patterns", f.config.Patterns)
-
-	for i, pattern := range f.config.Patterns {
-		isMatch := f.patterns[i].MatchString(text)
-		f.logger.Debug("msg", "Pattern match result",
+	// The report matches every pattern on its own and builds its arguments
+	// before Debug could drop them, so it runs only at DEBUG; otherwise
+	// matches alone runs the patterns, stopping where the logic allows
+	debug := f.logger.Enabled(log.LevelDebug)
+	if debug {
+		f.logger.Debug("msg", "Filter checking entry",
 			"component", "filter",
-			"pattern_index", i,
-			"pattern", pattern,
-			"matched", isMatch)
+			"type", f.config.Type,
+			"logic", f.config.Logic,
+			"entry_level", entry.Level,
+			"entry_source", entry.Source,
+			"entry_message", entry.Message[:min(100, len(entry.Message))],
+			"text_to_match", text[:min(150, len(text))],
+			"patterns", f.config.Patterns)
+
+		for i, pattern := range f.config.Patterns {
+			isMatch := f.patterns[i].MatchString(text)
+			f.logger.Debug("msg", "Pattern match result",
+				"component", "filter",
+				"pattern_index", i,
+				"pattern", pattern,
+				"matched", isMatch)
+		}
 	}
 
 	matched := f.matches(text)
 	if matched {
 		f.totalMatched.Add(1)
 	}
-	f.logger.Debug("msg", "Filter final match result",
-		"component", "filter",
-		"matched", matched)
+	if debug {
+		f.logger.Debug("msg", "Filter final match result",
+			"component", "filter",
+			"matched", matched)
+	}
 
 	shouldPass := false
 	switch f.config.Type {
@@ -101,11 +109,13 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 		shouldPass = !matched
 	}
 
-	f.logger.Debug("msg", "Filter decision",
-		"component", "filter",
-		"type", f.config.Type,
-		"matched", matched,
-		"should_pass", shouldPass)
+	if debug {
+		f.logger.Debug("msg", "Filter decision",
+			"component", "filter",
+			"type", f.config.Type,
+			"matched", matched,
+			"should_pass", shouldPass)
+	}
 
 	if !shouldPass {
 		f.totalDropped.Add(1)
