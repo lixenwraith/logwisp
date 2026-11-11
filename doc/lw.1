@@ -1,4 +1,4 @@
-.Dd October 14, 2026
+.Dd November 11, 2026
 .Dt LW 1
 .Os
 .Sh NAME
@@ -631,7 +631,10 @@ once to standard output.
 .Fl \-generate
 replaces an existing password without reading one.
 A missing credentials file is created with mode 0600; an existing one keeps
-its owner and mode, including an empty one made beforehand to choose them.
+its owner and mode, including an empty one made beforehand to choose them,
+and the comments above each user's
+.Ql [[users]]
+header.
 .It Cm remove-user Fl \-credentials Ar file Fl u Ar name
 Remove a user.
 The last user cannot be removed.
