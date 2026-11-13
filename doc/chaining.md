@@ -35,7 +35,9 @@ either transport from a few keys.
 Chained entries carry a `node` label identifying where they originated.
 
 - A chain **sink** stamps `node` on any entry that does not already have one.
-  The label comes from the `node` option, defaulting to `os.Hostname()`.
+  The label comes from the `node` option, defaulting to `os.Hostname()`. A
+  label is at most 256 bytes with no control character: a sink's option
+  fails at load, a source refuses a peer's (a refused hello, `400`).
 - A chain **source** either honours the sender's label or overrides it,
   according to `trust_node`:
   - `true` (default): keep the label the sender declared; fall back to the

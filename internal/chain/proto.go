@@ -7,9 +7,12 @@ package chain
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lixenwraith/logwisp/internal/core"
 )
@@ -66,6 +69,22 @@ func EncodeEntry(entry core.LogEntry) ([]byte, error) {
 	return line.Bytes(), nil
 }
 
+// MaxNodeBytes bounds a node label, well past a host name's 255 bytes
+const MaxNodeBytes = 256
+
+// CheckNode refuses a node label lw could not log, key sessions by or stamp
+// on entries as it is: a control byte would reach lw's own log raw (a forged
+// line, a terminal escape), and a peer's label has no other bound
+func CheckNode(node string) error {
+	if len(node) > MaxNodeBytes {
+		return fmt.Errorf("node label longer than %d bytes", MaxNodeBytes)
+	}
+	if strings.ContainsFunc(node, unicode.IsControl) {
+		return errors.New("node label holds a control character")
+	}
+	return nil
+}
+
 // DecodeHello parses and validates a hello preamble line
 func DecodeHello(line []byte) (Hello, error) {
 	var h Hello
@@ -74,6 +93,9 @@ func DecodeHello(line []byte) (Hello, error) {
 	}
 	if h.LogWisp != ProtocolVersion {
 		return h, fmt.Errorf("unsupported protocol version: %d", h.LogWisp)
+	}
+	if err := CheckNode(h.Node); err != nil {
+		return h, fmt.Errorf("hello: %w", err)
 	}
 	return h, nil
 }

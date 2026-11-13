@@ -60,6 +60,7 @@ type HTTPChainSource struct {
 
 	// Session cache: one session per remote host + node + authenticated identity
 	sessions   map[string]string // key -> sessionID
+	sweepAt    int               // len(sessions) at which expired keys are dropped
 	sessionsMu sync.Mutex
 
 	mu sync.RWMutex
@@ -292,6 +293,11 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 		remoteHost = host
 	}
 	declaredNode := r.Header.Get(chain.HeaderNode)
+	if err := chain.CheckNode(declaredNode); err != nil {
+		s.rejectedRequests.Add(1)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	connNode, err := s.auth.ResolveNode(declaredNode, remoteHost, s.config.TrustNode, ident)
 	if err != nil {
 		s.rejectedRequests.Add(1)
@@ -388,6 +394,17 @@ func (s *HTTPChainSource) sessionFor(remoteHost, node, peer string, cs *tls.Conn
 		if _, exists := s.proxy.GetSession(id); exists {
 			return id
 		}
+	}
+	// The manager expires idle sessions, not this map's keys: a rebuild when
+	// the map has doubled drops theirs, the map's grown capacity too
+	if len(s.sessions) >= s.sweepAt {
+		live := make(map[string]string, len(s.sessions)/2)
+		for k, id := range s.sessions {
+			if _, exists := s.proxy.GetSession(id); exists {
+				live[k] = id
+			}
+		}
+		s.sessions, s.sweepAt = live, 2*len(live)+64
 	}
 	meta := map[string]any{
 		"type": "http_chain",

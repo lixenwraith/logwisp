@@ -36,3 +36,24 @@ func TestEntryLineIsRefusedWhereASourceWouldRefuseIt(t *testing.T) {
 		}
 	}
 }
+
+// A hello's node label is refused past 256 bytes or with a control byte: lw
+// logs it, keys sessions by it and stamps it on entries
+func TestNodeLabelPastTheBoundOrWithAControlByteIsRefused(t *testing.T) {
+	for label, ok := range map[string]bool{
+		strings.Repeat("n", MaxNodeBytes):   true,
+		"edge-01 (rack 3)":                  true,
+		strings.Repeat("n", MaxNodeBytes+1): false,
+		"edge\n2026-11-13T00:00:00Z INFO x": false,
+		"edge\x1b]0;title\x07":              false,
+		"edge\u0085":                        false, // C1 next line
+	} {
+		line, err := EncodeHello(Hello{Node: label})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodeHello(line); (err == nil) != ok {
+			t.Errorf("label %q: %v", label, err)
+		}
+	}
+}

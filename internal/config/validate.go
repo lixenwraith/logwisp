@@ -480,6 +480,9 @@ func (o *HTTPSinkOptions) Check() error {
 func (o *HTTPChainSourceOptions) Check() error { return checkIngestPath(o.IngestPath) }
 func (o *HTTPChainSinkOptions) Check() error {
 	o.BackoffMaxMS = backoffMax(o.BackoffMinMS, o.BackoffMaxMS)
+	if err := chain.CheckNode(o.Node); err != nil {
+		return &KeyError{"node", err}
+	}
 	return checkIngestPath(o.IngestPath)
 }
 
@@ -501,6 +504,9 @@ func checkPath(key, p string) error {
 
 func (o *TCPChainSinkOptions) Check() error {
 	o.BackoffMaxMS = backoffMax(o.BackoffMinMS, o.BackoffMaxMS)
+	if err := chain.CheckNode(o.Node); err != nil {
+		return &KeyError{"node", err}
+	}
 	return nil
 }
 

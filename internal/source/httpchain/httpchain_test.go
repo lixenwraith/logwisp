@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lixenwraith/logwisp/internal/authz"
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/core"
 	"github.com/lixenwraith/logwisp/internal/session"
@@ -68,5 +69,20 @@ func TestBatchIsPublishedWholeOrNotAtAll(t *testing.T) {
 	}
 	if n := src.parseErrors.Load(); n != 1 {
 		t.Fatalf("%d parse errors, want 1", n)
+	}
+}
+
+// The session cache drops the keys of sessions the manager has expired, not
+// keeping one per label a sender ever declared
+func TestExpiredSessionsLeaveTheCache(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	proxy := session.NewProxy(manager, "in")
+	src := &HTTPChainSource{proxy: proxy, sessions: map[string]string{}}
+	for i := range 1000 {
+		proxy.RemoveSession(src.sessionFor("192.0.2.1", "edge-"+strconv.Itoa(i), "", nil, authz.Identity{})) // as idle expiry does
+	}
+	if n := len(src.sessions); n > 64 {
+		t.Fatalf("%d keys cached for no live session", n)
 	}
 }
