@@ -3,7 +3,7 @@ package httpchain
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -74,6 +74,7 @@ type HTTPChainSink struct {
 	requestErrors  atomic.Uint64
 	droppedBatches atomic.Uint64
 	synthesized    atomic.Uint64
+	oversized      atomic.Uint64 // entries whose line a chain source would refuse
 	lastProcessed  core.AtomicTime
 }
 
@@ -243,6 +244,7 @@ func (t *HTTPChainSink) GetStats() sink.SinkStats {
 		"request_errors":  t.requestErrors.Load(),
 		"dropped_batches": t.droppedBatches.Load(),
 		"synthesized":     t.synthesized.Load(),
+		"oversized":       t.oversized.Load(),
 	}
 	maps.Copy(details, t.auth.Stats())
 
@@ -299,7 +301,11 @@ func (t *HTTPChainSink) append(event core.TransportEvent) bool {
 	if synthesized {
 		t.synthesized.Add(1)
 	}
-	line, err := json.Marshal(entry)
+	line, err := chain.EncodeEntry(entry)
+	if errors.Is(err, chain.ErrEntryTooLong) {
+		t.oversized.Add(1)
+		return false
+	}
 	if err != nil {
 		// Non-transient: drop entry
 		t.logger.Error("msg", "Failed to marshal chain entry",
@@ -308,7 +314,6 @@ func (t *HTTPChainSink) append(event core.TransportEvent) bool {
 		return false
 	}
 	t.batch.Write(line)
-	t.batch.WriteByte('\n')
 	t.batchCount++
 	return t.batchCount >= t.config.MaxBatchCount || int64(t.batch.Len()) >= t.config.MaxBatchBytes
 }

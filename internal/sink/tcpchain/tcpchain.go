@@ -3,7 +3,6 @@ package tcpchain
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -68,6 +67,7 @@ type TCPChainSink struct {
 	writeErrors    atomic.Uint64
 	reconnects     atomic.Uint64
 	synthesized    atomic.Uint64
+	oversized      atomic.Uint64 // entries whose line a chain source would refuse
 	connected      atomic.Bool
 	lastProcessed  core.AtomicTime
 }
@@ -215,6 +215,7 @@ func (t *TCPChainSink) GetStats() sink.SinkStats {
 		"reconnects":   t.reconnects.Load(),
 		"write_errors": t.writeErrors.Load(),
 		"synthesized":  t.synthesized.Load(),
+		"oversized":    t.oversized.Load(),
 	}
 	maps.Copy(details, t.auth.Stats())
 
@@ -264,7 +265,11 @@ func (t *TCPChainSink) forward(ctx context.Context, event core.TransportEvent) b
 	if synthesized {
 		t.synthesized.Add(1)
 	}
-	line, err := json.Marshal(entry)
+	line, err := chain.EncodeEntry(entry)
+	if errors.Is(err, chain.ErrEntryTooLong) {
+		t.oversized.Add(1)
+		return true
+	}
 	if err != nil {
 		// Non-transient: drop
 		t.logger.Error("msg", "Failed to marshal chain entry",
@@ -272,7 +277,7 @@ func (t *TCPChainSink) forward(ctx context.Context, event core.TransportEvent) b
 			"error", err)
 		return true
 	}
-	if !t.deliver(ctx, append(line, '\n')) {
+	if !t.deliver(ctx, line) {
 		return false
 	}
 	t.totalProcessed.Add(1)

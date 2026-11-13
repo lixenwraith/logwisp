@@ -452,9 +452,12 @@ Options, each as type and default:
   `dial_timeout_ms` + 10 s.
 - Events arriving without a structured entry are wrapped from the formatted
   payload and counted in `synthesized`.
+- An entry whose line would pass the sources' 1 MiB cap, as escapes can make a
+  shorter one do, is dropped and counted in `oversized`: sent, it would cost
+  the link the entries written behind it.
 
 **Statistics**: `target`, `node`, `tls`, `connected`, `reconnects`,
-`write_errors`, `synthesized`, and the
+`write_errors`, `synthesized`, `oversized`, and the
 [auth keys](sources.md#source-statistics).
 
 ---
@@ -506,7 +509,8 @@ Options, each as type and default:
 **Behaviour**
 
 - Delivery: [Chaining](chaining.md#delivery-semantics); a retry logs WARN, a
-  dropped batch ERROR.
+  dropped batch ERROR. An entry whose line would pass the sources' 1 MiB cap
+  is dropped and counted in `oversized`: sent, it would cost its whole batch.
 - Under `scram` the sink logs in at `POST /auth` whenever it holds no token and
   sends `Authorization: Bearer <token>`. A failed login is retried like a
   transport error, holding the batch. The token is renewed ahead of its expiry;
@@ -523,7 +527,7 @@ Options, each as type and default:
   is dropped and logged at WARN.
 
 **Statistics**: `target`, `node`, `tls`, `batches_sent`, `request_errors`,
-`dropped_batches`, `synthesized`, and the
+`dropped_batches`, `synthesized`, `oversized`, and the
 [auth keys](sources.md#source-statistics).
 
 ---

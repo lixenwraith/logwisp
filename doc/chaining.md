@@ -180,7 +180,9 @@ in at ingest. A line that does not decode is skipped and counted in
   when a successful request's response is lost; there is no de-duplication
   downstream.
 - Both: while a link is down or a batch retries, the sink's input queue fills
-  and the pipeline counts drops in `total_dropped_by_sink`.
+  and the pipeline counts drops in `total_dropped_by_sink`. An entry whose
+  line would pass the sources' 1 MiB cap is dropped at the sink, counted in
+  `oversized`.
 
 Neither transport persists anything to disk. Entries buffered in memory during
 an outage are lost if the process exits.

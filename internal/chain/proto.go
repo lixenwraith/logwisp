@@ -5,6 +5,7 @@
 package chain
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
@@ -44,6 +45,25 @@ func EncodeHello(h Hello) ([]byte, error) {
 		return nil, err
 	}
 	return append(b, '\n'), nil
+}
+
+// ErrEntryTooLong refuses an entry line a chain source would refuse
+var ErrEntryTooLong = fmt.Errorf("entry line over %d bytes", core.MaxLogEntryBytes)
+
+// EncodeEntry serializes one newline-terminated entry line. Escapes can take
+// an entry under the 1 MiB line cap past it, and a source refusing the line
+// costs the link (tcp) or the whole batch (http), so it is refused here.
+func EncodeEntry(entry core.LogEntry) ([]byte, error) {
+	var line bytes.Buffer
+	enc := json.NewEncoder(&line)
+	enc.SetEscapeHTML(false) // decoded at the source, never put in a page
+	if err := enc.Encode(entry); err != nil {
+		return nil, err
+	}
+	if line.Len() > core.MaxLogEntryBytes { // the newline counts, as at the source
+		return nil, ErrEntryTooLong
+	}
+	return line.Bytes(), nil
 }
 
 // DecodeHello parses and validates a hello preamble line
