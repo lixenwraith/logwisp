@@ -268,7 +268,8 @@ Options, each as type and default:
   `max_connections`, and says so when all are taken (`server full`). Its
   search keeps the lines containing a text, in any case unless its `Aa` toggle
   matches case, and its level list the entries at or above a level, read as
-  the sources read it.
+  the sources read it. It keeps the newest 5000 lines, and draws what arrived
+  once a frame, so a burst costs one layout.
 - Refusals are logged ([WARN once a minute](security.md#refusals)) and counted
   in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
