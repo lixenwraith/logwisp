@@ -23,7 +23,9 @@ func Key(addr netip.Addr) string {
 		return addr.String()
 	}
 	key := netip.PrefixFrom(addr, 64).Masked().String()
-	if zone := addr.Zone(); zone != "" {
+	// Only a link-local peer's zone names a link here, an interface name under
+	// IFNAMSIZ (16) bytes; another comes in a forwarded hop's text, sized at will
+	if zone := addr.Zone(); zone != "" && addr.IsLinkLocalUnicast() && len(zone) < 16 {
 		key += "%" + zone
 	}
 	return key

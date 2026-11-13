@@ -377,7 +377,8 @@ func TestRequestsPerClientAreRateLimited(t *testing.T) {
 }
 
 // Limits count an IPv6 client by its /64, which one host holds whole, and a
-// link-local one per link; an IPv4-mapped client counts as IPv4
+// link-local one per link; an IPv4-mapped client counts as IPv4. A zone no
+// interface here could have, which only a forwarded hop carries, is no link.
 func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
@@ -387,6 +388,8 @@ func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 		{"2001:db8::1", "2001:db8:0:1::1", false},
 		{"fe80::1%eth0", "fe80::2%eth0", true},
 		{"fe80::1%eth0", "fe80::1%eth1", false},
+		{"2001:db8::1%a", "2001:db8::1%b", true},
+		{"fe80::1%" + strings.Repeat("a", 16), "fe80::1%" + strings.Repeat("b", 16), true},
 		{"::ffff:192.0.2.1", "192.0.2.1", true},
 		{"192.0.2.1", "192.0.2.2", false},
 	} {
