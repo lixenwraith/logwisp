@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"maps"
 	"net/netip"
-	"os"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -640,7 +639,7 @@ func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 // not: a misspelled table path such as plugin_sinks.confg.tls would otherwise
 // drop the whole table. Plugin config maps are checked by Decode instead.
 func checkFileKeys(path string) error {
-	data, err := os.ReadFile(path)
+	data, err := ReadRegular(path, MaxFileBytes)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}

@@ -64,3 +64,25 @@ func TestLogFileThatIsNotARegularFileIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// ReadRegular reads a regular file within its limit; a FIFO is refused at
+// once, with no writer to wait for, and so is a file over the limit
+func TestReadRegularReadsOnlyARegularFileWithinItsLimit(t *testing.T) {
+	dir := t.TempDir()
+	file, fifo := filepath.Join(dir, "file"), filepath.Join(dir, "fifo")
+	if err := os.WriteFile(file, []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := ReadRegular(file, 5); err != nil || string(data) != "12345" {
+		t.Fatalf("regular file: %q, %v", data, err)
+	}
+	if _, err := ReadRegular(file, 4); err == nil || !strings.Contains(err.Error(), "over 4") {
+		t.Fatalf("over the limit: %v", err)
+	}
+	if _, err := ReadRegular(fifo, 5); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("FIFO: %v", err)
+	}
+}

@@ -60,8 +60,9 @@ configure it, and — equally important — what it does not yet do.
   and `auth_rejected` only.
 - More than one identity mode per listener: `auth.identity` takes one of
   `cn`, `san_dns`, `san_uri`, `san_email`.
-- One read of the configuration file: lw's unknown-key check opens it again,
-  blocking, so a FIFO swapped in between the two reads hangs that load.
+- One read of the configuration file: lw's unknown-key check reads it again,
+  as a regular file of at most 10 MiB opened without blocking, so a file
+  replaced between the two reads is checked as replaced.
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
@@ -752,11 +753,12 @@ Write it with [`lw auth add-user`](cli.md#lw-auth) rather than by hand; a
 note in a comment above a user's `[[users]]` header stays with that user. A
 username, in the file or in `auth.username`, is 1 to 256 bytes of UTF-8
 without `,`, `=` or a control character. The whole file is validated when the
-plugin is built: a `decoy_key` of at least 32 bytes, at least one user, unique
-names, no unknown keys, and one Argon2 profile and salt length for every user,
-since mixed profiles would tell a prober which users exist. `decoy_key` keeps
-unknown-user challenges stable across restarts and edits; the CLI creates it
-once and preserves it. A single probe
+plugin is built: a regular file of at most 10 MiB, opened without blocking (a
+FIFO or a device is refused), a `decoy_key` of at least 32 bytes, at least
+one user, unique names, no unknown keys, and one Argon2 profile and salt
+length for every user, since mixed profiles would tell a prober which users
+exist. `decoy_key` keeps unknown-user challenges stable across restarts and
+edits; the CLI creates it once and preserves it. A single probe
 cannot tell a real user from an unknown one, but a prober polling a name sees
 its salt change when the user is added, rotated or removed. The file is read
 only when the plugin is built and `auto_reload` does not watch it: send

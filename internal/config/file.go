@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -53,4 +54,34 @@ func LogDir(dir, file string) error {
 		return fmt.Errorf("%s is not a regular file (%v): refusing to write through it", path, info.Mode())
 	}
 	return nil
+}
+
+// MaxFileBytes is the most a configuration or credentials file holds, as
+// lixenwraith/config reads the configuration
+const MaxFileBytes = 10 << 20
+
+// ReadRegular reads a regular file of at most limit bytes. It opens without
+// waiting, so a FIFO in the file's place fails rather than holding a load or
+// a reload, and checks the open file, so nothing swapped in after a check is
+// read.
+func ReadRegular(path string, limit int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|openNonBlock, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	switch {
+	case err != nil:
+		return nil, err
+	case !fi.Mode().IsRegular():
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	case fi.Size() > limit:
+		return nil, fmt.Errorf("%s holds %d bytes, over %d", path, fi.Size(), limit)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err == nil && int64(len(data)) > limit {
+		err = fmt.Errorf("%s grew past %d bytes", path, limit)
+	}
+	return data, err
 }

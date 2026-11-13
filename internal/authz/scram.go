@@ -87,7 +87,7 @@ func LoadCredentials(path string) (*Credentials, error) {
 
 // ReadCredentials is LoadCredentials returning the file as read, for Rewrite
 func ReadCredentials(path string) (*Credentials, []byte, error) {
-	data, err := os.ReadFile(path)
+	data, err := config.ReadRegular(path, config.MaxFileBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("auth: credentials_file: %w", err)
 	}
@@ -263,7 +263,7 @@ func EndStartup() { startupOver.Store(true) }
 func ReadPassword(path, user string, generate bool) (string, error) {
 	fd, inherited := descriptor(path)
 	if fi, err := os.Stat(path); !inherited && (err != nil || fi.Mode().IsRegular()) {
-		data, err := os.ReadFile(path)
+		data, err := config.ReadRegular(path, auth.MaxPasswordLen+3) // a regular file still, once open
 		return checkPassword(path, data, err)
 	}
 	readOnce.Lock()
