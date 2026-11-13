@@ -43,7 +43,7 @@ func scanString(s string, i int) (int, bool) {
 			return i + 1, true
 		}
 	}
-	return i, false
+	return min(i, len(s)), false // a final backslash escapes nothing
 }
 
 // scanValue returns the end index and kind of the value starting at i.
@@ -290,6 +290,11 @@ const (
 // write them, or syslog's (group 2)
 var stampRE = regexp.MustCompile(`^(\[?(?:\d{4}[-/]\d{2}[-/]\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2})\]?)(?:\s|$)`)
 
+// stampOpens are the bytes stampRE can match first: '[', a digit, a month's
+// initial. Most lines open with none, and the regexp clears its whole state
+// before failing on the first byte.
+const stampOpens = "[0123456789ADFJMNOS"
+
 // syslogTagRE is the host and program[pid] after a syslog stamp, to the colon
 var syslogTagRE = regexp.MustCompile(`^\S+ [\w./-]+(?:\[\d+\])?:`)
 
@@ -300,7 +305,10 @@ var syslogTagRE = regexp.MustCompile(`^\S+ [\w./-]+(?:\[\d+\])?:`)
 // and the values of time, level and tag keys.
 func Marks(s string, e core.LogEntry, fn func(Mark)) {
 	i, at := 0, Mark{Kind: MarkLevel, Start: -1}
-	stamp := stampRE.FindStringSubmatchIndex(s)
+	var stamp []int
+	if s != "" && strings.IndexByte(stampOpens, s[0]) >= 0 {
+		stamp = stampRE.FindStringSubmatchIndex(s)
+	}
 	if stamp != nil {
 		i = stamp[3]
 		fn(Mark{Kind: MarkTime, End: i})
@@ -320,9 +328,11 @@ func Marks(s string, e core.LogEntry, fn func(Mark)) {
 	case j > 0 && tag != "" && strings.HasPrefix(rest, tag) && wordEnd(rest, len(tag)) == len(tag):
 		i = j + len(tag)
 		fn(Mark{Kind: MarkTag, Start: j, End: i})
-	case stamp != nil && stamp[4] >= 0 && syslogTagRE.MatchString(rest):
-		i = j + len(syslogTagRE.FindString(rest)) - 1
-		fn(Mark{Kind: MarkTag, Start: j, End: i})
+	case stamp != nil && stamp[4] >= 0:
+		if t := syslogTagRE.FindString(rest); t != "" { // it matches nothing empty
+			i = j + len(t) - 1
+			fn(Mark{Kind: MarkTag, Start: j, End: i})
+		}
 	}
 
 	// the level word, when the line has no level of its own at its start,
@@ -349,7 +359,7 @@ func Marks(s string, e core.LogEntry, fn func(Mark)) {
 		}
 		ke := keyEnd(s, k)
 		if ke == k || ke == len(s) || s[ke] != '=' {
-			k, i = i, wordEnd(s, i)
+			k, i = i, wordEnd(s, i+1) // past a control byte, which skipSpace leaves
 			word(k, i)
 			continue
 		}

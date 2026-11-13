@@ -164,7 +164,7 @@ func TestAFilterChangeKeepsTheFocusedRowInPlace(t *testing.T) {
 }
 
 // A row keeps copies of its text, none of the entry's, and its size counts
-// every string it keeps, so the ring's bound holds for any line
+// every byte it keeps, so the ring's bound holds for any line
 func TestARowCountsAllItHolds(t *testing.T) {
 	long := strings.Repeat("y", 4096)
 	rec := tapped("p", "null", "", 0, `{"msg":"`+long+`","sub":"`+long+`","k":"`+long+`","t":"2026-10-10T12:00:00Z"}`)
@@ -172,21 +172,66 @@ func TestARowCountsAllItHolds(t *testing.T) {
 	var v view
 	size := v.take(rec)
 	r := v.rows[0]
+	in := func(s, of string) bool {
+		p, start := uintptr(unsafe.Pointer(unsafe.StringData(s))), uintptr(unsafe.Pointer(unsafe.StringData(of)))
+		return s != "" && p >= start && p < start+uintptr(len(of))
+	}
 	held := rowBytes + len(r.Stamp) + len(r.Level) + len(r.Tag) + len(r.Message) + len(r.Layout) + len(r.fields) + len(r.payload)
-	strs := []string{r.Stamp, r.Level, r.Tag, r.Message, r.Layout}
+	strs := []string{r.Stamp, r.Level, r.Tag, r.Message, r.Layout, r.fields}
 	for _, f := range r.Fields {
-		held += int(unsafe.Sizeof(f)) + len(f.Key) + len(f.Value)
-		strs = append(strs, f.Key, f.Value)
+		held += int(unsafe.Sizeof(f))
+		for _, s := range []string{f.Key, f.Value} {
+			if strs = append(strs, s); !in(s, r.fields) {
+				held += len(s) // held apart from the list
+			}
+		}
 	}
 	if size < held || v.bytes != size {
 		t.Fatalf("size %d, ring %d, for %d held", size, v.bytes, held)
 	}
 	for _, s := range strs {
-		for _, from := range []string{rec.Event.Entry.Message, rec.Event.Entry.Level} {
-			if p, start := uintptr(unsafe.Pointer(unsafe.StringData(s))), uintptr(unsafe.Pointer(unsafe.StringData(from))); s != "" && p >= start && p < start+uintptr(len(from)) {
-				t.Fatalf("%.20q is the entry's", s)
-			}
+		if in(s, rec.Event.Entry.Message) || in(s, rec.Event.Entry.Level) {
+			t.Fatalf("%.20q is the entry's", s)
 		}
+	}
+}
+
+// A row keeps its fields up to twice what the tap keeps of an entry's text:
+// an object flattened under a long key repeats the key in every path, so its
+// fields are cut there, and the layout says so
+func TestARowsFieldsStopAtWhatTheTapKeeps(t *testing.T) {
+	var msg strings.Builder
+	msg.WriteString(`{"msg":"x","` + strings.Repeat("k", 60) + `":{`)
+	for i := 0; msg.Len() < core.TapEntryBytes-16; i++ {
+		fmt.Fprintf(&msg, `"%d":1,`, i)
+	}
+	msg.WriteString(`"end":1}}`)
+	var v view
+	v.take(tapped("p", "null", "", 0, msg.String()))
+	r := v.rows[len(v.rows)-1]
+	n := 0
+	for _, f := range r.Fields {
+		n += len(f.Key) + len(f.Value)
+	}
+	if n > 2*core.TapEntryBytes || !strings.HasSuffix(r.Layout, ", fields cut") {
+		t.Fatalf("kept %d bytes in %d fields, layout %q", n, len(r.Fields), r.Layout)
+	}
+}
+
+// A row's tag leads with the node its entry came from, as formats write it,
+// in the list, the detail and an export: a chained line's own tag cannot pass
+// it off as another node's, or as lw's
+func TestARowsTagLeadsWithItsNode(t *testing.T) {
+	var v view
+	chained := tapped("p", "in", "", 0, `{"msg":"m","source":"edge-b/payments"}`)
+	chained.Event.Entry.Node = "edge-a"
+	v.take(chained)
+	v.take(tapped("p", "in", "", 0, "plain"))
+	var b strings.Builder
+	jsonLines(v.rows).WriteTo(&b)
+	export := b.String()
+	if v.rows[0].Tag != "edge-a/edge-b/payments" || v.rows[1].Tag != "in" || !strings.Contains(export, `"source":"edge-a/edge-b/payments"`) {
+		t.Fatalf("tags %q and %q, export %s", v.rows[0].Tag, v.rows[1].Tag, export)
 	}
 }
 
@@ -261,7 +306,7 @@ func TestThePointAndModePickTheRows(t *testing.T) {
 // mode show some
 func TestTheTapTakesDropsOnlyWhileShown(t *testing.T) {
 	a := watching(pipeline(t, []string{"null"}, []string{"null"}), looks[terminal.ColorModeNone])
-	a.live.tap = core.NewTap(1)
+	a.live.tap = core.NewTap(1, 0)
 	for _, c := range []struct {
 		at   compose.Node
 		mode int
@@ -486,7 +531,7 @@ func TestTheViewsCursorRowIsOneBar(t *testing.T) {
 // A tick reads the taps up to drainBytes, the rest waiting for the next
 func TestADrainKeepsToItsBudget(t *testing.T) {
 	a := mono(pipeline(t, []string{"null"}, []string{"null"}))
-	a.live.tap = core.NewTap(100)
+	a.live.tap = core.NewTap(100, 0)
 	for range 100 {
 		a.live.tap.Offer(tapped("p", "null", "", 0, strings.Repeat("x", 64<<10)))
 	}
@@ -502,7 +547,7 @@ func TestADrainKeepsToItsBudget(t *testing.T) {
 func TestATapHoldingRecordsWakesTheScreen(t *testing.T) {
 	posts := make(chan struct{}, 8)
 	r := newRun(&fakeRunner{}, func() { posts <- struct{}{} })
-	tap := core.NewTap(1)
+	tap := core.NewTap(1, 0)
 	r.fed.Store(tap)
 	go r.watch(time.Hour)
 	defer r.endAsks()
@@ -524,9 +569,9 @@ func TestATapHoldingRecordsWakesTheScreen(t *testing.T) {
 func TestARerunMarksTheRows(t *testing.T) {
 	f := &fakeRunner{}
 	a := running(t, pipeline(t, []string{"null"}, []string{"null"}), f)
-	a.live.tap = core.NewTap(4)
+	a.live.tap = core.NewTap(4, 0)
 	a.live.tap.Offer(tapped("p", "null", "", 0, "before"))
-	next := core.NewTap(4)
+	next := core.NewTap(4, 0)
 	next.Offer(tapped("p", "null", "", 0, "after"))
 	f.start = func(Ask) (*core.Tap, error) { return next, nil }
 	a.edit(a.comp.Set(0, compose.Node{Role: "format"}, "type", "txt"))
@@ -667,7 +712,7 @@ func TestTheChooserPicksThePoint(t *testing.T) {
 	if n, _ := a.node(); n.Role != "format" || a.point().name != "format" || !a.viewing {
 		t.Fatalf("on %+v, at %s, viewing %v", n, a.point().name, a.viewing)
 	}
-	a.live.state.Log = core.NewTap(1)
+	a.live.state.Log = core.NewTap(1, 0)
 	for _, leave := range [][]any{{"s", "format", terminal.KeyEnter}, {"t", "j"}} {
 		if press(a, "s", "own log", terminal.KeyEnter); !a.point().own {
 			t.Fatalf("at %s", a.point().name)
@@ -684,7 +729,7 @@ func TestTheChooserPicksThePoint(t *testing.T) {
 func TestASwapAndAWholeRerunMarkTheRows(t *testing.T) {
 	f := &fakeRunner{}
 	a := running(t, pipeline(t, []string{"null"}, []string{"null"}), f)
-	tap := core.NewTap(4)
+	tap := core.NewTap(4, 0)
 	a.live.tap = tap
 	tap.Offer(tapped("p", "null", "", 0, "before"))
 	f.start = func(Ask) (*core.Tap, error) { return tap, nil }
@@ -693,7 +738,7 @@ func TestASwapAndAWholeRerunMarkTheRows(t *testing.T) {
 	await(t, a)
 	tap.Offer(tapped("p", "null", "", 0, "after"))
 	press(a, terminal.KeyNone)
-	next := core.NewTap(4)
+	next := core.NewTap(4, 0)
 	f.start = func(Ask) (*core.Tap, error) { return next, nil }
 	press(a, "T")
 	await(t, a)
@@ -854,6 +899,47 @@ func TestXExportsThePinsOrTheRowsShown(t *testing.T) {
 	}
 }
 
+// An export holds no rune a terminal would act on, though json leaves C1,
+// DEL and bidi controls raw: each is a \u escape, which a value reads back as
+func TestAnExportHoldsNoRuneATerminalActsOn(t *testing.T) {
+	var v view
+	v.take(tapped("p", "null", "", 0, "{\"msg\":\"pay \u009b2J\u009d52;c;aGk=\u009c \u202eevil\u202c\x7f\",\"k\":\"\u2066v\u0085\"}"))
+	var b strings.Builder
+	jsonLines(v.rows).WriteTo(&b)
+	out := strings.TrimSuffix(b.String(), "\n")
+	if i := strings.IndexAny(out, "\u009b\u009c\u009d\u0085\x7f\u202c\u202e\u2066"); i >= 0 {
+		t.Fatalf("raw at %d: %q", i, out)
+	}
+	was, back := v.rows[0].Line, logline.Read(core.LogEntry{Message: out})
+	if back.Message != was.Message || !slices.Equal(back.Fields, was.Fields) {
+		t.Fatalf("%s\nreads back %+v\nwas        %+v", out, back, was)
+	}
+}
+
+// An export reaches its file in pieces of about 64 KiB, so a full view is
+// never held twice
+func TestAnExportReachesItsFileInPieces(t *testing.T) {
+	var v view
+	for range 64 {
+		v.take(tapped("p", "null", "x", 0, strings.Repeat("<a&b> ", 1000)))
+	}
+	var w pieces
+	n, err := jsonLines(v.rows).WriteTo(&w)
+	if err != nil || n != w.n || len(w.sizes) < 5 || slices.Max(w.sizes) > 72<<10 {
+		t.Fatalf("%d of %d bytes in pieces %v: %v", n, w.n, w.sizes, err)
+	}
+}
+
+type pieces struct {
+	sizes []int
+	n     int64
+}
+
+func (w *pieces) Write(p []byte) (int, error) {
+	w.sizes, w.n = append(w.sizes, len(p)), w.n+int64(len(p))
+	return len(p), nil
+}
+
 // A sink's drops show on its node while it runs
 func TestASinksDropsShowOnItsNode(t *testing.T) {
 	f := &fakeRunner{}
@@ -862,5 +948,48 @@ func TestASinksDropsShowOnItsNode(t *testing.T) {
 	screen := strings.Join(text(render(a, 120, 30), 120), "\n")
 	if !strings.Contains(screen, "null  7 dropped") {
 		t.Fatalf("%s", screen)
+	}
+}
+
+// BenchmarkTake takes an entry into a view whose rows are full: a text line,
+// and a JSON line of five fields
+func BenchmarkTake(b *testing.B) {
+	for _, l := range []struct{ name, line string }{
+		{"text", "2026-11-05T01:02:03Z INFO request served in 12 ms"},
+		{"json", `{"time":"2026-11-05T01:02:03.5Z","level":"warn","logger":"disk","msg":"disk almost full","dev":"sda","free_mb":120,"used":"97%","mount":"/var","inode":12}`},
+	} {
+		b.Run(l.name, func(b *testing.B) {
+			var v view
+			rec := tapped("p", "null", "", 0, l.line)
+			for len(v.rows) == 0 || v.rows[0].seq == 0 {
+				v.take(rec)
+			}
+			for b.Loop() {
+				v.take(rec)
+			}
+		})
+	}
+}
+
+// BenchmarkDetails builds the detail of an entry of 16 KiB, what the tap
+// keeps at most: of ASCII words, of CJK, of bytes no cell shows
+func BenchmarkDetails(b *testing.B) {
+	var bin []byte
+	for i := 0; len(bin) < 16<<10; i++ {
+		bin = append(bin, byte(i))
+	}
+	a := mono(pipeline(b, []string{"null"}, []string{"null"}))
+	for _, e := range []struct{ name, msg string }{
+		{"ascii", strings.Repeat("lorem ipsum ", 16<<10/12)},
+		{"cjk", strings.Repeat("日志", 16<<10/6)},
+		{"binary", string(bin)},
+	} {
+		b.Run(e.name, func(b *testing.B) {
+			a.view.take(tapped("p", "null", "", 0, e.msg))
+			w := &a.view.rows[len(a.view.rows)-1]
+			for b.Loop() {
+				a.details(w, 80)
+			}
+		})
 	}
 }

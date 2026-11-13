@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/x509"
 	"errors"
@@ -120,10 +121,10 @@ func writePair(dir, name string, cert *x509.Certificate, key crypto.PrivateKey) 
 			return fmt.Errorf("%s exists; remove it to replace it", p)
 		}
 	}
-	if err := config.WriteNew(keyPath, keyPEM, 0o600); err != nil {
+	if err := config.WriteNew(keyPath, bytes.NewReader(keyPEM), 0o600); err != nil {
 		return err
 	}
-	if err := config.WriteNew(certPath, tlsx.EncodeCert(cert), 0o644); err != nil {
+	if err := config.WriteNew(certPath, bytes.NewReader(tlsx.EncodeCert(cert)), 0o644); err != nil {
 		os.Remove(keyPath)
 		return err
 	}

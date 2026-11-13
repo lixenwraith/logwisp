@@ -53,22 +53,28 @@ func NewFilter(cfg config.FilterConfig, logger *log.Logger) (*Filter, error) {
 	return f, nil
 }
 
-// Apply determines if a log entry should be passed through based on the filter's rules
-func (f *Filter) Apply(entry core.LogEntry) bool {
-	f.totalProcessed.Add(1)
+// matchText is what the patterns match: the entry's source and level, each
+// followed by a space when set, then its message. A chain builds it once.
+func matchText(entry core.LogEntry) string {
+	switch {
+	case entry.Source != "" && entry.Level != "":
+		return entry.Source + " " + entry.Level + " " + entry.Message
+	case entry.Source != "":
+		return entry.Source + " " + entry.Message
+	case entry.Level != "":
+		return entry.Level + " " + entry.Message
+	}
+	return entry.Message
+}
 
-	// Check against all fields that might contain the log content
-	text := entry.Message
-	if entry.Level != "" {
-		text = entry.Level + " " + text
-	}
-	if entry.Source != "" {
-		text = entry.Source + " " + text
-	}
+// apply reports whether the entry, whose match text is text, passes
+func (f *Filter) apply(entry core.LogEntry, text string) bool {
+	f.totalProcessed.Add(1)
 
 	// The report matches every pattern on its own and builds its arguments
 	// before Debug could drop them, so it runs only at DEBUG; otherwise
-	// matches alone runs the patterns, stopping where the logic allows
+	// matches alone runs the patterns, stopping where the logic allows. It
+	// names no entry text: exclude filters are how secrets are kept out.
 	debug := f.logger.Enabled(log.LevelDebug)
 	if debug {
 		f.logger.Debug("msg", "Filter checking entry",
@@ -77,8 +83,6 @@ func (f *Filter) Apply(entry core.LogEntry) bool {
 			"logic", f.config.Logic,
 			"entry_level", entry.Level,
 			"entry_source", entry.Source,
-			"entry_message", entry.Message[:min(100, len(entry.Message))],
-			"text_to_match", text[:min(150, len(text))],
 			"patterns", f.config.Patterns)
 
 		for i, pattern := range f.config.Patterns {

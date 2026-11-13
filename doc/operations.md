@@ -14,8 +14,8 @@ lw -c /etc/logwisp/logwisp.toml
 ```
 
 lw exits on its own only at the end of input ([CLI](cli.md#built-in-defaults)).
-A reload stops the old sinks as shutdown does, so a stalled client or
-downstream delays it by up to 2 s.
+A reload stops the old sinks as shutdown does, so a stalled client,
+downstream or console output delays it by up to 2 s.
 
 There is no built-in daemon mode. Run LogWisp in the foreground under a
 supervisor — systemd, rc.d, or a container runtime — which is where restart,
@@ -24,8 +24,8 @@ log capture, and resource limits belong. See [Installation](installation.md).
 A supervisor's stdin is `/dev/null` (systemd's default, `docker run` without
 `-i`), where a console source ends at once. So a service defines its
 pipelines: a file without `[[pipelines]]` runs the built-in stdin-to-stdout
-pipeline and exits 0 at once, which `Restart=on-failure` does not restart, and
-a container configured through variables needs a `LOGWISP_SOURCE`, or a
+pipeline and exits 0 at once, which `Restart=on-failure` does not restart and
+rc.d restarts every 5 s, and a container configured through variables needs a `LOGWISP_SOURCE`, or a
 `LOGWISP_PRESET` with a source of its own (`aggregator`, or one given a `path`).
 
 **systemd**
@@ -77,10 +77,12 @@ What reload does *not* do:
 
 - Re-apply `logging.*`, `quiet` or `auto_reload`; they take effect at startup
   only.
-- Preserve connections, unless it only swaps flows. Listeners close and
-  reopen, and every SSE, TCP, and chain client is disconnected. Chain sinks
-  reconnect on their own backoff; browsers reconnect SSE automatically; raw
-  TCP consumers must retry themselves.
+- Preserve connections, unless it only swaps flows: every SSE, TCP, and chain
+  client is disconnected. Chain sinks reconnect on their own backoff; browsers
+  reconnect SSE automatically; raw TCP consumers must retry themselves.
+  - The listening sockets stay bound: a client connecting during the rebuild
+    waits in the backlog for the new service. An address the new configuration
+    drops closes once that service runs.
 - Keep bearer tokens, unless it only swaps flows. Each rebuild draws a new
   token key, so every token is revoked: run `lw auth token` again, and
   browser viewers log in again.
@@ -91,9 +93,9 @@ What reload does *not* do:
 Standard input survives a reload: one reader serves the process, so the new
 console source continues where the old one stopped, and no line is read twice.
 
-Plan reloads on a busy relay as you would a restart: a listener that fails to
-bind does so after the old service stopped, leaving lw without working
-pipelines until a corrected configuration reloads
+Plan reloads on a busy relay as you would a restart: a listener on a new
+address that fails to bind does so after the old service stopped, leaving lw
+without working pipelines until a corrected configuration reloads
 ([Hot Reload](configuration.md#hot-reload)).
 
 ### Checking a configuration
@@ -296,8 +298,9 @@ A console sink never drops while its pipeline runs: when its output is slow
 (a paused terminal, a full pipe, a stalled log collector) its pipeline waits,
 and the pipeline's other sinks with it. Stdin is read slower; other sources
 queue, then drop and count `dropped_entries`. Where a service's stdout may
-stall, give it a `file` sink instead. A closed stdout pipe ends lw with
-`SIGPIPE`.
+stall, give it a `file` sink instead. A stop or reload waits on the output
+2 s, then drops the sink's queue with a WARN. A closed stdout pipe ends lw
+with `SIGPIPE`.
 
 **File source reads nothing**
 
@@ -318,7 +321,8 @@ stall, give it a `file` sink instead. A closed stdout pipe ends lw with
 **High memory use**
 
 Buffers are bounded, so unbounded growth almost always means many buffers:
-count each source's and sink's `buffer_size` (a fixed 1000 on the `file`,
+a queue holds at most 1048576 entries; count each source's and sink's
+`buffer_size` (a fixed 1000 on the `file`,
 `random` and `null` sources and the `null` sink), clients ×
 `client_buffer_size`, and each `http` sink's `replay_lines`. A `tcp_chain` sink
 blocked on an unreachable downstream also holds its full input queue.
@@ -361,7 +365,8 @@ accepted, so "access review" means reviewing what your CA has issued. Add an
 file, and the review becomes those files: the identities or users listed there
 are the ones that can connect, and removing one plus a `SIGHUP` is the
 revocation path. Authorized identities are recorded in session metadata as
-`auth_identity`; rejections are counted in `auth_rejected` and logged at WARN.
+`auth_identity`; rejections are counted in `auth_rejected` and logged
+([WARN once a minute](security.md#refusals)).
 See [Security](security.md#the-auth-block).
 
 **Secret leakage**

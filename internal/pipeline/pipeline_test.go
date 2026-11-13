@@ -2,10 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,13 +24,17 @@ import (
 
 // finiteSource publishes n entries as soon as it starts, then those feed
 // sends when there is one, and ends once feed and hold close, when there are
-// those. Entries carry its id as their Source.
+// those. Entries carry its id as their Source. With fail it does not start,
+// as a source whose port is taken; stopped unstarted, it closes its channels,
+// as the plugins do.
 type finiteSource struct {
-	id   string
-	n    int
-	hold chan struct{}
-	feed chan string
-	subs []chan core.LogEntry
+	id    string
+	n     int
+	fail  bool
+	hold  chan struct{}
+	feed  chan string
+	subs  []chan core.LogEntry
+	begun atomic.Bool // taken by Start, or by a Stop before it
 }
 
 func (s *finiteSource) Capabilities() []core.Capability { return nil }
@@ -38,6 +44,12 @@ func (s *finiteSource) Subscribe() <-chan core.LogEntry {
 	return ch
 }
 func (s *finiteSource) Start() error {
+	if s.fail {
+		return errors.New("address already in use")
+	}
+	if !s.begun.CompareAndSwap(false, true) {
+		return nil
+	}
 	go func() {
 		for i := range s.n {
 			for _, ch := range s.subs {
@@ -63,7 +75,13 @@ func (s *finiteSource) Start() error {
 	}()
 	return nil
 }
-func (s *finiteSource) Stop()                        {}
+func (s *finiteSource) Stop() {
+	if s.begun.CompareAndSwap(false, true) {
+		for _, ch := range s.subs {
+			close(ch)
+		}
+	}
+}
 func (s *finiteSource) GetStats() source.SourceStats { return source.SourceStats{} }
 
 // slowSink applies backpressure; a nil out never reads at all
@@ -107,11 +125,48 @@ func init() {
 		n, _ := strconv.Atoi(fmt.Sprint(cfg["n"]))
 		hold, _ := cfg["hold"].(chan struct{})
 		feed, _ := cfg["feed"].(chan string)
-		return &finiteSource{id: id, n: n, hold: hold, feed: feed}, nil
+		fail, _ := cfg["fail"].(bool)
+		return &finiteSource{id: id, n: n, fail: fail, hold: hold, feed: feed}, nil
 	})
-	plugin.RegisterSink("null", func(id string, _ map[string]any, _ *log.Logger, _ *session.Proxy) (sink.Sink, error) {
-		return testSinks[id], nil
-	})
+	for _, typ := range []string{"null", "tcp_chain"} {
+		plugin.RegisterSink(typ, func(id string, _ map[string]any, _ *log.Logger, _ *session.Proxy) (sink.Sink, error) {
+			return testSinks[id], nil
+		})
+	}
+}
+
+// What sources published before another failed to start reaches the sinks
+// once the pipeline stops, whichever of them started first
+func TestAFailedStartDeliversWhatStartedSourcesPublished(t *testing.T) {
+	s := &slowSink{in: make(chan core.TransportEvent, 1000)}
+	testSinks[t.Name()] = s
+	for range 20 {
+		p, err := NewPipeline(&config.PipelineConfig{
+			Name: t.Name(),
+			PluginSources: []config.PluginSourceConfig{
+				{ID: "eager", Type: "random", Config: map[string]any{"n": 100}},
+				{ID: "taken", Type: "random", Config: map[string]any{"fail": true}},
+			},
+			PluginSinks: []config.PluginSinkConfig{{ID: t.Name(), Type: "null"}},
+		}, log.NewLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Start() == nil {
+			t.Fatal("a source failing to start went unreported")
+		}
+		want := 0
+		if p.Sources["eager"].(*finiteSource).begun.Load() {
+			want = 100
+		}
+		p.Shutdown()
+		if got := len(s.in); got != want {
+			t.Fatalf("the sinks got %d of the %d entries published", got, want)
+		}
+		for len(s.in) > 0 {
+			<-s.in
+		}
+	}
 }
 
 func newTestPipeline(t *testing.T, n int, s *slowSink) *Pipeline {
@@ -126,6 +181,37 @@ func newTestPipeline(t *testing.T, n int, s *slowSink) *Pipeline {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// A pipeline whose sinks are all chain sinks, which send the entry itself,
+// formats nothing, unless a viewer's tap shows the payload
+func TestChainSinksAloneSkipFormattingUnlessTapped(t *testing.T) {
+	const n = 10
+	for _, tapped := range []bool{false, true} {
+		s := &fullSink{in: make(chan core.TransportEvent, n)}
+		testSinks[t.Name()] = s
+		p, err := NewPipeline(&config.PipelineConfig{
+			Name:          t.Name(),
+			PluginSources: []config.PluginSourceConfig{{ID: "src", Type: "random", Config: map[string]any{"n": n}}},
+			PluginSinks:   []config.PluginSinkConfig{{ID: t.Name(), Type: "tcp_chain"}},
+		}, log.NewLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tapped {
+			p.SetTap(core.NewTap(n, 0))
+		}
+		if err := p.Start(); err != nil {
+			t.Fatal(err)
+		}
+		<-p.Finished()
+		p.Shutdown()
+		formatted, first := p.flow.Load().GetStats()["total_formatted"], <-s.in
+		if want := map[bool]uint64{true: n}[tapped]; formatted != want || len(s.in) != n-1 ||
+			first.Entry.Message != "0" || (len(first.Payload) > 0) != tapped {
+			t.Errorf("tapped %v: %v formatted, %d events, the first %+v", tapped, formatted, len(s.in)+1, first)
+		}
+	}
 }
 
 // A source that publishes from its first moment loses nothing to a slow sink,
@@ -202,7 +288,7 @@ func TestTapSeesEachVerdict(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		tap := core.NewTap(4 * n)
+		tap := core.NewTap(4*n, 0)
 		tap.All.Store(all)
 		p.SetTap(tap)
 		if err := p.Start(); err != nil {
@@ -267,7 +353,7 @@ func TestFullTapNeverStallsAPipeline(t *testing.T) {
 	const n = 2000
 	s := &slowSink{in: make(chan core.TransportEvent, 1), out: make(chan string, n)}
 	p := newTestPipeline(t, n, s)
-	tap := core.NewTap(1)
+	tap := core.NewTap(1, 0)
 	p.SetTap(tap)
 	if err := p.Start(); err != nil {
 		t.Fatal(err)
@@ -308,7 +394,7 @@ func TestSetFlowSwapsTheFlowInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tap := core.NewTap(64)
+	tap := core.NewTap(64, 0)
 	tap.All.Store(true)
 	p.SetTap(tap)
 	if err := p.Start(); err != nil {
@@ -419,5 +505,118 @@ func TestDispatchCountsEachSinksDrops(t *testing.T) {
 	}
 	if dropped[full] != uint64(n) || dropped[slow] != uint64(0) || stats["total_dropped_by_sink"] != uint64(n) {
 		t.Fatalf("dropped %v, in all %v", dropped, stats["total_dropped_by_sink"])
+	}
+}
+
+// Once Stop releases dispatch, a backpressure sink with room still takes each
+// entry, and only a full one drops it: a select with the release ready too
+// picks at random, which dropped about half of what was in flight
+func TestReleasedDispatchStillFillsASinkWithRoom(t *testing.T) {
+	const n = 1000
+	room, full := &slowSink{in: make(chan core.TransportEvent, n)}, &slowSink{in: make(chan core.TransportEvent)}
+	p := &Pipeline{halt: make(chan struct{}), outlets: []*outlet{{sink: room, backpressure: true}, {sink: full, backpressure: true}}}
+	close(p.halt)
+	for range n {
+		p.dispatch(core.TransportEvent{})
+	}
+	if len(room.in) != n || p.outlets[0].dropped.Load() != 0 || p.outlets[1].dropped.Load() != n {
+		t.Fatalf("a sink with room took %d of %d, dropped %d; a full one dropped %d",
+			len(room.in), n, p.outlets[0].dropped.Load(), p.outlets[1].dropped.Load())
+	}
+}
+
+// benchSource publishes n copies of entry as fast as the pipeline takes them
+type benchSource struct {
+	n     int
+	entry core.LogEntry
+	subs  []chan core.LogEntry
+}
+
+func (s *benchSource) Capabilities() []core.Capability { return nil }
+func (s *benchSource) Subscribe() <-chan core.LogEntry {
+	ch := make(chan core.LogEntry, 1000)
+	s.subs = append(s.subs, ch)
+	return ch
+}
+func (s *benchSource) Start() error {
+	go func() {
+		for range s.n {
+			for _, ch := range s.subs {
+				ch <- s.entry
+			}
+		}
+		for _, ch := range s.subs {
+			close(ch)
+		}
+	}()
+	return nil
+}
+func (s *benchSource) Stop()                        {}
+func (s *benchSource) GetStats() source.SourceStats { return source.SourceStats{} }
+
+// countSink takes n events, then closes done
+type countSink struct {
+	in   chan core.TransportEvent
+	n    int
+	done chan struct{}
+}
+
+func (s *countSink) Capabilities() []core.Capability   { return []core.Capability{core.CapBackpressure} }
+func (s *countSink) Input() chan<- core.TransportEvent { return s.in }
+func (s *countSink) Start(context.Context) error {
+	go func() {
+		for range s.n {
+			<-s.in
+		}
+		close(s.done)
+	}()
+	return nil
+}
+func (s *countSink) Stop()                    {}
+func (s *countSink) GetStats() sink.SinkStats { return sink.SinkStats{} }
+
+func init() {
+	plugin.RegisterSource("null", func(_ string, cfg map[string]any, _ *log.Logger, _ *session.Proxy) (source.Source, error) {
+		return &benchSource{n: cfg["n"].(int), entry: cfg["entry"].(core.LogEntry)}, nil
+	})
+}
+
+// BenchmarkPipeline is an entry's way from a source's channel through the
+// flow to every sink's input, per entry
+func BenchmarkPipeline(b *testing.B) {
+	entry := core.LogEntry{Time: time.Now(), Source: "app.log", Level: "INFO",
+		Message: "GET /api/v1/users/42 200 1.2ms user=alice request_id=7f3a9c2e", RawSize: 64}
+	for _, c := range []struct {
+		format string
+		sinks  int
+	}{{"txt", 1}, {"json", 1}, {"json", 3}} {
+		b.Run(fmt.Sprintf("%s-%dsinks", c.format, c.sinks), func(b *testing.B) {
+			b.ReportAllocs()
+			cfg := &config.PipelineConfig{
+				Name:          b.Name(),
+				Flow:          &config.FlowConfig{Format: &config.FormatConfig{Type: c.format}},
+				PluginSources: []config.PluginSourceConfig{{ID: "src", Type: "null", Config: map[string]any{"n": b.N, "entry": entry}}},
+			}
+			var sinks []*countSink
+			for i := range c.sinks {
+				id := fmt.Sprintf("%s/%d", b.Name(), i)
+				s := &countSink{in: make(chan core.TransportEvent, 1000), n: b.N, done: make(chan struct{})}
+				testSinks[id], sinks = s, append(sinks, s)
+				cfg.PluginSinks = append(cfg.PluginSinks, config.PluginSinkConfig{ID: id, Type: "null"})
+			}
+			p, err := NewPipeline(cfg, log.NewLogger())
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			if err := p.Start(); err != nil {
+				b.Fatal(err)
+			}
+			for _, s := range sinks {
+				<-s.done
+			}
+			b.StopTimer()
+			p.Shutdown()
+		})
 	}
 }

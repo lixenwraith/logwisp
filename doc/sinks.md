@@ -14,6 +14,11 @@ whose input queue is full drops the event for itself only, counted as its
 `dropped_entries` in the pipeline's statistics and summed as the pipeline's
 `total_dropped_by_sink`.
 
+The `console`, `file`, `http`, `tcp` and `tcp_chain` sinks write what is
+queued at once: whole entries, up to 4 KiB a write (a longer entry goes alone),
+so a burst costs one write and not one per entry, and a Linux pipe takes each
+whole.
+
 ---
 
 ## console
@@ -80,8 +85,14 @@ Payloads are written as the formatter made them, one record per line.
   output is slow (a slow reader, a paused terminal, a stalled log collector)
   the pipeline waits for it, with its other sinks. A service whose stdout may
   stall writes to a `file` sink instead. A closed stdout pipe ends lw with
-  `SIGPIPE`, as it ends `cat`.
-- On stop it writes what is queued.
+  `SIGPIPE`, as it ends `cat`. Entries a failed write loses (a hung-up
+  terminal, a full disk) count in `write_errors`; each new error is logged
+  once.
+- On stop it writes what is queued, giving its output 2 s: past that the
+  write in progress ends when the output takes it, and the rest of the queue
+  is dropped with a WARN naming how many entries it held.
+
+**Statistics**: `target`, `buffer_size`, `escape`, `color`, `write_errors`.
 
 ---
 
@@ -98,7 +109,7 @@ directory         = "/var/log/logwisp"
 name              = "output"
 max_size_mb       = 100
 max_total_size_mb = 1000
-min_disk_free_mb  = 0
+min_disk_free_mb  = 100
 retention_hours   = 168.0
 buffer_size       = 1000
 flush_interval_ms = 100
@@ -108,25 +119,37 @@ Options, each as type and default:
 
 - `directory` (string, **required**): output directory. The sink writes
   `NAME.log` and rotates it to `NAME_YYMMDD_HHMMSS.log`, adding
-  `_1`, `_2`, ... when that name is taken. The limits below delete *any*
-  `.log` file in the directory, so give each file sink a directory of its own.
-- `name` (string, **required**): file name base.
+  `_1`, `_2`, ... when that name is taken. The limits below count and delete
+  only these files, so file sinks, lw's own log and other programs can share
+  the directory. What it creates of the path is `0750`. It refuses to start
+  in a directory every user can write, where another could plant `NAME.log`
+  as a link, and when `NAME.log` is a link, a FIFO or anything but a regular
+  file.
+- `name` (string, **required**): file name base. A file sink with the
+  directory and name of lw's own log, or of another file sink, is refused at
+  load: both would rotate the same files.
 - `max_size_mb` (int, `100`): rotate when the active file reaches this size.
-- `max_total_size_mb` (int, `1000`): above this total, the oldest `.log` files
-  there are deleted.
-- `min_disk_free_mb` (int, `0`): the oldest `.log` files there are deleted to
+- `max_total_size_mb` (int, `1000`): above this total, the sink's oldest files
+  are deleted.
+- `min_disk_free_mb` (int, `100`): the sink's oldest files are deleted to
   keep this much space free, and nothing is written while that fails. `0`
-  means none and a negative value means `100`.
-- `retention_hours` (float, `168.0`): `.log` files there older than this are
+  means none, filling the disk, and a negative value means `100`.
+- `retention_hours` (float, `168.0`): the sink's files older than this are
   deleted; `0` keeps them.
 - `buffer_size` (int, `1000`): sink input queue depth, and the depth of the
-  internal writer's queue, which drops when full. That drop is reported
-  nowhere, and `total_processed` still counts the entry. At most `1048576`.
-- `flush_interval_ms` (int, `100`): forced flush interval.
+  internal writer's queue, which drops when full. A record there holds the
+  entries queued together, up to 4 KiB of them. A record dropped there, or
+  refused by the disk, counts in `dropped_records`, and `total_processed`
+  still counts its entries. At most `1048576`.
+- `flush_interval_ms` (int, `100`): forced flush interval: the file is synced
+  to disk at most this often, and only when written since; an idle sink makes
+  no fsync calls.
 
 The sink drives an internal writer configured for raw output with timestamps and
 levels disabled, so what lands on disk is exactly the formatted payload. On stop
 it hands the writer what is queued before closing the file.
+
+**Statistics**: `directory`, `name`, `dropped_records`.
 
 ---
 
@@ -134,7 +157,8 @@ it hands the writer what is queued before closing the file.
 
 Discards; holds a sink's place until one is chosen, so a pipeline can be set
 up before its sink is. It counts entries and bytes (`total_processed`,
-`total_bytes`), so it also isolates a source or flow when measuring it.
+`total_bytes`), what is queued at stop included, so it also isolates a
+source or flow when measuring it.
 
 ```toml
 [[pipelines.plugin_sinks]]
@@ -162,7 +186,7 @@ stream_path        = "/stream"
 status_path        = "/status"
 buffer_size        = 1000
 client_buffer_size = 256
-write_timeout_ms   = 0
+write_timeout_ms   = 5000
 max_connections    = 0
 
 [pipelines.plugin_sinks.config.tls]
@@ -179,8 +203,10 @@ allow = ["viewer-01"]
 
 Options, each as type and default:
 
-- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the listener
-  keeps to its family ([Networking](networking.md#address-family)).
+- `host` (string, `127.0.0.1`): bind address, IPv4 or IPv6 (`::`); `0.0.0.0`
+  or `::` for every interface, where it warns at start without `auth` or
+  `acl.allow`. The listener keeps to its family
+  ([Networking](networking.md#address-family)).
 - `port` (int, **required**): listen port.
 - `stream_path` (string, `/stream`): SSE endpoint, matched exactly (`/logs/`
   does not answer `/logs/x`); it starts with `/`, is clean (no `//`, `.` or
@@ -189,7 +215,8 @@ Options, each as type and default:
   differs from `stream_path`.
 - `buffer_size` (int, `1000`): sink input queue depth.
 - `client_buffer_size` (int, `256`): per-client send queue depth.
-- `write_timeout_ms` (int, `0`): per-event write deadline; `0` = none.
+- `write_timeout_ms` (int, `5000`): per-write deadline; `0` = none. A viewer
+  that cannot take one event in time is dropped; EventSource reconnects.
 - `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited. A
   stream past it gets `503` and counts in `rejected_clients`.
 - `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
@@ -243,8 +270,10 @@ Options, each as type and default:
   `max_connections`, and says so when all are taken (`server full`). Its
   search keeps the lines containing a text, in any case unless its `Aa` toggle
   matches case, and its level list the entries at or above a level, read as
-  the sources read it.
-- Refusals are logged at WARN and counted in `auth_rejected`. The authorized
+  the sources read it. It keeps the newest 5000 lines, and draws what arrived
+  once a frame, so a burst costs one layout.
+- Refusals are logged ([WARN once a minute](security.md#refusals)) and counted
+  in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
   `auth_identity`.
 - Stream responses carry `Content-Type: text/event-stream`,
@@ -257,7 +286,7 @@ Options, each as type and default:
   no entry can inject an `event:`, `id:` or `retry:` field.
 - The server sets no `WriteTimeout` (that would kill long-lived streams);
   per-write deadlines come from `write_timeout_ms` via `http.ResponseController`
-  and cover the connected frame, every payload, and the idle comment.
+  and cover the connected frame, every write of entries, and the idle comment.
 - Every stream gets an SSE comment every 15 s. It refreshes the client's
   session and is how a peer that stopped reading is noticed.
 - A client whose send queue is full has that event dropped
@@ -267,9 +296,11 @@ Options, each as type and default:
   `rate_limit` releases at once.
 - A client is registered only once its connected frame has flushed, so the
   broker never queues into a buffer whose reader has not started.
-- Clients whose session has been idle-expired by the session manager are
-  evicted by the broker. With the idle comment above, that reaches only a peer
-  that has stopped accepting bytes on a sink configured `write_timeout_ms = 0`.
+- Only the idle comment refreshes a stream's session. Clients whose session
+  has been idle-expired by the session manager are evicted by the broker at
+  the first entry their full queue cannot take, a write they block included.
+  That reaches only a peer that has stopped accepting bytes on a sink set to
+  `write_timeout_ms = 0`.
 - On shutdown (a reload too), each stream writes its queue and what remains
   of the sink's input, then
   `event: disconnect / data: {"reason":"server_shutdown"}`, on its own and
@@ -287,10 +318,11 @@ buffer sizes, connection limit, write timeout, uptime, endpoint paths, and the
 `max_connections`, `write_timeout_ms`, `endpoints`, `dropped_writes`,
 `rejected_clients`, and the [auth and acl keys](sources.md#source-statistics).
 
-> Without an `auth` block both endpoints are unauthenticated, and the stream
-> response carries `Access-Control-Allow-Origin: *`, so any web origin can read
-> it. With one, the header is omitted. Set an `auth` block, bind to a trusted
-> interface, or put an authenticating reverse proxy in front.
+> Without an `auth` block both endpoints are unauthenticated. No response
+> carries a CORS header, so a page from another origin cannot read the stream:
+> serve a dashboard from the sink's origin. On every interface without `auth`
+> or `acl.allow`, the sink warns at start. Set an `auth` block, keep the default
+> loopback host, or put an authenticating reverse proxy in front.
 
 ---
 
@@ -355,8 +387,8 @@ Options, each as type and default:
   `max_connections` check, so concurrent handshakes are bounded too.
 - With an `auth` block, authorization runs after that handshake and *before*
   registration, so an unauthorized client never enters the client map and never
-  receives a broadcast. Its connection is closed, the rejection logged at WARN,
-  and `rejected_conns` incremented.
+  receives a broadcast. Its connection is closed, the rejection logged
+  ([WARN once a minute](security.md#refusals)) and `rejected_conns` incremented.
 
 **Statistics**: `host`, `port`, `tls`, `buffer_size`, `write_errors`,
 `dropped_writes`, `rejected_conns`, `tls_handshake_errors`, and the
@@ -441,9 +473,12 @@ Options, each as type and default:
   `dial_timeout_ms` + 10 s.
 - Events arriving without a structured entry are wrapped from the formatted
   payload and counted in `synthesized`.
+- An entry whose line would pass the sources' 1 MiB cap, as escapes can make a
+  shorter one do, is dropped and counted in `oversized`: sent, it would cost
+  the link the entries written behind it.
 
 **Statistics**: `target`, `node`, `tls`, `connected`, `reconnects`,
-`write_errors`, `synthesized`, and the
+`write_errors`, `synthesized`, `oversized`, and the
 [auth keys](sources.md#source-statistics).
 
 ---
@@ -481,8 +516,9 @@ Options, each as type and default:
 
 - `host`, `port`, `node`, `buffer_size`, `tls`, `auth`: as on
   [tcp_chain](#tcp_chain).
-- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
-  `/auth` is reserved for the login.
+- `ingest_path` (string, `/ingest`): endpoint path; it starts with `/`, is
+  clean (no `//`, `.` or `..` segment) and holds none of `{`, `}`, `%`, `?`,
+  `#`, and `/auth` is reserved for the login.
 - `max_batch_count` (int, `100`): flush after this many entries.
 - `max_batch_bytes` (int, `1048576`): flush after this many bytes (1 MiB).
 - `flush_interval_ms` (int, `1000`): flush after this long.
@@ -494,7 +530,8 @@ Options, each as type and default:
 **Behaviour**
 
 - Delivery: [Chaining](chaining.md#delivery-semantics); a retry logs WARN, a
-  dropped batch ERROR.
+  dropped batch ERROR. An entry whose line would pass the sources' 1 MiB cap
+  is dropped and counted in `oversized`: sent, it would cost its whole batch.
 - Under `scram` the sink logs in at `POST /auth` whenever it holds no token and
   sends `Authorization: Bearer <token>`. A failed login is retried like a
   transport error, holding the batch. The token is renewed ahead of its expiry;
@@ -511,7 +548,7 @@ Options, each as type and default:
   is dropped and logged at WARN.
 
 **Statistics**: `target`, `node`, `tls`, `batches_sent`, `request_errors`,
-`dropped_batches`, `synthesized`, and the
+`dropped_batches`, `synthesized`, `oversized`, and the
 [auth keys](sources.md#source-statistics).
 
 ---

@@ -37,7 +37,7 @@ func (f *fakeRunner) Start(specs []config.Spec, whole bool, ask Ask) (*core.Tap,
 	if start != nil {
 		return start(ask)
 	}
-	return core.NewTap(1), nil
+	return core.NewTap(1, 0), nil
 }
 
 func (f *fakeRunner) Stop() {
@@ -252,7 +252,7 @@ func TestPasswordsAreAskedMasked(t *testing.T) {
 		f := &fakeRunner{start: func(ask Ask) (*core.Tap, error) {
 			pw, err := ask("alice", generate)
 			got = pw
-			return core.NewTap(1), err
+			return core.NewTap(1, 0), err
 		}}
 		a := mono(pipeline(t, []string{"null"}, []string{"null"}))
 		a.live = newRun(f, func() {})
@@ -292,7 +292,7 @@ func TestAGeneratedPasswordStaysUntilRead(t *testing.T) {
 				return nil, err
 			}
 			close(answered)
-			return core.NewTap(1), then(ask)
+			return core.NewTap(1, 0), then(ask)
 		}}
 		a := mono(pipeline(t, []string{"null"}, []string{"null"}))
 		a.live = newRun(f, func() {})
@@ -347,7 +347,7 @@ func TestAClosedStdoutFailsWritesOnScreen(t *testing.T) {
 
 // SIGTERM and SIGHUP stop what runs and leave
 func TestSignalsStopTheRunAndLeave(t *testing.T) {
-	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
 		f := &fakeRunner{}
 		a := running(t, pipeline(t, []string{"null"}, []string{"null"}), f)
 		stop := a.live.onSignals()

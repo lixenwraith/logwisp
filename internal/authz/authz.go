@@ -206,7 +206,7 @@ type Admission struct {
 // wantHello reads the chain hello without scram too. The whole exchange runs
 // under one read/write deadline of timeout; Accept clears it.
 func (p *Policy) Admit(conn net.Conn, cs *tls.ConnectionState, wantHello bool, timeout time.Duration) (*Admission, error) {
-	a := &Admission{conn: conn, Reader: bufio.NewReaderSize(conn, streamBuffer)}
+	a := &Admission{conn: conn, Reader: bufio.NewReaderSize(conn, maxAuthLine)}
 	scram := p != nil && p.listener != nil
 	if !scram {
 		id, err := p.Authorize(cs)
@@ -299,7 +299,7 @@ func Refuse(w http.ResponseWriter, status int) {
 // runs the whole exchange under ExchangeTimeout, cut short by ctx. The
 // returned reader holds whatever the server sent after the exchange.
 func (p *Policy) Greet(ctx context.Context, conn net.Conn, node string) (*bufio.Reader, error) {
-	r := bufio.NewReaderSize(conn, streamBuffer)
+	r := bufio.NewReaderSize(conn, maxAuthLine)
 	conn.SetDeadline(time.Now().Add(ExchangeTimeout))
 	defer context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })()
 	if p == nil || p.dialer == nil {
@@ -477,11 +477,22 @@ func (p *Policy) LogStartup(l *log.Logger, component, id string, trustNode bool)
 	if p.side == config.Dialer {
 		return
 	}
-	if p.BehindProxy() && p.listener.proxy.exposedHop() {
-		l.Warn("msg", "Trusted proxies may be on other hosts and the hop from them is plaintext: anyone on that path can relay logins and read sessions",
-			"component", component,
-			"instance_id", id,
-			"hint", "keep the proxies on loopback, or enable tls on this listener")
+	if p.BehindProxy() {
+		for _, q := range p.listener.proxy.trusted {
+			if netacl.Public(q) {
+				l.Warn("msg", "auth.trusted_proxies reaches public addresses, any of which may name any client",
+					"component", component,
+					"instance_id", id,
+					"entry", q.String(),
+					"hint", "list only the proxies' own addresses")
+			}
+		}
+		if p.listener.proxy.exposedHop() {
+			l.Warn("msg", "Trusted proxies may be on other hosts and the hop from them is plaintext: anyone on that path can relay logins and read sessions",
+				"component", component,
+				"instance_id", id,
+				"hint", "keep the proxies on loopback, or enable tls on this listener")
+		}
 	}
 	if p.Unrestricted() {
 		l.Warn("msg", "Auth policy admits any identity the configured CA vouches for",

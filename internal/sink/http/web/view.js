@@ -60,14 +60,26 @@ function refilter() {
   log.scrollTop = log.scrollHeight;
 }
 
+// Lines wait for the next frame, so a burst costs one layout, not one per
+// line; a hidden tab keeps at most the rows the log would
+let pending = [];
 function append(line, level) {
+  if (pending.push([line, level]) === 1) requestAnimationFrame(flush);
+  if (pending.length > 2 * MAX_LINES) pending = pending.slice(-MAX_LINES);
+}
+
+function flush() {
   const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
-  const row = document.createElement("div");
-  row.textContent = line;
-  row.dataset.level = level;
-  row.hidden = !shown(row);
-  log.append(row);
-  while (log.childElementCount > MAX_LINES) log.firstElementChild.remove();
+  const rows = pending.slice(-MAX_LINES).map(([line, level]) => {
+    const row = document.createElement("div");
+    row.textContent = line;
+    row.dataset.level = level;
+    row.hidden = !shown(row);
+    return row;
+  });
+  pending = [];
+  log.append(...rows);
+  for (let n = log.childElementCount - MAX_LINES; n > 0; n--) log.firstElementChild.remove();
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 

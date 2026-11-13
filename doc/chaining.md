@@ -35,7 +35,9 @@ either transport from a few keys.
 Chained entries carry a `node` label identifying where they originated.
 
 - A chain **sink** stamps `node` on any entry that does not already have one.
-  The label comes from the `node` option, defaulting to `os.Hostname()`.
+  The label comes from the `node` option, defaulting to `os.Hostname()`. A
+  label is at most 256 bytes with no control character: a sink's option
+  fails at load, a source refuses a peer's (a refused hello, `400`).
 - A chain **source** either honours the sender's label or overrides it,
   according to `trust_node`:
   - `true` (default): keep the label the sender declared; fall back to the
@@ -46,7 +48,9 @@ Relays preserve `node`, so a label survives any number of hops and identifies
 the original producer, unless a hop's source overwrites it: `trust_node =
 false`, or `node_binding = "force"` (the default under `mtls` or `scram`).
 Formatters write the label as a prefix on the source
-([Formatters](formatters.md#node-identity-in-output)).
+([Formatters](formatters.md#node-identity-in-output)); `raw` writes the
+message alone, so a pipeline with a chain source, `raw` format and a sink
+other than a chain sink or `null` warns when built and at each flow swap.
 
 With an `auth` block the source can instead bind the label to the sender's
 authenticated identity: its certificate identity under `mtls`, its username
@@ -173,14 +177,18 @@ in at ingest. A line that does not decode is skipped and counted in
 
 - `tcp_chain`: per line, held across reconnects until the socket accepts it,
   with exponential backoff plus ±20 % jitter. There is no acknowledgement:
-  lines in flight when a link breaks are lost (at most once).
+  lines in flight when a link breaks are lost (at most once). Queued lines go
+  out together, up to 4 KiB a write; after a failed write the next link
+  starts at the first line the socket did not take whole.
 - `http_chain`: at least once per batch. It retries transport errors, `408`,
   `429`, `5xx` and, under `scram`, failed logins and `401`. It drops the batch
   on any other non-2xx, counted in `dropped_batches`. A batch can arrive twice
   when a successful request's response is lost; there is no de-duplication
   downstream.
 - Both: while a link is down or a batch retries, the sink's input queue fills
-  and the pipeline counts drops in `total_dropped_by_sink`.
+  and the pipeline counts drops in `total_dropped_by_sink`. An entry whose
+  line would pass the sources' 1 MiB cap is dropped at the sink, counted in
+  `oversized`.
 
 Neither transport persists anything to disk. Entries buffered in memory during
 an outage are lost if the process exits.
@@ -282,6 +290,8 @@ labelled with the username. See
 - **Rate limits are per pipeline.** An edge limit protects the link; a relay
   limit protects the relay from a noisy edge.
 - **Heartbeats traverse chain links** as ordinary structured entries and keep
-  otherwise-idle links and their sessions warm.
+  otherwise-idle links and their sessions warm. Without them a `tcp_chain`
+  link idle for the source's `read_timeout_ms`, 5 minutes by default, is closed
+  and dialed again with the next entry.
 - **Dial the listener's own literal** when testing locally: a listener on
   `127.0.0.1` takes IPv4 only, and `localhost` may resolve to `::1`.

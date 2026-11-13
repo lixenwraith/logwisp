@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lixenwraith/logwisp/internal/core"
 
@@ -50,6 +51,9 @@ func Load(args Args) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	if names := unknownVariables(os.Environ()); len(names) > 0 {
+		return nil, fmt.Errorf("unknown variable %s: LOGWISP_ names a setting, a pipeline flag or LOGWISP_CONFIG_FILE/DIR", strings.Join(names, ", "))
+	}
 	if len(specs) == 0 {
 		specs = envPipelineSpecs(os.Environ())
 	}
@@ -78,13 +82,18 @@ func Load(args Args) (*Manager, error) {
 		}).
 		WithSecurityOptions(lconfig.SecurityOptions{
 			PreventPathTraversal: true,
-			MaxFileSize:          10 * 1024 * 1024,
+			// A file found without -c may lie in a directory others write, a
+			// shared one or another user's: only the user's own runs
+			EnforceFileOwnership: !isExplicit,
+			MaxFileSize:          MaxFileBytes,
 		}).
 		Build()
 	if err != nil {
 		switch {
 		case invalid != nil:
 			return nil, fmt.Errorf("invalid configuration:\n%w", invalid)
+		case !isExplicit && errors.Is(err, lconfig.ErrFileAccess):
+			return nil, fmt.Errorf("config file %q, found without -c: %w; -c reads a file another user owns", configPath, err)
 		case !errors.Is(err, lconfig.ErrConfigNotFound):
 			return nil, fmt.Errorf("failed to load or validate config: %w", err)
 		}
@@ -191,9 +200,10 @@ func defaults() *Config {
 		StatusReporter: true,
 		Color:          "auto",
 		Logging: &LogConfig{
-			Output: "stderr",
-			Level:  "info",
-			Format: "txt",
+			Output:       "stderr",
+			Level:        "info",
+			Format:       "txt",
+			Sanitization: "json",
 			File: &LogFileConfig{
 				Directory:      "./log",
 				Name:           "logwisp",

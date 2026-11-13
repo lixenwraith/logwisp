@@ -28,8 +28,9 @@ func init() {
 }
 
 // One reader serves the process: after a reload the new source continues
-// where the old one stopped, and no line is read twice. The channel is
-// unbuffered, so a busy pipeline stops the reading of stdin, not its lines.
+// where the old one stopped, and no line is read twice. The channel holds 16
+// lines, so the reader need not wait for a hand-off per line, and a busy
+// pipeline still stops the reading of stdin, not its lines.
 var (
 	stdinOnce  sync.Once
 	stdinLines chan string
@@ -38,7 +39,7 @@ var (
 
 func lines() <-chan string {
 	stdinOnce.Do(func() {
-		stdinLines = make(chan string)
+		stdinLines = make(chan string, 16)
 		go func() {
 			stdinErr = readLines(os.Stdin, stdinLines)
 			close(stdinLines)
@@ -99,12 +100,13 @@ type ConsoleSource struct {
 	// Runtime
 	done     chan struct{}
 	stopOnce sync.Once
+	begun    atomic.Bool // taken by Start, whose readLoop closes the subscribers, or by a Stop before it
 
 	// Statistics
 	totalEntries  atomic.Uint64
 	startTime     time.Time
-	lastEntryTime atomic.Value // time.Time
-	ended         atomic.Bool  // standard input reached its end
+	lastEntryTime core.AtomicTime
+	ended         atomic.Bool // standard input reached its end
 }
 
 // NewConsoleSourcePlugin creates a console source through plugin factory
@@ -127,7 +129,6 @@ func NewConsoleSourcePlugin(
 		done:        make(chan struct{}),
 		logger:      logger,
 	}
-	cs.lastEntryTime.Store(time.Time{})
 
 	// Create session
 	cs.session = proxy.CreateSession(
@@ -161,6 +162,9 @@ func (s *ConsoleSource) Subscribe() <-chan core.LogEntry {
 
 // Start begins reading from the standard input.
 func (s *ConsoleSource) Start() error {
+	if !s.begun.CompareAndSwap(false, true) {
+		return nil // stopped first
+	}
 	s.startTime = time.Now()
 	go s.readLoop(lines())
 
@@ -173,9 +177,15 @@ func (s *ConsoleSource) Start() error {
 	return nil
 }
 
-// Stop signals the source to stop reading; readLoop closes the subscribers.
+// Stop signals the source to stop reading; readLoop closes the subscribers,
+// or Stop does when Start never ran, so a pipeline's run loop ends either way
 func (s *ConsoleSource) Stop() {
 	s.stopOnce.Do(func() { close(s.done) })
+	if s.begun.CompareAndSwap(false, true) {
+		for _, ch := range s.subscribers {
+			close(ch)
+		}
+	}
 
 	// Remove session
 	if s.session != nil {
@@ -189,7 +199,7 @@ func (s *ConsoleSource) Stop() {
 
 // GetStats returns the source's statistics
 func (s *ConsoleSource) GetStats() source.SourceStats {
-	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
+	lastEntry := s.lastEntryTime.Load()
 
 	return source.SourceStats{
 		ID:            s.id,

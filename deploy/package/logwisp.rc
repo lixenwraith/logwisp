@@ -9,6 +9,8 @@
 #   logwisp_config  configuration file (default %%PREFIX%%/etc/logwisp/logwisp.toml)
 #   logwisp_user    account lw runs as (default "logwisp")
 #   logwisp_chdir   working directory (default /var/db/logwisp)
+#   logwisp_umask   file creation mask (default 027: what lw creates is closed
+#                   to other users, its group may read the logs)
 #   logwisp_args    extra lw options, e.g. --logging.level=debug (default empty);
 #                   rc.subr hands logwisp_flags to daemon(8), not to lw
 
@@ -24,17 +26,30 @@ load_rc_config $name
 : ${logwisp_config:="%%PREFIX%%/etc/logwisp/logwisp.toml"}
 : ${logwisp_user:="logwisp"}
 : ${logwisp_chdir:="/var/db/logwisp"}
+: ${logwisp_umask:="027"}
 : ${logwisp_args:=""}
 
-# daemon(8) records the child's pid, so stop and reload (SIGHUP) signal lw
-# itself, and sends its output to syslog under the tag logwisp.
-pidfile="/var/run/${name}/${name}.pid"
-procname="%%BINDIR%%/lw"
+# daemon(8) restarts lw 5 seconds after it exits, sends its output to syslog
+# under the tag logwisp, and records two pids: its own, which stop signals and
+# which forwards SIGTERM to lw, and lw's, which status checks and reload
+# signals (SIGHUP), as daemon(8) passes no SIGHUP on.
+pidfile="/var/run/${name}/daemon.pid"
+lw_pidfile="/var/run/${name}/${name}.pid"
+lw_program="%%BINDIR%%/lw"
 command="/usr/sbin/daemon"
-command_args="-f -S -T ${name} -p ${pidfile} ${procname} -c ${logwisp_config} ${logwisp_args}"
+command_args="-f -S -T ${name} -R 5 -P ${pidfile} -p ${lw_pidfile} ${lw_program} -c ${logwisp_config} ${logwisp_args}"
 required_files="${logwisp_config}"
 extra_commands="reload"
 start_precmd="${name}_prestart"
+status_cmd="${name}_status"
+reload_cmd="${name}_reload"
+
+# An lw this script started before daemon(8) supervised it left no daemon.pid:
+# stop finds it by its own pid, and its daemon(8) exits with it
+if [ ! -e "${pidfile}" ] && [ -e "${lw_pidfile}" ]; then
+	pidfile="${lw_pidfile}"
+	procname="${lw_program}"
+fi
 
 # rc.subr starts daemon(8) as logwisp_user, which must own the pidfile directory.
 # An existing logwisp_chdir keeps its owner: it may be a shared directory.
@@ -42,6 +57,34 @@ logwisp_prestart()
 {
 	install -d -o "${logwisp_user}" -m 0755 "/var/run/${name}"
 	[ -d "${logwisp_chdir}" ] || install -d -o "${logwisp_user}" -m 0750 "${logwisp_chdir}"
+}
+
+# A crashing lw leaves daemon(8) running: status reports lw itself
+logwisp_status()
+{
+	local pid
+	pid=$(check_pidfile "${lw_pidfile}" "${lw_program}")
+	if [ -n "${pid}" ]; then
+		echo "${name} is running as pid ${pid}."
+	elif [ -n "${rc_pid}" ]; then
+		echo "${name} is not running; daemon(8), pid ${rc_pid}, restarts it."
+		return 1
+	else
+		echo "${name} is not running."
+		return 1
+	fi
+}
+
+logwisp_reload()
+{
+	local pid
+	pid=$(check_pidfile "${lw_pidfile}" "${lw_program}")
+	if [ -z "${pid}" ]; then
+		echo "${name} is not running."
+		return 1
+	fi
+	echo "Reloading ${name} config files."
+	kill -HUP "${pid}"
 }
 
 run_rc_command "$1"

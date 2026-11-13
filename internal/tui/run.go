@@ -141,13 +141,14 @@ func (r *run) watch(every time.Duration) {
 
 func holds(t *core.Tap) bool { return t != nil && len(t.Records()) > 0 }
 
-// onSignals leaves on SIGTERM and SIGHUP (an ssh session's end), stopping
-// what runs, so sinks flush and the terminal is restored. A closed stdout or
-// stderr fails the write with EPIPE, which the run logs, instead of killing lw
-// on screen; stop gives SIGPIPE back to the runtime.
+// onSignals leaves on SIGINT (raw mode makes Ctrl-C a key, so another
+// process sent it), SIGTERM and SIGHUP (an ssh session's end), stopping what
+// runs, so sinks flush and the terminal is restored. A closed stdout or stderr
+// fails the write with EPIPE, which the run logs, instead of killing lw on
+// screen; stop gives SIGINT and SIGPIPE back to the runtime.
 func (r *run) onSignals() (stop func()) {
 	sigs, pipe := make(chan os.Signal, 1), make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	signal.Notify(pipe, syscall.SIGPIPE)
 	go func() {
 		select {
@@ -203,7 +204,9 @@ func (a *app) tick() {
 	for _, f := range later {
 		f(a)
 	}
-	a.drain(drainBytes, r.state.Log, r.tap)
+	if !a.done { // no frame follows: the runner prints what lw logged meanwhile
+		a.drain(drainBytes, r.state.Log, r.tap)
+	}
 }
 
 // tap runs the pipelines here, the screen staying, and gives the view the
@@ -250,7 +253,9 @@ func (a *app) started(specs []config.Spec, tap *core.Tap, err error) {
 		switch {
 		case old == tap: // fed on: what it holds came through the earlier flows
 			for range len(old.Records()) {
-				a.view.take(<-old.Records())
+				rec := <-old.Records()
+				old.Took(rec)
+				a.view.take(rec)
 			}
 			mark = "flows swapped "
 		case tap == nil:
@@ -282,7 +287,7 @@ func (a *app) fault(err error, format string) {
 		if pi != a.pi {
 			a.pi, a.row = pi, [3]int{}
 		}
-		a.bar, a.inspect = false, false
+		a.bar, a.inspect, a.insp.field = false, false, nil // a field left open would take the next Enter elsewhere
 		a.choose(n)
 		text = why
 		if where := a.where(pi, n, key); where != "" {
@@ -327,8 +332,14 @@ func (a *app) runMark() (string, ui.Style) {
 	if c.SinksDropped > 0 {
 		mark += fmt.Sprintf(" · %d sinks dropped", c.SinksDropped)
 	}
-	if r.tap != nil && r.tap.Dropped() > 0 {
-		mark += fmt.Sprintf(" · screen missed %d", r.tap.Dropped())
+	var missed uint64 // the entries' tap's drops and lw's own log's
+	for _, t := range []*core.Tap{r.tap, r.state.Log} {
+		if t != nil {
+			missed += t.Dropped()
+		}
+	}
+	if missed > 0 {
+		mark += fmt.Sprintf(" · screen missed %d", missed)
 	}
 	return mark, style
 }

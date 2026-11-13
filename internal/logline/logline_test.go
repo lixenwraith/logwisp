@@ -108,9 +108,12 @@ func TestReadFindsTheRolesWhereTheirWriterPutsThem(t *testing.T) {
 		// a line the tap clipped keeps the roles before the cut
 		{arrived(`{"time":"2026-10-10T12:00:00Z","level":"INFO","msg":"clipped","big":"aaaa`),
 			`json, cut short, message in msg | 2026-10-10T12:00:00Z=2026-10-10T12:00:00Z | INFO | app.log | "clipped" | `},
-		// nesting past nestMax stays one value, bounding the paths
+		// nesting past nestMax, or under a key past pathMax, stays one value,
+		// bounding the paths
 		{arrived(`{"msg":"deep","a":{"b":{"c":{"d":{"e":{"f":{"g":{"h":{"i":{"j":1}}}}}}}}}}`),
 			`json, message in msg | =- |  | app.log | "deep" | a.b.c.d.e.f.g.h.i="{\"j\":1}"`},
+		{arrived(`{"msg":"long","` + strings.Repeat("k", 65) + `":{"b":1}}`),
+			`json, message in msg | =- |  | app.log | "long" | ` + strings.Repeat("k", 65) + `="{\"b\":1}"`},
 		{arrived(`2026-10-10T12:00:00+02:00 ERROR db: connection refused`),
 			`text, stamped, level word | 2026-10-10T12:00:00+02:00=2026-10-10T10:00:00Z | ERROR | app.log | "db: connection refused" | `},
 		{arrived(`2026-10-10T12:00:00.5 a stamp without a zone is UTC`),
@@ -158,12 +161,31 @@ func TestEscapeControlsKeepsOnlyLayout(t *testing.T) {
 		"line\u2028sep\n":                  "line<e280a8>sep\n",
 		"zwj \U0001f468\u200d\U0001f469\n": "zwj \U0001f468\u200d\U0001f469\n",
 		"bad \xff utf8":                    "bad <ff> utf8",
+		"élan \x1b[2J\n":                   "élan <1b>[2J\n",
+		"del\x7f alone\n":                  "del<7f> alone\n",
 		"ünïcødé and \ufffd kept\n":        "ünïcødé and \ufffd kept\n",
 	} {
 		if got := string(EscapeControls([]byte(in))); got != want {
 			t.Errorf("%q: got %q, want %q", in, got, want)
 		}
 	}
+}
+
+// readStamp reads what either of its layouts parses, and refuses the rest
+func FuzzReadStampReadsWhatParseReads(f *testing.F) {
+	for _, s := range []string{"2026-10-10T12:00:00Z", "2026-10-10T1:00:00", "2026-10-10T12:00:00.5+02:00",
+		"+026-10-10T12:00:00Z", "connection", "1728561600000", "2026-10-10"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		want, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			want, err = time.Parse("2006-01-02T15:04:05.999999999", s)
+		}
+		if got, ok := readStamp(s); ok != (err == nil) || !got.Equal(want) {
+			t.Fatalf("%q: read %v %v, Parse %v %v", s, got, ok, want, err)
+		}
+	})
 }
 
 // marked writes each mark as its kind's letter (T time, L:level, G tag, K key,
@@ -228,12 +250,32 @@ func TestMarksNameEachRoleWhereTheLineWritesIt(t *testing.T) {
 	}
 }
 
-// Marks of any line, its level any word, are in order, apart and in bounds
+// Every stamp stampRE reads opens with a byte of stampOpens, which Marks
+// checks before running it: any month's, a date's, a time's, a bracket's
+func FuzzEveryStampOpensWithAByteMarksLetsThrough(f *testing.F) {
+	for m := time.January; m <= time.December; m++ {
+		f.Add(m.String()[:3] + " 10 12:00:00 host app: x")
+	}
+	for _, s := range []string{"2026-11-05T07:51:43Z", "2026/11/05 07:51:48", "[2026-11-05 07:51:44] x", "07:51:44.5 x"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if stampRE.MatchString(s) && strings.IndexByte(stampOpens, s[0]) < 0 {
+			t.Fatalf("%q opens with a stamp Marks does not look for", s)
+		}
+	})
+}
+
+// Marks of any line, its level any word, are in order, apart and in bounds,
+// and come to an end: a line unescaped may hold control bytes
 func FuzzMarksStayInOrderWithinTheLine(f *testing.F) {
 	f.Add(`2026-11-05 07:51:44,001 WARN edge-01/app "time=07:51:44 level=warn msg=\"slow\""`, "WARN")
+	f.Add("a \x01b \x1b[31mERROR\x1b[0m \x00", "ERROR")
 	f.Add(`Nov  5 07:51:45 edge-01 sshd[2211]: error: auth failed`, "ERROR")
 	f.Add(`{"level":30,"ts":1.5,"n":[1,{"k":"x"}],"logger":"db"} tail {"a":`, "INFO")
 	f.Add(`[warning] k="unterminated \"`, "warning")
+	f.Add(`level="x\`, "INFO")
+	f.Add(`ts="x\`, "INFO")
 	f.Fuzz(func(t *testing.T, s, level string) {
 		at := 0
 		Marks(s, core.LogEntry{Level: level, Source: "app"}, func(m Mark) {

@@ -10,7 +10,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,7 +36,11 @@ func init() {
 	}
 }
 
-const HTTPReadHeaderTimeout = 10 * time.Second
+// A request, headers and body, is read within readTimeout, which also bounds
+// the TLS handshake; a connection idle between requests closes after
+// idleTimeout, past the 60 s upstream keep-alive of common proxies so that
+// they close first. Vars so tests can shorten them.
+var readTimeout, idleTimeout = 10 * time.Second, 2 * time.Minute
 
 // HTTPSink streams log entries via Server-Sent Events
 // Server.WriteTimeout is deliberately unset (it would terminate long-lived SSE streams)
@@ -56,12 +59,15 @@ type HTTPSink struct {
 	server *http.Server
 
 	// Application
-	input  chan core.TransportEvent
-	logger *log.Logger
+	input    chan core.TransportEvent
+	logger   *log.Logger
+	refusals *netacl.Reporter
 
 	// Client registry, and the last replay_lines entries, under clientsMu
 	clients      map[uint64]*sseClient
-	replay       [][]byte
+	clientsPeak  int      // the most clients held since the map was built
+	replay       [][]byte // a ring once full, its oldest at replayNext
+	replayNext   int
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
 	writeTimeout time.Duration
@@ -92,13 +98,14 @@ type HTTPSink struct {
 	totalProcessed  atomic.Uint64
 	droppedWrites   atomic.Uint64
 	rejectedClients atomic.Uint64
-	lastProcessed   atomic.Value // time.Time
+	lastProcessed   core.AtomicTime
 }
 
 // sseClient is a registered stream consumer with a bounded send queue
 type sseClient struct {
 	send      chan []byte
 	sessionID string
+	rc        *http.ResponseController // eviction cuts a write a stalled peer blocks
 }
 
 // NewHTTPSinkPlugin creates a http sink through plugin factory
@@ -124,7 +131,8 @@ func NewHTTPSinkPlugin(
 	if opts.Auth != nil && len(opts.Auth.TrustedProxies) > 0 {
 		kind = netacl.HTTPProxied
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, kind, logger, "http_sink", id)
+	refusals := netacl.NewReporter(logger, "http_sink", id)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, kind, refusals)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +156,7 @@ func NewHTTPSinkPlugin(
 		flush:        make(chan struct{}),
 		flushed:      make(chan struct{}),
 		logger:       logger,
+		refusals:     refusals,
 		clients:      make(map[uint64]*sseClient),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
 		keepalive:    core.StreamKeepaliveInterval,
@@ -156,7 +165,6 @@ func NewHTTPSinkPlugin(
 		acl:          aclPolicy,
 		web:          web,
 	}
-	h.lastProcessed.Store(time.Time{})
 
 	logger.Info("msg", " HTTP sink initialized",
 		"component", "http_sink",
@@ -173,6 +181,7 @@ func NewHTTPSinkPlugin(
 		"viewer_page", web[chain.AuthPath+"/view"] != nil)
 	tlsx.LogWarnings(logger, "http_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_sink", id, false)
+	netacl.WarnOpen(refusals, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return h, nil
 }
 
@@ -242,13 +251,13 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	}
 
 	h.server = &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: HTTPReadHeaderTimeout,
-		ConnContext:       netacl.ConnContext,
-		// WriteTimeout unset by design: SSE responses are long-lived.
-		// net/http bounds the TLS handshake by min(ReadHeaderTimeout,
-		// ReadTimeout, WriteTimeout), so ReadHeaderTimeout covers it here.
-		ErrorLog: tlsx.HTTPErrorLog(h.logger, "http_sink"),
+		Handler: handler,
+		// net/http clears the read deadline once a body-less request reaches
+		// its handler, so streams outlive ReadTimeout; WriteTimeout would not.
+		ReadTimeout: readTimeout,
+		IdleTimeout: idleTimeout,
+		ConnContext: netacl.ConnContext,
+		ErrorLog:    h.refusals.ErrorLog(),
 	}
 	h.startTime = time.Now()
 
@@ -328,6 +337,7 @@ func (h *HTTPSink) removeClient(id uint64) {
 	c, ok := h.clients[id]
 	if ok {
 		delete(h.clients, id)
+		h.clients, h.clientsPeak = sink.Shrunk(h.clients, h.clientsPeak)
 	}
 	h.clientsMu.Unlock()
 	if ok {
@@ -337,7 +347,8 @@ func (h *HTTPSink) removeClient(id uint64) {
 
 // brokerLoop fans out transport events to all client queues, non-blocking,
 // and evicts clients whose sessions were idle-expired by the session manager,
-// until flush, which shutdown closes on Stop and on context cancellation.
+// found when their queue is full, until flush, which shutdown closes on Stop
+// and on context cancellation.
 func (h *HTTPSink) brokerLoop() {
 	defer h.wg.Done()
 	for {
@@ -357,18 +368,25 @@ func (h *HTTPSink) brokerLoop() {
 
 			var stale []uint64
 			h.clientsMu.Lock()
-			if n := int(h.config.ReplayLines); n > 0 {
-				h.replay = append(h.replay[max(len(h.replay)+1-n, 0):], event.Payload)
+			if n := int(h.config.ReplayLines); len(h.replay) < n {
+				h.replay = append(h.replay, event.Payload)
+			} else if n > 0 {
+				h.replay[h.replayNext] = event.Payload
+				h.replayNext = (h.replayNext + 1) % n
 			}
 			for id, c := range h.clients {
-				if _, exists := h.proxy.GetSession(c.sessionID); !exists {
-					stale = append(stale, id)
-					continue
-				}
 				select {
 				case c.send <- event.Payload:
-					h.proxy.UpdateActivity(c.sessionID)
 				default:
+					// Only a stalled reader lets its session expire, and its
+					// queue fills. Without write_timeout_ms its write holds the
+					// handler and slot for good; registered, the handler has
+					// not returned, so its controller is still its own.
+					if _, exists := h.proxy.GetSession(c.sessionID); !exists {
+						_ = c.rc.SetWriteDeadline(time.Now())
+						stale = append(stale, id)
+						continue
+					}
 					h.droppedWrites.Add(1)
 				}
 			}
@@ -390,7 +408,11 @@ func (h *HTTPSink) flushInput() {
 
 // handleStream serves one client's SSE stream
 func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
-	if h.config.MaxConnections > 0 && h.activeClients.Load() >= h.config.MaxConnections {
+	// The slot is taken before the check, so concurrent streams cannot all
+	// pass it before one counts
+	count := h.activeClients.Add(1)
+	if h.config.MaxConnections > 0 && count > h.config.MaxConnections {
+		h.activeClients.Add(-1)
 		h.rejectedClients.Add(1)
 		http.Error(w, "too many clients", http.StatusServiceUnavailable)
 		return
@@ -419,10 +441,10 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	c := &sseClient{
 		send:      make(chan []byte, h.config.ClientBufferSize),
 		sessionID: sess.ID,
+		rc:        rc,
 	}
 	id := h.nextClientID.Add(1)
 
-	count := h.activeClients.Add(1)
 	h.logger.Debug("msg", "HTTP client connected",
 		"component", "http_sink",
 		"remote_addr", remote,
@@ -445,10 +467,6 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	if !h.auth.Enabled() {
-		// An authenticated stream is not offered to every web origin
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-	}
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
@@ -466,11 +484,23 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	send := func(payload []byte) bool {
-		if writeSSE(w, payload) != nil || rc.Flush() != nil {
-			return false
+	// send frames payload and all q holds behind it, a batch a flush, each
+	// under its own write deadline unless armed is false (the flush's one)
+	var buf []byte
+	send := func(payload []byte, q <-chan []byte, armed bool) bool {
+		for more := true; more; {
+			buf, _, payload, more = sink.Batch(buf, payload, q, appendSSE)
+			if armed {
+				h.armWrite(rc)
+			}
+			if _, err := w.Write(buf); err != nil || rc.Flush() != nil {
+				return false
+			}
+			if !more && len(q) > 0 {
+				payload, more = <-q, true
+			}
 		}
-		h.proxy.UpdateActivity(sess.ID)
+		buf = sink.Kept(buf)
 		return true
 	}
 
@@ -479,18 +509,16 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	// backlog is taken under the same lock, so it ends where the queue begins.
 	h.clientsMu.Lock()
 	h.clients[id] = c
-	backlog := slices.Clone(h.replay)
+	h.clientsPeak = max(h.clientsPeak, len(h.clients))
+	backlog := sink.Queue(h.replay[h.replayNext:], h.replay[:h.replayNext])
 	h.clientsMu.Unlock()
-	for _, payload := range backlog {
-		h.armWrite(rc)
-		if !send(payload) {
-			return
-		}
+	if len(backlog) > 0 && !send(<-backlog, backlog, true) {
+		return
 	}
 
-	// A stream with nothing to carry still has to prove the peer is there. The
-	// comment refreshes the session the broker evicts on, and fails on a peer
-	// that stopped reading.
+	// A stream, busy or quiet, proves its peer is there with a comment each
+	// interval. Only the comment refreshes the session the broker evicts on,
+	// and it fails on a peer that stopped reading.
 	idle := time.NewTicker(h.keepalive)
 	defer idle.Stop()
 
@@ -501,8 +529,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // broker evicted (stale session)
 			}
-			h.armWrite(rc)
-			if !send(payload) {
+			if !send(payload, c.send, true) {
 				return
 			}
 		case <-idle.C:
@@ -520,15 +547,13 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			// Nothing more will be queued: write the queue and the tail, then
 			// say why the stream ends
 			_ = rc.SetWriteDeadline(h.flushBy)
-			for len(c.send) > 0 {
-				if payload, ok := <-c.send; !ok || !send(payload) {
+			if len(c.send) > 0 {
+				if payload, ok := <-c.send; !ok || !send(payload, c.send, false) {
 					return
 				}
 			}
-			for _, payload := range h.tail {
-				if !send(payload) {
-					return
-				}
+			if tail := sink.Queue(h.tail); len(tail) > 0 && !send(<-tail, tail, false) {
+				return
 			}
 			fmt.Fprintf(w, "event: disconnect\ndata: {\"reason\":\"server_shutdown\"}\n\n")
 			rc.Flush()
@@ -586,7 +611,7 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // GetStats returns sink statistics
 func (h *HTTPSink) GetStats() sink.SinkStats {
-	lastProc, _ := h.lastProcessed.Load().(time.Time)
+	lastProc := h.lastProcessed.Load()
 	details := map[string]any{
 		"host":               h.config.Host,
 		"port":               h.config.Port,
@@ -629,12 +654,9 @@ func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ident, status, err := h.auth.AuthorizeRequest(r)
 		if err != nil {
-			h.logger.Warn("msg", "Request rejected by auth policy",
-				"component", "http_sink",
-				"instance_id", h.id,
-				"remote_addr", clientAddr(r),
-				"path", r.URL.Path,
-				"error", err)
+			h.refusals.Refused("Request rejected by auth policy", func() []any {
+				return []any{"remote_addr", clientAddr(r), "path", r.URL.EscapedPath(), "error", err}
+			})
 			authz.Refuse(w, status)
 			return
 		}
@@ -647,11 +669,7 @@ func (h *HTTPSink) handleAuth(w http.ResponseWriter, r *http.Request) {
 	ident, err := h.auth.ServeAuth(w, r)
 	switch {
 	case err != nil:
-		h.logger.Warn("msg", "Login rejected",
-			"component", "http_sink",
-			"instance_id", h.id,
-			"remote_addr", clientAddr(r),
-			"error", err)
+		h.refusals.Refused("Login rejected", func() []any { return []any{"remote_addr", clientAddr(r), "error", err} })
 	case ident.Name != "":
 		h.logger.Info("msg", "Login accepted",
 			"component", "http_sink",
@@ -675,39 +693,29 @@ func streamHeadNotAllowed(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
-// writeSSE frames a payload per the W3C SSE spec, one data: line per line
-func writeSSE(w http.ResponseWriter, payload []byte) error {
-	for _, line := range splitLines(payload) {
-		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
-			return err
+// appendSSE frames a payload per the W3C SSE spec, one data: line per line:
+// every break SSE recognises (CRLF, LF and a lone CR) starts another, so no
+// payload byte can end a data: line and start an event: or retry: field. One
+// trailing break is dropped.
+func appendSSE(dst, data []byte) []byte {
+	if len(data) > 0 {
+		if bytes.HasSuffix(data, []byte("\r\n")) {
+			data = data[:len(data)-2]
+		} else if data[len(data)-1] == '\n' || data[len(data)-1] == '\r' {
+			data = data[:len(data)-1]
+		}
+		for {
+			i := bytes.IndexAny(data, "\r\n")
+			if i < 0 {
+				dst = append(append(append(dst, "data: "...), data...), '\n')
+				break
+			}
+			dst = append(append(append(dst, "data: "...), data[:i]...), '\n')
+			if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+				i++
+			}
+			data = data[i+1:]
 		}
 	}
-	_, err := fmt.Fprint(w, "\n")
-	return err
-}
-
-// splitLines splits on every break SSE recognises (CRLF, LF and a lone CR),
-// so no payload byte can end a data: line and start an event: or retry:
-// field. One trailing break is dropped.
-func splitLines(data []byte) [][]byte {
-	if len(data) == 0 {
-		return nil
-	}
-	if bytes.HasSuffix(data, []byte("\r\n")) {
-		data = data[:len(data)-2]
-	} else if data[len(data)-1] == '\n' || data[len(data)-1] == '\r' {
-		data = data[:len(data)-1]
-	}
-	var lines [][]byte
-	for {
-		i := bytes.IndexAny(data, "\r\n")
-		if i < 0 {
-			return append(lines, data)
-		}
-		lines = append(lines, data[:i])
-		if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
-			i++
-		}
-		data = data[i+1:]
-	}
+	return append(dst, '\n')
 }

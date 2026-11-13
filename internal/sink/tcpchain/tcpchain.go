@@ -1,9 +1,9 @@
 package tcpchain
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -59,6 +59,9 @@ type TCPChainSink struct {
 	everConnected bool
 	dialTimeout   time.Duration
 	writeTimeout  time.Duration
+	enc           *chain.Encoder
+	batch         []byte
+	skipped       int // entries of the batch being built that line dropped
 
 	done      chan struct{}
 	wg        sync.WaitGroup
@@ -68,8 +71,9 @@ type TCPChainSink struct {
 	writeErrors    atomic.Uint64
 	reconnects     atomic.Uint64
 	synthesized    atomic.Uint64
+	oversized      atomic.Uint64 // entries whose line a chain source would refuse
 	connected      atomic.Bool
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
 }
 
 // NewTCPChainSinkPlugin creates a tcp_chain sink through plugin factory
@@ -125,8 +129,8 @@ func NewTCPChainSinkPlugin(
 		logger:       logger,
 		dialTimeout:  time.Duration(opts.DialTimeoutMS) * time.Millisecond,
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
+		enc:          chain.NewEncoder(),
 	}
-	t.lastProcessed.Store(time.Time{})
 
 	t.session = proxy.CreateSession(
 		"tcp_chain://"+t.addr,
@@ -203,7 +207,7 @@ func (t *TCPChainSink) Stop() {
 
 // GetStats returns sink statistics
 func (t *TCPChainSink) GetStats() sink.SinkStats {
-	lastProc, _ := t.lastProcessed.Load().(time.Time)
+	lastProc := t.lastProcessed.Load()
 	var active int64
 	if t.connected.Load() {
 		active = 1
@@ -216,6 +220,7 @@ func (t *TCPChainSink) GetStats() sink.SinkStats {
 		"reconnects":   t.reconnects.Load(),
 		"write_errors": t.writeErrors.Load(),
 		"synthesized":  t.synthesized.Load(),
+		"oversized":    t.oversized.Load(),
 	}
 	maps.Copy(details, t.auth.Stats())
 
@@ -259,32 +264,57 @@ func (t *TCPChainSink) runLoop(ctx context.Context) {
 	}
 }
 
-// forward delivers one event; false once shutdown ends the delivery
+// forward writes event and what is queued behind it, up to
+// core.SinkWriteBatchBytes a write; false once shutdown ends the delivery
 func (t *TCPChainSink) forward(ctx context.Context, event core.TransportEvent) bool {
+	for {
+		var n int
+		var more bool
+		t.skipped = 0
+		t.batch, n, event, more = sink.Batch(t.batch, event, t.input, t.line)
+		if more && event.Entry.Time.IsZero() {
+			t.synthesized.Add(^uint64(0)) // counted again as the next batch's first
+		}
+		if n -= t.skipped; n > 0 {
+			if !t.deliver(ctx, t.batch) {
+				return false
+			}
+			t.totalProcessed.Add(uint64(n))
+			t.lastProcessed.Store(time.Now())
+			t.proxy.UpdateActivity(t.session.ID)
+		}
+		t.batch = sink.Kept(t.batch)
+		if !more {
+			return true
+		}
+	}
+}
+
+// line appends event's line to dst: Batch's add. An entry json cannot encode,
+// or whose line a source would refuse, is dropped
+func (t *TCPChainSink) line(dst []byte, event core.TransportEvent) []byte {
 	entry, synthesized := chain.EntryFromEvent(event, t.node, t.id)
 	if synthesized {
 		t.synthesized.Add(1)
 	}
-	line, err := json.Marshal(entry)
+	line, err := t.enc.Append(dst, entry)
 	if err != nil {
-		// Non-transient: drop
-		t.logger.Error("msg", "Failed to marshal chain entry",
-			"component", "tcp_chain_sink",
-			"error", err)
-		return true
+		t.skipped++
+		if errors.Is(err, chain.ErrEntryTooLong) {
+			t.oversized.Add(1)
+		} else {
+			t.logger.Error("msg", "Failed to marshal chain entry",
+				"component", "tcp_chain_sink",
+				"error", err)
+		}
 	}
-	if !t.deliver(ctx, append(line, '\n')) {
-		return false
-	}
-	t.totalProcessed.Add(1)
-	t.lastProcessed.Store(time.Now())
-	t.proxy.UpdateActivity(t.session.ID)
-	return true
+	return line
 }
 
-// deliver writes one line, holding it across reconnects until sent or shutdown.
-// Backpressure during outage propagates to the pipeline dispatch drop counter.
-func (t *TCPChainSink) deliver(ctx context.Context, line []byte) bool {
+// deliver writes buf, holding what the socket has not taken across reconnects
+// until sent or shutdown; a line it took whole before a failure is not sent
+// again. Backpressure during outage propagates to the pipeline's drop counter.
+func (t *TCPChainSink) deliver(ctx context.Context, buf []byte) bool {
 	for {
 		if t.conn == nil {
 			if t.failures > 0 && !t.waitBackoff(ctx, t.failures) {
@@ -315,7 +345,8 @@ func (t *TCPChainSink) deliver(ctx context.Context, line []byte) bool {
 		}
 
 		t.conn.SetWriteDeadline(time.Now().Add(t.writeTimeout))
-		if _, err := t.conn.Write(line); err != nil {
+		if n, err := t.conn.Write(buf); err != nil {
+			buf = buf[bytes.LastIndexByte(buf[:n], '\n')+1:]
 			t.writeErrors.Add(1)
 			t.failures++
 			t.logger.Warn("msg", "Chain write failed",

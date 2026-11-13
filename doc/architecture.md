@@ -102,7 +102,10 @@ instance of a single type fails, naming both pipelines.
    passed or the stage that dropped it (a filter by its index), goes to the
    pipeline's tap when a viewer set one, as `lw --tui`'s live view does.
 3. The formatter output becomes a `core.TransportEvent`, which carries both the
-   formatted `Payload` and the original structured `Entry`.
+   formatted `Payload` and the original structured `Entry`. A pipeline whose
+   sinks are all chain sinks, which send the entry, skips the formatter
+   unless a viewer's tap shows the payload: its events carry the entry
+   alone, and `flow.total_formatted` does not count them.
 4. **Dispatch** sends the event to every sink's input channel with a
    non-blocking send, except to a sink declaring `CapBackpressure`.
 
@@ -147,7 +150,9 @@ loses nothing. Each stage drops and counts instead of waiting:
   view counts as "screen missed". It copies the first 16 KiB of a longer
   message, fields or payload and 256 bytes of a level, source or node, so a
   viewer's rows pin no source's line, and takes dropped entries only while
-  the view shows them.
+  the view shows them. The screen's tap is full at 1024 records or 4 MiB of
+  their text, four ticks of what the view reads, so long lines queue no more
+  than it shows.
 
 The `tcp_chain` sink is the one deliberate exception. It holds a line across
 reconnects until it is written or the sink stops (shutdown or reload, after
@@ -160,8 +165,8 @@ shutdown (`dropped_batches`).
 ## Concurrency Model
 
 - One goroutine per source drains that source's subscription and feeds the flow.
-- The flow's formatter holds a mutex; the underlying formatter reuses an
-  internal buffer and is not goroutine-safe.
+- A pipeline's sources format at once: the formatter keeps no state between
+  entries, and each record is built in pooled scratch.
 - Each network sink runs one broadcast/broker goroutine plus, per connection, a
   writer goroutine (and for TCP, a reader goroutine that exists only to detect
   disconnects and refresh session activity).
@@ -177,14 +182,14 @@ shutdown (`dropped_batches`).
 
 1. Release dispatch waits on backpressure sinks; stop all sources
    concurrently, each closing its subscriber channels. From the release on,
-   dispatch picks at random between a backpressure sink's input and the
-   release, so it drops about half of the entries still in flight for one
-   (`total_dropped_by_sink`) even with room.
+   a backpressure sink with room still takes each entry in flight, and one
+   that is full drops it (`total_dropped_by_sink`) instead of waiting.
 2. Wait for the run loop, which ends when every subscription channel closes.
-3. Stop all sinks concurrently: console and file sinks write their queue;
-   network sinks deliver theirs within `sink.FlushBound`, their write or
-   request timeout when set below 2 s, else 2 s. Then cancel the pipeline
-   context.
+3. Stop all sinks concurrently: the file sink writes its queue; the console
+   sink writes its own within 2 s, as nothing interrupts a write to a
+   stalled stdout; network sinks deliver theirs within `sink.FlushBound`,
+   their write or request timeout when set below 2 s, else 2 s. Then cancel
+   the pipeline context.
 
 A finite source ends on its own: the console source at the end of stdin. The
 run loop then returns and the pipeline's `Finished` channel closes; once every
@@ -223,9 +228,10 @@ including `tls` and `tls_peer_cn` for TLS peers, `auth_method` /
 `auth_identity` for authorized ones, and `peer_addr`, the proxy, for a client
 a PROXY header names.
 
-Idle sessions are reaped every 5 minutes against a 30-minute idle limit. The
-HTTP sink's broker treats a vanished session as an eviction signal and closes
-the corresponding SSE client.
+Idle sessions are reaped every 5 minutes against a 30-minute idle limit.
+A session's activity is an atomic, refreshed after a read-locked lookup.
+The HTTP sink's broker treats a vanished session, checked when a client's
+queue is full, as an eviction signal and closes the corresponding SSE client.
 
 Authorization decisions do not read session metadata — `internal/authz` makes
 them from the handshake, the SCRAM exchange or a bearer token, at the point of
@@ -258,8 +264,12 @@ so the pipeline's `total_processed` and `total_filtered` go on; the new rate
 limiter starts with a full bucket, the new filters' own counters at zero, and
 the heartbeat restarts its interval.
 
-A rebuild is total: listening sockets close and reopen, all clients are
-disconnected, and a file source reads from where its `from` says again.
+A rebuild is total but for the listening sockets: `core.Listen` keeps each
+bound once its listener closes, and the new service's listener on that address
+takes it over, so a client connecting meanwhile waits in the backlog;
+`core.ReleaseIdle` then closes the sockets of addresses the new service
+dropped. All clients are disconnected, and a file source reads from where its
+`from` says again.
 Application logging is configured once at startup and is **not** re-applied
 on reload. The `lw --tui` screen takes the same paths, giving each new
 service the screen's tap before it starts: `t` after an edit swaps flows as a
@@ -345,11 +355,11 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
 
 ## Performance Notes
 
-- In-memory entry processing is sub-millisecond. Besides the formatter's
-  mutex, an entry can take the rate limiter's bucket lock (`policy = "drop"`)
-  and the pipeline's session-manager lock, which the network plugins and the
-  console and random sources take as entries pass, to refresh session
-  activity.
+- In-memory entry processing is sub-millisecond. An entry can take the rate
+  limiter's bucket lock (`policy = "drop"`) and, shared, the pipeline's
+  session-manager lock, which the network plugins and the console and random
+  sources read as entries pass to find the session whose activity they
+  refresh.
 - File tailing detects new content within roughly 100 ms (fixed poll), while
   `check_interval_ms` governs how quickly a *newly created* file is noticed.
 - `http_chain` trades latency for efficiency: entries wait up to

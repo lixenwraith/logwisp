@@ -43,6 +43,7 @@ type TCPChainSource struct {
 	listener    net.Listener
 	conns       map[net.Conn]struct{}
 	logger      *log.Logger
+	refusals    *netacl.Reporter
 
 	// TLS
 	tlsConfig          *tls.Config
@@ -63,7 +64,7 @@ type TCPChainSource struct {
 	parseErrors    atomic.Uint64
 	rejectedConns  atomic.Uint64
 	activeConns    atomic.Int64
-	lastEntryTime  atomic.Value // time.Time
+	lastEntryTime  core.AtomicTime
 }
 
 // NewTCPChainSourcePlugin creates a tcp_chain source through plugin factory
@@ -85,7 +86,8 @@ func NewTCPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, logger, "tcp_chain_source", id)
+	refusals := netacl.NewReporter(logger, "tcp_chain_source", id)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, refusals)
 	if err != nil {
 		return nil, err
 	}
@@ -102,11 +104,11 @@ func NewTCPChainSourcePlugin(
 		subscribers: make([]chan core.LogEntry, 0),
 		conns:       make(map[net.Conn]struct{}),
 		logger:      logger,
+		refusals:    refusals,
 		tlsConfig:   tlsCfg,
 		auth:        authPolicy,
 		acl:         aclPolicy,
 	}
-	s.lastEntryTime.Store(time.Time{})
 
 	logger.Info("msg", "TCP chain source initialized",
 		"component", "tcp_chain_source",
@@ -119,6 +121,7 @@ func NewTCPChainSourcePlugin(
 		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_chain_source", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "tcp_chain_source", id, opts.TrustNode)
+	netacl.WarnOpen(refusals, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return s, nil
 }
 
@@ -205,7 +208,7 @@ func (s *TCPChainSource) Stop() {
 
 // GetStats returns the source's statistics
 func (s *TCPChainSource) GetStats() source.SourceStats {
-	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
+	lastEntry := s.lastEntryTime.Load()
 	details := map[string]any{
 		"host":                 s.config.Host,
 		"port":                 s.config.Port,
@@ -233,25 +236,44 @@ func (s *TCPChainSource) GetStats() source.SourceStats {
 // acceptLoop accepts upstream connections until listener close
 func (s *TCPChainSource) acceptLoop() {
 	defer s.wg.Done()
+	var delay time.Duration
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || s.ctx.Err() != nil {
 				return
 			}
+			// EMFILE and the like persist: an immediate retry spins
+			delay = min(max(2*delay, 5*time.Millisecond), time.Second)
 			s.logger.Warn("msg", "Accept error",
 				"component", "tcp_chain_source",
-				"error", err)
+				"error", err,
+				"retry_in", delay)
+			select {
+			case <-time.After(delay):
+			case <-s.ctx.Done():
+				return
+			}
 			continue
 		}
+		delay = 0
 
-		if s.config.MaxConnections > 0 && s.activeConns.Load() >= s.config.MaxConnections {
+		// The slot is taken before the check, so a burst cannot pass it while
+		// no handleConn has run
+		if n := s.activeConns.Add(1); s.config.MaxConnections > 0 && n > s.config.MaxConnections {
+			s.activeConns.Add(-1)
 			s.rejectedConns.Add(1)
 			conn.Close()
 			continue
 		}
 
 		s.mu.Lock()
+		if s.ctx.Err() != nil { // Stop has swept conns: this one would outlive it
+			s.mu.Unlock()
+			s.activeConns.Add(-1)
+			conn.Close()
+			return
+		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
 
@@ -264,7 +286,6 @@ func (s *TCPChainSource) acceptLoop() {
 func (s *TCPChainSource) handleConn(conn net.Conn) {
 	defer s.wg.Done()
 	remote := conn.RemoteAddr().String()
-	s.activeConns.Add(1)
 
 	var sessID string
 	defer func() {
@@ -285,10 +306,7 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		cancel()
 		if err != nil {
 			s.tlsHandshakeErrors.Add(1)
-			s.logger.Warn("msg", "TLS handshake failed",
-				"component", "tcp_chain_source",
-				"remote_addr", remote,
-				"error", err)
+			s.refusals.Refused("TLS handshake failed", func() []any { return []any{"remote_addr", remote, "error", err} })
 			return // deferred cleanup closes conn
 		}
 		cs := tc.ConnectionState()
@@ -299,19 +317,12 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 	// carries the exchange. Nothing is acknowledged until node binding agrees.
 	adm, err := s.auth.Admit(conn, tlsState, true, time.Duration(s.config.HelloTimeoutMS)*time.Millisecond)
 	if err != nil {
+		msg := "Rejected chain connection"
 		if errors.Is(err, authz.ErrRefused) {
 			s.rejectedConns.Add(1)
-			s.logger.Warn("msg", "Connection rejected by auth policy",
-				"component", "tcp_chain_source",
-				"instance_id", s.id,
-				"remote_addr", remote,
-				"error", err)
-		} else {
-			s.logger.Warn("msg", "Rejected chain connection",
-				"component", "tcp_chain_source",
-				"remote_addr", remote,
-				"error", err)
+			msg = "Connection rejected by auth policy"
 		}
+		s.refusals.Refused(msg, func() []any { return []any{"remote_addr", remote, "error", err} })
 		return
 	}
 	ident := adm.Identity
@@ -324,22 +335,14 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 	if err != nil {
 		s.rejectedConns.Add(1)
 		adm.Reject("node label rejected")
-		s.logger.Warn("msg", "Connection rejected by node binding",
-			"component", "tcp_chain_source",
-			"instance_id", s.id,
-			"remote_addr", remote,
-			"declared_node", adm.Hello.Node,
-			"error", err)
+		s.refusals.Refused("Connection rejected by node binding", func() []any {
+			return []any{"remote_addr", remote, "declared_node", adm.Hello.Node, "error", err}
+		})
 		return
 	}
 	if err := adm.Accept(); err != nil {
 		return
 	}
-	scanner := bufio.NewScanner(adm.Reader)
-	// Oversized line (> MaxLogEntryBytes) is a protocol violation; scanner is
-	// unrecoverable after ErrTooLong, connection terminates
-	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
-
 	// force relabels every entry, so an edge cannot smuggle a foreign origin
 	// through the per-entry node field either
 	trustEntryNode := s.auth.TrustsEntryNode(s.config.TrustNode)
@@ -367,13 +370,24 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		"node", connNode,
 		"auth_identity", ident.Name)
 
+	// The deadline and the session's activity go per read, not per line: a
+	// burst costs one of each, and a link idles only while nothing arrives
 	idle := time.Duration(s.config.ReadTimeoutMS) * time.Millisecond
-	for {
+	scanner := bufio.NewScanner(readFunc(func(p []byte) (int, error) {
 		if idle > 0 {
 			conn.SetReadDeadline(time.Now().Add(idle))
-		} else {
-			conn.SetReadDeadline(time.Time{})
 		}
+		n, err := adm.Reader.Read(p)
+		if n > 0 {
+			s.proxy.UpdateActivity(sessID)
+		}
+		return n, err
+	}))
+	// A line past MaxLogEntryBytes ends the link, as the scanner cannot go on
+	// after ErrTooLong. Its buffer grows from 4 KiB only for a longer line.
+	scanner.Buffer(nil, core.MaxLogEntryBytes)
+	var entry core.LogEntry
+	for {
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
 				s.logger.Debug("msg", "Chain read terminated",
@@ -387,10 +401,7 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		if len(line) == 0 {
 			continue
 		}
-		s.proxy.UpdateActivity(sessID)
-
-		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
-		if err != nil {
+		if err := chain.DecodeEntry(&entry, line, connNode, trustEntryNode); err != nil {
 			s.parseErrors.Add(1)
 			s.logger.Debug("msg", "Dropped malformed chain entry",
 				"component", "tcp_chain_source",
@@ -400,6 +411,11 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		s.publish(entry)
 	}
 }
+
+// readFunc is a Read method from a function
+type readFunc func([]byte) (int, error)
+
+func (f readFunc) Read(p []byte) (int, error) { return f(p) }
 
 // publish sends a log entry to all subscribers
 func (s *TCPChainSource) publish(entry core.LogEntry) {

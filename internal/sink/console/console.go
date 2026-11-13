@@ -46,17 +46,21 @@ type ConsoleSink struct {
 	input  chan core.TransportEvent
 	output io.Writer
 	logger *log.Logger // application logger
+	batch  []byte      // the lines of one write, reused
 
 	// Runtime
 	done      chan struct{}
 	exited    chan struct{}
 	started   atomic.Bool
+	abandoned atomic.Bool // Stop gave up on a stalled output: nothing more is written
 	stopOnce  sync.Once
 	startTime time.Time
 
 	// Statistics
 	totalProcessed atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
+	writeErrors    atomic.Uint64 // entries a failed write lost
+	lastErr        string        // the last write error logged; processLoop alone writes it
 }
 
 // levelStyles and markStyles are ANSI 16, so the terminal's theme picks the
@@ -115,7 +119,6 @@ func NewConsoleSinkPlugin(
 		exited:  make(chan struct{}),
 		logger:  logger,
 	}
-	cs.lastProcessed.Store(time.Time{})
 
 	// Create session for output
 	cs.session = proxy.CreateSession(
@@ -170,7 +173,9 @@ func (cs *ConsoleSink) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop writes what is queued, then returns
+// Stop writes what is queued, then returns: within core.SinkFlushTimeout, as
+// network sinks flush, since nothing interrupts a write to a stalled stdout.
+// The write in progress then ends when it can, and the queue is left.
 func (cs *ConsoleSink) Stop() {
 	cs.logger.Info("msg", "Stopping console sink", "target", cs.config.Target)
 
@@ -181,7 +186,16 @@ func (cs *ConsoleSink) Stop() {
 
 	cs.stopOnce.Do(func() { close(cs.done) })
 	if cs.started.Load() {
-		<-cs.exited
+		select {
+		case <-cs.exited:
+		case <-time.After(core.SinkFlushTimeout):
+			cs.abandoned.Store(true)
+			cs.logger.Warn("msg", "Console output stalled: stopped without the queued entries",
+				"component", "console_sink",
+				"instance_id", cs.id,
+				"target", cs.config.Target,
+				"queued", len(cs.input))
+		}
 	}
 
 	cs.logger.Info("msg", "Console sink stopped",
@@ -192,7 +206,7 @@ func (cs *ConsoleSink) Stop() {
 
 // GetStats returns sink statistics
 func (cs *ConsoleSink) GetStats() sink.SinkStats {
-	lastProc, _ := cs.lastProcessed.Load().(time.Time)
+	lastProc := cs.lastProcessed.Load()
 
 	return sink.SinkStats{
 		ID:             cs.id,
@@ -201,10 +215,11 @@ func (cs *ConsoleSink) GetStats() sink.SinkStats {
 		StartTime:      cs.startTime,
 		LastProcessed:  lastProc,
 		Details: map[string]any{
-			"target":      cs.config.Target,
-			"buffer_size": cs.config.BufferSize,
-			"escape":      cs.escape,
-			"color":       cs.palette != nil,
+			"target":       cs.config.Target,
+			"buffer_size":  cs.config.BufferSize,
+			"escape":       cs.escape,
+			"write_errors": cs.writeErrors.Load(),
+			"color":        cs.palette != nil,
 		},
 	}
 }
@@ -227,7 +242,7 @@ func (cs *ConsoleSink) processLoop(ctx context.Context) {
 }
 
 func (cs *ConsoleSink) drain() {
-	for {
+	for !cs.abandoned.Load() {
 		select {
 		case event := <-cs.input:
 			cs.write(event)
@@ -237,23 +252,43 @@ func (cs *ConsoleSink) drain() {
 	}
 }
 
+// write writes the event with the lines queued behind it, a batch a write; a
+// batch a write fails is lost, as its lines would be one by one
 func (cs *ConsoleSink) write(event core.TransportEvent) {
+	for more := true; more && !cs.abandoned.Load(); {
+		var n int
+		cs.batch, n, event, more = sink.Batch(cs.batch, event, cs.input, cs.line)
+		if _, err := cs.output.Write(cs.batch); err != nil {
+			// A hung-up terminal or a full disk fails every write: the count
+			// keeps them, the log only a new error
+			cs.writeErrors.Add(uint64(n))
+			if msg := err.Error(); msg != cs.lastErr {
+				cs.lastErr = msg
+				cs.logger.Error("msg", "Failed to write to console",
+					"component", "console_sink",
+					"target", cs.config.Target,
+					"error", err)
+			}
+			continue
+		}
+		cs.lastErr = ""
+		cs.totalProcessed.Add(uint64(n))
+		cs.lastProcessed.Store(time.Now())
+	}
+	cs.batch = sink.Kept(cs.batch)
+}
+
+// line appends the event's line as the console shows it: escaped on a
+// terminal, painted when color is on
+func (cs *ConsoleSink) line(dst []byte, event core.TransportEvent) []byte {
 	payload := event.Payload
 	if cs.escape {
 		payload = logline.EscapeControls(payload)
 	}
 	if cs.palette != nil {
-		payload = cs.palette.paint(payload, event.Entry)
+		return cs.palette.paint(dst, payload, event.Entry)
 	}
-	if _, err := cs.output.Write(payload); err != nil {
-		cs.logger.Error("msg", "Failed to write to console",
-			"component", "console_sink",
-			"target", cs.config.Target,
-			"error", err)
-		return
-	}
-	cs.totalProcessed.Add(1)
-	cs.lastProcessed.Store(time.Now())
+	return append(dst, payload...)
 }
 
 // palette holds each style's opening and closing codes, rendered once
@@ -277,11 +312,10 @@ func newPalette(p *inline.Printer) *palette {
 	return pal
 }
 
-// paint colors the parts of the line logline marks, after escaping: the
-// escape sequences are the sink's own
-func (pal *palette) paint(payload []byte, e core.LogEntry) []byte {
+// paint appends the line to out, coloring the parts logline marks, after
+// escaping: the escape sequences are the sink's own
+func (pal *palette) paint(out, payload []byte, e core.LogEntry) []byte {
 	s := string(payload)
-	out := make([]byte, 0, len(s)+len(s)/2)
 	at := 0
 	logline.Marks(s, e, func(m logline.Mark) {
 		c, ok := pal.marks[m.Kind], m.Kind != logline.MarkLevel

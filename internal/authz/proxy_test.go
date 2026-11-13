@@ -6,8 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
@@ -86,7 +88,7 @@ func TestProxyModeTrustsOnlyItsProxies(t *testing.T) {
 func TestForwardedClientIsRefusedByTheRules(t *testing.T) {
 	f := newFixture(t)
 	acl, err := netacl.New(&config.ACLOptions{Allow: []string{"127.0.0.1", "203.0.113.0/24"}, Deny: []string{"203.0.113.66"}},
-		"127.0.0.1", netacl.HTTPProxied, log.NewLogger(), "test", "acl")
+		"127.0.0.1", netacl.HTTPProxied, netacl.NewReporter(log.NewLogger(), "test", "acl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,5 +285,53 @@ func TestAuthTakesOnlyJSON(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnsupportedMediaType {
 		t.Fatalf("text/plain /auth: %d, want 415", resp.StatusCode)
+	}
+}
+
+// The client is found walking X-Forwarded-For from the right, so the hops a
+// client pads the header with cost nothing: no more allocations than one hop
+func TestPaddedForwardedForCostsNoMore(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1"}}, nil, config.Listener, HTTP)
+	allocs := func(xff string) float64 {
+		r := httptest.NewRequest(http.MethodGet, "/status", nil)
+		r.RemoteAddr = "127.0.0.1:5000"
+		r.Header.Set("X-Forwarded-For", xff)
+		r.Header.Set("X-Forwarded-Proto", "https")
+		return testing.AllocsPerRun(10, func() { l.ClientAddr(r) })
+	}
+	if one, padded := allocs("203.0.113.7"), allocs(strings.Repeat("198.51.100.1, ", 4096)+"203.0.113.7"); padded > one {
+		t.Fatalf("a padded header allocates %v times a call, one hop %v", padded, one)
+	}
+}
+
+// A full revocation list refuses a logout only while every token in it is
+// live, a token revoked after the list was last scanned included, and never
+// that of a token it holds
+func TestFullRevocationListForgetsExpiredTokens(t *testing.T) {
+	m := &proxyMode{}
+	now := time.Now()
+	for i := range maxRevoked - 2 {
+		m.revoke(strconv.Itoa(i), now.Add(time.Hour))
+	}
+	m.revoke("expired-1", now.Add(-time.Second))
+	m.revoke("expired-2", now.Add(-time.Second))
+	if !m.revoke("late-1", now.Add(time.Hour)) { // the scan drops both expired tokens
+		t.Fatal("a full list kept its expired tokens")
+	}
+	// From here, not the test's start: filling the list takes a while
+	soon := time.Now().Add(250 * time.Millisecond)
+	if !m.revoke("soon", soon) {
+		t.Fatal("a list with room refused a token")
+	}
+	if m.revoke("late-2", now.Add(time.Hour)) {
+		t.Fatal("a list full of live tokens took another")
+	}
+	if !m.revoke("late-1", now.Add(time.Hour)) {
+		t.Fatal("a full list refused a token it holds")
+	}
+	time.Sleep(time.Until(soon) + 10*time.Millisecond)
+	if !m.revoke("late-2", now.Add(time.Hour)) {
+		t.Fatal("a full list kept a token that expired after its last scan")
 	}
 }

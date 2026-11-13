@@ -14,8 +14,10 @@ type TokenBucket struct {
 	mu         sync.Mutex
 }
 
-// New creates a new token bucket with given capacity and refill rate
+// New creates a new token bucket with given capacity, at least one token:
+// a bucket that never holds one admits nothing, whatever its rate
 func New(capacity float64, refillRate float64) *TokenBucket {
+	capacity = max(capacity, 1)
 	return &TokenBucket{
 		capacity:   capacity,
 		tokens:     capacity, // Start full

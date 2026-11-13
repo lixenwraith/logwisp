@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,10 @@ import (
 
 	"github.com/lixenwraith/log"
 )
+
+// maxFollowed bounds the files one source follows: each is a goroutine, and an
+// open and a stat every poll. Past it the other files matching wait.
+const maxFollowed = 4096
 
 // init registers the component in plugin factory
 func init() {
@@ -37,6 +42,7 @@ type FileSource struct {
 
 	// Configuration
 	config *config.FileSourceOptions
+	match  *regexp.Regexp // the pattern, compiled once
 
 	// lw's stdout and stderr when they are files: a console sink writes there,
 	// so following them would feed lw its own output. ownSkipped is per path
@@ -44,6 +50,13 @@ type FileSource struct {
 	own        []os.FileInfo
 	ownSkipped map[string]bool
 	scanErr    string // the last scan's error, "" once it read; monitorLoop's
+	capped     bool   // the last scan found more files than maxFollowed; monitorLoop's
+
+	// The directory, held open as the root followed files open in: a link
+	// there leads only to a file within it. Opened again when its path names
+	// another directory; dirInfo is the one held, monitorLoop's.
+	dir     atomic.Pointer[os.Root]
+	dirInfo os.FileInfo
 
 	// Application
 	subscribers []chan core.LogEntry
@@ -60,7 +73,7 @@ type FileSource struct {
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
 	startTime      time.Time
-	lastEntryTime  atomic.Value // time.Time
+	lastEntryTime  core.AtomicTime
 }
 
 // NewFileSourcePlugin creates a file source through plugin factory
@@ -79,6 +92,7 @@ func NewFileSourcePlugin(
 		id:          id,
 		proxy:       proxy,
 		config:      opts,
+		match:       regexp.MustCompile(globToRegex(opts.Pattern)),
 		subscribers: make([]chan core.LogEntry, 0),
 		watchers:    make(map[string]*fileWatcher),
 		ownSkipped:  make(map[string]bool),
@@ -89,7 +103,6 @@ func NewFileSourcePlugin(
 			fs.own = append(fs.own, info)
 		}
 	}
-	fs.lastEntryTime.Store(time.Time{})
 
 	fs.session = proxy.CreateSession(
 		fmt.Sprintf("file:///%s/%s", opts.Directory, opts.Pattern),
@@ -151,6 +164,9 @@ func (fs *FileSource) Stop() {
 		fs.cancel()
 	}
 	fs.wg.Wait()
+	if root := fs.dir.Load(); root != nil {
+		root.Close()
+	}
 
 	fs.proxy.RemoveSession(fs.session.ID)
 
@@ -171,7 +187,7 @@ func (fs *FileSource) Stop() {
 
 // GetStats returns the source's statistics, including active watchers.
 func (fs *FileSource) GetStats() source.SourceStats {
-	lastEntry, _ := fs.lastEntryTime.Load().(time.Time)
+	lastEntry := fs.lastEntryTime.Load()
 
 	fs.mu.RLock()
 	watcherCount := int64(len(fs.watchers))
@@ -232,11 +248,21 @@ func (fs *FileSource) checkTargets() {
 		return
 	}
 
+	waiting := 0
 	for _, file := range files {
-		fs.ensureWatcher(file)
+		if !fs.ensureWatcher(file) {
+			waiting++
+		}
+	}
+	if fs.capped != (waiting > 0) {
+		if fs.capped = waiting > 0; fs.capped {
+			fs.logger.Warn("msg", "File source follows at most 4096 files; the others matching wait",
+				"component", "file_source", "instance_id", fs.id, "directory", fs.config.Directory, "waiting", waiting,
+				"hint", "narrow pattern, or split the directory between sources")
+		}
 	}
 
-	fs.cleanupWatchers()
+	fs.cleanupWatchers(files)
 }
 
 // noteScan logs when the directory cannot be read and when it can again, not
@@ -265,16 +291,21 @@ func changed(last *string, err error) bool {
 	return text != was
 }
 
-// ensureWatcher creates and starts a new file watcher if one doesn't exist for the given path.
-func (fs *FileSource) ensureWatcher(path string) {
+// ensureWatcher creates and starts a new file watcher if one doesn't exist for
+// the given path, unless it is lw's own output, and reports false only for a
+// path left waiting past maxFollowed
+func (fs *FileSource) ensureWatcher(path string) bool {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	if _, exists := fs.watchers[path]; exists {
-		return
+	if _, exists := fs.watchers[path]; exists || fs.isOwn(path) {
+		return true
+	}
+	if len(fs.watchers) >= maxFollowed {
+		return false
 	}
 
-	w := newFileWatcher(path, fs.config.Raw, fs.config.From == "start", fs.publish, fs.logger)
+	w := newFileWatcher(&fs.dir, path, fs.config.Raw, fs.config.From == "start", fs.publish, fs.logger)
 	w.others = fs.othersOf(w)
 	// A rotation renames the file out from under its watcher, so the same inode
 	// reappears here under the archive name. Resume where it was left: from the
@@ -299,12 +330,13 @@ func (fs *FileSource) ensureWatcher(path string) {
 
 		fs.removeWatcher(path, w)
 	}()
+	return true
 }
 
 // readPosition reports how far a running watcher has read the file now at path.
 // Callers hold fs.mu.
 func (fs *FileSource) readPosition(path string) (int64, bool) {
-	file, err := os.Open(path)
+	file, err := openFollowed(fs.dir.Load(), filepath.Base(path))
 	if err != nil {
 		return 0, false
 	}
@@ -324,7 +356,7 @@ func (fs *FileSource) readFile(file *os.File, info os.FileInfo, but *fileWatcher
 		if w == but {
 			continue
 		}
-		if position, tail, ok := w.readTo(inodeOf(info)); ok && leads(file, position, info.Size(), tail) {
+		if position, ok := w.resumeAt(file, info); ok {
 			return position, true
 		}
 	}
@@ -353,13 +385,15 @@ func (fs *FileSource) removeWatcher(path string, watcher *fileWatcher) {
 	fs.mu.Unlock()
 }
 
-// cleanupWatchers stops and removes watchers for files that no longer exist.
-func (fs *FileSource) cleanupWatchers() {
+// cleanupWatchers stops and removes the watchers of files the scan no longer
+// lists, sorted: gone, or no longer a file. The listing answers without a stat
+// per file under the lock that every entry published waits on.
+func (fs *FileSource) cleanupWatchers(files []string) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
 	for path, w := range fs.watchers {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, listed := slices.BinarySearch(files, path); !listed {
 			w.stop()
 			delete(fs.watchers, path)
 			fs.logger.Debug("msg", "Cleaned up watcher for non-existent file",
@@ -388,41 +422,66 @@ func (fs *FileSource) publish(entry core.LogEntry) {
 	}
 }
 
-// scanFile finds all files in the configured path that match the pattern.
+// scanFile finds all files in the configured path that match the pattern,
+// sorted, as the directory may list them in any order
 func (fs *FileSource) scanFile() ([]string, error) {
-	entries, err := os.ReadDir(fs.config.Directory)
+	root, err := fs.openDir()
+	if err != nil {
+		return nil, err
+	}
+	d, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	entries, err := d.ReadDir(-1)
+	d.Close()
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert glob pattern to regex
-	regexPattern := globToRegex(fs.config.Pattern)
-	re, err := regexp.Compile(regexPattern)
-	if err != nil {
-		return nil, fmt.Errorf("invalid pattern regex: %w", err)
-	}
-
 	var files []string
 	for _, entry := range entries {
-		if entry.IsDir() {
+		// a FIFO, socket or device is no file to follow; a link's target is
+		// checked as it opens
+		if t := entry.Type(); t != 0 && t != os.ModeSymlink || !fs.match.MatchString(entry.Name()) {
 			continue
 		}
-
-		path := filepath.Join(fs.config.Directory, entry.Name())
-		if re.MatchString(entry.Name()) && !fs.isOwn(path) {
-			files = append(files, path)
-		}
+		files = append(files, filepath.Join(fs.config.Directory, entry.Name()))
 	}
-
+	slices.Sort(files)
 	return files, nil
 }
 
-// isOwn reports whether path is lw's own stdout or stderr, warning once per path
+// openDir returns the directory's root, opening it again when the path names
+// another directory: a replaced root is left to its finalizer, as a watcher
+// may be opening a file in it.
+func (fs *FileSource) openDir() (*os.Root, error) {
+	info, err := os.Stat(fs.config.Directory)
+	if err != nil {
+		return nil, err
+	}
+	if root := fs.dir.Load(); root != nil && os.SameFile(info, fs.dirInfo) {
+		return root, nil
+	}
+	root, err := os.OpenRoot(fs.config.Directory)
+	if err != nil {
+		return nil, err
+	}
+	if fs.dirInfo, err = root.Stat("."); err != nil {
+		root.Close()
+		return nil, err
+	}
+	fs.dir.Store(root)
+	return root, nil
+}
+
+// isOwn reports whether path is lw's own stdout or stderr, warning once per
+// path. Callers hold fs.mu.
 func (fs *FileSource) isOwn(path string) bool {
 	if len(fs.own) == 0 {
 		return false
 	}
-	info, err := os.Stat(path)
+	info, err := fs.dir.Load().Stat(filepath.Base(path))
 	if err != nil {
 		return false
 	}

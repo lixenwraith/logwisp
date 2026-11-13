@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -49,7 +51,7 @@ func text(cells []terminal.Cell, w int) []string {
 }
 
 // pipeline builds a composition of one pipeline from typed parts
-func pipeline(t *testing.T, sources, sinks []string) *compose.Composition {
+func pipeline(t testing.TB, sources, sinks []string) *compose.Composition {
 	t.Helper()
 	c := &compose.Composition{}
 	if err := c.AddPipeline("p"); err != nil {
@@ -611,6 +613,19 @@ func TestPasteReplacesThePipelines(t *testing.T) {
 	}
 }
 
+// With no pipeline left the preset menu comes back once what covered it
+// closes, the notice of a start that was underway included: no key reaches a
+// pipeline's bar while none exists
+func TestThePresetMenuOutlivesWhatCoversIt(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, []string{"null"}))
+	press(a, "k", "d", "y")
+	a.fault(errors.New("address already in use"), "%s")
+	press(a, terminal.KeyEscape)
+	if _, menu := a.dialog.(*chooser); !menu || len(a.comp.Pipelines) != 0 {
+		t.Fatalf("%d pipelines under %T", len(a.comp.Pipelines), a.dialog)
+	}
+}
+
 // Every problem marks the part it names and its key's row, the status counts
 // those after the first, and ! moves to the first, to the key
 func TestProblemNamesItsPart(t *testing.T) {
@@ -1022,5 +1037,52 @@ func TestThePipelineBarAddsRenamesDeletes(t *testing.T) {
 	press(a, "y", "l", "d")
 	if got := names(); !slices.Equal(got, []string{"default"}) || a.dialog != nil {
 		t.Fatalf("%q %T", got, a.dialog)
+	}
+}
+
+// BenchmarkPaint paints a valid pipeline of two sources, three sinks, a
+// filter and two stages on: its live view of 2000 rows alone at 80x24 and
+// under the diagram at 200x50, and the diagram inspecting a stage
+func BenchmarkPaint(b *testing.B) {
+	c := pipeline(b, []string{"file", "random"}, []string{"http", "file", "null"})
+	if _, err := c.Add(0, "filters", "include"); err != nil {
+		b.Fatal(err)
+	}
+	for _, s := range []struct {
+		n    compose.Node
+		k, v string
+	}{
+		{compose.Node{Role: "source", ID: "file"}, "directory", "/var/log/app"},
+		{compose.Node{Role: "sink", ID: "http"}, "port", "8080"},
+		{compose.Node{Role: "sink", ID: "file"}, "directory", "/var/log/lw"},
+		{compose.Node{Role: "sink", ID: "file"}, "name", "lw"},
+		{compose.Node{Role: "filters"}, "patterns", "error"},
+		{compose.Node{Role: "format"}, "type", "json"},
+		{compose.Node{Role: "rate_limit"}, "entries_per_second", "100"},
+	} {
+		if err := c.Set(0, s.n, s.k, s.v); err != nil {
+			b.Fatal(err)
+		}
+	}
+	for _, f := range []struct {
+		name string
+		w, h int
+		view bool
+	}{{"view 80x24", 80, 24, true}, {"view under diagram 200x50", 200, 50, true}, {"inspector 200x50", 200, 50, false}} {
+		b.Run(f.name, func(b *testing.B) {
+			a := mono(c)
+			if a.viewing = f.view; f.view {
+				for i := range 2000 {
+					a.view.take(tapped("p", "file", "", 0, fmt.Sprintf(`{"level":"INFO","msg":"request %d served","path":"/api/items","status":200}`, i)))
+				}
+			} else {
+				a.choose(compose.Node{Role: "format"})
+				a.inspectFirst(compose.Node{Role: "format"})
+			}
+			cells := make([]terminal.Cell, f.w*f.h)
+			for b.Loop() {
+				a.paint(cells, f.w, f.h)
+			}
+		})
 	}
 }

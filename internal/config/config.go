@@ -31,7 +31,7 @@ type LogConfig struct {
 	Output       string `toml:"output" lw:"enum=file|stdout|stderr|split|all|none" help:"where lw's own log goes; split: warn and error to stderr"`
 	Level        string `toml:"level" lw:"enum=debug|info|warn|error" help:"lowest level logged; without a file, warn"`
 	Format       string `toml:"format" lw:"enum=raw|txt|json,zero=the log default" help:"format of lw's own log"`
-	Sanitization string `toml:"sanitization" lw:"enum=raw|json|txt|shell,zero=the log default" help:"how the console log escapes control characters"`
+	Sanitization string `toml:"sanitization" lw:"enum=raw|json|txt|shell,zero=json" help:"how lw's own log escapes control characters"`
 
 	// File output settings (when Output includes "file" or "all")
 	File *LogFileConfig `toml:"file"`
@@ -42,11 +42,11 @@ type LogConfig struct {
 
 // LogFileConfig defines settings for file-based application logging
 type LogFileConfig struct {
-	Directory      string  `toml:"directory" lw:"hint=dir" help:"where file and all write; the limits below delete old .log files in it"`
+	Directory      string  `toml:"directory" lw:"hint=dir" help:"where file and all write; the limits below delete only lw's files in it"`
 	Name           string  `toml:"name" help:"base name of the files"`
 	MaxSizeMB      int64   `toml:"max_size_mb" help:"size at which a file rotates"`
-	MaxTotalSizeMB int64   `toml:"max_total_size_mb" help:"size of all .log files there, beyond which the oldest go"`
-	RetentionHours float64 `toml:"retention_hours" help:"hours a .log file is kept; 0 keeps them"`
+	MaxTotalSizeMB int64   `toml:"max_total_size_mb" help:"size of all lw's files there, beyond which the oldest go"`
+	RetentionHours float64 `toml:"retention_hours" help:"hours a file is kept; 0 keeps them"`
 }
 
 // LogConsoleConfig is logging.console, whose target has no effect:
@@ -112,7 +112,7 @@ const (
 // RateLimitConfig defines the configuration for pipeline-level rate limiting
 type RateLimitConfig struct {
 	EntriesPerSecond  float64 `toml:"entries_per_second,omitempty" lw:"min=0,zero=off" help:"entries a second let through; unset, the stage limits nothing, sizes included"`
-	BurstEntries      float64 `toml:"burst_entries,omitempty" lw:"min=0,zero=one second's worth" help:"entries that may pass in a burst before entries_per_second holds them back"`
+	BurstEntries      float64 `toml:"burst_entries,omitempty" lw:"min=0,zero=one second's worth" help:"entries that may pass in a burst before entries_per_second holds them back; at least 1"`
 	Policy            string  `toml:"policy,omitempty" default:"pass" lw:"enum=pass|drop" help:"drop enforces entries_per_second and max_entry_size_bytes; pass lets every entry through"`
 	MaxEntrySizeBytes int64   `toml:"max_entry_size_bytes,omitempty" lw:"min=0,zero=unlimited" help:"drop larger entries; needs entries_per_second and policy drop"`
 }
@@ -162,7 +162,7 @@ type RandomSourceOptions struct {
 	IntervalMS int64  `toml:"interval_ms" default:"500" lw:"min=1" help:"milliseconds between entries"`
 	JitterMS   int64  `toml:"jitter_ms" lw:"min=0,zero=none" help:"milliseconds the interval varies by, half each way; at most the interval"`
 	Format     string `toml:"format" default:"txt" lw:"enum=raw|txt|json" help:"entry format"`
-	Length     int64  `toml:"length" default:"20" lw:"min=1" help:"bytes of random text"`
+	Length     int64  `toml:"length" default:"20" lw:"min=1,max=1048576" help:"bytes of random text"`
 	Special    bool   `toml:"special" help:"mix in control and non-ASCII bytes"`
 }
 
@@ -177,18 +177,18 @@ type FileSourceOptions struct {
 
 // ConsoleSourceOptions defines settings for a stdin-based source
 type ConsoleSourceOptions struct {
-	BufferSize int64 `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
+	BufferSize int64 `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 }
 
 // TCPChainSourceOptions defines settings for a stdlib TCP listener ingesting
 // NDJSON entries from upstream logwisp tcp_chain sinks
 type TCPChainSourceOptions struct {
 	TLS            *TLSOptions  `toml:"tls" help:"TLS for the connections it accepts"`
-	Host           string       `toml:"host" default:"0.0.0.0" lw:"hint=host" help:"address to listen on, one family per listener: 0.0.0.0 every IPv4 interface, :: every IPv6 interface, 127.0.0.1 or ::1 this machine only"`
+	Host           string       `toml:"host" default:"127.0.0.1" lw:"hint=host" help:"address to listen on, one family per listener: 127.0.0.1 or ::1 this machine only, 0.0.0.0 every IPv4 interface, :: every IPv6 interface"`
 	Port           int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
-	BufferSize     int64        `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
+	BufferSize     int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	MaxConnections int64        `toml:"max_connections" lw:"min=0,zero=unlimited" help:"connections at once"`
-	ReadTimeoutMS  int64        `toml:"read_timeout_ms" lw:"min=0,zero=none" help:"milliseconds a connection may idle"`
+	ReadTimeoutMS  int64        `toml:"read_timeout_ms" default:"300000" lw:"min=0,zero=none" help:"milliseconds a connection may idle"`
 	HelloTimeoutMS int64        `toml:"hello_timeout_ms" default:"10000" lw:"min=1" help:"milliseconds for a peer's hello"`
 	TrustNode      bool         `toml:"trust_node" default:"true" help:"keep the node label a peer declares; off, the label is its address"`
 	Auth           *AuthOptions `toml:"auth" help:"how peers authenticate: mtls by client certificate, scram by user and password"`
@@ -199,10 +199,10 @@ type TCPChainSourceOptions struct {
 // NDJSON batches from upstream logwisp http_chain sinks
 type HTTPChainSourceOptions struct {
 	TLS           *TLSOptions  `toml:"tls" help:"TLS for the connections it accepts"`
-	Host          string       `toml:"host" default:"0.0.0.0" lw:"hint=host" help:"address to listen on, one family per listener: 0.0.0.0 every IPv4 interface, :: every IPv6 interface, 127.0.0.1 or ::1 this machine only"`
+	Host          string       `toml:"host" default:"127.0.0.1" lw:"hint=host" help:"address to listen on, one family per listener: 127.0.0.1 or ::1 this machine only, 0.0.0.0 every IPv4 interface, :: every IPv6 interface"`
 	Port          int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
 	IngestPath    string       `toml:"ingest_path" default:"/ingest" lw:"hint=path" help:"path batches are posted to"`
-	BufferSize    int64        `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
+	BufferSize    int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	MaxBodyBytes  int64        `toml:"max_body_bytes" default:"8388608" lw:"min=1" help:"largest batch accepted"`
 	ReadTimeoutMS int64        `toml:"read_timeout_ms" default:"30000" lw:"min=1" help:"milliseconds to read a request"`
 	TrustNode     bool         `toml:"trust_node" default:"true" help:"keep the node label a peer declares; off, the label is its address"`
@@ -226,7 +226,7 @@ type NullSinkOptions struct{}
 // ConsoleSinkOptions defines settings for a console-based sink
 type ConsoleSinkOptions struct {
 	Target     string `toml:"target" default:"stdout" lw:"enum=stdout|stderr" help:"stream written to"`
-	BufferSize int64  `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
+	BufferSize int64  `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	Escape     string `toml:"escape" default:"auto" lw:"enum=auto|always|never" help:"write control characters as <hex>; auto on a terminal"`
 	Color      string `toml:"color" default:"auto" lw:"enum=auto|always|never" help:"stamps, levels, sources and fields in color; unset, the top-level color"`
 }
@@ -237,19 +237,19 @@ type FileSinkOptions struct {
 	Name            string  `toml:"name" lw:"required" help:"base name of the files"`
 	MaxSizeMB       int64   `toml:"max_size_mb" default:"100" lw:"min=1" help:"size at which a file rotates"`
 	MaxTotalSizeMB  int64   `toml:"max_total_size_mb" default:"1000" lw:"min=1" help:"size of all files, beyond which the oldest go"`
-	MinDiskFreeMB   int64   `toml:"min_disk_free_mb" lw:"zero=none" help:"megabytes kept free on the disk, the oldest .log files deleted for it; a negative value means 100"`
-	RetentionHours  float64 `toml:"retention_hours" default:"168" lw:"min=0,zero=kept" help:"hours a .log file is kept; 0 keeps them"`
-	BufferSize      int64   `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
+	MinDiskFreeMB   int64   `toml:"min_disk_free_mb" default:"100" lw:"zero=none" help:"megabytes kept free on the disk, the sink's oldest files deleted for it, then writing paused; a negative value means 100"`
+	RetentionHours  float64 `toml:"retention_hours" default:"168" lw:"min=0,zero=kept" help:"hours a file is kept; 0 keeps them"`
+	BufferSize      int64   `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	FlushIntervalMs int64   `toml:"flush_interval_ms" default:"100" lw:"min=1" help:"milliseconds between flushes"`
 }
 
 // TCPSinkOptions defines settings for a TCP server sink
 type TCPSinkOptions struct {
 	TLS               *TLSOptions  `toml:"tls" help:"TLS for the connections it accepts"`
-	Host              string       `toml:"host" default:"0.0.0.0" lw:"hint=host" help:"address to listen on, one family per listener: 0.0.0.0 every IPv4 interface, :: every IPv6 interface, 127.0.0.1 or ::1 this machine only"`
+	Host              string       `toml:"host" default:"127.0.0.1" lw:"hint=host" help:"address to listen on, one family per listener: 127.0.0.1 or ::1 this machine only, 0.0.0.0 every IPv4 interface, :: every IPv6 interface"`
 	Port              int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
-	BufferSize        int64        `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued for all clients"`
-	ClientBufferSize  int64        `toml:"client_buffer_size" default:"256" lw:"min=1" help:"entries queued per client"`
+	BufferSize        int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued for all clients"`
+	ClientBufferSize  int64        `toml:"client_buffer_size" default:"256" lw:"min=1,max=1048576" help:"entries queued per client"`
 	WriteTimeoutMS    int64        `toml:"write_timeout_ms" default:"5000" lw:"min=1" help:"milliseconds a write may take before the client is dropped"`
 	KeepAlive         bool         `toml:"keep_alive" default:"true" help:"TCP keep-alive"`
 	KeepAlivePeriodMS int64        `toml:"keep_alive_period_ms" default:"30000" lw:"min=1" help:"milliseconds idle before a keep-alive probe"`
@@ -261,13 +261,13 @@ type TCPSinkOptions struct {
 // HTTPSinkOptions defines settings for an HTTP SSE server sink
 type HTTPSinkOptions struct {
 	TLS              *TLSOptions  `toml:"tls" help:"TLS for the connections it accepts"`
-	Host             string       `toml:"host" default:"0.0.0.0" lw:"hint=host" help:"address to listen on, one family per listener: 0.0.0.0 every IPv4 interface, :: every IPv6 interface, 127.0.0.1 or ::1 this machine only"`
+	Host             string       `toml:"host" default:"127.0.0.1" lw:"hint=host" help:"address to listen on, one family per listener: 127.0.0.1 or ::1 this machine only, 0.0.0.0 every IPv4 interface, :: every IPv6 interface"`
 	Port             int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
 	StreamPath       string       `toml:"stream_path" default:"/stream" lw:"hint=path" help:"path of the event stream"`
 	StatusPath       string       `toml:"status_path" default:"/status" lw:"hint=path" help:"path of the status document"`
-	BufferSize       int64        `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued for all clients"`
-	ClientBufferSize int64        `toml:"client_buffer_size" default:"256" lw:"min=1" help:"entries queued per client"`
-	WriteTimeoutMS   int64        `toml:"write_timeout_ms" lw:"min=0,zero=none" help:"milliseconds an event write may take"`
+	BufferSize       int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued for all clients"`
+	ClientBufferSize int64        `toml:"client_buffer_size" default:"256" lw:"min=1,max=1048576" help:"entries queued per client"`
+	WriteTimeoutMS   int64        `toml:"write_timeout_ms" default:"5000" lw:"min=0,zero=none" help:"milliseconds an event write may take"`
 	MaxConnections   int64        `toml:"max_connections" lw:"min=0,zero=unlimited" help:"clients at once"`
 	ReplayLines      int64        `toml:"replay_lines" lw:"min=0,zero=none" help:"recent entries a new stream gets first"`
 	LoginPage        bool         `toml:"login_page" help:"scram behind auth.trusted_proxies only: a login page at /auth/login"`
@@ -283,7 +283,7 @@ type TCPChainSinkOptions struct {
 	Node              string       `toml:"node" lw:"zero=the host name" help:"origin label of the entries"`
 	Host              string       `toml:"host" lw:"required,hint=host" help:"host of the tcp_chain source"`
 	Port              int64        `toml:"port" lw:"required,min=1,max=65535" help:"port of the tcp_chain source"`
-	BufferSize        int64        `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
+	BufferSize        int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	DialTimeoutMS     int64        `toml:"dial_timeout_ms" default:"5000" lw:"min=1" help:"milliseconds to connect"`
 	WriteTimeoutMS    int64        `toml:"write_timeout_ms" default:"5000" lw:"min=1" help:"milliseconds a write may take"`
 	BackoffMinMS      int64        `toml:"backoff_min_ms" default:"500" lw:"min=1" help:"first wait before reconnecting"`
@@ -301,7 +301,7 @@ type HTTPChainSinkOptions struct {
 	Host             string       `toml:"host" lw:"required,hint=host" help:"host of the http_chain source"`
 	Port             int64        `toml:"port" lw:"required,min=1,max=65535" help:"port of the http_chain source"`
 	IngestPath       string       `toml:"ingest_path" default:"/ingest" lw:"hint=path" help:"path batches are posted to"`
-	BufferSize       int64        `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
+	BufferSize       int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	MaxBatchCount    int64        `toml:"max_batch_count" default:"100" lw:"min=1" help:"entries in a batch"`
 	MaxBatchBytes    int64        `toml:"max_batch_bytes" default:"1048576" lw:"min=1" help:"bytes in a batch"`
 	FlushIntervalMS  int64        `toml:"flush_interval_ms" default:"1000" lw:"min=1" help:"milliseconds before a partial batch is sent"`
@@ -340,7 +340,7 @@ type AuthOptions struct {
 type ACLOptions struct {
 	Allow                      []string `toml:"allow" lw:"hint=cidr" help:"addresses or CIDRs that may connect; unset, any that deny does not refuse"`
 	Deny                       []string `toml:"deny" lw:"hint=cidr" help:"addresses or CIDRs refused, even when allow lists them"`
-	ProxyProtocol              string   `toml:"proxy_protocol" default:"off" lw:"enum=off|optional|required" help:"read a PROXY header from proxy_from"`
+	ProxyProtocol              string   `toml:"proxy_protocol" default:"off" lw:"enum=off|required" help:"read a PROXY header from proxy_from"`
 	ProxyFrom                  []string `toml:"proxy_from" lw:"hint=cidr" help:"proxies that may send a PROXY header"`
 	MaxConnectionsPerClient    int64    `toml:"max_connections_per_client" lw:"min=0,zero=unlimited" help:"connections a client may hold"`
 	RequestsPerSecondPerClient float64  `toml:"requests_per_second_per_client" lw:"http,min=0,zero=unlimited" help:"HTTP: requests a client may make each second"`

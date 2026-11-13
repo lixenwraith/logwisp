@@ -141,6 +141,25 @@ func TestOnATerminalSIGHUPStopsThePipelinesAndLeaves(t *testing.T) {
 	s.sunkAll(out)
 }
 
+// What lw warns of while q stops the pipelines, a sink's lost batch, shows
+// on no frame: it is printed once the screen closes
+func TestOnATerminalTheStopsWarningsArePrinted(t *testing.T) {
+	t.Parallel()
+	args, _ := filePipeline(t)
+	args[len(args)-1] = "http_chain:host=127.0.0.1,port=9" // refused: the batch waits
+	s := startTTY(t, true, append([]string{"-T"}, args...)...)
+	s.waitFor("t tap")
+	s.keys("t")
+	s.waitFor("running · 3 in")
+	s.keys("q")
+	s.waitFor("Stop the pipelines and quit?")
+	s.keys("y")
+	s.exitsRestored()
+	if !strings.Contains(s.printed(), "Chain batch dropped on shutdown") {
+		s.fatalf("the stop's warning was not printed")
+	}
+}
+
 // A hangup that signals nothing, the terminal not lw's controlling one,
 // fails the screen's read: lw stops the pipelines and leaves as on SIGHUP,
 // where it waited for a key no hung up terminal sends

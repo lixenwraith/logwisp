@@ -90,9 +90,10 @@ pipelines have [their own flags](#pipelines):
   writes the codes into a pipe and overrides `NO_COLOR`. A console sink's
   own `color` wins ([console sink](sinks.md#console))
 - `-q`, `--quiet`: silence lw's own log and notices, default `false`;
-  pipeline output still flows
+  pipeline output still flows, and why lw fails to start still prints
 - `--status_reporter=BOOL`: pipeline statistics every 30 s, logged at
-  `debug`, default `true` with a configuration file, `false` without
+  `debug` and gathered only then, default `true` with a configuration file,
+  `false` without
 - `--auto_reload=BOOL`: reload when the configuration file changes, default
   `false`
 - `-V`, `--version`: print the version and exit
@@ -108,9 +109,11 @@ The last `-c` wins; a missing or empty path is an error.
 - `--logging.level`: `debug`, `info`, `warn` or `error`, default `info` with a
   configuration file, `warn` without
 - `--logging.format`: `raw`, `txt` or `json`, default `txt`
-- `--logging.sanitization`: `raw`, `json`, `txt` or `shell`, default `raw`
+- `--logging.sanitization`: `raw`, `json`, `txt` or `shell`, default `json`:
+  control characters a peer puts in an address, a name or an error reach
+  lw's log escaped; `raw` writes them as they came
 - `--logging.file.directory`: a path, default `./log`; the limits below
-  delete any `.log` file in it
+  delete only lw's own files in it
   ([Application Logging](configuration.md#application-logging))
 - `--logging.file.name`: a string, default `logwisp`
 - `--logging.file.max_size_mb`, `--logging.file.max_total_size_mb`: integers,
@@ -163,12 +166,14 @@ A SPEC is `TYPE:key=value,...`, or `key=value,...` without a TYPE:
 - naming a stage turns it on: `--rate-limit` defaults `policy` to `drop`,
   `--heartbeat` defaults `enabled` to `true`
 
-Errors name the flag and the offending part, and nothing starts:
+Errors name the flag, TYPE and key, never a value, which may be a secret
+typed in the wrong place; an entry without `=` goes by its place. Nothing
+starts:
 
 ```
---sink http:port: missing "="
---rate-limit entries_per_second=100,polcy=drop: unknown key "polcy"
---source file,directory=/x: TYPE ends at ':', as in file:directory=/x
+--sink http: entry 1 has no "="
+--rate-limit: unknown key "polcy"
+--source file: TYPE ends at ':', as in file:KEY=VALUE
 ```
 
 A misspelled plugin key fails validation, before anything is built or opened:
@@ -283,7 +288,10 @@ changes when lw restarts; a fleet signs with an issuer instead, and edges set
 Every setting is also a variable: its path with `.` as `_`, uppercased, after
 `LOGWISP_`. An empty variable, a setting's or a pipeline's, counts as unset.
 They rank below flags and above the file
-([precedence](configuration.md#configuration-precedence)).
+([precedence](configuration.md#configuration-precedence)). A `LOGWISP_`
+variable that names no setting, pipeline variable or file location below is
+refused, as an unknown key is: a misspelled `LOGWISP_SINKS_1` would leave the
+entries on standard output.
 
 ```bash
 export LOGWISP_QUIET=true
@@ -335,9 +343,10 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
   ([Hot Reload](configuration.md#hot-reload))
 - `SIGHUP` before the signal handler is installed is ignored, so LogWisp
   survives a terminal hang-up like `nohup`
-- On the `lw --tui` screen, `SIGTERM` and `SIGHUP` close it, stopping what
-  `t` runs, and lw exits 0; so does a hangup no signal reports, where the
-  screen's terminal is not lw's controlling one and its read fails
+- On the `lw --tui` screen, `SIGINT` (from another process: Ctrl-C there is
+  a key), `SIGTERM` and `SIGHUP` close it, stopping what `t` runs, and lw
+  exits 0; so does a hangup no signal reports, where the screen's terminal
+  is not lw's controlling one and its read fails
 
 ## Exit Codes
 
@@ -389,9 +398,10 @@ values from the file, the environment or flags win.
 finishes when all its sources have ended, and once every pipeline has
 finished lw shuts down gracefully and exits 0. Only a console source ends on
 its own: file and network sources run until a signal, and so does a pipeline
-holding one. Every sink writes what is queued before the exit; a network
-sink gives its clients or its downstream its `write_timeout_ms`
-(`request_timeout_ms` for `http_chain`), at most 2 s, to take it.
+holding one. Every sink writes what is queued before the exit; a console
+sink gives its output 2 s to take it, a network sink gives its clients or
+its downstream its `write_timeout_ms` (`request_timeout_ms` for
+`http_chain`), at most 2 s.
 
 ## Usage Patterns
 
@@ -404,8 +414,8 @@ lw < app.log > copy.log
 # errors and warnings only
 tail -F app.log | lw --filter include:patterns=ERROR,patterns=WARN
 
-# stdin as a live SSE stream; the http and tcp sinks bind 0.0.0.0 by default
-journalctl -f | lw --sink http:host=127.0.0.1,port=8080
+# stdin as a live SSE stream; listeners bind 127.0.0.1 unless told
+journalctl -f | lw --sink http:port=8080
 
 # a directory's files to one file, through stdout
 lw --source file:directory=/var/log/app,pattern='*.log' > all.log
@@ -514,12 +524,14 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     again. A rule in the view marks where the swapped flows or the new run
     begin. When the new pipelines do not build, the earlier ones keep
     running and the error chooses the part it names. `q` asks before it
-    stops them, `r` and `o`'s choices stop them first, and `SIGTERM` or
-    `SIGHUP` (an ssh session's end) stops them and closes the screen, as
-    does a hangup no signal reports.
+    stops them, `r` and `o`'s choices stop them first, and `SIGINT`,
+    `SIGTERM` or `SIGHUP` (an ssh session's end) stops them and closes the
+    screen, as does a hangup no signal reports. The warnings and errors lw
+    logs while they stop (a sink's lost batch) print once the screen closes.
   - The bar counts the shown pipeline's entries in, filtered by the flow,
-    dropped by sinks, and missed by the screen: the view never slows a
-    pipeline. A sink that dropped entries shows how many on its node.
+    dropped by sinks, and missed by the screen, lw's own log records
+    included: the view never slows a pipeline. A sink that dropped entries
+    shows how many on its node.
 - Live view: from 40 rows it sits under the diagram, unless the inspector is
   open below the canvas; otherwise it takes the screen while it has the keys.
   `t` or Esc gives them back to the diagram (Esc first closes an open detail).
@@ -533,8 +545,15 @@ WebAssembly; `t` runs them under the screen and shows what flows.
   - A row is the entry's time, level, tag, message and fields, read from any
     line shape: LogWisp's json, lw's own log, vif records, pino, zap, slog,
     docker, journald, ECS, GCP, logfmt, or text after an RFC3339 stamp and
-    a level name. A narrow screen drops columns; a rune a terminal would act
-    on or draw wider than a cell shows as a placeholder.
+    a level name. An entry from a chain peer has its node before the tag,
+    `node/tag`, as formats write it, in the detail and an export too: the
+    node `node_binding` bound, which the line itself cannot change. A narrow
+    screen drops columns; a rune a terminal would act on or draw wider than
+    a cell shows as a placeholder.
+  - A nested object's members are fields at dotted keys, eight levels deep
+    and while the key is at most 64 bytes; deeper, or under a longer key,
+    the object is one field. A row keeps 32 KiB of field keys and values, and
+    its layout ends `fields cut` when it holds fewer than the entry had.
   - Keys: arrows or `jk` move (up pauses, down onto the newest follows),
     PgUp/PgDn; `g` or Home the oldest, `G`, End or `f` the newest; Enter the
     row's detail, `J`/`K` scroll it; `i` the row full screen, scrolled by
@@ -561,8 +580,9 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     and the payload as the sinks receive it, with escapes for what a cell
     cannot show.
   - It keeps 32 MiB of rows, each entry's message, fields and payload cut to
-    16 KiB, and redraws at most every 100 ms while entries flow, at once on
-    a key, never when idle. A closed standard output or error fails the
+    16 KiB, and up to 4 MiB of entries waiting for the next redraw; past
+    that they count as screen missed. It redraws at most every 100 ms while
+    entries flow, at once on a key, never when idle. A closed standard output or error fails the
     write (logged) rather than end lw with the terminal raw.
 - The screen draws on the controlling terminal: `lw -T > pipelines.toml` and
   `cmd | lw -T` keep standard input and output as data. lw never writes the
@@ -595,7 +615,8 @@ lw auth stream      --addr HOST:PORT -u NAME [--password-file FILE] [TLS flags]
 - `token`: logs in to an `http` sink or `http_chain` source and prints a
   bearer token
 - `stream`: logs in to a `tcp` sink and copies its stream to stdout until
-  interrupted
+  interrupted; on a terminal, control characters are escaped as by the
+  console sink's `escape = "auto"`
 
 `lw auth COMMAND -h` lists a command's flags. The exit status is `0` on
 success, `1` on failure and `2` on a usage error.
@@ -613,7 +634,8 @@ cannot replace a working password; `--generate` always generates, overwriting
 Both file commands rewrite atomically (a temporary file in the same directory
 as the file, or a symlink's target, then a rename), create files `0600`, keep an
 existing file's mode and owner, and refuse to write anything the daemon would
-not load. Comments above a user's `[[users]]` header stay with that user, and
+not load, warning when a file it wrote is readable by all users. Comments
+above a user's `[[users]]` header stay with that user, and
 those outside the users' tables stay where they are; a comment inside a user's
 table is dropped, and a new user goes last. A change that cannot keep the
 owner fails: run it as root or as the owner. A symlink to a missing file is

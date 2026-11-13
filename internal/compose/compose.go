@@ -83,18 +83,19 @@ func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 		words = words[1:]
 	}
 	var specs []config.Spec
+	flags := config.SpecFlags()
 	for i := 0; i < len(words); i++ {
 		name, value, inline := strings.Cut(words[i], "=")
 		if name == "-p" {
 			name = "--preset"
 		}
 		flag, long := strings.CutPrefix(name, "--")
-		if flags := config.SpecFlags(); !long || !slices.ContainsFunc(flags, func(f config.SpecFlag) bool { return f.Flag == flag }) {
+		if !long || !slices.ContainsFunc(flags, func(f config.SpecFlag) bool { return f.Flag == flag }) {
 			var names []string
 			for _, f := range flags {
 				names = append(names, "--"+f.Flag)
 			}
-			return nil, fmt.Errorf("%s: not a pipeline flag; paste lw's %s only", words[i], strings.Join(names, ", "))
+			return nil, fmt.Errorf("%s: not a pipeline flag; paste lw's %s only", name, strings.Join(names, ", "))
 		}
 		if !inline {
 			if i++; i == len(words) || strings.HasPrefix(words[i], "-") {
@@ -328,12 +329,13 @@ func (c *Composition) Retype(pi int, n Node, typ string) (Node, error) {
 	default:
 		return Node{}, n.missing()
 	}
-	from, _ := config.LookupPlugin(n.Role, *old)
 	kept := map[string]any{}
-	for _, k := range from.Keys() {
-		same := func(t config.Key) bool { return t.Name == k.Name && t.Kind == k.Kind }
-		if v, set := (*opts)[k.Name]; set && from.Side == to.Side && slices.ContainsFunc(to.Keys(), same) {
-			kept[k.Name] = v
+	if from, known := config.LookupPlugin(n.Role, *old); known && from.Side == to.Side {
+		for _, k := range from.Keys() {
+			same := func(t config.Key) bool { return t.Name == k.Name && t.Kind == k.Kind }
+			if v, set := (*opts)[k.Name]; set && slices.ContainsFunc(to.Keys(), same) {
+				kept[k.Name] = v
+			}
 		}
 	}
 	suffix, auto := strings.CutPrefix(*id, *old)
@@ -531,6 +533,28 @@ func (c *Composition) Options(pi int, n Node) (map[string]any, bool, error) {
 		return config.Values(stage.Interface()), true, nil
 	}
 	return nil, false, n.missing()
+}
+
+// Value is the value at a dotted key of a part's options, nil while unset.
+// A source's or sink's is read where it is stored, uncopied, as Options
+// would clone the whole map: callers only read it.
+func (c *Composition) Value(pi int, n Node, key string) any {
+	var v any
+	if p, err := c.pipeline(pi); err == nil {
+		switch i := index(p, n); {
+		case i >= 0 && n.Role == "source":
+			v = p.PluginSources[i].Config
+		case i >= 0 && n.Role == "sink":
+			v = p.PluginSinks[i].Config
+		default:
+			v, _, _ = c.Options(pi, n)
+		}
+	}
+	for part := range strings.SplitSeq(key, ".") {
+		m, _ := v.(map[string]any)
+		v = m[part]
+	}
+	return v
 }
 
 // Validate applies every rule lw applies at load: its error joins every
@@ -929,7 +953,7 @@ func NewSchema() Schema {
 		Forms:   Forms(),
 	}
 	for _, k := range config.SettingKeys() {
-		s.Settings = append(s.Settings, Setting{k, "LOGWISP_" + strings.ToUpper(strings.ReplaceAll(k.Name, ".", "_"))})
+		s.Settings = append(s.Settings, Setting{k, config.SettingVariable(k.Name)})
 	}
 	for _, p := range config.Plugins() {
 		if p.Role == "source" {

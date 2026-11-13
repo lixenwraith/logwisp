@@ -61,21 +61,21 @@ key alone means true:
                                 configuration file, warn without)
       --logging.format=FORMAT   txt|json|raw (default: txt)
       --logging.sanitization=POLICY
-                                raw (default: unchanged), txt (hex for '<'
-                                and non-printables), json (escapes control
-                                characters) or shell (strips; lossy)
+                                json (default: escapes control characters),
+                                raw (unchanged), txt (hex for '<' and
+                                non-printables) or shell (strips; lossy)
       --logging.file.directory=DIR
                                 Where file and all write (default: ./log);
-                                lw's alone: the limits below delete any old
-                                .log file in it
+                                the limits below delete only lw's files in
+                                it, so it can be shared
       --logging.file.name=NAME  File name base (default: logwisp)
       --logging.file.max_size_mb=N
                                 Start a new file past N MB (default: 100)
       --logging.file.max_total_size_mb=N
-                                Delete the oldest .log files there past N MB
-                                in all (default: 1000)
+                                Delete lw's oldest files there past N MB in
+                                all (default: 1000)
       --logging.file.retention_hours=H
-                                Delete .log files there older than H hours
+                                Delete lw's files there older than H hours
                                 (default: 168; 0 keeps them)
       --logging.console.target=TARGET
                                 Accepted without effect: --logging.output

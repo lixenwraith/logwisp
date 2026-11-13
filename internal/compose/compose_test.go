@@ -251,6 +251,36 @@ func TestOptionsAreACopy(t *testing.T) {
 	}
 }
 
+// Value reads an option at a dotted key as Options holds it: a source's, a
+// sink's table's, a flow stage's; nil for one unset or a part not there
+func TestValueReadsWhatOptionsHold(t *testing.T) {
+	c := &Composition{}
+	if err := c.AddPipeline("p"); err != nil {
+		t.Fatal(err)
+	}
+	src, _ := c.Add(0, "source", "file")
+	sink, _ := c.Add(0, "sink", "http")
+	format := Node{Role: "format"}
+	for _, s := range []struct {
+		n    Node
+		k, v string
+	}{{src, "directory", "/var/log"}, {sink, "tls.enabled", "true"}, {format, "type", "json"}} {
+		if err := c.Set(0, s.n, s.k, s.v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range []struct {
+		n    Node
+		key  string
+		want any
+	}{{src, "directory", "/var/log"}, {sink, "tls.enabled", true}, {sink, "tls.cert_file", nil},
+		{format, "type", "json"}, {Node{Role: "sink", ID: "gone"}, "port", nil}} {
+		if got := c.Value(0, r.n, r.key); got != r.want {
+			t.Errorf("%v %s: %v, want %v", r.n, r.key, got, r.want)
+		}
+	}
+}
+
 // A file may leave a source's or sink's id out: the engine names it as a
 // spec would, around the ids the file gave, so the shell forms load back
 func TestUnnamedPartsTakeFreeIDs(t *testing.T) {
@@ -305,6 +335,22 @@ func TestRetypeKeepsThePlace(t *testing.T) {
 	}
 	if want := []string{"tcp=tcp map[]", "web=tcp_chain map[]", "http=http map[port:9000]"}; !slices.Equal(parts, want) {
 		t.Fatalf("%q, want %q", parts, want)
+	}
+}
+
+// A part of a type the catalogue lacks, which a paste may hold, retypes
+// carrying no options over
+func TestRetypeFromAnUnknownTypeCarriesNothing(t *testing.T) {
+	c, err := FromJSON([]byte(`[{"name":"p","plugin_sources":[{"id":"s","type":"null"}],
+		"plugin_sinks":[{"id":"x","type":"bogus","config":{"port":9000}}]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Retype(0, Node{Role: "sink", ID: "x"}, "tcp"); err != nil {
+		t.Fatal(err)
+	}
+	if s := c.Pipelines[0].PluginSinks[0]; s.Type != "tcp" || len(s.Config) != 0 {
+		t.Fatalf("%+v", s)
 	}
 }
 

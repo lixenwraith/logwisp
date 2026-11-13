@@ -6,10 +6,17 @@ import (
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/service"
+
+	"github.com/lixenwraith/log"
 )
 
-// startStatusReporter starts a new status reporter for a service and returns its cancel function.
+// startStatusReporter starts a new status reporter for a service and returns
+// its cancel function, nil when the level keeps no debug record: the report
+// is one, and gathering every plugin's stats for it costs each tick
 func startStatusReporter(ctx context.Context, svc *service.Service) context.CancelFunc {
+	if !logger.Enabled(log.LevelDebug) {
+		return nil
+	}
 	reporterCtx, cancel := context.WithCancel(ctx)
 	go statusReporter(svc, reporterCtx)
 	logger.Debug("msg", "Started status reporter")

@@ -108,6 +108,9 @@ func main() {
 	if err != nil {
 		logger.Error("msg", "Failed to initialize service", "error", err)
 		shutdownLogger()
+		if cfg.Quiet || cfg.Logging.Output == "none" { // the log is off: still say why lw exits
+			fmt.Fprintf(os.Stderr, "Error: Failed to initialize service: %v\n", oneLine(err))
+		}
 		os.Exit(1)
 	}
 
@@ -134,6 +137,7 @@ func main() {
 		if svc != nil {
 			svc.Shutdown()
 		}
+		core.ReleaseIdle()
 		manager.Close()
 		logger.Info("msg", "Shutdown complete")
 	}()
@@ -155,8 +159,9 @@ func main() {
 		}
 		// Watch events are hints and may be duplicated or concern startup-only
 		// settings; an edit of flows alone swaps them in place. Signals always
-		// rebuild, including for certificate and credential rotation.
-		if !fromDisk && cfg.StatusReporter == next.StatusReporter {
+		// rebuild, including for certificate and credential rotation; so does
+		// any change while no service runs (done is nil), a rollback included.
+		if !fromDisk && done != nil && cfg.StatusReporter == next.StatusReporter {
 			if reflect.DeepEqual(cfg.Pipelines, next.Pipelines) {
 				return
 			}

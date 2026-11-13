@@ -43,8 +43,9 @@ func NewChain(configs []config.FilterConfig, logger *log.Logger) (*Chain, error)
 // the one that dropped it, or -1
 func (c *Chain) Apply(entry core.LogEntry) int {
 	c.totalProcessed.Add(1)
+	text := matchText(entry)
 	for i, filter := range c.filters {
-		if !filter.Apply(entry) {
+		if !filter.apply(entry, text) {
 			if c.logger.Enabled(log.LevelDebug) {
 				c.logger.Debug("msg", "Entry filtered out",
 					"component", "filter_chain",

@@ -166,7 +166,10 @@ sudo systemctl reload logwisp
 
 `$PREFIX/etc/rc.d/logwisp` runs `lw` through `daemon(8)` as `logwisp_user`,
 with its output in syslog under the tag `logwisp`; `service logwisp reload`
-sends `SIGHUP`. The port in `deploy/package/freebsd/` places the
+sends `SIGHUP`. `daemon(8)` restarts `lw` 5 s after it exits, as the systemd
+unit does after a failure, and after a clean exit too: a configuration whose
+input ends, such as a console source, restarts every 5 s. `service logwisp
+status` reports `lw`, which `daemon(8)` outlives. The port in `deploy/package/freebsd/` places the
 configuration the ports way, to the same effect: `@sample` installs
 `logwisp.toml.sample` and copies it to `logwisp.toml` when none exists.
 
@@ -184,6 +187,9 @@ rc.conf variables:
 - `logwisp_user`: the account (default `logwisp`)
 - `logwisp_chdir`: the working directory (default `/var/db/logwisp`, created
   for `logwisp_user` when missing)
+- `logwisp_umask`: the file creation mask (default `027`, as the systemd
+  unit's `UMask`: what lw creates is closed to other users, and its group may
+  read the logs)
 - `logwisp_args`: extra `lw` options, e.g. `--logging.level=debug` (default
   empty); `logwisp_flags` goes to `daemon(8)`, not to `lw`
 
@@ -372,8 +378,8 @@ docker run -d --name logwisp \
 - Privileges: keep the image's non-root user, a read-only root filesystem,
   `--cap-drop ALL` and `no-new-privileges`. Without capabilities, a port of
   1024 or above binds on every runtime; publish it on any host port.
-- Listeners bind `0.0.0.0` inside the container; `127.0.0.1` would be
-  unreachable through `-p`.
+- Listeners inside the container need `host = "0.0.0.0"`: the default
+  `127.0.0.1` is unreachable through `-p`.
 - Writable data: a `file` sink or `logging.file` needs a volume writable by
   65532; nothing else is written.
 - Reload: `docker kill -s HUP logwisp`.

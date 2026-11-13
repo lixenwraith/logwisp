@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -8,8 +9,8 @@ import (
 	"io/fs"
 	"maps"
 	"net/netip"
-	"os"
 	"path"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -32,17 +33,37 @@ func ValidateConfig(cfg *Config) error {
 		return fmt.Errorf("config is nil")
 	}
 	errs := []error{checkTags(reflect.ValueOf(cfg).Elem(), "")}
+	writers := map[string]string{}
 	if l := cfg.Logging; l != nil {
 		errs = append(errs, checkTags(reflect.ValueOf(l).Elem(), "logging."))
 		if l.Console != nil {
 			errs = append(errs, checkTags(reflect.ValueOf(l.Console).Elem(), "logging.console."))
 		}
+		if (l.Output == "file" || l.Output == "all") && l.File != nil {
+			writers[writes(l.File.Directory, l.File.Name)] = "logging.file"
+		}
 	}
-	return errors.Join(append(errs, ValidatePipelines(cfg.Pipelines))...)
+	return errors.Join(append(errs, validatePipelines(cfg.Pipelines, writers))...)
 }
 
 // ValidatePipelines is ValidateConfig's check of the pipelines
 func ValidatePipelines(pipelines []PipelineConfig) error {
+	return validatePipelines(pipelines, map[string]string{})
+}
+
+// writes is the files a log writer makes in directory under name, as a key:
+// two writers sharing it would rotate, and delete, each other's
+func writes(directory, name string) string {
+	dir, err := filepath.Abs(ExpandHome(directory))
+	if err != nil {
+		dir = filepath.Clean(directory)
+	}
+	return filepath.Join(dir, name)
+}
+
+// validatePipelines checks the pipelines; writers holds the files written
+// already, by the path of what writes them
+func validatePipelines(pipelines []PipelineConfig, writers map[string]string) error {
 	if len(pipelines) == 0 {
 		return fmt.Errorf("no pipelines configured")
 	}
@@ -84,8 +105,15 @@ func ValidatePipelines(pipelines []PipelineConfig) error {
 				if plugin.Single {
 					single[role+typ] = p.Name
 				}
-				if _, err := decode(role, typ, m); err != nil {
+				v, err := decode(role, typ, m)
+				if err != nil {
 					at(path+".config", err)
+				} else if o, ok := v.(*FileSinkOptions); ok {
+					key := writes(o.Directory, o.Name)
+					if first, taken := writers[key]; taken {
+						at(path+".config.name", fmt.Errorf("%s writes these files already; give this sink another name or directory", first))
+					}
+					writers[key] = cmp.Or(writers[key], path)
 				}
 			}
 		}
@@ -191,10 +219,20 @@ func (p Plugin) checkNetwork(n networked) error {
 // Check holds the rules between tls keys on a listener or a dialer; a table
 // not enabled is ignored whole
 func (o *TLSOptions) Check(listener bool) error {
-	if o == nil || !o.Enabled {
+	if o == nil {
 		return nil
 	}
 	v := reflect.ValueOf(o).Elem()
+	if !o.Enabled {
+		// min_version, with its default, is tuning; any other key means TLS
+		// was meant and enabled forgotten
+		for _, opt := range options(v.Type()) {
+			if f := v.Field(opt.index); opt.Default == "" && !f.IsZero() && (f.Kind() != reflect.Slice || f.Len() > 0) {
+				return fmt.Errorf("tls: %s is set but enabled is not", opt.Name)
+			}
+		}
+		return nil
+	}
 	if err := checkTags(v, "tls."); err != nil {
 		return err
 	}
@@ -222,6 +260,8 @@ func (o *TLSOptions) Check(listener bool) error {
 		return fmt.Errorf("tls: listeners need cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file")
 	case o.ClientAuth && o.ClientCAFile == "":
 		return fmt.Errorf("tls: client_auth requires client_ca_file")
+	case o.ClientCAFile != "" && !o.ClientAuth:
+		return fmt.Errorf("tls: client_ca_file is set but client_auth is not, so no client certificate is asked for")
 	}
 	if (o.CertFile == "") != (o.KeyFile == "") {
 		return fmt.Errorf("tls: cert_file and key_file must be set together")
@@ -373,12 +413,12 @@ func (o *ACLOptions) Check(host string, http, proxied bool) error {
 	if err := checkTags(reflect.ValueOf(o).Elem(), "acl."); err != nil {
 		return err
 	}
-	header := o.ProxyProtocol == "optional" || o.ProxyProtocol == "required"
+	header := o.ProxyProtocol == "required"
 	switch {
 	case header && len(o.ProxyFrom) == 0:
 		return fmt.Errorf("acl: proxy_protocol %s needs proxy_from, the proxies that may send the header", o.ProxyProtocol)
 	case !header && len(o.ProxyFrom) > 0:
-		return errors.New("acl: proxy_from needs proxy_protocol optional or required")
+		return errors.New("acl: proxy_from needs proxy_protocol required")
 	case !http && httpKey(o) != "":
 		return fmt.Errorf("acl: %s applies only to HTTP listeners", httpKey(o))
 	case o.MaxConnectionsPerClient > 0 && proxied:
@@ -456,11 +496,10 @@ const pagesBehind = "only for scram behind auth.trusted_proxies, where browsers 
 // log in, behind a proxy
 func (o *HTTPSinkOptions) Check() error {
 	for _, p := range []struct{ key, path string }{{"stream_path", o.StreamPath}, {"status_path", o.StatusPath}} {
-		c := path.Clean(p.path)
-		switch {
-		case !strings.HasPrefix(p.path, "/") || strings.ContainsAny(p.path, "{}%?#") || c != p.path && (c == "/" || c+"/" != p.path):
-			return &KeyError{p.key, fmt.Errorf("%q must start with '/', hold no '//', '.' or '..' segment, and none of '{', '}', '%%', '?', '#'", p.path)}
-		case p.path == chain.AuthPath || strings.HasPrefix(p.path, chain.AuthPath+"/"):
+		if err := checkPath(p.key, p.path); err != nil {
+			return err
+		}
+		if p.path == chain.AuthPath || strings.HasPrefix(p.path, chain.AuthPath+"/") {
 			return &KeyError{p.key, fmt.Errorf("%s and the paths under it are reserved for authentication", chain.AuthPath)}
 		}
 	}
@@ -481,21 +520,33 @@ func (o *HTTPSinkOptions) Check() error {
 func (o *HTTPChainSourceOptions) Check() error { return checkIngestPath(o.IngestPath) }
 func (o *HTTPChainSinkOptions) Check() error {
 	o.BackoffMaxMS = backoffMax(o.BackoffMinMS, o.BackoffMaxMS)
+	if err := chain.CheckNode(o.Node); err != nil {
+		return &KeyError{"node", err}
+	}
 	return checkIngestPath(o.IngestPath)
 }
 
 func checkIngestPath(p string) error {
-	switch {
-	case !strings.HasPrefix(p, "/"):
-		return &KeyError{"ingest_path", errors.New("must start with '/'")}
-	case p == chain.AuthPath:
+	if p == chain.AuthPath {
 		return &KeyError{"ingest_path", fmt.Errorf("%s is reserved for authentication", chain.AuthPath)}
+	}
+	return checkPath("ingest_path", p)
+}
+
+// checkPath keeps a path ServeMux registers and a URL carries literally: a
+// pattern ServeMux cannot parse panics at Start, past --check and a reload
+func checkPath(key, p string) error {
+	if c := path.Clean(p); !strings.HasPrefix(p, "/") || strings.ContainsAny(p, "{}%?#") || c != p && (c == "/" || c+"/" != p) {
+		return &KeyError{key, fmt.Errorf("%q must start with '/', hold no '//', '.' or '..' segment, and none of '{', '}', '%%', '?', '#'", p)}
 	}
 	return nil
 }
 
 func (o *TCPChainSinkOptions) Check() error {
 	o.BackoffMaxMS = backoffMax(o.BackoffMinMS, o.BackoffMaxMS)
+	if err := chain.CheckNode(o.Node); err != nil {
+		return &KeyError{"node", err}
+	}
 	return nil
 }
 
@@ -507,7 +558,7 @@ func backoffMax(lo, hi int64) int64 {
 	return hi
 }
 
-// Check reads a negative min_disk_free_mb as 100; 0, or none set, keeps no space free
+// Check reads a negative min_disk_free_mb as the default, 100; 0 keeps no space free
 func (o *FileSinkOptions) Check() error {
 	if o.MinDiskFreeMB < 0 {
 		o.MinDiskFreeMB = 100
@@ -555,19 +606,15 @@ func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 	if t.Kind() != reflect.Struct {
 		return nil
 	}
-	fields := make(map[string]reflect.Type, t.NumField())
-	for f := range t.Fields() {
-		if name, _, _ := strings.Cut(f.Tag.Get("toml"), ","); name != "" && name != "-" {
-			fields[name] = f.Type
-		}
-	}
+	opts := options(t)
 	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(m)) {
-		ft, ok := fields[key]
-		if !ok {
+		i := slices.IndexFunc(opts, func(o option) bool { return o.Name == key })
+		if i < 0 {
 			errs = append(errs, fmt.Errorf("unknown key %q", prefix+key))
 			continue
 		}
+		ft := t.Field(opts[i].index).Type
 		var tables []map[string]any
 		switch v := m[key].(type) {
 		case map[string]any:
@@ -592,7 +639,7 @@ func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 // not: a misspelled table path such as plugin_sinks.confg.tls would otherwise
 // drop the whole table. Plugin config maps are checked by Decode instead.
 func checkFileKeys(path string) error {
-	data, err := os.ReadFile(path)
+	data, err := ReadRegular(path, MaxFileBytes)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}

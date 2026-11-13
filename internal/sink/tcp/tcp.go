@@ -49,12 +49,14 @@ type TCPSink struct {
 	listener net.Listener
 
 	// Application
-	input  chan core.TransportEvent
-	logger *log.Logger
+	input    chan core.TransportEvent
+	logger   *log.Logger
+	refusals *netacl.Reporter
 
 	// Client registry. conns holds every accepted connection, so shutdown also
 	// reaches peers still in the handshake, before they become clients.
 	clients      map[uint64]*tcpClient
+	clientsPeak  int // the most clients held since the map was built
 	conns        map[net.Conn]struct{}
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
@@ -87,7 +89,7 @@ type TCPSink struct {
 	writeErrors    atomic.Uint64
 	droppedWrites  atomic.Uint64
 	rejectedConns  atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
 }
 
 // tcpClient is a registered connection's bounded send queue.
@@ -120,7 +122,8 @@ func NewTCPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, logger, "tcp_sink", id)
+	refusals := netacl.NewReporter(logger, "tcp_sink", id)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, refusals)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +143,7 @@ func NewTCPSinkPlugin(
 		flush:        make(chan struct{}),
 		flushed:      make(chan struct{}),
 		logger:       logger,
+		refusals:     refusals,
 		clients:      make(map[uint64]*tcpClient),
 		conns:        make(map[net.Conn]struct{}),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
@@ -147,7 +151,6 @@ func NewTCPSinkPlugin(
 		auth:         authPolicy,
 		acl:          aclPolicy,
 	}
-	t.lastProcessed.Store(time.Time{})
 
 	logger.Info("msg", " TCP sink initialized",
 		"component", "tcp_sink",
@@ -160,6 +163,7 @@ func NewTCPSinkPlugin(
 		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "tcp_sink", id, false)
+	netacl.WarnOpen(refusals, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return t, nil
 }
 
@@ -283,24 +287,37 @@ func (t *TCPSink) shutdown() {
 	})
 }
 
-// acceptLoop accepts client connections until listener close
+// acceptLoop accepts client connections until listener close. After an
+// Accept error it backs off as net/http does: at the descriptor limit the
+// error recurs until a connection closes, and retrying at once spins.
 func (t *TCPSink) acceptLoop() {
 	defer t.wg.Done()
+	var delay time.Duration
 	for {
 		conn, err := t.listener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
+			delay = min(max(2*delay, 5*time.Millisecond), time.Second)
 			t.logger.Warn("msg", "Accept error",
 				"component", "tcp_sink",
-				"error", err)
+				"error", err,
+				"retry_in", delay)
+			select {
+			case <-time.After(delay):
+			case <-t.done:
+				return
+			}
 			continue
 		}
+		delay = 0
 
-		if t.config.MaxConnections > 0 && t.activeConns.Load() >= t.config.MaxConnections {
-			// The count rises only in handleConn, so a burst can over-admit by
-			// the conns accepted before their handleConn runs; acceptable
+		// The slot is taken before the check, so a burst cannot pass it while
+		// no handleConn has run; it bounds concurrent handshakes too
+		count := t.activeConns.Add(1)
+		if t.config.MaxConnections > 0 && count > t.config.MaxConnections {
+			t.activeConns.Add(-1)
 			t.rejectedConns.Add(1)
 			conn.Close()
 			continue
@@ -311,6 +328,7 @@ func (t *TCPSink) acceptLoop() {
 		case <-t.done:
 			// shutdown already swept conns; this one would outlive it
 			t.clientsMu.Unlock()
+			t.activeConns.Add(-1)
 			conn.Close()
 			return
 		default:
@@ -319,18 +337,17 @@ func (t *TCPSink) acceptLoop() {
 		t.clientsMu.Unlock()
 
 		t.wg.Add(1)
-		go t.handleConn(conn)
+		go t.handleConn(conn, count)
 	}
 }
 
-// handleConn registers the client and runs its writer; a companion reader
-// goroutine drains inbound bytes for disconnect detection
-func (t *TCPSink) handleConn(conn net.Conn) {
+// handleConn registers the client, holding the slot acceptLoop took, and runs
+// its writer; a companion reader goroutine drains inbound bytes for
+// disconnect detection
+func (t *TCPSink) handleConn(conn net.Conn, count int64) {
 	defer t.wg.Done()
 	remote := conn.RemoteAddr().String()
 
-	// Counted before the handshake: max_connections bounds concurrent handshakes too
-	count := t.activeConns.Add(1)
 	defer func() {
 		conn.Close()
 		t.clientsMu.Lock()
@@ -357,10 +374,7 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		cancel()
 		if err != nil {
 			t.tlsHandshakeErrors.Add(1)
-			t.logger.Debug("msg", "TLS handshake failed",
-				"component", "tcp_sink",
-				"remote_addr", remote,
-				"error", err)
+			t.refusals.Refused("TLS handshake failed", func() []any { return []any{"remote_addr", remote, "error", err} })
 			return
 		}
 		cs := tc.ConnectionState()
@@ -380,11 +394,7 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 	}
 	if err != nil {
 		t.rejectedConns.Add(1)
-		t.logger.Warn("msg", "Connection rejected by auth policy",
-			"component", "tcp_sink",
-			"instance_id", t.id,
-			"remote_addr", remote,
-			"error", err)
+		t.refusals.Refused("Connection rejected by auth policy", func() []any { return []any{"remote_addr", remote, "error", err} })
 		return
 	}
 	ident := adm.Identity
@@ -407,6 +417,7 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		return
 	}
 	t.clients[id] = c
+	t.clientsPeak = max(t.clientsPeak, len(t.clients))
 	t.clientsMu.Unlock()
 
 	t.logger.Debug("msg", "TCP connection opened",
@@ -419,6 +430,7 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 	defer func() {
 		t.clientsMu.Lock()
 		delete(t.clients, id)
+		t.clients, t.clientsPeak = sink.Shrunk(t.clients, t.clientsPeak)
 		t.clientsMu.Unlock()
 		conn.Close()
 		<-c.closed // reader has exited
@@ -426,10 +438,11 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 	}()
 
 	// Reader: sink is write-only; drain and discard inbound bytes to detect
-	// disconnect and refresh session activity on client traffic
+	// disconnect and refresh session activity on client traffic. Only EOF
+	// matters: a client that sends anyway pays the extra reads.
 	go func() {
 		defer close(c.closed)
-		buf := make([]byte, 4096)
+		buf := make([]byte, 512)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
@@ -459,27 +472,45 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		t.proxy.UpdateActivity(sess.ID)
 		return true
 	}
+	// send writes data and all q holds behind it, a batch a write, each under
+	// the deadline by, or writeTimeout from its start; a payload with nothing
+	// queued behind it, or one that fills a batch alone, is written as it is
+	var buf []byte
+	send := func(data []byte, q <-chan []byte, by time.Time) bool {
+		for more := true; more; {
+			batch := data
+			more = false
+			if len(q) > 0 && len(batch) < core.SinkWriteBatchBytes {
+				buf, _, data, more = sink.Batch(buf, data, q, sink.Bytes)
+				batch = buf
+			}
+			deadline := by
+			if deadline.IsZero() && t.writeTimeout > 0 {
+				deadline = time.Now().Add(t.writeTimeout)
+			}
+			if !write(batch, deadline) {
+				return false
+			}
+			if !more && len(q) > 0 {
+				data, more = <-q, true
+			}
+		}
+		buf = sink.Kept(buf)
+		return true
+	}
 	for {
 		select {
 		case data := <-c.send:
-			var deadline time.Time
-			if t.writeTimeout > 0 {
-				deadline = time.Now().Add(t.writeTimeout)
-			}
-			if !write(data, deadline) {
+			if !send(data, c.send, time.Time{}) {
 				return
 			}
 		case <-t.flushed:
 			// Nothing more will be queued: write the queue, then the tail
-			for len(c.send) > 0 {
-				if !write(<-c.send, t.flushBy) {
-					return
-				}
+			if len(c.send) > 0 && !send(<-c.send, c.send, t.flushBy) {
+				return
 			}
-			for _, data := range t.tail {
-				if !write(data, t.flushBy) {
-					return
-				}
+			if tail := sink.Queue(t.tail); len(tail) > 0 {
+				send(<-tail, tail, t.flushBy)
 			}
 			return
 		case <-c.closed:
@@ -532,7 +563,7 @@ func (t *TCPSink) flushInput() {
 
 // GetStats returns sink statistics
 func (t *TCPSink) GetStats() sink.SinkStats {
-	lastProc, _ := t.lastProcessed.Load().(time.Time)
+	lastProc := t.lastProcessed.Load()
 	details := map[string]any{
 		"host":                 t.config.Host,
 		"port":                 t.config.Port,

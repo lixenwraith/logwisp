@@ -33,7 +33,11 @@ Options, each as type and default:
 - `directory` (string, required): directory to scan; not recursive. A leading
   `~/`, here as in every file or directory option, is the home directory; a
   relative path starts at lw's working directory.
-- `pattern` (string, `*`): glob over filenames; `*` and `?` only.
+- `pattern` (string, `*`): glob over filenames; `*` and `?` only. A source
+  follows 4,096 files at most, the first by name: past that, one WARN, and the
+  others matching wait for a watcher to end. Narrow the pattern, or split the
+  directory between sources. A file's watcher stops once a scan no longer lists
+  it: removed, renamed away, or replaced by a directory.
 - `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
   An open file is polled every 100 ms whatever this is.
 - `raw` (bool, `false`): never parse a line: the whole line is the message.
@@ -51,9 +55,13 @@ Options, each as type and default:
   `Cannot read file` when the failure starts or changes, not at each retry.
 - The file lw's stdout or stderr is redirected to is never followed, with a
   warning: `lw > out.log` in the directory would read its own output back.
+- A symbolic link is followed only to a file inside the directory: one leading
+  out of it, or an absolute one, is `Cannot read file` with
+  `path escapes from parent`. A directory is followed where it is: replaced
+  (a release's link swapped), it is opened anew at the next scan.
 - A line longer than 1 MiB continues in the next entry, as on the console
   source; so does the rest of a line a poll reads while it is still being
-  written.
+  written, or past the 64 MiB a poll reads at most.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
   restart or a reload resumes from the current end of each file, and content
   written meanwhile is not read. A file created while lw runs gets its watcher
@@ -86,16 +94,24 @@ Options, each as type and default:
     so it is read from its start. A rewrite still being written after 2 s is
     judged as it stands: read from its start if it has not reached those
     lines yet, else what it writes after that is replayed.
+- A watcher keeps its file open, so each followed file holds a descriptor.
+  When a rotation renames or removes the file, whatever the archive is
+  called, lw reads it to its end before it follows the new file under the
+  name, and on while its writer still appends before reopening the name, for
+  2 s at most: nothing written before the rotation is lost.
 - A rotation that renames in place (a size-capped writer, a numbered logrotate
   chain shifting `app.log.1` to `app.log.2`) puts the same inode back under a
   name `pattern` also matches. The watcher there, new or already following
   that name, resumes where the file was read to: it reads only the tail an
-  unfinished read left behind, never the whole archive a second time.
+  unfinished read left behind, never the whole archive a second time, and
+  the watcher it came from reads it no further.
 - A line is parsed as JSON only when it is a non-empty object whose top-level
   keys are all drawn from `time`, `level`, `msg` and `fields` (the four an
-  entry can carry), with any `level` or `msg` a string. `time` is read as
-  RFC3339Nano; the read time stands in when it is missing or does not parse.
-  Any other line is kept whole as text, so nothing in it is dropped. `level` is
+  entry can carry), each named once, with any `level` or `msg` a string.
+  `time` is read as RFC3339Nano; the read time stands in when it is missing,
+  zero or does not parse. Any other line is kept whole as text, so nothing in
+  it is dropped. The keys are read before the line is decoded, so a zap,
+  slog or logrus line costs a scan of its keys only. `level` is
   kept as written (a filter sees `Error` or `fatal` as is), and a line without
   `level` has none; only text lines get the inference below.
 - A text line's level is its first whole word, in any case, naming one:
@@ -104,7 +120,8 @@ Options, each as type and default:
   console sink paints that word and the http sink's viewer filters on it.
 - `raw = true` skips the JSON branch. The line, with its terminator (`\n` or
   `\r\n`) removed, becomes the message. `fields` stays empty, the time is the
-  read time, and the level is inferred from the text. Empty lines are skipped.
+  read time, and the level is inferred from the text. Empty lines, and lines
+  of NULs only (a sparse file's hole), are skipped.
   With `format.type = "raw"` each line is written back with one `\n`, which
   carries records the envelope cannot hold but is not byte-exact; see
   [Formatters](formatters.md#raw).
@@ -143,7 +160,7 @@ Lines:
 
 Delivery and lifetime:
 - The source drops nothing while its pipeline runs: it waits, so a slow
-  pipeline slows the reading of stdin.
+  pipeline slows the reading of stdin, which runs at most 16 lines ahead.
 - One reader serves the process. A reload's new source continues where the old
   one stopped, and no line is read twice, but lines the old pipeline still
   holds at the reload can be lost. Hence at most **one** console source in the
@@ -224,7 +241,7 @@ host             = "0.0.0.0"
 port             = 15801
 buffer_size      = 1000
 max_connections  = 0
-read_timeout_ms  = 0
+read_timeout_ms  = 300000
 hello_timeout_ms = 10000
 trust_node       = true
 
@@ -244,12 +261,16 @@ node_binding = "force"
 
 Options, each as type and default:
 
-- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the
-  listener keeps to its family ([Networking](networking.md#address-family)).
+- `host` (string, `127.0.0.1`): bind address, IPv4 or IPv6 (`::`); `0.0.0.0`
+  or `::` for every interface, where it warns at start without `auth` or
+  `acl.allow`. The listener keeps to its family
+  ([Networking](networking.md#address-family)).
 - `port` (int, required): listen port, 1–65535.
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_connections` (int, `0`): concurrent connection cap; `0` = unlimited.
-- `read_timeout_ms` (int, `0`): per-connection idle read deadline; `0` = none.
+- `read_timeout_ms` (int, `300000`): time a connection may pass with nothing
+  arriving, 5 minutes; `0` = none. An edge idle that long is disconnected and
+  reconnects with its next entry.
 - `hello_timeout_ms` (int, `10000`): deadline for the hello preamble.
 - `trust_node` (bool, `true`): `false` overrides the sender's node label with
   its remote address. `auth.node_binding` `assert` or `force` takes over the
@@ -278,9 +299,10 @@ and a `credentials_file`, or one `username` with its `password_file`, and
   connection, the whole exchange within `hello_timeout_ms`, and the final is
   sent only once node binding agrees. A source without `scram` answers a hello
   offering credentials with `authentication not enabled`.
-- An auth or node-binding refusal is logged at WARN and counted in
-  `rejected_conns`. A missing, malformed or wrong-version hello is logged at
-  WARN (`Rejected chain connection`) and not counted in `rejected_conns`;
+- An auth or node-binding refusal is logged ([WARN once a
+  minute](security.md#refusals)) and counted in `rejected_conns`. A missing,
+  malformed or wrong-version hello is logged the same way (`Rejected chain
+  connection`) and not counted in `rejected_conns`;
   under `scram` a malformed or wrong-version one counts in `auth_rejected`. A
   connection over `max_connections` is closed and counted without a log.
 - The node label is then resolved by `trust_node` and `auth.node_binding` (see
@@ -335,10 +357,12 @@ Options, each as type and default:
 - `host`, `port`, `trust_node`, `tls`: as on [tcp_chain](#tcp_chain).
 - `auth` (table): as on `tcp_chain`, plus `token_lifetime_ms`, the `scram`
   bearer token lifetime: 10 s to 24 h, `0` = 15 minutes.
-- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
-  `/auth` is reserved for the login.
+- `ingest_path` (string, `/ingest`): endpoint path; it starts with `/`, is
+  clean (no `//`, `.` or `..` segment) and holds none of `{`, `}`, `%`, `?`,
+  `#`, and `/auth` is reserved for the login.
 - `buffer_size` (int, `1000`): subscriber channel depth.
-- `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB).
+- `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB), and about
+  what a request holds in memory while its entries are published.
 - `read_timeout_ms` (int, `30000`): full request read deadline.
 - `acl` (table): as on `tcp_chain`, plus `requests_per_second_per_client`.
 
@@ -363,10 +387,12 @@ Options, each as type and default:
   *line* inside an otherwise clean transfer is skipped and counted in
   `parse_errors`.
 - Success is `204 No Content` with `X-Logwisp-Accepted` set to the number of
-  entries ingested.
-- Sessions are cached per remote host + node + authenticated identity, and
-  recreated after idle expiry. Including the identity in the key means two peers
-  sharing a remote address never share a session.
+  entries ingested. A batch still in flight when the source stops, past its
+  2 s shutdown bound, gets `503`, which the sink retries.
+- Sessions are cached per remote host + authenticated identity, and recreated
+  after idle expiry: two peers sharing an address never share one.
+  - The node label is the sender's to choose, so it is not in the key: a
+    session shows the label of its first batch, each entry keeps its own.
 
 **Statistics**: `host`, `port`, `ingest_path`, `tls`, `total_requests`,
 `rejected_requests`, `parse_errors`, `cached_sessions`, `trust_node`, and the

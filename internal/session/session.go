@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/core"
@@ -21,10 +22,23 @@ type Session struct {
 	ID           string         // Unique session identifier
 	RemoteAddr   string         // Client address
 	CreatedAt    time.Time      // Session creation time
-	LastActivity time.Time      // Last activity timestamp
+	LastActivity time.Time      // Last activity timestamp, in snapshots only
 	Metadata     map[string]any // Optional metadata (e.g., TLS info)
 
 	Source string // the owning plugin's instance ID, which Proxy sets
+
+	seen atomic.Int64 // last activity as time since epoch, refreshed without the manager's lock
+}
+
+// epoch keeps activity on the monotonic clock. Plugins refresh it per entry,
+// line or write, so it is an atomic rather than a field the manager's
+// exclusive lock guards.
+var epoch = time.Now()
+
+func (s *Session) touch() { s.seen.Store(int64(time.Since(epoch))) }
+
+func (s *Session) idle(now time.Time) time.Duration {
+	return now.Sub(epoch) - time.Duration(s.seen.Load())
 }
 
 // Manager handles the lifecycle of sessions
@@ -67,14 +81,14 @@ func (m *Manager) CreateSession(remoteAddr string, source string, metadata map[s
 
 func (m *Manager) createSession(remoteAddr, source, instanceID string, metadata map[string]any) *Session {
 	session := &Session{
-		InstanceID:   instanceID,
-		ID:           generateSessionID(),
-		RemoteAddr:   remoteAddr,
-		CreatedAt:    time.Now(),
-		LastActivity: time.Now(),
-		Source:       source,
-		Metadata:     metadata,
+		InstanceID: instanceID,
+		ID:         generateSessionID(),
+		RemoteAddr: remoteAddr,
+		CreatedAt:  time.Now(),
+		Source:     source,
+		Metadata:   metadata,
 	}
+	session.touch()
 
 	if metadata == nil {
 		session.Metadata = make(map[string]any)
@@ -106,16 +120,6 @@ func (m *Manager) RemoveSession(sessionID string) {
 	delete(m.sessions, sessionID)
 }
 
-// UpdateActivity updates the last activity timestamp for a session
-func (m *Manager) UpdateActivity(sessionID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if session, exists := m.sessions[sessionID]; exists {
-		session.LastActivity = time.Now()
-	}
-}
-
 // IsSessionActive checks if a session exists and has not been idle for too long
 func (m *Manager) IsSessionActive(sessionID string) bool {
 	m.mu.RLock()
@@ -123,7 +127,7 @@ func (m *Manager) IsSessionActive(sessionID string) bool {
 
 	if session, exists := m.sessions[sessionID]; exists {
 		// Session exists and hasn't exceeded idle timeout
-		return time.Since(session.LastActivity) < m.maxIdleTime
+		return session.idle(time.Now()) < m.maxIdleTime
 	}
 	return false
 }
@@ -170,7 +174,7 @@ func (m *Manager) GetActiveSessionsBySource(source string) []*Session {
 	now := time.Now()
 
 	for _, session := range m.sessions {
-		if session.Source == source && now.Sub(session.LastActivity) < m.maxIdleTime {
+		if session.Source == source && session.idle(now) < m.maxIdleTime {
 			sessions = append(sessions, snapshotSession(session))
 		}
 	}
@@ -180,9 +184,15 @@ func (m *Manager) GetActiveSessionsBySource(source string) []*Session {
 // Call under m.mu. Metadata values are immutable after session creation; copy
 // the top-level map so readers cannot add or remove entries in stored metadata.
 func snapshotSession(session *Session) *Session {
-	snapshot := *session
-	snapshot.Metadata = maps.Clone(session.Metadata)
-	return &snapshot
+	return &Session{
+		InstanceID:   session.InstanceID,
+		ID:           session.ID,
+		RemoteAddr:   session.RemoteAddr,
+		CreatedAt:    session.CreatedAt,
+		LastActivity: epoch.Add(time.Duration(session.seen.Load())),
+		Metadata:     maps.Clone(session.Metadata),
+		Source:       session.Source,
+	}
 }
 
 // GetStats returns statistics about the session manager
@@ -273,9 +283,7 @@ func (m *Manager) cleanupIdleSessions() {
 
 	m.mu.Lock()
 	for id, session := range m.sessions {
-		idleTime := now.Sub(session.LastActivity)
-
-		if idleTime > m.maxIdleTime {
+		if session.idle(now) > m.maxIdleTime {
 			expiredSessions = append(expiredSessions, session)
 			delete(m.sessions, id)
 		}

@@ -2,10 +2,12 @@ package httpchain
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/http"
@@ -48,6 +50,7 @@ type HTTPChainSource struct {
 	subscribers []chan core.LogEntry
 	server      *http.Server
 	logger      *log.Logger
+	refusals    *netacl.Reporter
 
 	// TLS
 	tlsConfig *tls.Config
@@ -56,11 +59,13 @@ type HTTPChainSource struct {
 	auth *authz.Policy
 	acl  *netacl.Policy
 
-	// Session cache: one session per remote host + node + authenticated identity
+	// Session cache: one session per remote host + authenticated identity
 	sessions   map[string]string // key -> sessionID
+	sweepAt    int               // len(sessions) at which expired keys are dropped
 	sessionsMu sync.Mutex
 
-	mu sync.RWMutex
+	mu      sync.RWMutex
+	stopped bool // under mu: set before the subscriber channels close
 
 	startTime        time.Time
 	totalEntries     atomic.Uint64
@@ -68,7 +73,7 @@ type HTTPChainSource struct {
 	parseErrors      atomic.Uint64
 	totalRequests    atomic.Uint64
 	rejectedRequests atomic.Uint64
-	lastEntryTime    atomic.Value // time.Time
+	lastEntryTime    core.AtomicTime
 }
 
 // NewHTTPChainSourcePlugin creates an http_chain source through plugin factory
@@ -90,7 +95,8 @@ func NewHTTPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.HTTP, logger, "http_chain_source", id)
+	refusals := netacl.NewReporter(logger, "http_chain_source", id)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.HTTP, refusals)
 	if err != nil {
 		return nil, err
 	}
@@ -107,11 +113,11 @@ func NewHTTPChainSourcePlugin(
 		subscribers: make([]chan core.LogEntry, 0),
 		sessions:    make(map[string]string),
 		logger:      logger,
+		refusals:    refusals,
 		tlsConfig:   tlsCfg,
 		auth:        authPolicy,
 		acl:         aclPolicy,
 	}
-	s.lastEntryTime.Store(time.Time{})
 
 	logger.Info("msg", "HTTP chain source initialized",
 		"component", "http_chain_source",
@@ -125,6 +131,7 @@ func NewHTTPChainSourcePlugin(
 		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "http_chain_source", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_chain_source", id, opts.TrustNode)
+	netacl.WarnOpen(refusals, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return s, nil
 }
 
@@ -174,7 +181,7 @@ func (s *HTTPChainSource) Start() error {
 		ReadHeaderTimeout: HTTPChainReadHeaderTimeout,
 		ConnContext:       netacl.ConnContext,
 		// TLS handshake bounded by min(ReadTimeout, ReadHeaderTimeout)
-		ErrorLog: tlsx.HTTPErrorLog(s.logger, "http_chain_source"),
+		ErrorLog: s.refusals.ErrorLog(),
 	}
 	s.startTime = time.Now()
 
@@ -205,7 +212,9 @@ func (s *HTTPChainSource) Stop() {
 	if s.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), HTTPChainServerShutdownTimeout)
 		defer cancel()
-		s.server.Shutdown(ctx)
+		if s.server.Shutdown(ctx) != nil {
+			s.server.Close() // a handler still reading a body fails at once
+		}
 	}
 	s.auth.Close()
 
@@ -217,6 +226,7 @@ func (s *HTTPChainSource) Stop() {
 	s.sessionsMu.Unlock()
 
 	s.mu.Lock()
+	s.stopped = true
 	for _, ch := range s.subscribers {
 		close(ch)
 	}
@@ -229,7 +239,7 @@ func (s *HTTPChainSource) Stop() {
 
 // GetStats returns the source's statistics
 func (s *HTTPChainSource) GetStats() source.SourceStats {
-	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
+	lastEntry := s.lastEntryTime.Load()
 
 	s.sessionsMu.Lock()
 	cachedSessions := len(s.sessions)
@@ -271,11 +281,7 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	ident, status, err := s.auth.AuthorizeRequest(r)
 	if err != nil {
 		s.rejectedRequests.Add(1)
-		s.logger.Warn("msg", "Request rejected by auth policy",
-			"component", "http_chain_source",
-			"instance_id", s.id,
-			"remote_addr", r.RemoteAddr,
-			"error", err)
+		s.refusals.Refused("Request rejected by auth policy", func() []any { return []any{"remote_addr", r.RemoteAddr, "error", err} })
 		authz.Refuse(w, status)
 		return
 	}
@@ -291,15 +297,17 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 		remoteHost = host
 	}
 	declaredNode := r.Header.Get(chain.HeaderNode)
+	if err := chain.CheckNode(declaredNode); err != nil {
+		s.rejectedRequests.Add(1)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	connNode, err := s.auth.ResolveNode(declaredNode, remoteHost, s.config.TrustNode, ident)
 	if err != nil {
 		s.rejectedRequests.Add(1)
-		s.logger.Warn("msg", "Request rejected by node binding",
-			"component", "http_chain_source",
-			"instance_id", s.id,
-			"remote_addr", r.RemoteAddr,
-			"declared_node", declaredNode,
-			"error", err)
+		s.refusals.Refused("Request rejected by node binding", func() []any {
+			return []any{"remote_addr", r.RemoteAddr, "declared_node", declaredNode, "error", err}
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -307,25 +315,19 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// through the per-entry node field either
 	trustEntryNode := s.auth.TrustsEntryNode(s.config.TrustNode)
 
-	body := http.MaxBytesReader(w, r.Body, s.config.MaxBodyBytes)
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
-
-	entries := make([]core.LogEntry, 0, 128)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	// The batch is held as its body, which max_body_bytes bounds, and decoded
+	// as it is published: held decoded, a body of short lines took 100 times
+	// its size in entries
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.config.MaxBodyBytes))
+	if err == nil {
+		for line := range bytes.Lines(body) {
+			if len(bytes.TrimSuffix(line, []byte{'\n'})) >= core.MaxLogEntryBytes {
+				err = bufio.ErrTooLong
+				break
+			}
 		}
-		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
-		if err != nil {
-			// Content error within a clean transfer: skip line, keep batch
-			s.parseErrors.Add(1)
-			continue
-		}
-		entries = append(entries, entry)
 	}
-	if err := scanner.Err(); err != nil {
+	if err != nil {
 		// Transfer error: reject batch without partial ingestion, sender retries
 		s.rejectedRequests.Add(1)
 		var maxErr *http.MaxBytesError
@@ -341,12 +343,33 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, entry := range entries {
-		s.publish(entry)
+	// A handler can outlive Stop's bound: past it the channels are closed, and
+	// a 503 sends the batch to the sink's next attempt
+	s.mu.RLock()
+	if s.stopped {
+		s.mu.RUnlock()
+		http.Error(w, "source stopping", http.StatusServiceUnavailable)
+		return
 	}
+	accepted := 0
+	var entry core.LogEntry
+	for line := range bytes.Lines(body) {
+		line = bytes.TrimSuffix(bytes.TrimSuffix(line, []byte{'\n'}), []byte{'\r'})
+		if len(line) == 0 {
+			continue
+		}
+		if err := chain.DecodeEntry(&entry, line, connNode, trustEntryNode); err != nil {
+			// Content error within a clean transfer: skip line, keep batch
+			s.parseErrors.Add(1)
+			continue
+		}
+		s.publish(entry)
+		accepted++
+	}
+	s.mu.RUnlock()
 	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode, netacl.ContextPeerAddr(r.Context()), r.TLS, ident))
 
-	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(len(entries)))
+	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(accepted))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -355,11 +378,7 @@ func (s *HTTPChainSource) handleAuth(w http.ResponseWriter, r *http.Request) {
 	ident, err := s.auth.ServeAuth(w, r)
 	switch {
 	case err != nil:
-		s.logger.Warn("msg", "Login rejected",
-			"component", "http_chain_source",
-			"instance_id", s.id,
-			"remote_addr", r.RemoteAddr,
-			"error", err)
+		s.refusals.Refused("Login rejected", func() []any { return []any{"remote_addr", r.RemoteAddr, "error", err} })
 	case ident.Name != "":
 		s.logger.Info("msg", "Login accepted",
 			"component", "http_chain_source",
@@ -369,11 +388,12 @@ func (s *HTTPChainSource) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sessionFor returns the cached session for a remote+node+identity,
-// recreating after idle expiry. Identity is part of the key so two peers
-// sharing a remote address never share a session.
+// sessionFor returns the cached session for a remote+identity, recreating
+// after idle expiry. Two peers sharing an address never share a session; the
+// node label, the sender's to choose, is not in the key, so spinning it makes
+// no sessions: the session shows its first, each entry keeps its own.
 func (s *HTTPChainSource) sessionFor(remoteHost, node, peer string, cs *tls.ConnectionState, ident authz.Identity) string {
-	key := remoteHost + "|" + node + "|" + ident.Name
+	key := remoteHost + "|" + ident.Name
 	s.sessionsMu.Lock()
 	defer s.sessionsMu.Unlock()
 
@@ -381,6 +401,17 @@ func (s *HTTPChainSource) sessionFor(remoteHost, node, peer string, cs *tls.Conn
 		if _, exists := s.proxy.GetSession(id); exists {
 			return id
 		}
+	}
+	// The manager expires idle sessions, not this map's keys: a rebuild when
+	// the map has doubled drops theirs, the map's grown capacity too
+	if len(s.sessions) >= s.sweepAt {
+		live := make(map[string]string, len(s.sessions)/2)
+		for k, id := range s.sessions {
+			if _, exists := s.proxy.GetSession(id); exists {
+				live[k] = id
+			}
+		}
+		s.sessions, s.sweepAt = live, 2*len(live)+64
 	}
 	meta := map[string]any{
 		"type": "http_chain",
@@ -401,11 +432,8 @@ func (s *HTTPChainSource) sessionFor(remoteHost, node, peer string, cs *tls.Conn
 	return sess.ID
 }
 
-// publish sends a log entry to all subscribers
+// publish sends a log entry to all subscribers; s.mu is held for reading
 func (s *HTTPChainSource) publish(entry core.LogEntry) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	s.totalEntries.Add(1)
 	s.lastEntryTime.Store(entry.Time)
 

@@ -175,6 +175,41 @@ func specVariable(flag string) string {
 	return "LOGWISP_" + strings.ToUpper(strings.ReplaceAll(flag, "-", "_"))
 }
 
+// SettingVariable is a setting's environment variable, its path with '.' as
+// '_' uppercased after LOGWISP_, as lixenwraith/config reads it
+func SettingVariable(path string) string {
+	return "LOGWISP_" + strings.ToUpper(strings.ReplaceAll(path, ".", "_"))
+}
+
+// unknownVariables names, sorted, the LOGWISP_ variables set that no setting,
+// pipeline flag or file location reads: misspelled, one would drop what it
+// held, a sink's sending entries to standard output
+func unknownVariables(environ []string) []string {
+	known := map[string]bool{"LOGWISP_CONFIG_FILE": true, "LOGWISP_CONFIG_DIR": true}
+	for _, k := range SettingKeys() {
+		known[SettingVariable(k.Name)] = true
+	}
+	flags := SpecFlags()
+	for _, f := range flags {
+		known[f.Variable] = true
+	}
+	var unknown []string
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, "LOGWISP_") || value == "" || known[name] {
+			continue
+		}
+		i := strings.LastIndexByte(name, '_')
+		if _, err := strconv.ParseUint(name[i+1:], 10, 64); err == nil &&
+			slices.ContainsFunc(flags, func(f SpecFlag) bool { return f.Many && f.Variable == name[:i] }) {
+			continue
+		}
+		unknown = append(unknown, name)
+	}
+	slices.Sort(unknown)
+	return unknown
+}
+
 // cliSpecs looks up the kind of each command-line spec.
 func cliSpecs(in []Spec) ([]pipelineSpec, error) {
 	var specs []pipelineSpec
@@ -271,9 +306,12 @@ func buildPipelines(specs []pipelineSpec, isDir IsDir) ([]PipelineConfig, error)
 			seen = map[*specKind]bool{}
 			continue
 		}
+		// Errors name the flag, TYPE and a key, never a value: a secret typed in
+		// the wrong place must not reach a terminal or a service's journal
 		typ, opts, err := parseSpec(s.value, s.kind.typed)
+		at := strings.TrimSuffix(s.name+" "+typ, " ")
 		if err != nil {
-			return nil, fmt.Errorf("%s %w", s.name, err)
+			return nil, fmt.Errorf("%s: %w", at, err)
 		}
 		if pipelines == nil {
 			name := "cli"
@@ -286,13 +324,13 @@ func buildPipelines(specs []pipelineSpec, isDir IsDir) ([]PipelineConfig, error)
 		p := &pipelines[len(pipelines)-1]
 		switch {
 		case seen[s.kind] && !s.kind.many:
-			return nil, fmt.Errorf("%s %s: pipeline %q already has one", s.name, s.value, p.Name)
+			return nil, fmt.Errorf("%s: pipeline %q already has one", at, p.Name)
 		case s.kind.first && len(seen) > 0:
-			return nil, fmt.Errorf("%s %s: must start its pipeline", s.name, s.value)
+			return nil, fmt.Errorf("%s: must start its pipeline", at)
 		}
 		seen[s.kind] = true
 		if err := s.kind.apply(p, typ, opts, isDir); err != nil {
-			return nil, fmt.Errorf("%s %s: %w", s.name, s.value, err)
+			return nil, fmt.Errorf("%s: %w", at, err)
 		}
 	}
 	for i := range pipelines {
@@ -384,6 +422,9 @@ func text(v any) string {
 // escape is unescape's inverse: ',' and '=' escaped, and '\' where an escape
 // would otherwise start, so a regex's \d stays as typed
 func escape(s string) string {
+	if !strings.ContainsAny(s, `,=\`) {
+		return s
+	}
 	var b strings.Builder
 	followed := s + "," // as a value is, unless it ends the spec
 	for i := range len(s) {
@@ -431,34 +472,35 @@ func useStdio(p *PipelineConfig) {
 
 // parseSpec reads TYPE[:key=value,...] or key=value,...: TYPE ends at the
 // first ':', dotted keys nest, a repeated key makes a list, and a backslash
-// escapes ',', '=' and '\'. Errors name the part.
+// escapes ',', '=' and '\'. Errors name a key or an entry's place, and come
+// with the TYPE read.
 func parseSpec(spec string, typed bool) (typ string, opts map[string]any, err error) {
 	rest, more := spec, true
 	if typed {
 		typ, rest, _ = strings.Cut(spec, ":")
 		more = rest != ""
 		if head, _, comma := cutUnescaped(typ, ','); comma && !strings.Contains(head, "=") {
-			return "", nil, fmt.Errorf("%s: TYPE ends at ':', as in %s:%s", spec, head, spec[len(head)+1:])
+			return head, nil, fmt.Errorf("TYPE ends at ':', as in %s:KEY=VALUE", head)
 		}
 		if typ == "" || strings.ContainsAny(typ, "=,\\") {
-			return "", nil, fmt.Errorf("%s: missing TYPE", spec)
+			return "", nil, errors.New("missing TYPE")
 		}
 	}
 	opts = map[string]any{}
-	for more {
+	for n := 1; more; n++ {
 		var part string
 		part, rest, more = cutUnescaped(rest, ',')
 		key, value, eq := cutUnescaped(part, '=')
 		switch key = unescape(key); {
 		case !eq:
-			err = errors.New(`missing "="`)
+			err = fmt.Errorf(`entry %d has no "="`, n) // without one, a key is no surer than a value
 		case typed && key == "type":
 			err = errors.New(`TYPE already sets "type"`)
 		default:
 			err = SetOption(opts, key, unescape(value))
 		}
 		if err != nil {
-			return "", nil, fmt.Errorf("%s: %w", strings.TrimPrefix(typ+":"+part, ":"), err)
+			return typ, nil, err
 		}
 	}
 	return typ, opts, nil
@@ -537,11 +579,22 @@ func instanceID(typ string, opts map[string]any, taken []string) (string, error)
 }
 
 // FreeID is the first of TYPE, TYPE_2, TYPE_3... that no earlier instance of
-// its role holds
+// its role holds. One pass marks the suffixes held, so naming many parts is
+// not a scan of the list per candidate: one of the first len(taken)+1 is free.
 func FreeID(typ string, taken []string) string {
-	id := typ
-	for n := 2; slices.Contains(taken, id); n++ {
-		id = typ + "_" + strconv.Itoa(n)
+	held, prefix := make([]bool, len(taken)+2), typ+"_" // by suffix, TYPE alone at 1
+	for _, id := range taken {
+		suffix, ok := strings.CutPrefix(id, prefix)
+		if id == typ {
+			held[1] = true
+		} else if ok && suffix != "" && suffix[0] != '0' && suffix[0] != '+' { // not TYPE_02 or TYPE_+2
+			if n, err := strconv.Atoi(suffix); err == nil && n >= 2 && n < len(held) {
+				held[n] = true
+			}
+		}
 	}
-	return id
+	if n := slices.Index(held[1:], false) + 1; n > 1 {
+		return typ + "_" + strconv.Itoa(n)
+	}
+	return typ
 }

@@ -3,12 +3,16 @@ package file
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -32,13 +36,20 @@ func TestFileSourceSkipsItsOwnOutput(t *testing.T) {
 	}
 	source := &FileSource{
 		config:     &config.FileSourceOptions{Directory: dir, Pattern: "*.log"},
+		match:      regexp.MustCompile(globToRegex("*.log")),
 		own:        []os.FileInfo{own},
 		ownSkipped: map[string]bool{},
+		watchers:   map[string]*fileWatcher{},
 		logger:     log.NewLogger(),
 	}
-	files, err := source.scanFile()
-	if err != nil || len(files) != 1 || filepath.Base(files[0]) != "app.log" {
-		t.Fatalf("scanFile = %v, %v; want app.log alone", files, err)
+	source.ctx, source.cancel = context.WithCancel(t.Context())
+	defer source.wg.Wait()
+	defer source.cancel()
+	source.checkTargets()
+	source.mu.RLock()
+	defer source.mu.RUnlock()
+	if _, followed := source.watchers[filepath.Join(dir, "app.log")]; !followed || len(source.watchers) != 1 || source.capped {
+		t.Fatalf("watchers %v, capped %v; want app.log alone", slices.Collect(maps.Keys(source.watchers)), source.capped)
 	}
 }
 
@@ -48,7 +59,8 @@ func TestFileSourceSkipsItsOwnOutput(t *testing.T) {
 func TestUnreadableDirectoryIsLoggedOncePerChange(t *testing.T) {
 	logger, out := txtLogger(t)
 	dir := filepath.Join(t.TempDir(), "logs")
-	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*"}, watchers: map[string]*fileWatcher{}, logger: logger}
+	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*"}, match: regexp.MustCompile(globToRegex("*")),
+		watchers: map[string]*fileWatcher{}, logger: logger}
 	checksAfter := func(err error) {
 		if err != nil {
 			t.Fatal(err)
@@ -77,10 +89,10 @@ func TestUnreadableDirectoryIsLoggedOncePerChange(t *testing.T) {
 // on
 func TestUnreadableFileIsLoggedOnceAndWaitedFor(t *testing.T) {
 	logger, out := txtLogger(t)
-	dir := filepath.Join(t.TempDir(), "logs")
-	block := func() error { return errors.Join(os.RemoveAll(dir), os.WriteFile(dir, nil, 0o600)) } // logs/a.log cannot open
+	path := filepath.Join(t.TempDir(), "a.log")
+	block := func() error { return errors.Join(os.RemoveAll(path), os.Mkdir(path, 0o700)) } // no file to follow
 	read := make(chan string, 10)
-	w := newFileWatcher(filepath.Join(dir, "a.log"), true, true, func(e core.LogEntry) { read <- e.Message }, logger)
+	w := newFileWatcher(dirOf(t, path), path, true, true, func(e core.LogEntry) { read <- e.Message }, logger)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)
 	if err := block(); err != nil {
@@ -88,7 +100,7 @@ func TestUnreadableFileIsLoggedOnceAndWaitedFor(t *testing.T) {
 	}
 	go func() { done <- w.watch(ctx) }()
 	time.Sleep(4 * core.FileWatcherPollInterval)
-	if err := errors.Join(os.Remove(dir), os.Mkdir(dir, 0o700), os.WriteFile(filepath.Join(dir, "a.log"), []byte("first\n"), 0o600)); err != nil {
+	if err := errors.Join(os.Remove(path), os.WriteFile(path, []byte("first\n"), 0o600)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -110,6 +122,38 @@ func TestUnreadableFileIsLoggedOnceAndWaitedFor(t *testing.T) {
 	}
 }
 
+// A FIFO under the pattern is not followed, and one put where a followed file
+// was is refused, not waited on: its open would block until a writer came,
+// holding the watcher or the source's lock, and with them Stop and a reload
+func TestFIFOUnderThePatternIsNotWaitedOn(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(dir, "app.log"), "")
+	fifo := filepath.Join(dir, "evil.log")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*.log"}, match: regexp.MustCompile(globToRegex("*.log")),
+		watchers: map[string]*fileWatcher{}, logger: log.NewLogger()}
+	files, err := source.scanFile()
+	if err != nil || len(files) != 1 || filepath.Base(files[0]) != "app.log" {
+		t.Fatalf("scanFile = %v, %v; want app.log alone", files, err)
+	}
+	done := make(chan error)
+	go func() {
+		source.readPosition(fifo)
+		w := newFileWatcher(&source.dir, fifo, true, false, func(core.LogEntry) {}, log.NewLogger())
+		done <- w.initPosition()
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("a FIFO opened as a followed file: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("opening a FIFO waited for a writer")
+	}
+}
+
 // txtLogger logs txt lines into the buffer it returns, read after Flush
 func txtLogger(t *testing.T) (*log.Logger, *bytes.Buffer) {
 	t.Helper()
@@ -125,10 +169,51 @@ func txtLogger(t *testing.T) (*log.Logger, *bytes.Buffer) {
 	return logger, out
 }
 
+// dirOf holds the directory of path open, as a source does for its watchers
+func dirOf(t *testing.T, path string) *atomic.Pointer[os.Root] {
+	t.Helper()
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { root.Close() })
+	dir := new(atomic.Pointer[os.Root])
+	dir.Store(root)
+	return dir
+}
+
+// A link in the followed directory leads only to a file within it: one
+// leaving it, or an absolute one, is not followed
+func TestLinkIsFollowedOnlyWithinTheDirectory(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "logs")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, filepath.Join(dir, "app.log"), "")
+	testutil.WriteFile(t, filepath.Join(base, "secret"), "")
+	links := map[string]string{"inside.log": "app.log", "outside.log": "../secret", "absolute.log": filepath.Join(dir, "app.log")}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := dirOf(t, filepath.Join(dir, "app.log")).Load()
+	for name := range links {
+		file, err := openFollowed(root, name)
+		if (err == nil) != (name == "inside.log") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if file != nil {
+			file.Close()
+		}
+	}
+}
+
 func TestStoppedWatcherReturnsNormally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	testutil.WriteFile(t, path, "")
-	watcher := newFileWatcher(path, true, true, func(_ core.LogEntry) {}, nil)
+	watcher := newFileWatcher(dirOf(t, path), path, true, true, func(_ core.LogEntry) {}, nil)
 	watcher.stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -165,7 +250,7 @@ func TestLongLineContinuesInTheNextEntry(t *testing.T) {
 	long := strings.Repeat("x", core.MaxLogEntryBytes+10)
 	testutil.WriteFile(t, path, "first\n"+long+"\nafter\n")
 	var got []string
-	w := newFileWatcher(path, true, true, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	w := newFileWatcher(dirOf(t, path), path, true, true, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
 	for range 2 {
 		if err := w.checkFile(); err != nil {
 			t.Fatal(err)
@@ -195,11 +280,13 @@ func TestRotatedFileResumesInsteadOfReplaying(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	root := dirOf(t, archive).Load()
 	for name, watcher := range map[string]*fileWatcher{
 		"still tailing the renamed inode": {inode: inode, position: 8},
 		"already moved on from it":        {inode: 99, prevInode: inode, prevPosition: 8},
 	} {
 		source := &FileSource{watchers: map[string]*fileWatcher{active: watcher}}
+		source.dir.Store(root)
 		position, ok := source.readPosition(archive)
 		if !ok || position != 8 {
 			t.Errorf("%s: position = %d, ok = %v, want 8, true", name, position, ok)
@@ -207,6 +294,7 @@ func TestRotatedFileResumesInsteadOfReplaying(t *testing.T) {
 	}
 
 	unrelated := &FileSource{watchers: map[string]*fileWatcher{active: {inode: 99}}}
+	unrelated.dir.Store(root)
 	if _, ok := unrelated.readPosition(archive); ok {
 		t.Error("a file no watcher has read was treated as rotated")
 	}
@@ -242,7 +330,7 @@ func appendFile(t *testing.T, path, text string) {
 func tailFrom(t *testing.T, path string) func() []string {
 	t.Helper()
 	var got []string
-	w := newFileWatcher(path, true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	w := newFileWatcher(dirOf(t, path), path, true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
 	if err := w.initPosition(); err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +471,7 @@ func TestReadToAnswersOnlyForFilesRead(t *testing.T) {
 	}
 	text := lines(14, 0, 20)
 	testutil.WriteFile(t, path, text)
-	w := newFileWatcher(path, true, false, func(core.LogEntry) {}, log.NewLogger())
+	w := newFileWatcher(dirOf(t, path), path, true, false, func(core.LogEntry) {}, log.NewLogger())
 	if err := w.initPosition(); err != nil {
 		t.Fatal(err)
 	}
@@ -433,9 +521,10 @@ func TestShiftedArchiveResumesWhereItWasRead(t *testing.T) {
 			testutil.WriteFile(t, paths[1], lines(14, 0, 20))
 			var got []string
 			source := &FileSource{watchers: map[string]*fileWatcher{}}
+			source.dir.Store(dirOf(t, paths[0]).Load())
 			watchers := make([]*fileWatcher, 2)
 			for i := range watchers {
-				w := newFileWatcher(paths[i], true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+				w := newFileWatcher(&source.dir, paths[i], true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
 				w.others = source.othersOf(w)
 				if err := w.initPosition(); err != nil {
 					t.Fatal(err)
@@ -456,7 +545,8 @@ func TestShiftedArchiveResumesWhereItWasRead(t *testing.T) {
 			}
 			source.watchers["deleted"] = &fileWatcher{inode: inodeOf(info), position: 3, tail: []byte("ab\n")}
 			source.watchers["deleted too"] = &fileWatcher{prevInode: watchers[0].inode, prevPosition: 3, prevTail: []byte("ab\n")}
-			for range 2 {
+			// the file a name left is read on a check more, while it may grow
+			for range 3 {
 				for _, i := range order {
 					if err := watchers[i].checkFile(); err != nil {
 						t.Fatal(err)
@@ -471,5 +561,248 @@ func TestShiftedArchiveResumesWhereItWasRead(t *testing.T) {
 				t.Errorf("app.log.2 read to %d, %v; want %d, true", position, ok, len(lines(14, 0, 20)))
 			}
 		})
+	}
+}
+
+// A rotation that renames the file loses none of it, whatever the archive is
+// called: the lines written since the last check, and those the writer adds
+// until it reopens the name, are read before the new file's
+func TestRenamedFileIsReadToItsEndFirst(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	testutil.WriteFile(t, path, "before\n")
+	check := tailFrom(t, path)
+	writer, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	write := func(f *os.File, line string) {
+		if _, err := f.WriteString(line + "\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(writer, "unread")
+	if err := os.Rename(path, path+"-20261113"); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, path, "")
+	got := check()
+	write(writer, "late")
+	got = append(got, check()...)
+	reopened, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	write(reopened, "reopened")
+	for range 3 {
+		got = append(got, check()...)
+	}
+	if want := []string{"unread", "late", "Log rotation detected (#1): the file starts anew", "reopened"}; !slices.Equal(got, want) {
+		t.Errorf("read %q, want %q", got, want)
+	}
+}
+
+// A check reads or skips a bounded part of a file, so a sparse file's hole,
+// terabytes that cost nothing to make, neither holds the watcher for hours
+// nor becomes entries of NULs
+func TestHoleIsWalkedABoundedPartACheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	testutil.WriteFile(t, path, "first\n")
+	var got []string
+	w := newFileWatcher(dirOf(t, path), path, true, true, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	if err := w.checkFile(); err != nil {
+		t.Fatal(err)
+	}
+	// copytruncate under a writer that goes on at an offset a terabyte on
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("far\n"), 1<<40); err != nil {
+		t.Skipf("no sparse file here: %v", err)
+	}
+	f.Close()
+	done := make(chan error, 1)
+	go func() { // the first check holds the changed file, the second judges it
+		err := w.checkFile()
+		if err == nil {
+			err = w.checkFile()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a check still walking the hole after 10 s")
+	}
+	for _, e := range got {
+		if strings.Contains(e, "\x00") {
+			t.Fatalf("published an entry of %d NULs", strings.Count(e, "\x00"))
+		}
+	}
+	if w.position > int64(len("first\n"))+2*readPerCheck { // what pastHole skips and what is read
+		t.Fatalf("a check went %d bytes into the hole", w.position)
+	}
+}
+
+// A JSON line becomes an entry when it is an object of the envelope's keys
+// alone, time, level, msg and fields, each named exactly and once; any other
+// line is text.
+// A time that is not RFC 3339, or is zero, gives way to the time read: a zero
+// time marks an event without its entry.
+func TestJSONLineIsAnEntryOnlyWhenNothingIsLost(t *testing.T) {
+	w := &fileWatcher{directory: "/var/log/app"}
+	stamp := time.Date(2026, 11, 13, 10, 0, 0, 123e6, time.UTC)
+	for _, c := range []struct {
+		line string
+		want *core.LogEntry // nil: text
+	}{
+		{`{"time":"2026-11-13T10:00:00.123Z","level":"INFO","msg":"m","fields":{"a":1}}`,
+			&core.LogEntry{Time: stamp, Source: "app", Level: "INFO", Message: "m", Fields: []byte(`{"a":1}`)}},
+		{` {"msg":"m"}`, nil},
+		{`{"msg":"m","user":"x"}`, nil},
+		{`{"MSG":"m"}`, nil},
+		{`{"msg":"a","msg":"b"}`, nil},
+		{`{}`, nil},
+		{`{"msg":"m"} {}`, nil},
+		{`{"level":5,"msg":"m"}`, nil},
+		{`{"msg":"m","time":"yesterday"}`, &core.LogEntry{Source: "app", Message: "m"}},
+		{`{"msg":"m","time":"0001-01-01T00:00:00Z"}`, &core.LogEntry{Source: "app", Message: "m"}},
+		{`{"m\u0073g":"m","fields":[1, 2]}`, &core.LogEntry{Source: "app", Message: "m", Fields: []byte(`[1, 2]`)}},
+	} {
+		got, ok := w.parseJSON(c.line)
+		switch {
+		case c.want == nil && ok:
+			t.Errorf("%s: an entry, want text", c.line)
+		case c.want == nil:
+		case !ok:
+			t.Errorf("%s: text, want an entry", c.line)
+		case c.want.Time.IsZero() && time.Since(got.Time) > time.Minute, !c.want.Time.IsZero() && !got.Time.Equal(c.want.Time),
+			got.Source != c.want.Source || got.Level != c.want.Level || got.Message != c.want.Message || string(got.Fields) != string(c.want.Fields):
+			t.Errorf("%s:\n got %+v\nwant %+v", c.line, got, *c.want)
+		}
+	}
+}
+
+// The envelope's keys are read by hand before any decode, so decoding the
+// whole line into a map, as parseJSON did, is the reference: the same lines
+// become the same entries, but for a key named twice, which now makes text
+func FuzzJSONLineReadsAsTheMapDecodeDid(f *testing.F) {
+	for _, line := range []string{
+		`{"time":"2026-11-13T10:00:00.123Z","level":"INFO","msg":"m","fields":{"a":[1,{"b":"}"}]}}`,
+		`{"level":"info","ts":1731492000.123,"caller":"main.go:42","msg":"m"}`,
+		`{"msg":"a\"b\\","fields":null}`, `{"fields":1}`, `{"fields":[]}`, `{"level":null}`, `{"time":{"a":1}}`,
+		`{"m\u0073g":"x"}`, `{"msg":"x"}  `, `{"msg":"x"} {}`, `{"msg":"\ud800"}`, "{\"msg\":\"\xff\"}",
+		`{"fields":1e999}`, `{"msg":"a","msg":"b"}`, `{ "msg" : "x" , "level" : "W" }`, `{"msg":}`, `{"msg"`,
+	} {
+		f.Add(line)
+	}
+	w := &fileWatcher{directory: "/var/log/app"}
+	f.Fuzz(func(t *testing.T, line string) {
+		got, ok := w.parseJSON(line)
+		want, wantOK := mapEnvelope(line)
+		wantOK = wantOK && !repeatsAKey(line)
+		switch {
+		case ok != wantOK:
+			t.Fatalf("%q: an entry %v, by the map decode %v", line, ok, wantOK)
+		case !ok:
+		case got.Level != want.Level || got.Message != want.Message || string(got.Fields) != string(want.Fields),
+			!want.Time.IsZero() && !got.Time.Equal(want.Time), want.Time.IsZero() && time.Since(got.Time) > time.Minute:
+			t.Fatalf("%q:\n got %+v\nwant %+v", line, got, want)
+		}
+	})
+}
+
+// mapEnvelope is parseJSON as it decoded the whole line into a map, but for
+// the time read, which it leaves zero
+func mapEnvelope(line string) (core.LogEntry, bool) {
+	if len(line) == 0 || line[0] != '{' {
+		return core.LogEntry{}, false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &obj); err != nil || len(obj) == 0 {
+		return core.LogEntry{}, false
+	}
+	var entry core.LogEntry
+	for key, val := range obj {
+		var err error
+		switch key {
+		case "time":
+			var ts string
+			if json.Unmarshal(val, &ts) == nil {
+				if t, terr := time.Parse(time.RFC3339Nano, ts); terr == nil && !t.IsZero() {
+					entry.Time = t
+				}
+			}
+		case "level":
+			err = json.Unmarshal(val, &entry.Level)
+		case "msg":
+			err = json.Unmarshal(val, &entry.Message)
+		case "fields":
+			entry.Fields = val
+		default:
+			return core.LogEntry{}, false
+		}
+		if err != nil {
+			return core.LogEntry{}, false
+		}
+	}
+	return entry, true
+}
+
+// repeatsAKey reports whether a JSON object names a top-level key twice
+func repeatsAKey(line string) bool {
+	dec := json.NewDecoder(strings.NewReader(line))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, isKey := tok.(string)
+		if err != nil || !isKey || seen[key] {
+			return err == nil && isKey
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return false
+		}
+	}
+	return false
+}
+
+// A scan keeps the watchers of the files it lists, in whatever order the
+// directory gives them, and stops those of a file gone or no longer a file
+func TestAScanStopsOnlyTheWatchersOfFilesItNoLongerLists(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"m.log", "z.log", "a.log", "q.log", "gone.log", "dir.log"} {
+		testutil.WriteFile(t, filepath.Join(dir, name), "")
+	}
+	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*.log"}, match: regexp.MustCompile(globToRegex("*.log")),
+		watchers: map[string]*fileWatcher{}, ownSkipped: map[string]bool{}, logger: log.NewLogger()}
+	source.ctx, source.cancel = context.WithCancel(t.Context())
+	defer source.wg.Wait()
+	defer source.cancel()
+	source.checkTargets()
+	source.mu.RLock()
+	before := maps.Clone(source.watchers)
+	source.mu.RUnlock()
+	if err := errors.Join(os.Remove(filepath.Join(dir, "gone.log")), os.Remove(filepath.Join(dir, "dir.log")), os.Mkdir(filepath.Join(dir, "dir.log"), 0o700)); err != nil {
+		t.Fatal(err)
+	}
+	source.checkTargets()
+	source.mu.RLock()
+	defer source.mu.RUnlock()
+	for name, kept := range map[string]bool{"m.log": true, "z.log": true, "a.log": true, "q.log": true, "gone.log": false, "dir.log": false} {
+		path := filepath.Join(dir, name)
+		if w, ok := source.watchers[path]; ok != kept || kept && w != before[path] {
+			t.Errorf("%s: watcher %p, before %p, want kept %v", name, w, before[path], kept)
+		}
 	}
 }

@@ -6,10 +6,12 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,11 +26,38 @@ import (
 
 func mustNew(t *testing.T, host string, o config.ACLOptions) *Policy {
 	t.Helper()
-	p, err := New(&o, host, HTTP, log.NewLogger(), "test", "acl")
+	p, err := New(&o, host, HTTP, NewReporter(log.NewLogger(), "test", "acl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// Of a listener's refusals the first in a minute is a WARN with the number
+// since the last WARN, the rest DEBUG: no peer floods lw's log
+func TestRefusalsWarnOnceAMinuteTheRestAtDebug(t *testing.T) {
+	var out bytes.Buffer
+	logger := log.NewLogger()
+	logger.SetConsoleWriter(&out)
+	if err := logger.ApplyConfigString("level=debug", "format=txt"); err != nil || logger.Start() != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logger.Shutdown() })
+	r := NewReporter(logger, "test", "acl")
+	refuse := func() { r.Refused("Connection refused by acl", func() []any { return []any{"reason", "test"} }) }
+	refuse()
+	refuse()
+	refuse()
+	r.next.Store(0) // a minute later
+	refuse()
+	if err := logger.Flush(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Count(got, " WARN msg") != 2 || strings.Count(got, " DEBUG msg") != 2 ||
+		!strings.Contains(got, "refused_since_last_warn 0") || !strings.Contains(got, "refused_since_last_warn 2") {
+		t.Fatalf("logged:\n%s", got)
+	}
 }
 
 // Deny wins over allow, a set allow list admits only its entries, an empty
@@ -82,11 +111,11 @@ func TestEntriesFollowTheListenerFamily(t *testing.T) {
 		if c.from != "" {
 			o.ProxyProtocol, o.ProxyFrom = "required", []string{c.from}
 		}
-		if _, err := New(o, c.host, HTTP, log.NewLogger(), "test", "acl"); (err == nil) != c.ok {
+		if _, err := New(o, c.host, HTTP, NewReporter(log.NewLogger(), "test", "acl")); (err == nil) != c.ok {
 			t.Errorf("%s behind %q on %q: %v", c.entry, c.from, c.host, err)
 		}
 	}
-	if _, err := New(&config.ACLOptions{Deny: []string{"2001:db8::/32"}}, "127.0.0.1", HTTPProxied, log.NewLogger(), "test", "acl"); err != nil {
+	if _, err := New(&config.ACLOptions{Deny: []string{"2001:db8::/32"}}, "127.0.0.1", HTTPProxied, NewReporter(log.NewLogger(), "test", "acl")); err != nil {
 		t.Errorf("IPv6 entry behind trusted_proxies: %v", err)
 	}
 }
@@ -118,7 +147,7 @@ func TestRefusedPeerNeverReachesAccept(t *testing.T) {
 }
 
 // proxy_protocol and proxy_from come together: either alone is a mistake, as
-// is a mode that is none of off, optional and required
+// is a mode that is neither off nor required
 func TestProxyProtocolAndProxyFromComeTogether(t *testing.T) {
 	for _, c := range []struct {
 		mode string
@@ -129,9 +158,10 @@ func TestProxyProtocolAndProxyFromComeTogether(t *testing.T) {
 		{"", []string{"127.0.0.1"}, false},
 		{"off", []string{"127.0.0.1"}, false},
 		{"always", nil, false},
-		{"optional", []string{"127.0.0.1"}, true},
+		{"optional", []string{"127.0.0.1"}, false},
+		{"required", []string{"127.0.0.1"}, true},
 	} {
-		_, err := New(&config.ACLOptions{ProxyProtocol: c.mode, ProxyFrom: c.from}, "127.0.0.1", HTTP, log.NewLogger(), "test", "acl")
+		_, err := New(&config.ACLOptions{ProxyProtocol: c.mode, ProxyFrom: c.from}, "127.0.0.1", HTTP, NewReporter(log.NewLogger(), "test", "acl"))
 		if (err == nil) != c.ok {
 			t.Errorf("proxy_protocol %q with proxy_from %v: %v", c.mode, c.from, err)
 		}
@@ -207,7 +237,7 @@ func TestMalformedHeaderIsRefused(t *testing.T) {
 // A peer outside proxy_from that sends a header is refused at its first
 // read, as the header is spoofable; its other bytes pass untouched
 func TestHeaderFromUnlistedPeerIsRefused(t *testing.T) {
-	p := mustNew(t, "127.0.0.1", config.ACLOptions{ProxyProtocol: "optional", ProxyFrom: []string{"10.0.0.1"}})
+	p := mustNew(t, "127.0.0.1", config.ACLOptions{ProxyProtocol: "required", ProxyFrom: []string{"10.0.0.1"}})
 	ln, dial := listening(t, p)
 	for _, c := range []struct {
 		send    string
@@ -229,24 +259,14 @@ func TestHeaderFromUnlistedPeerIsRefused(t *testing.T) {
 	}
 }
 
-// Under required a peer in proxy_from must send a header; under optional
-// one that sends none keeps its socket address and its bytes
-func TestRequiredRefusesAListedPeerWithoutHeader(t *testing.T) {
-	for mode, refused := range map[string]bool{"required": true, "optional": false} {
-		p := mustNew(t, "127.0.0.1", config.ACLOptions{ProxyProtocol: mode, ProxyFrom: []string{"127.0.0.1"}})
-		ln, dial := listening(t, p)
-		peer := dial("127.0.0.1")
-		peer.Write([]byte("GET /"))
-		if refused {
-			closed(t, peer)
-			continue
-		}
-		conn := accept(t, ln)
-		b := make([]byte, 5)
-		if _, err := io.ReadFull(conn, b); err != nil || string(b) != "GET /" || conn.RemoteAddr().String() != "127.0.0.1:40000" {
-			t.Errorf("optional: %s read %q: %v", conn.RemoteAddr(), b, err)
-		}
-	}
+// A peer in proxy_from must send a header: a client it forwarded without one
+// would pass as the proxy
+func TestListedPeerWithoutHeaderIsRefused(t *testing.T) {
+	p := mustNew(t, "127.0.0.1", config.ACLOptions{ProxyProtocol: "required", ProxyFrom: []string{"127.0.0.1"}})
+	_, dial := listening(t, p)
+	peer := dial("127.0.0.1")
+	peer.Write([]byte("GET /"))
+	closed(t, peer)
 }
 
 // The client a header names is what the rules, RemoteAddr and the stats see;
@@ -306,7 +326,7 @@ func TestCloseReleasesHeadersInFlight(t *testing.T) {
 // address it ends with: behind proxy_from, the one its header names. Closing
 // a connection returns its slot; refusals count in acl_limited.
 func TestConnectionsPerClientAreCapped(t *testing.T) {
-	p := mustNew(t, "127.0.0.1", config.ACLOptions{MaxConnectionsPerClient: 2, ProxyProtocol: "optional", ProxyFrom: []string{"127.0.0.1"}})
+	p := mustNew(t, "127.0.0.1", config.ACLOptions{MaxConnectionsPerClient: 2, ProxyProtocol: "required", ProxyFrom: []string{"127.0.0.1"}})
 	ln, dial := listening(t, p)
 	dial("192.0.2.1")
 	first := accept(t, ln)
@@ -375,7 +395,9 @@ func TestRequestsPerClientAreRateLimited(t *testing.T) {
 }
 
 // Limits count an IPv6 client by its /64, which one host holds whole, and a
-// link-local one per link; an IPv4-mapped client counts as IPv4
+// link-local one per link; an IPv4-mapped client counts as IPv4, a NAT64 one
+// as the IPv4 client it carries. A zone no interface here could have, which
+// only a forwarded hop carries, is no link.
 func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
@@ -385,8 +407,12 @@ func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 		{"2001:db8::1", "2001:db8:0:1::1", false},
 		{"fe80::1%eth0", "fe80::2%eth0", true},
 		{"fe80::1%eth0", "fe80::1%eth1", false},
+		{"2001:db8::1%a", "2001:db8::1%b", true},
+		{"fe80::1%" + strings.Repeat("a", 16), "fe80::1%" + strings.Repeat("b", 16), true},
 		{"::ffff:192.0.2.1", "192.0.2.1", true},
 		{"192.0.2.1", "192.0.2.2", false},
+		{"64:ff9b::192.0.2.1", "192.0.2.1", true},
+		{"64:ff9b::192.0.2.1", "64:ff9b::192.0.2.2", false},
 	} {
 		a, b := Key(netip.MustParseAddr(c.a)), Key(netip.MustParseAddr(c.b))
 		if (a == b) != c.same {
@@ -395,37 +421,70 @@ func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 	}
 }
 
+// A /48, 65,536 /64s that tunnel brokers hand out free, holds at most a
+// sixteenth of a table's clients, and of the pool its slots stand for; a
+// client of another /48, or of IPv4, still gets in
+func TestA48HoldsASixteenthOfATable(t *testing.T) {
+	in48 := func(net, host int) Client {
+		return Key(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 4: byte(net), 6: byte(host >> 8), 7: byte(host), 15: 1}))
+	}
+	keys := NewTable(1, 1, 0, 0)
+	for i := range maxClients / netShare {
+		if !keys.Take(in48(0, i)) {
+			t.Fatalf("/64 %d of a /48 refused", i)
+		}
+	}
+	if keys.Take(in48(0, maxClients/netShare)) || !keys.Take(in48(1, 0)) || !keys.Take(Key(netip.MustParseAddr("192.0.2.1"))) {
+		t.Fatal("a /48 took more than its share of clients, or another was refused")
+	}
+	logins := NewTable(10, 1, 4, 4096)
+	for i := range 4096 / netShare {
+		if !logins.Take(in48(0, i/4)) {
+			t.Fatalf("slot %d of a /48 refused", i)
+		}
+	}
+	if logins.Take(in48(0, 4096)) || !logins.Take(in48(1, 0)) {
+		t.Fatal("a /48 took more than its share of slots, or another was refused")
+	}
+	logins.Release(in48(0, 0))
+	if !logins.Take(in48(0, 4096)) {
+		t.Fatal("a released slot still counts against its /48")
+	}
+}
+
 // Refunded attempts cost nothing and released ones keep their cost; slots are
-// capped from the moment they are taken, so concurrent attempts cannot all
-// pass; a full table refuses new clients, and the sweep frees clients whose
-// holds expired or whose bucket is full again.
+// capped once taken, so concurrent attempts cannot all pass; a full table
+// refuses new clients; the sweep frees clients whose holds expired or whose
+// bucket is full again, however slow its refill, and keeps the rest's budgets
+// as it shrinks the map.
 func TestTableBounds(t *testing.T) {
-	tb := NewTable(10, 1, 4)
+	ip := func(s string) Client { return Key(netip.MustParseAddr(s)) }
+	tb := NewTable(10, 1, 4, 0)
 	for i := range 20 {
-		if !tb.Take("10.0.0.1") {
+		if !tb.Take(ip("10.0.0.1")) {
 			t.Fatalf("refunded attempt %d refused", i)
 		}
-		tb.Hold("10.0.0.1", strconv.Itoa(i), time.Now().Add(time.Minute))
-		tb.Done("10.0.0.1", strconv.Itoa(i))
-		tb.Refund("10.0.0.1")
+		tb.Hold(ip("10.0.0.1"), strconv.Itoa(i), time.Now().Add(time.Minute))
+		tb.Done(ip("10.0.0.1"), strconv.Itoa(i))
+		tb.Refund(ip("10.0.0.1"))
 	}
 	for i := range 4 {
-		if !tb.Take("10.0.0.2") {
+		if !tb.Take(ip("10.0.0.2")) {
 			t.Fatalf("slot %d refused", i)
 		}
 	}
-	if tb.Take("10.0.0.2") {
+	if tb.Take(ip("10.0.0.2")) {
 		t.Fatal("an attempt beyond the slots was admitted before any hold")
 	}
-	tb.Release("10.0.0.2")
-	if !tb.Take("10.0.0.2") {
+	tb.Release(ip("10.0.0.2"))
+	if !tb.Take(ip("10.0.0.2")) {
 		t.Fatal("a released slot still counts")
 	}
 	for range 10 {
-		tb.Take("10.0.0.3")
-		tb.Release("10.0.0.3")
+		tb.Take(ip("10.0.0.3"))
+		tb.Release(ip("10.0.0.3"))
 	}
-	if tb.Take("10.0.0.3") {
+	if tb.Take(ip("10.0.0.3")) {
 		t.Fatal("releasing its slots refilled a client's bucket")
 	}
 	for i := len(tb.clients); i < maxClients; i++ {
@@ -433,17 +492,22 @@ func TestTableBounds(t *testing.T) {
 			seen: time.Now(), held: map[string]time.Time{"abandoned": time.Now().Add(time.Second)},
 		}
 	}
-	if tb.Take("192.0.2.1") {
+	tb.peak = maxClients // as Take counts the clients it adds
+	if tb.Take(ip("192.0.2.1")) {
 		t.Fatal("a full table admitted a new client")
 	}
 	tb.sweep(time.Now().Add(2 * tb.idle))
-	if len(tb.clients) != 1 { // 10.0.0.2 still holds its slots
-		t.Fatalf("%d clients left after their holds expired, want 1", len(tb.clients))
+	if len(tb.clients) != 1 || tb.Take(ip("10.0.0.2")) {
+		t.Fatalf("%d clients left after their holds expired, want 10.0.0.2 still holding its slots", len(tb.clients))
 	}
-	rate := NewTable(1, 1, 0)
-	rate.Take("10.0.0.4")
+	rate := NewTable(1, 1, 0, 0)
+	rate.Take(ip("10.0.0.4"))
 	if rate.sweep(time.Now().Add(1100 * time.Millisecond)); len(rate.clients) != 0 {
 		t.Fatal("a client outlived the refill of its bucket")
+	}
+	slow := NewTable(1, 1e-11, 0, 0) // a refill past a Duration's range
+	if !slow.Take(ip("10.0.0.5")) || slow.Take(ip("10.0.0.5")) {
+		t.Fatal("a client whose refill outlasts a Duration was admitted again at once")
 	}
 }
 
@@ -477,6 +541,101 @@ func FuzzReadHeader(f *testing.F) {
 			t.Fatalf("client %v, found %v", client, found)
 		}
 	})
+}
+
+// BenchmarkParseHost reads an address bare, as a forwarded client or the
+// SCRAM throttle's peer comes, and with its port, as a socket peer does
+func BenchmarkParseHost(b *testing.B) {
+	for _, s := range []string{"192.0.2.1", "2001:db8::1", "192.0.2.1:40000", "[2001:db8::1]:40000"} {
+		b.Run(s, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				ParseHost(s)
+			}
+		})
+	}
+}
+
+// BenchmarkRefuse is a refusal past its close, its WARN muted as all but one
+// a minute are: a direct peer, a client a PROXY header names, and a client a
+// trusted proxy forwards
+func BenchmarkRefuse(b *testing.B) {
+	p := &Policy{deny: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}, rep: NewReporter(log.NewLogger(), "test", "acl")}
+	p.rep.next.Store(math.MaxInt64)
+	server, client := net.Pipe()
+	client.Close()
+	var direct net.Conn = remoteConn{server, net.TCPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.1:40000"))}
+	proxied := &conn{Conn: remoteConn{server, net.TCPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:40000"))},
+		client: net.TCPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.1:40000"))}
+	forwarded := netip.MustParseAddr("192.0.2.1")
+	for _, c := range []struct {
+		name   string
+		refuse func()
+	}{
+		{"direct", func() { p.refuse(direct, &p.denied, "address rules") }},
+		{"proxied", func() { p.refuse(proxied, &p.denied, "address rules") }},
+		{"forwarded", func() { p.Forwarded(forwarded, "127.0.0.1:40000") }},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				c.refuse()
+			}
+		})
+	}
+}
+
+// BenchmarkTable is a client's entry made, used and dropped: a capped
+// connection's slot, taken at accept and released at close, and a rate
+// client's first request, made again whenever it idles past its refill
+func BenchmarkTable(b *testing.B) {
+	conns, rate := NewTable(0, 0, 4, 0), NewTable(1, 1, 0, 0)
+	client := Key(netip.MustParseAddr("192.0.2.1"))
+	for _, c := range []struct {
+		name string
+		take func()
+	}{
+		{"connection", func() { conns.Take(client); conns.Release(client) }},
+		{"rate-client", func() { rate.Take(client); delete(rate.clients, client.key) }},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				c.take()
+			}
+		})
+	}
+}
+
+// BenchmarkTableFlood is a flood of new clients filling a rate table, swept
+// once their buckets are whole; retained-B is the heap the emptied table keeps
+func BenchmarkTableFlood(b *testing.B) {
+	keys := make([]Client, maxClients)
+	for i := range keys {
+		keys[i] = Key(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 4: byte(i >> 8), 5: byte(i), 15: 1}))
+	}
+	flood := func() *Table {
+		t := NewTable(1, 1, 0, 0)
+		for _, k := range keys {
+			t.Take(k)
+		}
+		t.sweep(time.Now().Add(2 * time.Second))
+		return t
+	}
+	heap := func() int64 {
+		var m runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m)
+		return int64(m.HeapAlloc)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		flood()
+	}
+	t := flood()
+	with := heap()
+	runtime.KeepAlive(t)
+	b.ReportMetric(float64(with-heap()), "retained-B")
 }
 
 func parseHeader(s string) (client netip.AddrPort, found bool, rest string, err error) {

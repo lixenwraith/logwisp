@@ -84,6 +84,9 @@ func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Se
 		oldSvc.Shutdown()
 	}
 
+	// The new service takes over the old one's sockets; those it does not
+	// listen on, as it dropped or moved their addresses, close after
+	defer core.ReleaseIdle()
 	if err := newService.Start(); err != nil {
 		newService.Shutdown()
 		logger.Error("msg", "Failed to start new service pipelines after reload. The application may be in a non-functional state.", "error", err)
@@ -153,8 +156,8 @@ func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 	logCfg := log.DefaultConfig()
 
-	if cfg.Quiet {
-		logCfg.Level = 255 // A level that disables all output
+	if cfg.Quiet || cfg.Logging.Output == "none" {
+		logCfg.Level = 255 // A level that disables all output, so no record is built
 		logCfg.EnableFile = false
 		logCfg.EnableConsole = false
 		return logger.ApplyConfig(logCfg)
@@ -169,14 +172,14 @@ func initializeLogger(cfg *config.Config) error {
 	if cfg.Logging.Format != "" {
 		logCfg.Format = cfg.Logging.Format
 	}
+	// Peers write into this log (addresses, names, errors): no control rune
+	// of theirs reaches a terminal showing it unless raw is asked for
+	logCfg.Sanitization = sanitizer.PolicyJSON
 	if cfg.Logging.Sanitization != "" {
 		logCfg.Sanitization = sanitizer.PolicyPreset(cfg.Logging.Sanitization)
 	}
 
 	switch cfg.Logging.Output {
-	case "none":
-		logCfg.EnableFile = false
-		logCfg.EnableConsole = false
 	case "stdout":
 		logCfg.EnableFile = false
 		logCfg.EnableConsole = true
@@ -201,11 +204,22 @@ func initializeLogger(cfg *config.Config) error {
 	default:
 		return fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
 	}
+	if logCfg.EnableFile {
+		if err := config.LogDir(logCfg.Directory, logCfg.Name+"."+logCfg.Extension); err != nil {
+			return fmt.Errorf("log file: %w", err)
+		}
+	}
 
 	return logger.ApplyConfig(logCfg)
 }
 
 func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
+	// lw's log is sparse, startup and warnings: one fsync a second at most,
+	// not ten, bounds what a crash loses without costing a busy disk
+	logCfg.FlushIntervalMs = 1000
+	// The limits delete lw's files alone, so the directory can be shared,
+	// with a file sink among others
+	logCfg.CleanupOwnFiles = true
 	if cfg.Logging.File != nil {
 		logCfg.Directory = config.ExpandHome(cfg.Logging.File.Directory)
 		logCfg.Name = cfg.Logging.File.Name

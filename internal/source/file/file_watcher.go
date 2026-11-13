@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -48,9 +50,16 @@ const settleChecks = 20
 // position must be NUL to take them for a hole (see pastHole)
 const holeProbe = 4 << 10
 
+// readPerCheck bounds what one check reads or skips, so that a watcher sees
+// stop between checks however large a file, or a hole in it, grows: a sparse
+// file's terabytes cost nothing to make and hours to read
+const readPerCheck = 64 << 20
+
 // fileWatcher tails a single file, handles rotations, and sends new lines to a callback
 type fileWatcher struct {
-	directory    string
+	directory    string                   // the file's path, for logs and stats
+	dir          *atomic.Pointer[os.Root] // the source's directory, which the file opens in
+	name         string                   // the file's name in it
 	callback     func(core.LogEntry)
 	raw          bool
 	position     int64
@@ -64,32 +73,35 @@ type fileWatcher struct {
 	prevPosition int64
 	prevTail     []byte
 	entriesRead  atomic.Uint64
-	lastReadTime atomic.Value // time.Time
+	lastReadTime core.AtomicTime
 	logger       *log.Logger
 	failed       string      // the last check's error, "" for none; watch's
 	tail         []byte      // the lines before position (lastLines), set with it under mu
-	seen         os.FileInfo // the file as the last check found it; watch's
-	holds        int         // checks waited for the file to settle; watch's
+	seen         os.FileInfo // the file as the last check found it, held's while there is one; watch's
+	holds        int         // checks waited for the file to settle, or for held to stop growing; watch's
+	held         *os.File    // the file inode is, open from the check that judged it; watch's
+	taken        bool        // another watcher goes on reading inode from where this one got; under mu
 	// how far another watcher of the source read a file (FileSource.othersOf)
 	others func(*os.File, os.FileInfo) (int64, bool)
 }
 
-// newFileWatcher creates a new watcher for a specific file path.
+// newFileWatcher creates a new watcher for the file at path in dir.
 // A start position of 0 reads an existing file whole; -1 seeks to its end.
-func newFileWatcher(directory string, raw, fromStart bool, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
+func newFileWatcher(dir *atomic.Pointer[os.Root], directory string, raw, fromStart bool, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
 	position := int64(-1)
 	if fromStart {
 		position = 0
 	}
 	w := &fileWatcher{
 		directory: directory,
+		dir:       dir,
+		name:      filepath.Base(directory),
 		callback:  callback,
 		raw:       raw,
 		position:  position,
 		logger:    logger,
 		others:    func(*os.File, os.FileInfo) (int64, bool) { return 0, false },
 	}
-	w.lastReadTime.Store(time.Time{})
 	return w
 }
 
@@ -98,6 +110,11 @@ func newFileWatcher(directory string, raw, fromStart bool, callback func(core.Lo
 func (w *fileWatcher) watch(ctx context.Context) error {
 	ticker := time.NewTicker(core.FileWatcherPollInterval)
 	defer ticker.Stop()
+	defer func() {
+		if w.held != nil {
+			w.held.Close()
+		}
+	}()
 
 	check := w.initPosition
 	for {
@@ -143,10 +160,7 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 	}
 	w.mu.Unlock()
 
-	if lastRead, ok := w.lastReadTime.Load().(time.Time); ok {
-		info.LastReadTime = lastRead
-	}
-
+	info.LastReadTime = w.lastReadTime.Load()
 	return info
 }
 
@@ -157,18 +171,42 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 // line read last is missing and the file still changes, it is held, up to
 // settleChecks, so that a slow rewrite is judged once written.
 func (w *fileWatcher) checkFile() error {
-	file, err := os.Open(w.directory)
+	info, err := w.dir.Load().Stat(w.name)
+	if w.held != nil && (err != nil || !os.SameFile(info, w.seen)) {
+		// The name left the file being read: a rotation renamed or removed it,
+		// and its writer may append until it reopens. It is read to its end
+		// first, and on while it grows, up to settleChecks checks.
+		if left, serr := w.held.Stat(); serr == nil && w.holds < settleChecks {
+			if grew, rerr := w.read(w.held, left.Size(), true); rerr == nil && grew {
+				w.holds++
+				return nil
+			}
+		}
+		w.held.Close()
+		w.held, w.holds = nil, 0
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return err
+	file := w.held
+	if file == nil {
+		if file, err = openFollowed(w.dir.Load(), w.name); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		defer func() {
+			if file != w.held {
+				file.Close()
+			}
+		}()
+		if info, err = file.Stat(); err != nil { // the file judged is the one opened
+			return err
+		}
 	}
 	size, same := info.Size(), w.seen != nil && os.SameFile(info, w.seen) && info.Size() == w.seen.Size() && info.ModTime().Equal(w.seen.ModTime())
 	w.seen = info
@@ -217,24 +255,57 @@ func (w *fileWatcher) checkFile() error {
 		// its archive name, and only this says how much of it was read.
 		w.prevInode, w.prevPosition, w.prevTail = w.inode, w.position, w.tail
 	}
-	w.inode, w.position, w.tail = inodeOf(info), pos, tail
+	if inode := inodeOf(info); inode != w.inode {
+		w.inode, w.taken = inode, false
+	}
+	w.position, w.tail = pos, tail
 	w.mu.Unlock()
-	w.holds = 0
+	w.held, w.holds = file, 0
 	if rotated {
 		w.rotated()
 	}
+	_, err = w.read(file, size, false)
+	return err
+}
 
-	if _, err := file.Seek(pos, io.SeekStart); err != nil {
-		return err
+// scanBufs are what a check's scanner starts with: one that finds lines would
+// otherwise allocate 64 KiB. A longer line grows a buffer of the scanner's own.
+var scanBufs = sync.Pool{New: func() any { return new([64 << 10]byte) }}
+
+// read sends the lines file holds from position to size, readPerCheck at most,
+// and reports whether there were any. position moves on first, so a watcher
+// that goes on reading the file meanwhile starts after them; once the name
+// has left the file (left), and another watcher has, this one reads no more.
+func (w *fileWatcher) read(file *os.File, size int64, left bool) (bool, error) {
+	w.mu.Lock()
+	pos := w.position
+	w.mu.Unlock()
+	end := min(size, pos+readPerCheck)
+	if end <= pos {
+		return false, nil
 	}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
+	tail, err := lastLines(file, end)
+	if err != nil {
+		return false, err
+	}
+	w.mu.Lock()
+	if left && w.taken {
+		w.mu.Unlock()
+		return false, nil
+	}
+	w.position, w.tail = end, tail
+	w.mu.Unlock()
+
+	buf := scanBufs.Get().(*[64 << 10]byte)
+	defer scanBufs.Put(buf)
+	scanner := bufio.NewScanner(io.NewSectionReader(file, pos, end-pos))
+	scanner.Buffer(buf[:0], core.MaxLogEntryBytes)
 	scanner.Split(scanLinesCapped)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
+		if len(bytes.TrimLeft(scanner.Bytes(), "\x00")) == 0 {
+			continue // empty, or a hole's NULs, which nothing wrote
 		}
+		line := scanner.Text()
 
 		entry := w.parseLine(line)
 		entry.RawSize = int64(len(line))
@@ -243,22 +314,7 @@ func (w *fileWatcher) checkFile() error {
 		w.entriesRead.Add(1)
 		w.lastReadTime.Store(time.Now())
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-
-	end, err := file.Seek(0, io.SeekCurrent)
-	if err != nil {
-		w.logger.Warn("msg", "Failed to get file position", "error", err)
-		end = max(pos, size)
-	}
-	if tail, err = lastLines(file, end); err != nil {
-		return err
-	}
-	w.mu.Lock()
-	w.position, w.tail = end, tail
-	w.mu.Unlock()
-	return nil
+	return true, scanner.Err()
 }
 
 // rotated counts a rotation and says so, in lw's log and to the pipeline
@@ -324,7 +380,8 @@ func (w *fileWatcher) find(file *os.File, pos, size int64) (at int64, which int,
 
 // pastHole is where a rotated file is read from: its start, or its first data
 // past the position when the bytes before it are NUL, the hole copytruncate
-// leaves under a writer that does not append and goes on at its offset
+// leaves under a writer that does not append and goes on at its offset. It
+// walks readPerCheck of the hole at most; the reads after skip the rest.
 func pastHole(file *os.File, pos, size int64) int64 {
 	at := min(pos, size)
 	for _, from := range []int64{0, max(0, at-holeProbe)} {
@@ -333,8 +390,8 @@ func pastHole(file *os.File, pos, size int64) int64 {
 		}
 	}
 	buf := make([]byte, holeProbe)
-	for at < size {
-		n, err := file.ReadAt(buf[:min(int64(len(buf)), size-at)], at)
+	for end := at + min(size-at, readPerCheck); at < end; {
+		n, err := file.ReadAt(buf[:min(int64(len(buf)), end-at)], at)
 		if i := bytes.IndexFunc(buf[:n], func(r rune) bool { return r != 0 }); i >= 0 {
 			return at + int64(i)
 		}
@@ -394,10 +451,30 @@ func scanLinesCapped(data []byte, atEOF bool) (int, []byte, error) {
 	return advance, token, err
 }
 
+// openFollowed opens a followed file in dir without waiting on it: a FIFO put
+// in its place would block the open until a writer came, holding the watcher,
+// or the source's lock, and with them Stop and a reload. Only a regular file
+// is kept, as lixenwraith/log's openLogPath keeps one; a link leaving dir, or
+// absolute, fails as "path escapes from parent".
+func openFollowed(dir *os.Root, name string) (*os.File, error) {
+	file, err := dir.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		if err == nil {
+			err = fmt.Errorf("%s is not a regular file", file.Name())
+		}
+		return nil, err
+	}
+	return file, nil
+}
+
 // initPosition records the file's metadata and its marks and, unless the
 // watcher was created to read from the start, sets the read position to the end.
 func (w *fileWatcher) initPosition() error {
-	file, err := os.Open(w.directory)
+	file, err := openFollowed(w.dir.Load(), w.name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			w.mu.Lock()
@@ -410,16 +487,13 @@ func (w *fileWatcher) initPosition() error {
 		}
 		return err
 	}
-	defer file.Close()
-
 	info, err := file.Stat()
 	if err != nil {
+		file.Close()
 		return err
 	}
 
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	w.size = info.Size()
 	w.modTime = info.ModTime()
 	w.inode = inodeOf(info)
@@ -428,22 +502,40 @@ func (w *fileWatcher) initPosition() error {
 		w.position = w.size
 	}
 	w.tail, err = lastLines(file, w.position)
-	return err
+	w.mu.Unlock()
+	if err != nil {
+		file.Close()
+		return err
+	}
+	w.held = file
+	return nil
+}
+
+// resumeAt reports how far this watcher read file, if file still holds the
+// lines it read last before there. The asker goes on from there, so once the
+// name leaves the file this watcher reads it no more.
+func (w *fileWatcher) resumeAt(file *os.File, info os.FileInfo) (int64, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	inode := inodeOf(info)
+	position, tail, ok := w.readTo(inode)
+	if !ok || !leads(file, position, info.Size(), tail) {
+		return 0, false
+	}
+	w.taken = w.taken || inode == w.inode
+	return position, true
 }
 
 // readTo reports how far this watcher read the given inode, and the lines it
 // read last before there: the file it tails now, as last judged (not one a held
-// check has yet to), or the one a rotation renamed out from under it.
+// check has yet to), or the one a rotation renamed out from under it. Callers
+// hold mu.
 func (w *fileWatcher) readTo(inode uint64) (int64, []byte, bool) {
-	if inode == 0 {
-		return 0, nil, false
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	switch inode {
-	case w.inode:
+	switch {
+	case inode == 0:
+	case inode == w.inode:
 		return w.position, w.tail, true
-	case w.prevInode:
+	case inode == w.prevInode:
 		return w.prevPosition, w.prevTail, true
 	}
 	return 0, nil, false
@@ -479,42 +571,129 @@ func (w *fileWatcher) parseLine(line string) core.LogEntry {
 }
 
 // parseJSON decodes a line into the entry envelope. A top-level key LogEntry
-// cannot carry refuses the whole line, so a richer record reaches the pipeline
-// as text rather than silently reduced to the four keys kept here.
+// cannot carry, or one named twice, refuses the whole line, so a richer record
+// reaches the pipeline as text rather than silently reduced to the four keys
+// kept here. The keys are read first: zap, slog and logrus lines carry others
+// and cost no decode.
 func (w *fileWatcher) parseJSON(line string) (core.LogEntry, bool) {
+	if !envelopeKeys(line) {
+		return core.LogEntry{}, false
+	}
+	var env struct {
+		Time   json.RawMessage `json:"time"`
+		Level  string          `json:"level"`
+		Msg    string          `json:"msg"`
+		Fields json.RawMessage `json:"fields"`
+	}
+	if json.Unmarshal([]byte(line), &env) != nil {
+		return core.LogEntry{}, false
+	}
+	entry := core.LogEntry{Time: time.Now(), Source: filepath.Base(w.directory), Level: env.Level, Message: env.Msg, Fields: env.Fields}
+	var ts string
+	if env.Time != nil && json.Unmarshal(env.Time, &ts) == nil {
+		// A zero time would mark an event without its entry, which a chain
+		// sink rebuilds from the payload
+		if t, err := time.Parse(time.RFC3339Nano, ts); err == nil && !t.IsZero() {
+			entry.Time = t
+		}
+	}
+	return entry, true
+}
+
+// envelopeNames are the keys parseJSON keeps
+var envelopeNames = [...]string{"time", "level", "msg", "fields"}
+
+// envelopeKeys reports whether line is an object of envelopeNames alone, each
+// at most once. It reads valid JSON exactly; whatever else it passes, the
+// decode refuses.
+func envelopeKeys(line string) bool {
 	if len(line) == 0 || line[0] != '{' {
-		return core.LogEntry{}, false
+		return false
 	}
-
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(line), &obj); err != nil || len(obj) == 0 {
-		return core.LogEntry{}, false
+	var seen [len(envelopeNames)]bool
+	for i := 1; ; i++ { // i++ steps past each comma
+		if i = jsonSpace(line, i); i >= len(line) || line[i] != '"' {
+			return false // {} too, an envelope of nothing
+		}
+		end := jsonValueEnd(line, i)
+		if end < 0 {
+			return false
+		}
+		name := line[i+1 : end-1]
+		if strings.IndexByte(name, '\\') >= 0 {
+			var unquoted string
+			if json.Unmarshal([]byte(line[i:end]), &unquoted) != nil {
+				return false
+			}
+			name = unquoted
+		}
+		k := slices.Index(envelopeNames[:], name)
+		if k < 0 || seen[k] {
+			return false
+		}
+		seen[k] = true
+		if i = jsonSpace(line, end); i >= len(line) || line[i] != ':' {
+			return false
+		}
+		if i = jsonValueEnd(line, jsonSpace(line, i+1)); i < 0 {
+			return false
+		}
+		if i = jsonSpace(line, i); i >= len(line) || line[i] != ',' {
+			return i < len(line) && line[i] == '}'
+		}
 	}
+}
 
-	entry := core.LogEntry{Time: time.Now(), Source: filepath.Base(w.directory)}
-	for key, val := range obj {
-		var err error
-		switch key {
-		case "time":
-			var ts string
-			if json.Unmarshal(val, &ts) == nil {
-				if t, terr := time.Parse(time.RFC3339Nano, ts); terr == nil {
-					entry.Time = t
+// jsonValueEnd is the index past the JSON value at s[i], or -1 when there is
+// none. Objects and arrays are matched by depth alone.
+func jsonValueEnd(s string, i int) int {
+	if i >= len(s) {
+		return -1
+	}
+	switch s[i] {
+	case '"':
+		for j := i + 1; j < len(s); j++ {
+			switch s[j] {
+			case '\\':
+				j++
+			case '"':
+				return j + 1
+			}
+		}
+		return -1
+	case '{', '[':
+		depth := 0
+		for j := i; j < len(s); j++ {
+			switch s[j] {
+			case '"':
+				if j = jsonValueEnd(s, j) - 1; j < 0 {
+					return -1
+				}
+			case '{', '[':
+				depth++
+			case '}', ']':
+				if depth--; depth == 0 {
+					return j + 1
 				}
 			}
-		case "level":
-			err = json.Unmarshal(val, &entry.Level)
-		case "msg":
-			err = json.Unmarshal(val, &entry.Message)
-		case "fields":
-			entry.Fields = val
-		default:
-			return core.LogEntry{}, false
 		}
-		if err != nil {
-			return core.LogEntry{}, false
+		return -1
+	}
+	for j := i; j < len(s); j++ {
+		switch s[j] {
+		case ',', '}', ']', ' ', '\t', '\r', '\n':
+			if j == i {
+				return -1
+			}
+			return j
 		}
 	}
+	return len(s)
+}
 
-	return entry, true
+func jsonSpace(s string, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n') {
+		i++
+	}
+	return i
 }

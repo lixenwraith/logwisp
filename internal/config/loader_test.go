@@ -30,6 +30,27 @@ func TestResolveConfigPath(t *testing.T) {
 	}
 }
 
+// A file found without -c must be the user's own: another user may have put
+// it in a directory both can write. -c reads it whoever owns it.
+func TestFoundFileOfAnotherUserIsRefused(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("giving a file to another user needs root")
+	}
+	isolateConfig(t)
+	testutil.WriteFile(t, "logwisp.toml", "[logging]\nlevel = \"debug\"\n")
+	if err := os.Chown("logwisp.toml", 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(Args{}); err == nil || !strings.Contains(err.Error(), "found without -c") {
+		t.Fatalf("found file of another user: %v", err)
+	}
+	m, err := Load(Args{File: "logwisp.toml"})
+	if err != nil {
+		t.Fatalf("named with -c: %v", err)
+	}
+	m.Close()
+}
+
 func TestLoadPrecedenceAndDetachedSnapshots(t *testing.T) {
 	isolateConfig(t)
 	testutil.WriteFile(t, "selected.toml", "config_file = \"ignored.toml\"\n[logging]\nlevel = \"error\"\n")
@@ -165,10 +186,10 @@ id = "out"
 type = "tcp"
 [pipelines.plugin_sinks.config]
 port = 9000
-write_timeout_ms = 9007199254740993
+max_connections = 9007199254740993
 [pipelines.plugin_sinks.config.tls]
-enabled = false
-server_name = "relay.example"
+enabled = true
+self_signed = true
 [pipelines.plugin_sinks.config.acl]
 allow = ["10.0.0.1", "10.0.0.2"]
 `)
@@ -185,8 +206,8 @@ allow = ["10.0.0.1", "10.0.0.2"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Host != "0.0.0.0" || opts.BufferSize != 1000 || !opts.KeepAlive || opts.Port != 9000 || opts.WriteTimeoutMS != 9007199254740993 ||
-		opts.TLS == nil || opts.TLS.ServerName != "relay.example" || opts.ACL == nil || !reflect.DeepEqual(opts.ACL.Allow, []string{"10.0.0.1", "10.0.0.2"}) {
+	if opts.Host != "127.0.0.1" || opts.BufferSize != 1000 || !opts.KeepAlive || opts.Port != 9000 || opts.MaxConnections != 9007199254740993 ||
+		opts.TLS == nil || !opts.TLS.SelfSigned || opts.TLS.MinVersion != "1.3" || opts.ACL == nil || !reflect.DeepEqual(opts.ACL.Allow, []string{"10.0.0.1", "10.0.0.2"}) {
 		t.Fatalf("plugin defaults, nested tables or integer precision lost: %+v", opts)
 	}
 }

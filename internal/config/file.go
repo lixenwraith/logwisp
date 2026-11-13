@@ -1,15 +1,22 @@
 package config
 
-import "os"
+import (
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+)
 
 // WriteNew writes data to a file it creates, mode as given: it never replaces
 // a file, and removes what it created when the write fails
-func WriteNew(path string, data []byte, mode os.FileMode) error {
+func WriteNew(path string, data io.WriterTo, mode os.FileMode) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(data)
+	_, err = data.WriteTo(f)
 	if err == nil {
 		err = f.Sync()
 	}
@@ -20,4 +27,61 @@ func WriteNew(path string, data []byte, mode os.FileMode) error {
 		os.Remove(path)
 	}
 	return err
+}
+
+// LogDir readies dir for a writer appending to file there, creating what is
+// missing as 0750. It refuses a directory every user can write, where another
+// could plant file as a link to what lw may write, and a file that is not a
+// regular one: the writer's first open follows a link and waits on a FIFO.
+func LogDir(dir, file string) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o002 != 0 {
+		return fmt.Errorf("%s is writable by every user: refusing to write %s there (chmod o-w)", dir, file)
+	}
+	path := filepath.Join(dir, file)
+	switch info, err := os.Lstat(path); {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case !info.Mode().IsRegular():
+		return fmt.Errorf("%s is not a regular file (%v): refusing to write through it", path, info.Mode())
+	}
+	return nil
+}
+
+// MaxFileBytes is the most a configuration or credentials file holds, as
+// lixenwraith/config reads the configuration
+const MaxFileBytes = 10 << 20
+
+// ReadRegular reads a regular file of at most limit bytes. It opens without
+// waiting, so a FIFO in the file's place fails rather than holding a load or
+// a reload, and checks the open file, so nothing swapped in after a check is
+// read.
+func ReadRegular(path string, limit int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|openNonBlock, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	switch {
+	case err != nil:
+		return nil, err
+	case !fi.Mode().IsRegular():
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	case fi.Size() > limit:
+		return nil, fmt.Errorf("%s holds %d bytes, over %d", path, fi.Size(), limit)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err == nil && int64(len(data)) > limit {
+		err = fmt.Errorf("%s grew past %d bytes", path, limit)
+	}
+	return data, err
 }

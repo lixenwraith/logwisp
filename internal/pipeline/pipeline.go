@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +41,7 @@ type Pipeline struct {
 	swapped chan struct{} // a flow set that the heartbeat has not taken up
 
 	outlets []*outlet // the sinks as dispatch offers them events, in order
+	formats bool      // a sink writes the payload: chain sinks send the entry
 
 	tap atomic.Pointer[core.Tap] // a viewer's copy of what the flow decides
 
@@ -103,8 +105,35 @@ func NewPipeline(
 		sessionManager.Stop()
 		return nil, err
 	}
+	pipeline.warnUnlabelled()
+	pipeline.formats = slices.ContainsFunc(cfg.PluginSinks, func(c config.PluginSinkConfig) bool {
+		plugin, _ := config.LookupPlugin("sink", c.Type)
+		return plugin.Side != config.Dialer
+	})
 
 	return pipeline, nil
+}
+
+// warnUnlabelled reports, when built and at each flow swap, a pipeline whose
+// raw format writes chain peers' entries without the node they came from; the
+// chain sinks carry entries whole and lose nothing, the null sink writes none
+func (p *Pipeline) warnUnlabelled() {
+	if f := p.Config.Flow; f != nil && f.Format != nil && f.Format.Type != "" && f.Format.Type != "raw" {
+		return
+	}
+	peers := slices.ContainsFunc(p.Config.PluginSources, func(c config.PluginSourceConfig) bool {
+		plugin, _ := config.LookupPlugin("source", c.Type)
+		return plugin.Side == config.ChainListener
+	})
+	writes := slices.ContainsFunc(p.Config.PluginSinks, func(c config.PluginSinkConfig) bool {
+		plugin, _ := config.LookupPlugin("sink", c.Type)
+		return plugin.Side != config.Dialer && c.Type != "null"
+	})
+	if peers && writes {
+		p.logger.Warn("msg", "Pipeline writes chain peers' entries in raw format, without the node each came from",
+			"pipeline", p.Config.Name,
+			"hint", "a txt or json format writes it, as node/source")
+	}
 }
 
 func (p *Pipeline) initializeComponents() error {
@@ -258,8 +287,10 @@ func (p *Pipeline) run(ids []string, subscriptions []<-chan core.LogEntry) {
 			defer componentWg.Done()
 			// Range drains in-flight entries once the source closes the channel
 			for entry := range ch {
-				event, stage, index := p.flow.Load().Process(entry)
-				if t := p.tap.Load(); t != nil {
+				// A viewer reads the payload, though chain sinks do not
+				t := p.tap.Load()
+				event, stage, index := p.flow.Load().Process(entry, p.formats || t != nil)
+				if t != nil {
 					t.Offer(core.Tapped{Pipeline: p.Config.Name, Source: ids[i], Stage: stage, Index: index, Event: event})
 				}
 				if stage == "" {
@@ -322,6 +353,7 @@ func (p *Pipeline) SetFlow(cfg *config.FlowConfig, f *flow.Flow) {
 	f.Continue(p.flow.Load())
 	p.flow.Store(f)
 	p.Config.Flow = cfg
+	p.warnUnlabelled()
 	select {
 	case p.swapped <- struct{}{}:
 	default:
@@ -333,17 +365,20 @@ func (p *Pipeline) SetFlow(cfg *config.FlowConfig, f *flow.Flow) {
 // waits until Stop.
 func (p *Pipeline) dispatch(event core.TransportEvent) {
 	for _, o := range p.outlets {
-		if o.backpressure {
-			select {
-			case o.sink.Input() <- event:
-			case <-p.halt:
-				o.dropped.Add(1)
-			}
+		// A sink with room takes the event first: a select with the release
+		// ready too picks at random, which dropped half of what was in flight
+		select {
+		case o.sink.Input() <- event:
+			continue
+		default:
+		}
+		if !o.backpressure {
+			o.dropped.Add(1)
 			continue
 		}
 		select {
 		case o.sink.Input() <- event:
-		default:
+		case <-p.halt:
 			o.dropped.Add(1)
 		}
 	}
@@ -381,15 +416,16 @@ func (p *Pipeline) Start() error {
 	for id, src := range p.Sources {
 		ids, subscriptions = append(ids, id), append(subscriptions, src.Subscribe())
 	}
+	// The run loop first: a source failing to start leaves what those started
+	// before it published to the sinks, which Stop drains it to
+	p.Stats.StartTime = time.Now()
+	p.wg.Add(1)
+	go p.run(ids, subscriptions)
 	for id, src := range p.Sources {
 		if err := src.Start(); err != nil {
 			return p.part("source", id, fmt.Errorf("failed to start source %s: %w", id, err))
 		}
 	}
-
-	p.Stats.StartTime = time.Now()
-	p.wg.Add(1)
-	go p.run(ids, subscriptions)
 
 	return nil
 }

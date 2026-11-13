@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"reflect"
 	"slices"
@@ -40,14 +42,14 @@ func TestEveryRowDecodesFromItsRequiredKeys(t *testing.T) {
 // a backoff maximum below the minimum the default maximum
 func TestZeroDefaultsAndNegatives(t *testing.T) {
 	tcp, err := Decode[TCPSinkOptions]("sink", "tcp", map[string]any{"port": int64(1), "buffer_size": int64(0), "keep_alive": false})
-	if err != nil || tcp.BufferSize != 1000 || tcp.KeepAlive || tcp.Host != "0.0.0.0" {
+	if err != nil || tcp.BufferSize != 1000 || tcp.KeepAlive || tcp.Host != "127.0.0.1" {
 		t.Fatalf("tcp sink: %+v %v", tcp, err)
 	}
 	if _, err := Decode[TCPSinkOptions]("sink", "tcp", map[string]any{"port": int64(1), "buffer_size": int64(-1)}); err == nil ||
-		err.Error() != "buffer_size: must be at least 1, got -1" {
+		err.Error() != "buffer_size: must be from 1 to 1048576, got -1" {
 		t.Fatalf("negative buffer_size: %v", err)
 	}
-	for in, want := range map[any]int64{nil: 0, int64(0): 0, int64(-1): 100, int64(7): 7} {
+	for in, want := range map[any]int64{nil: 100, int64(0): 0, int64(-1): 100, int64(7): 7} {
 		m := map[string]any{"directory": "d", "name": "n", "min_disk_free_mb": in}
 		if in == nil {
 			delete(m, "min_disk_free_mb")
@@ -155,6 +157,22 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 	}
 }
 
+// No two writers share files: a file sink takes neither lw's own log's
+// directory and name nor another file sink's, however the path is spelled
+func TestNoTwoWritersShareFiles(t *testing.T) {
+	sink := func(id, dir, name string) PluginSinkConfig {
+		return PluginSinkConfig{ID: id, Type: "file", Config: map[string]any{"directory": dir, "name": name}}
+	}
+	cfg := &Config{Color: "auto", Logging: &LogConfig{Output: "file", Level: "info", File: &LogFileConfig{Directory: "./log", Name: "logwisp"}},
+		Pipelines: []PipelineConfig{{Name: "p", Flow: &FlowConfig{}, PluginSources: []PluginSourceConfig{{ID: "in", Type: "null"}},
+			PluginSinks: []PluginSinkConfig{sink("own", "log", "logwisp"), sink("a", "/var/log/lw", "app"), sink("b", "/var/log/lw/", "app"), sink("c", "/var/log/lw", "other")}}}}
+	want := "pipelines[0].plugin_sinks[own].config.name: logging.file writes these files already; give this sink another name or directory\n" +
+		"pipelines[0].plugin_sinks[b].config.name: pipelines[0].plugin_sinks[a] writes these files already; give this sink another name or directory"
+	if err := ValidateConfig(cfg); err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant %s", err, want)
+	}
+}
+
 // A configuration that does not load names every problem, a line each: the
 // settings, each flow stage, each plugin and each pipeline, every key's of a
 // part, and the first rule between a table's keys
@@ -171,7 +189,7 @@ func TestLoadReportsEveryProblemALine(t *testing.T) {
 		"pipelines[0].plugin_sources[file].config.directory: must be set",
 		`pipelines[0].plugin_sources[file].config.from: must be one of start, end, got "middle"`,
 		"pipelines[0].plugin_sinks[tcp].config.port: must be from 1 to 65535, got 70000",
-		"pipelines[0].plugin_sinks[tcp].config.buffer_size: must be at least 1, got -1",
+		"pipelines[0].plugin_sinks[tcp].config.buffer_size: must be from 1 to 1048576, got -1",
 		`pipelines[0].plugin_sinks[tcp].config.acl.allow[0]: "x": not an IP address or CIDR; host names and IPv6 zones are not accepted`,
 		"pipelines[0].plugin_sinks[tcp].config.tls: listeners need cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file",
 		`pipelines[1].name: duplicate name "a"`,
@@ -211,6 +229,24 @@ func TestTableKeysFollowThePlugin(t *testing.T) {
 	}
 }
 
+// A tls table without enabled holds min_version alone: a certificate, CA or
+// pin there means TLS was meant, so it is refused rather than ignored
+func TestATLSKeyNeedsEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		tls  map[string]any
+		want string
+	}{
+		{map[string]any{"enabled": false, "min_version": "1.2", "self_signed": false, "hosts": []any{}}, ""},
+		{map[string]any{"cert_file": "c", "key_file": "k"}, "tls: cert_file is set but enabled is not"},
+		{map[string]any{"enabled": false, "pin_sha256": "sha256//x"}, "tls: pin_sha256 is set but enabled is not"},
+	} {
+		_, err := Decode[TCPSinkOptions]("sink", "tcp", map[string]any{"port": int64(9000), "tls": tc.tls})
+		if got := fmt.Sprint(err); tc.want == "" && err != nil || tc.want != "" && got != tc.want {
+			t.Errorf("%v: %v, want %q", tc.tls, err, tc.want)
+		}
+	}
+}
+
 // A leading ~ or ~/ in a dir or file key is the home directory where lw reads
 // it, in a plugin's options, its tables too, while the configuration keeps it
 // as typed, the settings' too (lw's log reads it at startup); ~user, other
@@ -239,5 +275,80 @@ func TestTildeIsHomeInPathKeys(t *testing.T) {
 	t.Setenv("HOME", "")
 	if src, err := Decode[FileSourceOptions]("source", "file", map[string]any{"directory": "~/logs"}); err != nil || src.Directory != "~/logs" {
 		t.Fatalf("without a home directory: %+v %v", src, err)
+	}
+}
+
+// Every key in milliseconds takes at most what a time.Duration holds, so no
+// setting wraps to a negative interval
+func TestMillisecondKeysFitADuration(t *testing.T) {
+	over := int64(maxMS) + 1
+	for _, p := range plugins {
+		for _, o := range options(p.options) {
+			if !strings.HasSuffix(o.Name, "_ms") {
+				continue
+			}
+			m := map[string]any{o.Name: over}
+			for _, r := range options(p.options) {
+				if r.Required {
+					m[r.Name] = "1"
+				}
+			}
+			if err := Coerce(p.Role, p.Type, m); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decode(p.Role, p.Type, m); err == nil || !strings.Contains(err.Error(), o.Name+": must be at most") {
+				t.Errorf("%s %s %s %d: %v", p.Type, p.Role, o.Name, over, err)
+			}
+		}
+	}
+	for _, stage := range []any{&HeartbeatConfig{IntervalMS: over}} {
+		if err := Settle(stage); err == nil || !strings.Contains(err.Error(), "must be at most") {
+			t.Errorf("%T: %v", stage, err)
+		}
+	}
+}
+
+// An ingest path is one ServeMux registers and a URL carries literally, as the
+// http sink's paths are: a pattern it cannot parse panics the source's Start,
+// past --check and a reload
+func TestIngestPathIsOneServeMuxRegisters(t *testing.T) {
+	registers := func(p string) (ok bool) {
+		defer func() { ok = recover() == nil }()
+		http.NewServeMux().Handle("POST "+p, http.NotFoundHandler())
+		return
+	}
+	for _, c := range []struct {
+		path string
+		ok   bool
+	}{
+		{"/ingest", true}, {"/v1/logs/", true}, {"/", true},
+		{"/v1/{tenant", false}, {"/ingest//x", false}, {"/a/./b", false}, {"/a/..", false},
+		{"/ingest/{}", false}, {"/{x}/{x}", false}, {"/a{b}", false}, {"/ingest/{$}/x", false},
+		{"ingest", false}, {"/a?b", false}, {"/%78", false}, {"/auth", false},
+	} {
+		_, srcErr := Decode[HTTPChainSourceOptions]("source", "http_chain", map[string]any{"port": int64(1), "ingest_path": c.path})
+		_, sinkErr := Decode[HTTPChainSinkOptions]("sink", "http_chain", map[string]any{"host": "h", "port": int64(1), "ingest_path": c.path})
+		if (srcErr == nil) != c.ok || (sinkErr == nil) != c.ok {
+			t.Errorf("ingest_path %q: source %v, sink %v, want accepted %v", c.path, srcErr, sinkErr, c.ok)
+		}
+		if c.ok && !registers(c.path) {
+			t.Errorf("ingest_path %q accepted, but ServeMux refuses it", c.path)
+		}
+	}
+}
+
+// Every queue's size is bounded, as the file sink's writer bounds its own: a
+// size past what the runtime allocates panicked the constructor, in --check
+// and at a reload, and one that fits could take the host's memory
+func TestEveryQueueSizeIsBounded(t *testing.T) {
+	for _, p := range plugins {
+		for _, o := range options(p.options) {
+			if !strings.HasSuffix(o.Name, "buffer_size") {
+				continue
+			}
+			if o.Max == nil || *o.Max != 1<<20 {
+				t.Errorf("%s %s: %s has no bound of 1048576", p.Type, p.Role, o.Name)
+			}
+		}
 	}
 }

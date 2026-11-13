@@ -40,6 +40,21 @@ type TransportEvent struct {
 	Entry LogEntry
 }
 
+// AtomicTime is a time stats report, such as a plugin's last entry: stored
+// and loaded atomically, without the allocation each store of a time.Time in
+// an atomic.Value costs. It keeps the years 1678 to 2262; zero is unset.
+type AtomicTime struct{ ns atomic.Int64 }
+
+func (a *AtomicTime) Store(t time.Time) { a.ns.Store(t.UnixNano()) }
+
+// Load returns the time last stored, or the zero time when none was
+func (a *AtomicTime) Load() time.Time {
+	if ns := a.ns.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
+}
+
 // Tapped is what a pipeline's flow decided about one entry: Stage names the
 // stage that dropped Event.Entry (rate_limit, filters at Index, format), or is
 // "" when it passed and Event.Payload is what dispatch offered the sinks; a
@@ -59,9 +74,16 @@ type Tap struct {
 	ch    chan Tapped
 	All   atomic.Bool
 	drops atomic.Uint64
+	held  atomic.Int64 // the bytes of the records queued, which Took hands back
+	limit int64        // what held may reach; 0 bounds only the count
 }
 
-func NewTap(size int) *Tap { return &Tap{ch: make(chan Tapped, size)} }
+// NewTap holds up to records records and, when bytes is set, up to bytes of
+// their text: a viewer reads a tick's bytes, so a count alone would queue
+// long lines far past what it shows
+func NewTap(records, bytes int) *Tap {
+	return &Tap{ch: make(chan Tapped, records), limit: int64(bytes)}
+}
 
 // Offer clips only what it can keep, so a full tap costs the pipeline nothing;
 // a reader racing it costs a drop, never a wait
@@ -73,6 +95,12 @@ func (t *Tap) Offer(r Tapped) {
 		t.drops.Add(1)
 		return
 	}
+	n := r.size()
+	if held := t.held.Add(n); t.limit > 0 && held > t.limit {
+		t.held.Add(-n)
+		t.drops.Add(1)
+		return
+	}
 	e := &r.Event.Entry
 	r.Event.Payload = clip(r.Event.Payload, TapEntryBytes)
 	e.Message, e.Fields = clip(e.Message, TapEntryBytes), clip(e.Fields, TapEntryBytes)
@@ -80,11 +108,25 @@ func (t *Tap) Offer(r Tapped) {
 	select {
 	case t.ch <- r:
 	default:
+		t.held.Add(-n)
 		t.drops.Add(1)
 	}
 }
 
+// Records are the records queued; a reader hands each one's bytes back with
+// Took
 func (t *Tap) Records() <-chan Tapped { return t.ch }
+
+// Took hands back the bytes of a record read from Records
+func (t *Tap) Took(r Tapped) { t.held.Add(-r.size()) }
+
+// size is the text r holds once Offer clips it
+func (r *Tapped) size() int64 {
+	e := &r.Event.Entry
+	return int64(min(len(r.Event.Payload), TapEntryBytes) + min(len(e.Message), TapEntryBytes) +
+		min(len(e.Fields), TapEntryBytes) + min(len(e.Level), TapNameBytes) +
+		min(len(e.Source), TapNameBytes) + min(len(e.Node), TapNameBytes))
+}
 
 // Dropped counts the records a full tap could not take
 func (t *Tap) Dropped() uint64 { return t.drops.Load() }
@@ -128,6 +170,9 @@ func LevelWord[T string | []byte](text T, want string) (level string, start, end
 		}
 		for end = i; end < len(text) && wordByte(text[end]); end++ {
 		}
+		if n := end - i; n == 0 || n >= 64 || nameLens&(1<<n) == 0 || !nameFirst[text[i]] {
+			continue
+		}
 		for _, l := range Levels {
 			for _, name := range l.Names {
 				if end-i == len(name) && (want == "" || want == l.Level) && strings.EqualFold(string(text[i:end]), name) {
@@ -138,6 +183,19 @@ func LevelWord[T string | []byte](text T, want string) (level string, start, end
 	}
 	return "", 0, 0
 }
+
+// nameLens has bit n set when a level name is n bytes long, and nameFirst
+// holds the bytes, in either case, a name begins with: a word failing either
+// names no level, so LevelWord skips it without walking Levels
+var nameLens, nameFirst = func() (lens uint64, first [256]bool) {
+	for _, l := range Levels {
+		for _, n := range l.Names {
+			lens |= 1 << len(n)
+			first[n[0]|0x20], first[n[0]&^0x20] = true, true
+		}
+	}
+	return lens, first
+}()
 
 func wordByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'

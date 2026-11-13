@@ -8,8 +8,10 @@ see [Chaining](chaining.md).
 
 Every listener and dialer keeps strictly to the family of its `host`:
 
-- IPv4 literal (`127.0.0.1`, the default `0.0.0.0`): IPv4 only (`tcp4`). A
+- IPv4 literal (the default `127.0.0.1`, `0.0.0.0`): IPv4 only (`tcp4`). A
   listener's empty `host` is the IPv4 wildcard, as `0.0.0.0`.
+  - A listener on every address with neither `auth` nor `acl.allow` warns at
+    start: anyone who reaches it reads the stream, or writes entries into it.
 - IPv6 literal (`::1`, `::`, `fe80::1%eth0`): IPv6 only (`tcp6`).
   - `::` takes no IPv4 connections, on Linux and FreeBSD alike, whatever the
     system's `bindv6only` default.
@@ -67,25 +69,29 @@ ERROR msg "Failed to initialize service" error "failed to start service pipeline
 
 ## Timeouts
 
-Every network plugin exposes the deadlines relevant to its role. `0` means no
-deadline where the default is `0` (none); elsewhere it selects the default.
+Every network plugin exposes the deadlines relevant to its role. An explicit
+`0` means no deadline on the `http` sink's `write_timeout_ms` and the
+`tcp_chain` source's `read_timeout_ms`; elsewhere it selects the default.
 
 - `tcp` sink
   - `write_timeout_ms`, default `5000`: one write to one client; a miss
     disconnects that client.
 - `http` sink
-  - `write_timeout_ms`, default `0` (none): one SSE event write.
+  - `write_timeout_ms`, default `5000`: one SSE event write; a miss ends that
+    stream, and EventSource reconnects.
 - `tcp_chain` source
   - `hello_timeout_ms`, default `10000`: reading the protocol preamble, and
     under `scram` the whole login.
-  - `read_timeout_ms`, default `0` (none): idle time between entries.
+  - `read_timeout_ms`, default `300000` (5 min): idle time in which nothing
+    arrives; a line may take longer while its bytes keep coming. An entry
+    written in the instant of the close can be lost.
 - `http_chain` source
   - `read_timeout_ms`, default `30000`: reading a whole request, headers and
     body; also how long an idle keep-alive connection waits for its next
     request.
 - `tcp_chain` sink
   - `dial_timeout_ms`, default `5000`: TCP connect.
-  - `write_timeout_ms`, default `5000`: one line write.
+  - `write_timeout_ms`, default `5000`: one write, up to 4 KiB of lines.
 - `http_chain` sink
   - `request_timeout_ms`, default `10000`: dial plus write plus response, and
     a SCRAM login when one is due.
@@ -94,7 +100,10 @@ Fixed, non-configurable bounds:
 
 - TLS handshake: 10 s, on all TLS listeners and dialers; on the `http_chain`
   source, `read_timeout_ms` when shorter.
-- HTTP read-header timeout: 10 s, on the `http` sink and `http_chain` source.
+- HTTP request read: 10 s, headers and body on the `http` sink, headers on the
+  `http_chain` source.
+- HTTP idle keep-alive: 2 min on the `http` sink, past the 60 s of common
+  proxies so that they close first.
 - HTTP server shutdown grace: 2 s on the `http_chain` source and the `http`
   sink; on the `http` sink, `write_timeout_ms` instead when set below 2 s.
 - Single entry line: at most 1 MiB, on chain listeners.
@@ -113,8 +122,8 @@ would terminate long-lived SSE streams; per-event deadlines come from
 `tcp_chain` source, and concurrent streams on the `http` sink (other requests
 are not counted); `0` means unlimited.
 
-- A connection or stream counts only after the check that admits it, so a
-  burst can over-admit by several, more the larger the burst.
+- A connection or stream takes its slot before the check, so a burst cannot
+  over-admit.
 - On the `tcp` sink and `tcp_chain` source a connection counts before its TLS
   handshake, so the cap bounds handshakes in progress as well as sessions.
 - Over the limit a TCP connection is closed and counted in `rejected_conns`;
@@ -201,8 +210,8 @@ preamble, headers, and entry encoding.
 
 **Closed as soon as it connects, before TLS**
 - The listener's `acl` refused it: `acl_denied` or `acl_limited` rises, and
-  its log has `Connection refused by acl` at WARN with a `reason`, once a
-  minute at most. The dialer sees `EOF` or `connection reset by peer` (curl:
+  its log has `Connection refused by acl` with a `reason`
+  ([WARN once a minute](security.md#refusals)). The dialer sees `EOF` or `connection reset by peer` (curl:
   exit 52 or 56; over TLS, 35).
   - `address rules` — `allow` or `deny` excludes the client: the one a PROXY
     header names (`remote_addr`, the proxy as `peer_addr`), else the socket
@@ -223,7 +232,7 @@ preamble, headers, and entry encoding.
 
 **HTTP `429 Too Many Requests` with `Retry-After`**
 - `requests_per_second_per_client`: `acl_limited` rises and the log has
-  `Request refused by acl`, once a minute at most. A browser's page load
+  `Request refused by acl` ([WARN once a minute](security.md#refusals)). A browser's page load
   takes several requests; raise the rate rather than retry faster. From
   `/auth` with `too many attempts`, it is SCRAM throttling (below).
 
@@ -240,9 +249,9 @@ preamble, headers, and entry encoding.
   pin from its startup warning, or move it to an issuer and `ca_file`.
 - `protocol version not supported` — one side is pinned to `min_version = "1.3"`
   and the other cannot negotiate it.
-- Listeners log handshake failures at WARN with the remote address (the `tcp`
-  sink at DEBUG); the `tcp` sink and `tcp_chain` source count them in
-  `tls_handshake_errors`.
+- Listeners log `TLS handshake failed` with the remote address
+  ([WARN once a minute](security.md#refusals)); the `tcp` sink and `tcp_chain`
+  source count them in `tls_handshake_errors`.
 
 **Rejected after a successful handshake**
 - `auth: refused: identity "<id>" is not allowed` — the certificate is valid
@@ -258,15 +267,17 @@ preamble, headers, and entry encoding.
 - On a `tcp_chain` sink the same message inside `Chain connect refused` means
   the *server* was refused: its certificate identity is not in the sink's
   `auth.allow`.
-- Allow-list and login rejections log WARN and count `auth_rejected`; a
+- Allow-list and login rejections log ([WARN once a minute](security.md#refusals))
+  and count `auth_rejected`; a
   node-binding refusal logs `Connection rejected by node binding`
   (`tcp_chain`, `rejected_conns`) or `Request rejected by node binding`
   (`http_chain`, `rejected_requests`).
 
 **SCRAM login fails**
 - `authentication failed` — the dialer is not told why, by design. The
-  listener's WARN line (`Connection rejected by auth policy` on TCP,
-  `Login rejected` on HTTP) is: `invalid credentials` for a wrong password, an
+  listener's line (`Connection rejected by auth policy` on TCP, `Login
+  rejected` on HTTP; [DEBUG](security.md#refusals) after the minute's first)
+  is: `invalid credentials` for a wrong password, an
   unknown user, or one removed or rotated on the listener (compare the
   `password_file` with the last `add-user`, and check the listener got
   `SIGHUP`); `certificate cn "…" does not match user "…"` for the `identity`
@@ -284,13 +295,14 @@ preamble, headers, and entry encoding.
 - `403` from an `http` sink in proxy mode, with `not a trusted proxy` or
   `X-Forwarded-Proto` in its WARN line — the request did not come from a listed
   proxy, or the proxy did not forward `X-Forwarded-Proto: https` and
-  `X-Forwarded-For`. With `Request refused by acl` (once a minute at most) or
+  `X-Forwarded-For`. With `Request refused by acl` (WARN once a minute) or
   none, the `acl` rules refuse the forwarded client (`acl_denied`).
 - `too many attempts` — the address failed or abandoned logins faster than one
   per second beyond a burst of 10, or has 4 unfinished; it clears within seconds
   once the failing peer stops. Peers behind one NAT, or one passthrough proxy
-  that sends no PROXY header, share the budget. `busy` — 4,096 logins in
-  flight, or the listener is stopping.
+  that sends no PROXY header, share the budget. `busy` — 4,096 logins being
+  verified at once, or the listener is stopping; past 4,096 unanswered ones,
+  the oldest is dropped instead.
 - `authentication not enabled` — the dialer has `scram`; the listener's
   `auth.type` is `none` or `mtls`.
 - `no challenge within 10s (older logwisp, or not a scram listener)` — the

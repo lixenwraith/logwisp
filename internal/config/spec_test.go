@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -76,14 +78,15 @@ func TestPipelineSpecGrammar(t *testing.T) {
 		t.Fatalf("pipelines:\n got %+v\nwant %+v", got, want)
 	}
 	for want, pairs := range map[string][]string{
-		`--sink http:port: missing "="`:                                         {"sink", "http:port"},
-		`--source file,directory=/x: TYPE ends at ':', as in file:directory=/x`: {"source", "file,directory=/x"},
-		`--source directory=/x: missing TYPE`:                                   {"source", "directory=/x"},
-		`--source file:type=x: TYPE already sets "type"`:                        {"source", "file:type=x"},
-		`--sink http:tls.cert_file=c: "tls" is both a value and a table`:        {"sink", "http:tls=1,tls.cert_file=c"},
-		`--sink requires a value`:                                               {"sink", ""},
-		`--format txt: pipeline "cli" already has one`:                          {"format", "json", "format", "txt"},
-		`--rate-limit entries_per_second=1,polcy=drop: unknown key "polcy"`:     {"rate-limit", "entries_per_second=1,polcy=drop"},
+		`--sink http: entry 1 has no "="`:                       {"sink", "http:port"},
+		`--sink tcp_chain: entry 2 has no "="`:                  {"sink", "tcp_chain:host=h,s3cret"},
+		`--source file: TYPE ends at ':', as in file:KEY=VALUE`: {"source", "file,directory=/x"},
+		`--source: missing TYPE`:                                {"source", "directory=/x"},
+		`--source file: TYPE already sets "type"`:               {"source", "file:type=x"},
+		`--sink http: "tls" is both a value and a table`:        {"sink", "http:tls=1,tls.cert_file=c"},
+		`--sink requires a value`:                               {"sink", ""},
+		`--format txt: pipeline "cli" already has one`:          {"format", "json", "format", "txt"},
+		`--rate-limit: unknown key "polcy"`:                     {"rate-limit", "entries_per_second=1,polcy=drop"},
 	} {
 		if _, err := Load(Args{Specs: specs(pairs...)}); err == nil || err.Error() != want {
 			t.Errorf("%q: err = %v, want %s", pairs, err, want)
@@ -109,7 +112,7 @@ func TestSpecValueIsOneListEntry(t *testing.T) {
 }
 
 // One pipeline from LOGWISP_*: numbered variables follow the bare one in
-// numeric order, only repeatable kinds are numbered, and empty means unset.
+// numeric order, and empty means unset.
 func TestEnvironmentPipeline(t *testing.T) {
 	isolateConfig(t)
 	for name, value := range map[string]string{
@@ -119,7 +122,6 @@ func TestEnvironmentPipeline(t *testing.T) {
 		"LOGWISP_SOURCE_2":      "null:id=two",
 		"LOGWISP_SINK_1":        "console",
 		"LOGWISP_FILTER":        "",
-		"LOGWISP_FORMAT_1":      "raw",
 		"LOGWISP_RATE_LIMIT":    "entries_per_second=10",
 		"LOGWISP_LOGGING_LEVEL": "debug",
 	} {
@@ -139,6 +141,23 @@ func TestEnvironmentPipeline(t *testing.T) {
 		p[0].PluginSources[2].ID != "ten" || len(p[0].PluginSinks) != 1 || p[0].Flow.Filters != nil || p[0].Flow.Format != nil ||
 		*p[0].Flow.RateLimit != (RateLimitConfig{EntriesPerSecond: 10, Policy: "drop"}) || cfg.Logging.Level != "debug" {
 		t.Fatalf("environment pipeline: %+v %+v", p, cfg.Logging)
+	}
+}
+
+// A LOGWISP_ variable no setting, pipeline flag or file location reads is
+// refused, as an unknown key is: a misspelled sink would leave entries on
+// standard output. Only repeatable kinds are numbered; empty means unset.
+func TestUnknownVariablesAreRefused(t *testing.T) {
+	isolateConfig(t)
+	for name, value := range map[string]string{
+		"LOGWISP_SINKS_1": "tcp:port=9000", "LOGWISP_FORMAT_1": "raw", "LOGWISP_LOGGING_LEVL": "debug",
+		"LOGWISP_SOURCE_2": "null", "LOGWISP_COLOR": "never", "LOGWISP_CONFIG_DIR": ".", "LOGWISP_UNSET": "",
+	} {
+		t.Setenv(name, value)
+	}
+	_, err := Load(Args{})
+	if err == nil || !strings.HasPrefix(err.Error(), "unknown variable LOGWISP_FORMAT_1, LOGWISP_LOGGING_LEVL, LOGWISP_SINKS_1:") {
+		t.Fatalf("misspelled variables: %v", err)
 	}
 }
 
@@ -233,4 +252,21 @@ func TestWrittenSpecsBuildWhatAFileWould(t *testing.T) {
 		{"rate-limit", "entries_per_second=5,policy=pass"}, {"heartbeat", "enabled=false"}}; !reflect.DeepEqual(specs, want) {
 		t.Fatalf("specs %v, want %v", specs, want)
 	}
+}
+
+// FreeID is TYPE, or TYPE_N with the least N from 2 that no id holds as
+// written: TYPE_02, TYPE_+2 and TYPE_X_2 hold none
+func FuzzFreeIDIsTheLeastSuffixFree(f *testing.F) {
+	f.Add("null", "null,null_2,null_02,null_+3,null_1,null_2_3,null_,tcp_chain_2")
+	f.Add("tcp", "tcp_chain,tcp,tcp_3,tcp_2")
+	f.Fuzz(func(t *testing.T, typ, ids string) {
+		taken := strings.Split(ids, ",")
+		want := typ
+		for n := 2; slices.Contains(taken, want); n++ {
+			want = typ + "_" + strconv.Itoa(n)
+		}
+		if got := FreeID(typ, taken); got != want {
+			t.Fatalf("FreeID(%q, %q) = %q, want %q", typ, taken, got, want)
+		}
+	})
 }

@@ -146,7 +146,7 @@ func TestNewValidation(t *testing.T) {
 		{"scram certificate binding without client_auth", listener(config.AuthOptions{Identity: "cn"}), f.serverTLS, config.Listener, TCP, "requires tls.client_auth"},
 		{"token lifetime on tcp", listener(config.AuthOptions{TokenLifetimeMS: 60000}), f.serverTLS, config.Listener, TCP, "only to HTTP listeners"},
 		{"token lifetime too short", listener(config.AuthOptions{TokenLifetimeMS: 900}), f.serverTLS, config.Listener, HTTP, "must be from 10000 to 86400000"},
-		{"token lifetime too long", listener(config.AuthOptions{TokenLifetimeMS: 1e13}), f.serverTLS, config.Listener, HTTP, "must be from 10000 to 86400000"},
+		{"token lifetime too long", listener(config.AuthOptions{TokenLifetimeMS: 1e9}), f.serverTLS, config.Listener, HTTP, "must be from 10000 to 86400000"},
 		{"scram listener without a certificate", listener(config.AuthOptions{}), &tls.Config{}, config.Listener, TCP, "listener certificate"},
 		{"scram dialer without a password", scram(config.AuthOptions{Username: "edge-01"}), &tls.Config{}, config.Dialer, TCP, "requires username and password_file"},
 		{"scram dialer with credentials", dialer(config.AuthOptions{CredentialsFile: f.creds}), &tls.Config{}, config.Dialer, TCP, "only to listeners"},

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	lconfig "github.com/lixenwraith/config"
 )
@@ -60,8 +62,17 @@ var plugins = []Plugin{
 func Plugins() []Plugin { return slices.Clone(plugins) }
 
 // Keys describes the plugin's options, its tables holding the keys of its
-// side, and HTTP's keys only when it speaks HTTP
-func (p Plugin) Keys() []Key { return p.applying(keys(p.options)) }
+// side, and HTTP's keys only when it speaks HTTP; callers share the result
+// and only read it
+func (p Plugin) Keys() []Key { return pluginKeys()[p.Role+"/"+p.Type] }
+
+var pluginKeys = sync.OnceValue(func() map[string][]Key {
+	out := make(map[string][]Key, len(plugins))
+	for _, p := range plugins {
+		out[p.Role+"/"+p.Type] = p.applying(keys(p.options))
+	}
+	return out
+})
 
 func (p Plugin) applying(all []Key) []Key {
 	out := []Key{}
@@ -105,9 +116,19 @@ type option struct {
 	index int
 }
 
-// options reads the keys of an options table; a malformed tag panics, as the
-// tables are static and every run would fail alike
+// options reads the keys of an options table, once a type; a malformed tag
+// panics, as the tables are static and every run would fail alike
 func options(t reflect.Type) []option {
+	if opts, ok := optionsOf.Load(t); ok {
+		return opts.([]option)
+	}
+	opts, _ := optionsOf.LoadOrStore(t, readOptions(t))
+	return opts.([]option)
+}
+
+var optionsOf sync.Map // reflect.Type: []option, which callers only read
+
+func readOptions(t reflect.Type) []option {
 	var opts []option
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -183,8 +204,11 @@ type Stage struct {
 	On      map[string]any `json:"on,omitempty"`
 }
 
-// FlowStages lists the flow table's stages, in the order entries pass them
-func FlowStages() []Stage {
+// FlowStages lists the flow table's stages, in the order entries pass them;
+// callers share the stages' keys and values and only read them
+func FlowStages() []Stage { return slices.Clone(flowStages()) }
+
+var flowStages = sync.OnceValue(func() []Stage {
 	var out []Stage
 	t := reflect.TypeFor[FlowConfig]()
 	for _, o := range options(t) {
@@ -192,7 +216,7 @@ func FlowStages() []Stage {
 		out = append(out, Stage{o.Name, o.Help, ft.Kind() == reflect.Slice, keys(ft.Elem()), maps.Clone(stageOn[o.Name])})
 	}
 	return out
-}
+})
 
 func keys(t reflect.Type) []Key {
 	out := []Key{}
@@ -394,6 +418,8 @@ func checkTags(v reflect.Value, prefix string) error {
 			switch {
 			case math.IsNaN(n) || math.IsInf(n, 0):
 				err = errors.New("must be a finite number")
+			case strings.HasSuffix(o.Name, "_ms") && n > maxMS:
+				err = fmt.Errorf("must be at most %s, got %s", num(maxMS), num(n))
 			case o.Min != nil && o.Max != nil && !(n >= *o.Min && n <= *o.Max):
 				err = fmt.Errorf("must be from %s to %s, got %s", num(*o.Min), num(*o.Max), num(n))
 			case o.Min != nil && !(n >= *o.Min):
@@ -410,6 +436,10 @@ func checkTags(v reflect.Value, prefix string) error {
 }
 
 func num(n float64) string { return strconv.FormatFloat(n, 'f', -1, 64) }
+
+// maxMS is the most milliseconds a time.Duration holds: more, at any key
+// ending in _ms, would wrap to a negative interval, which a ticker panics on
+const maxMS = float64(math.MaxInt64 / int64(time.Millisecond))
 
 // sideKeys lists, in order, the keys of a table tagged for side
 func sideKeys(t reflect.Type, side string) []string {

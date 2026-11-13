@@ -3,6 +3,7 @@ package format
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/lixenwraith/logwisp/internal/config"
@@ -17,7 +18,6 @@ type FormatterAdapter struct {
 	formatter *formatter.Formatter
 	format    string
 	flags     int64
-	mu        sync.Mutex // formatter reuses internal buffer, not goroutine-safe
 }
 
 // NewFormatterAdapter creates adapter from config
@@ -78,60 +78,148 @@ func (a *FormatterAdapter) FormatWithFlags(entry core.LogEntry, customFlags int6
 }
 
 // serialize renders an entry under the given flags as one record ending in
-// one newline, which raw output lacks unless the message carried it. The
-// result is a copy: the formatter reuses one buffer and sinks keep payloads.
+// one newline, which raw output lacks unless the message carried it. Sources
+// format at once (AppendFormat keeps no state) into pooled scratch, and the
+// record is a copy of its size, as sinks keep payloads; a large one is
+// formatted in place, in a buffer about its size.
 func (a *FormatterAdapter) serialize(entry core.LogEntry, flags int64) []byte {
-	args, flags := formatArgs(entry, flags)
-
-	a.mu.Lock()
-	out := a.formatter.Format(flags, entry.Time, mapLevel(entry.Level), entry.Label(), args)
-	record := make([]byte, len(out), len(out)+1)
-	copy(record, out)
-	a.mu.Unlock()
+	if flags&formatter.FlagRaw != 0 {
+		return raw(entry)
+	}
+	var argv [2]any
+	args, flags := formatArgs(&argv, entry, flags)
+	level, label := mapLevel(entry.Level), entry.Label()
+	var record []byte
+	if size := len(entry.Message) + len(entry.Fields) + 256; size > maxScratch {
+		record = a.formatter.AppendFormat(make([]byte, 0, size), flags, entry.Time, level, label, args)
+	} else {
+		buf := scratch.Get().(*[]byte)
+		out := a.formatter.AppendFormat((*buf)[:0], flags, entry.Time, level, label, args)
+		record = make([]byte, len(out), len(out)+1)
+		copy(record, out)
+		if cap(out) <= maxScratch {
+			*buf = out
+			scratch.Put(buf)
+		}
+	}
 	if !bytes.HasSuffix(record, []byte{'\n'}) {
 		record = append(record, '\n')
 	}
 	return record
 }
 
-// formatArgs pairs the entry with its flags. FlagRaw keeps the fields JSON
-// verbatim beside the message rather than silently overriding the caller's
-// choice of passthrough; every other mode renders it as a JSON object.
-func formatArgs(entry core.LogEntry, flags int64) ([]any, int64) {
-	if len(entry.Fields) == 0 {
-		return []any{entry.Message}, flags
-	}
-	if flags&formatter.FlagRaw != 0 {
-		if entry.Message == "" {
-			return []any{[]byte(entry.Fields)}, flags
+// raw is what the formatter's FlagRaw makes of the arguments, which it only
+// joins: the message, then the fields JSON as written, a space between when
+// both are there. Built here it takes one allocation of its size, not the
+// arguments' boxes, the scratch and the copy.
+func raw(entry core.LogEntry) []byte {
+	record := make([]byte, 0, len(entry.Message)+len(entry.Fields)+2)
+	record = append(record, entry.Message...)
+	if len(entry.Fields) > 0 {
+		if entry.Message != "" {
+			record = append(record, ' ')
 		}
-		return []any{entry.Message, []byte(entry.Fields)}, flags
+		record = append(record, entry.Fields...)
+	}
+	if !bytes.HasSuffix(record, []byte{'\n'}) {
+		record = append(record, '\n')
+	}
+	return record
+}
+
+// scratch holds records while they are formatted; one longer than maxScratch
+// is not kept, so a rare large entry pins no memory
+var scratch = sync.Pool{New: func() any { return new([]byte) }}
+
+const maxScratch = 64 << 10
+
+// formatArgs puts the entry's arguments in argv and pairs them with its flags:
+// the fields render as a JSON object
+func formatArgs(argv *[2]any, entry core.LogEntry, flags int64) ([]any, int64) {
+	argv[0] = entry.Message
+	if len(entry.Fields) == 0 {
+		return argv[:1], flags
 	}
 
-	var fields map[string]any
-	if err := json.Unmarshal(entry.Fields, &fields); err != nil || len(fields) == 0 {
-		return []any{entry.Message}, flags
+	if len(entry.Fields) > maxDecodedFields {
+		argv[1] = []byte(entry.Fields)
+		return argv[:2], flags
 	}
-	return []any{entry.Message, fields}, flags | formatter.FlagStructuredJSON
+	var fields map[string]any
+	var err error
+	if exactNumbers(entry.Fields) {
+		dec := json.NewDecoder(bytes.NewReader(entry.Fields))
+		dec.UseNumber()
+		err = dec.Decode(&fields)
+	} else {
+		err = json.Unmarshal(entry.Fields, &fields)
+	}
+	if err != nil || len(fields) == 0 {
+		return argv[:1], flags
+	}
+	argv[1] = fields
+	return argv[:2], flags | formatter.FlagStructuredJSON
 }
+
+// exactNumbers reports whether fields hold a number a float64 would alter: 16
+// digits or more, past its exact integers (2^53), or an exponent, which may
+// pass its range and fail the whole decode. Those are kept as json.Number,
+// whose decode costs other entries too much.
+func exactNumbers(fields []byte) bool {
+	digits := 0
+	for i := 0; i < len(fields); i++ {
+		switch c := fields[i]; {
+		case c == '"':
+			for i++; i < len(fields) && fields[i] != '"'; i++ {
+				if fields[i] == '\\' {
+					i++
+				}
+			}
+		case c >= '0' && c <= '9':
+			if digits++; digits >= 16 {
+				return true
+			}
+			continue
+		case c == '.' && digits > 0:
+			continue
+		case (c == 'e' || c == 'E') && digits > 0:
+			return true
+		}
+		digits = 0
+	}
+	return false
+}
+
+// maxDecodedFields bounds the fields JSON decoded into a map, which costs some
+// 50 bytes of garbage a byte; longer fields are written as their JSON text,
+// sanitized and quoted like a message
+const maxDecodedFields = 64 << 10
 
 // Name returns formatter type
 func (a *FormatterAdapter) Name() string {
 	return a.format
 }
 
-// mapLevel maps string level to int64
+// mapLevel is the log library's number for the level an entry's word names
+// in core.Levels, TRACE -8 to ERROR 8 by rank; no level, or another word, is
+// INFO's 0
 func mapLevel(level string) int64 {
-	switch level {
-	case "DEBUG", "debug":
-		return -4
-	case "INFO", "info":
-		return 0
-	case "WARN", "warn", "WARNING", "warning":
-		return 4
-	case "ERROR", "error":
-		return 8
-	default:
+	if level == "" {
 		return 0
 	}
+	for i, l := range core.Levels {
+		if level == l.Level {
+			return int64(i-2) * 4
+		}
+	}
+	for i, l := range core.Levels {
+		for _, names := range [2][]string{l.Names, l.Keyed} {
+			for _, name := range names {
+				if strings.EqualFold(level, name) {
+					return int64(i-2) * 4
+				}
+			}
+		}
+	}
+	return 0
 }

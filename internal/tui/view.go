@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -73,6 +74,7 @@ type row struct {
 // those the filters pass, oldest first. The screen's goroutine alone uses it.
 type view struct {
 	rows    []row
+	array   []row // the rows' array whole, evictions leaving room at its front
 	bytes   int
 	next    uint64
 	shown   []uint64 // in the rows, or with P among the held pins too
@@ -177,7 +179,8 @@ func (a *app) point() point {
 	}
 	p.pipe = a.pipeline().Name
 	n, ok := a.node()
-	if l := a.lines(); a.inspect && ok && n.Role == "filters" && len(l) > 0 {
+	if a.inspect && ok && n.Role == "filters" {
+		l := a.lines() // ends with the row adding a filter
 		if m := l[min(a.insp.cursor, len(l)-1)].node; m.Index < len(a.pipeline().Flow.Filters) {
 			r := rank("filters", m.Index)
 			return point{pipe: p.pipe, name: fmt.Sprintf("filter %d", m.Index+1), all: "all that reaches it", reach: r, lo: r, hi: r}
@@ -200,45 +203,78 @@ func (v *view) take(t core.Tapped) int {
 	e := t.Event.Entry
 	r := row{Line: logline.Read(e), pipe: t.Pipeline, source: t.Source,
 		stage: t.Stage, index: t.Index, rank: rank(t.Stage, t.Index), payload: t.Event.Payload}
-	r.at = r.Time
-	for _, at := range []time.Time{e.Time, t.Event.Time, time.Now()} {
+	// The node first, as formats write it: what node_binding bound, which a
+	// chained line's own tag cannot pass off as another node's, or lw's
+	r.Tag = core.LogEntry{Node: e.Node, Source: r.Tag}.Label()
+	for _, at := range []time.Time{r.Time, e.Time, t.Event.Time} {
 		if r.at.IsZero() {
 			r.at = at
 		}
 	}
-	r.level = slices.IndexFunc(core.Levels, func(l core.Level) bool { return l.Level == r.Level })
-	var b strings.Builder
-	for _, f := range r.Fields {
-		if b.Len() > 0 {
-			b.WriteByte(' ')
-		}
-		if f.Key != "" {
-			b.WriteString(f.Key + "=")
-		}
-		b.WriteString(f.Value)
+	if r.at.IsZero() {
+		r.at = time.Now() // not in the list, which would call it for every entry
 	}
-	r.fields = b.String()
-	r.size = rowBytes + r.own() + len(r.fields) + len(r.payload)
+	r.level = slices.IndexFunc(core.Levels, func(l core.Level) bool { return l.Level == r.Level })
+	r.size = rowBytes + r.own() + len(r.payload)
 	v.tagW = max(v.tagW, ui.RuneLen(r.Tag))
 	v.add(r)
 	return r.size
 }
 
-// own copies the line's text, which logline cuts from the entry's, so a row
-// pins no entry and its size is what it holds; it returns those bytes
+// own copies the line's text, which logline cuts from the entry's, into one
+// string the row's strings are cut from: the fields as the list shows them,
+// k=v, then the roles. So a row pins no entry, holds the fields' text once,
+// and its size is what it holds; own returns those bytes.
 func (r *row) own() int {
 	l := &r.Line
-	for _, s := range []*string{&l.Stamp, &l.Level, &l.Tag, &l.Message, &l.Layout} {
-		*s = strings.Clone(*s)
-	}
-	n := len(l.Stamp) + len(l.Level) + len(l.Tag) + len(l.Message) + len(l.Layout)
-	fields := make([]logline.Field, len(l.Fields))
+	// Fields past what the tap keeps of a message and its fields are cut:
+	// flattened, a key repeats in every path under it
+	n := 0
 	for i, f := range l.Fields {
-		fields[i] = logline.Field{Key: strings.Clone(f.Key), Value: strings.Clone(f.Value)}
-		n += fieldBytes + len(f.Key) + len(f.Value)
+		if n+len(f.Key)+len(f.Value) > 2*core.TapEntryBytes {
+			l.Fields, l.Layout = l.Fields[:i], l.Layout+", fields cut"
+			break
+		}
+		n += len(f.Key) + len(f.Value) + 2 // '=' and a space at most
+	}
+	roles := [...]*string{&l.Stamp, &l.Level, &l.Tag, &l.Message, &l.Layout}
+	for _, s := range roles {
+		n += len(*s)
+	}
+	var b strings.Builder
+	b.Grow(n)
+	for _, f := range l.Fields {
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		if f.Key != "" {
+			b.WriteString(f.Key)
+			b.WriteByte('=')
+		}
+		b.WriteString(f.Value)
+	}
+	at := b.Len()
+	for _, s := range roles {
+		b.WriteString(*s)
+	}
+	all := b.String()
+	r.fields = all[:at]
+	for _, s := range roles {
+		*s, at = all[at:at+len(*s)], at+len(*s)
+	}
+	fields := make([]logline.Field, len(l.Fields))
+	at = 0
+	for i, f := range l.Fields {
+		if at > 0 {
+			at++
+		}
+		if f.Key != "" {
+			fields[i].Key, at = all[at:at+len(f.Key)], at+len(f.Key)+1
+		}
+		fields[i].Value, at = all[at:at+len(f.Value)], at+len(f.Value)
 	}
 	l.Fields = fields
-	return n
+	return n + fieldBytes*len(fields)
 }
 
 // dropped reports whether the flow dropped the row
@@ -253,7 +289,17 @@ func (v *view) mark(text string) { v.add(row{mark: text, level: -1, size: rowByt
 func (v *view) add(r row) {
 	r.seq = v.next
 	v.next++
-	v.rows = append(v.rows, r)
+	full := len(v.rows) == cap(v.rows)
+	if full && cap(v.array)-len(v.rows) > len(v.rows)/4 {
+		// evictions left a quarter's room at the array's front: the rows move
+		// there rather than to a larger array, and leave no copy behind
+		n := copy(v.array, v.rows)
+		clear(v.array[n:])
+		v.rows, full = v.array[:n], false
+	}
+	if v.rows = append(v.rows, r); full {
+		v.array = v.rows[:cap(v.rows)]
+	}
 	v.bytes += r.size
 	if v.passes(&v.rows[len(v.rows)-1]) {
 		v.shown = append(v.shown, r.seq)
@@ -376,7 +422,7 @@ func (v *view) clear() {
 			v.held = append(v.held, v.rows[i])
 		}
 	}
-	v.rows, v.shown, v.bytes, v.cursor, v.scroll, v.paused = nil, nil, 0, 0, 0, false
+	v.rows, v.array, v.shown, v.bytes, v.cursor, v.scroll, v.paused = nil, nil, nil, 0, 0, 0, false
 	v.built = query{} // P shows the held
 }
 
@@ -490,20 +536,50 @@ func (a *app) export() {
 
 // jsonLines is rows as LogWisp json, a line each, which lw reads back as
 // they were read: the time, the tag as source, level, message and the fields
-// in their order, each value a string
-func jsonLines(rows []row) []byte {
-	var b bytes.Buffer
+// in their order, each value a string. json leaves DEL, C1 and bidi controls
+// raw, which a terminal showing the file would act on: they are \u escapes.
+type jsonLines []row
+
+// WriteTo hands w the lines 64 KiB at a time, so a full view is never held
+// twice. < > & stay as they are: a JSONL file is no HTML page.
+func (rows jsonLines) WriteTo(w io.Writer) (n int64, err error) {
+	var b, q bytes.Buffer
+	enc := json.NewEncoder(&q)
+	enc.SetEscapeHTML(false)
 	put := func(v string) {
-		q, _ := json.Marshal(v) // invalid UTF-8 as U+FFFD
-		b.Write(q)
+		q.Reset()
+		enc.Encode(v) // a string never fails; invalid UTF-8 as U+FFFD
+		p, start := q.Bytes(), 0
+		p = p[:len(p)-1] // less Encode's newline
+		for i := 0; i < len(p); {
+			if p[i] < 0x7f { // json escaped the controls under DEL
+				i++
+				continue
+			}
+			r, size := utf8.DecodeRune(p[i:])
+			if logline.Control(r, size) {
+				b.Write(p[start:i])
+				fmt.Fprintf(&b, `\u%04x`, r)
+				start = i + size
+			}
+			i += size
+		}
+		b.Write(p[start:])
+	}
+	flush := func() error {
+		m, err := w.Write(b.Bytes())
+		n += int64(m)
+		b.Reset()
+		return err
 	}
 	for i := range rows {
 		r := &rows[i]
-		b.WriteString(`{"time":`)
-		put(r.at.Format(time.RFC3339Nano))
-		for _, kv := range [][2]string{{"source", r.Tag}, {"level", r.Level}} {
+		b.WriteString(`{"time":"`) // RFC 3339 needs no escape
+		b.Write(r.at.AppendFormat(b.AvailableBuffer(), time.RFC3339Nano))
+		b.WriteByte('"')
+		for _, kv := range [][2]string{{`,"source":`, r.Tag}, {`,"level":`, r.Level}} {
 			if kv[1] != "" {
-				b.WriteString(`,"` + kv[0] + `":`)
+				b.WriteString(kv[0])
 				put(kv[1])
 			}
 		}
@@ -522,8 +598,14 @@ func jsonLines(rows []row) []byte {
 			b.WriteByte('}')
 		}
 		b.WriteString("}\n")
+		if b.Len() >= 64<<10 {
+			if err := flush(); err != nil {
+				return n, err
+			}
+		}
 	}
-	return b.Bytes()
+	err = flush() // before n is read: a return's order of the two is open
+	return n, err
 }
 
 // drain reads taps into the view until they are empty or it read budget
@@ -537,6 +619,7 @@ func (a *app) drain(budget int, taps ...*core.Tap) {
 			}
 			select {
 			case rec := <-t.Records():
+				t.Took(rec)
 				budget -= a.view.take(rec)
 				took = true
 			default:
@@ -838,7 +921,8 @@ func (a *app) drawRow(r ui.Region, w *row, tw, lw, gw int, cursor bool) {
 	}
 	x := 1
 	if tw > 0 {
-		r.TextStyled(x, 0, w.at.Local().Format("15:04:05.000")[:tw], on(th.Muted))
+		var stamp [len("15:04:05.000")]byte
+		r.TextStyled(x, 0, string(w.at.Local().AppendFormat(stamp[:0], "15:04:05.000")[:tw]), on(th.Muted))
 		x += tw + 1
 	}
 	if lw > 0 {
@@ -846,17 +930,15 @@ func (a *app) drawRow(r ui.Region, w *row, tw, lw, gw int, cursor bool) {
 		if !ok {
 			style = th.Text
 		}
-		r.TextStyled(x, 0, f.flat(w.Level, lw), on(style))
+		f.put(r, x, w.Level, lw, on(style))
 		x += lw + 1
 	}
 	if gw > 0 {
-		r.TextStyled(x, 0, f.flat(w.Tag, gw), on(a.look.Source))
+		f.put(r, x, w.Tag, gw, on(a.look.Source))
 		x += gw + 1
 	}
-	msg := f.flat(w.Message, r.W-x)
-	r.TextStyled(x, 0, msg, on(th.Text))
-	if x += ui.RuneLen(msg) + 2; x < r.W {
-		r.TextStyled(x, 0, f.flat(w.fields, r.W-x), on(th.Muted))
+	if x += f.put(r, x, w.Message, r.W-x, on(th.Text)) + 2; x < r.W {
+		f.put(r, x, w.fields, r.W-x, on(th.Muted))
 	}
 }
 
@@ -901,11 +983,12 @@ func (a *app) details(w *row, width int) []dline {
 	th := a.th
 	var out []dline
 	put := func(key string, keyW int, value string, style ui.Style) {
+		key = ui.PadRight(ui.Truncate(escape(key), keyW), keyW)
 		for i, s := range ui.WrapText(escape(value), max(1, width-keyW-1)) {
-			if i > 0 {
-				key = ""
+			if i == 1 {
+				key = strings.Repeat(" ", keyW)
 			}
-			out = append(out, dline{ui.PadRight(ui.Truncate(escape(key), keyW), keyW), s, style})
+			out = append(out, dline{key, s, style})
 		}
 	}
 	put("time", 8, w.at.Local().Format("2006-01-02 15:04:05.000 MST"), th.Text)
@@ -988,19 +1071,16 @@ func oneCell(r rune, size int) bool {
 	return r >= ' ' && r < 0x7f || (r != utf8.RuneError || size > 1) && terminal.OneColumn(r)
 }
 
-// flat is s on one row of at most w cells: a line break as the font's mark,
-// a tab as a space, what a cell cannot show as the font's placeholder, and
-// '…' where it is cut
-func (f font) flat(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	out := make([]rune, 0, min(w, len(s)))
-	i := 0
-	for i < len(s) && len(out) < w {
+// fit lays s on one row of at most w cells, passing each its rune: a line
+// break as the font's mark, a tab as a space, what a cell cannot show as the
+// font's placeholder, and '…' where it is cut; it returns the cells taken
+func (f font) fit(s string, w int, cell func(x int, r rune)) int {
+	x := 0
+	for i := 0; i < len(s) && x < w; x++ {
 		r, n := utf8.DecodeRuneInString(s[i:])
-		i += n
-		switch {
+		switch i += n; {
+		case i < len(s) && x == w-1 && w > 1:
+			r = '…'
 		case r == '\n':
 			r = f.newline
 		case r == '\t':
@@ -1008,33 +1088,57 @@ func (f font) flat(s string, w int) string {
 		case !oneCell(r, n):
 			r = f.odd
 		}
-		out = append(out, r)
+		cell(x, r)
 	}
-	if i < len(s) && w > 1 {
-		out[w-1] = '…'
-	}
+	return x
+}
+
+// flat is s as fit lays it out
+func (f font) flat(s string, w int) string {
+	out := make([]rune, 0, max(0, min(w, len(s))))
+	f.fit(s, w, func(_ int, r rune) { out = append(out, r) })
 	return string(out)
 }
 
+// put draws s from x on r's first row as fit lays it out, making no string
+// as flat does: the view draws every row it shows on every frame
+func (f font) put(r ui.Region, x int, s string, w int, style ui.Style) int {
+	return f.fit(s, w, func(i int, c rune) { r.Cell(x+i, 0, c, style.Fg, style.Bg, style.Attr) })
+}
+
 // escape writes each rune a cell cannot show as a \u escape and each invalid
-// byte as a \x one; line breaks stay, for the detail to keep them
+// byte as a \x one; line breaks stay, for the detail to keep them. The detail
+// is built on every frame: s comes back as it is when nothing needs escaping.
 func escape(s string) string {
-	var b strings.Builder
+	var b []byte
+	kept := 0 // s[:kept] is in b
 	for i := 0; i < len(s); {
 		r, n := utf8.DecodeRuneInString(s[i:])
+		if r == '\n' || oneCell(r, n) {
+			i += n
+			continue
+		}
+		esc, v, width, digits := `\u`, uint32(r), 4, "0123456789ABCDEF"
 		switch {
-		case r == '\n' || oneCell(r, n):
-			b.WriteString(s[i : i+n])
 		case r == utf8.RuneError && n == 1:
-			fmt.Fprintf(&b, `\x%02x`, s[i])
+			esc, v, width, digits = `\x`, uint32(s[i]), 2, "0123456789abcdef"
 		case r > 0xffff:
-			fmt.Fprintf(&b, `\U%08X`, r)
-		default:
-			fmt.Fprintf(&b, `\u%04X`, r)
+			esc, width = `\U`, 8
+		}
+		if b == nil {
+			b = make([]byte, 0, len(s)+len(s)/2)
+		}
+		b = append(append(b, s[kept:i]...), esc...)
+		for shift := 4 * (width - 1); shift >= 0; shift -= 4 {
+			b = append(b, digits[v>>shift&0xf])
 		}
 		i += n
+		kept = i
 	}
-	return b.String()
+	if b == nil {
+		return s
+	}
+	return string(append(b, s[kept:]...))
 }
 
 // pattern is a smart-case match: all lower case ignores case. Without

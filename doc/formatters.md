@@ -176,7 +176,10 @@ source when a tailed line parses as JSON with a `fields` key, from the
 from the heartbeat when `include_stats = true`. In `json` output such an entry
 is `{"time":…,"level":…,"trace":…,"message":…,"fields":{…}}`; without fields
 the message sits in `"fields":[…]`. In `txt` the fields follow the message in
-Go's map syntax, keys sorted: `"disk full" "map[dev:sda pct:99]"`.
+Go's map syntax, keys sorted: `"disk full" "map[dev:sda pct:99]"`. Numbers
+keep their digits, a trace id past 2^53 or `1e400` included. Fields over
+64 KiB are not parsed: they follow the message as their JSON text, one quoted
+string, in both formats.
 
 ## Choosing a Configuration
 
@@ -197,6 +200,8 @@ Chain sinks (`tcp_chain`, `http_chain`) do **not** ship the formatted payload:
 they send the structured entry in the chain encoding. `flow.format` on an edge
 node therefore changes only that node's own local sinks; the shape a human or
 a downstream system sees is decided on the node that owns the sink they read.
+A pipeline whose sinks are all chain sinks formats nothing, but for
+`lw --tui`'s live view, and its `flow.total_formatted` stays 0.
 
 An event that reaches a chain sink without a structured entry is wrapped from
 its formatted payload and counted in `synthesized`; a non-zero count means

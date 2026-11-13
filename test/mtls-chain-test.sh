@@ -39,9 +39,11 @@ info "test PKI in $(short "$PKI")/: ca, relay, edge-01, edge-02, edge-99, viewer
 # the certificate identity; both streaming sinks authorize viewer-01 only.
 cat >"$CONF/relay.toml" <<EOF
 status_reporter = false
+# debug: past a listener's one WARN a minute, each refusal is a DEBUG line,
+# which the checks count
 [logging]
 output = "stdout"
-level = "info"
+level = "debug"
 
 [[pipelines]]
 name = "relay_tcp"

@@ -1,14 +1,9 @@
 package session
 
-import (
-	"sync"
-)
-
 // Proxy provides filtered access to session management for a specific plugin instance
 type Proxy struct {
 	manager    *Manager
 	instanceID string
-	mu         sync.RWMutex
 }
 
 // NewProxy creates a session proxy for a specific plugin instance
@@ -67,11 +62,11 @@ func (p *Proxy) GetActiveSessions() []*Session {
 
 // UpdateActivity updates activity for a session if it belongs to this instance
 func (p *Proxy) UpdateActivity(sessionID string) bool {
-	if session, exists := p.GetSession(sessionID); exists {
-		p.manager.UpdateActivity(session.ID)
-		return true
+	session, exists := p.GetSession(sessionID)
+	if exists {
+		session.touch()
 	}
-	return false
+	return exists
 }
 
 // GetInstanceID returns the instance ID this proxy is bound to

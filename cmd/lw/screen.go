@@ -13,6 +13,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/logline"
 	"github.com/lixenwraith/logwisp/internal/pipeline"
 	"github.com/lixenwraith/logwisp/internal/service"
 	"github.com/lixenwraith/logwisp/internal/sink/console"
@@ -21,9 +22,12 @@ import (
 	"golang.org/x/term"
 )
 
-// The records a tap holds for the screen between ticks: a run's, lw's log's
+// The records a tap holds for the screen between ticks: a run's, lw's log's;
+// and the bytes of a run's, four ticks of the view's reading. lw's log
+// carries only messages, 4 MiB at most.
 const (
 	runTapRecords = 1024
+	runTapBytes   = 4 << 20
 	logTapRecords = 256
 )
 
@@ -56,7 +60,7 @@ func (r *screenRunner) Start(specs []config.Spec, whole bool, ask tui.Ask) (*cor
 		}
 	}
 	authz.SetAsker(ask)
-	tap := core.NewTap(runTapRecords)
+	tap := core.NewTap(runTapRecords, runTapBytes)
 	tap.All.Store(true) // until the view's first draw says what its point shows
 	if r.svc == nil {
 		svc, err := bootstrapService(context.Background(), cfg, tap)
@@ -149,10 +153,25 @@ func (r *screenRunner) State() tui.RunState {
 }
 
 // close ends view mode before lw runs on or exits: nothing runs, lw's log is
-// shut down, and terminals answer passwords again
+// shut down, and terminals answer passwords again. What lw warned of after the
+// last frame, stopping the pipelines (a sink's lost batch), is printed: the
+// screen no longer shows it.
 func (r *screenRunner) close() {
 	r.Stop()
 	authz.SetAsker(nil)
+	r.mu.Lock()
+	tap := r.log
+	r.log = nil
+	r.mu.Unlock()
+	if tap != nil && logger != nil {
+		logger.Flush(core.LoggerShutdownTimeout)
+		logger.SetConsoleWriter(nil)
+		for len(tap.Records()) > 0 {
+			if e := (<-tap.Records()).Event.Entry; e.Level == "WARN" || e.Level == "ERROR" {
+				os.Stderr.Write(logline.EscapeControls([]byte(e.Message + "\n")))
+			}
+		}
+	}
 	shutdownLogger()
 	logger = nil
 }
@@ -212,7 +231,7 @@ func (r *screenRunner) startLogger(cfg *config.Config) error {
 	c := logger.GetConfig()
 	streams := map[string][]*os.File{"stdout": {os.Stdout}, "stderr": {os.Stderr}, "split": {os.Stdout, os.Stderr}}[c.ConsoleTarget]
 	if c.EnableConsole && slices.ContainsFunc(streams, func(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }) {
-		w := lwStream{core.NewTap(logTapRecords)}
+		w := lwStream{core.NewTap(logTapRecords, 0)}
 		logger.SetConsoleWriter(w)
 		logger.SetErrorHandler(func(msg string) { w.Write([]byte(msg)) })
 		r.mu.Lock()

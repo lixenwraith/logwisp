@@ -99,16 +99,16 @@ warns() { lw --check --source null --sink "$1" 2>&1 >/dev/null | grep ' WARN ' |
 check "an IPv4 entry on an IPv6 listener is refused" "$(rejects 'tcp:host=::1,port=15881,acl.allow=10.0.0.0/8' "IPv4, and the listener's host is IPv6")"
 check "an acl on a dialer is refused" "$(rejects 'tcp_chain:host=127.0.0.1,port=15881,acl.deny=10.0.0.1' 'unknown key "acl"')"
 check "a CIDR with host bits warns, naming the network it matches" "$(warns 'tcp:host=127.0.0.1,port=15881,acl.allow=10.0.0.1/8' 'network 10.0.0.0/8')"
-check "a deny list alone on a wildcard listener warns" "$(warns 'tcp:port=15881,acl.deny=10.0.0.1' 'admits all that acl.deny does not list')"
+check "a deny list alone on a wildcard listener warns" "$(warns 'tcp:host=0.0.0.0,port=15881,acl.deny=10.0.0.1' 'admits all that acl.deny does not list')"
 check "an allow entry of a whole family warns" "$(warns 'tcp:port=15881,acl.allow=0.0.0.0/0' 'admits every address of its family')"
 check "a proxy_from entry reaching public addresses warns" \
-	"$(warns 'tcp:host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=203.0.113.0/24' 'proxy_from reaches public addresses')"
+	"$(warns 'tcp:host=127.0.0.1,port=15881,acl.proxy_protocol=required,acl.proxy_from=203.0.113.0/24' 'proxy_from reaches public addresses')"
 check "a request rate on a tcp listener is refused" \
 	"$(rejects 'tcp:host=127.0.0.1,port=15881,acl.requests_per_second_per_client=5' 'applies only to HTTP listeners')"
 check "a connection cap behind trusted_proxies, which would count the proxy, is refused" \
 	"$(rejects "http:host=127.0.0.1,port=15881,auth.type=scram,auth.credentials_file=$RUN/users.toml,auth.trusted_proxies=127.0.0.1,acl.max_connections_per_client=2" 'behind trusted_proxies')"
-check "optional proxy_protocol warns that a headerless client passes as the proxy" \
-	"$(warns 'tcp:host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=127.0.0.1' 'passes as the proxy')"
+check "optional proxy_protocol, under which a headerless client passed as the proxy, is refused" \
+	"$(rejects 'tcp:host=127.0.0.1,port=15881,acl.proxy_protocol=optional,acl.proxy_from=127.0.0.1' 'must be one of off, required')"
 
 section "HTTP sink"
 spawn serve "$BIN" --preset "serve:path=$RUN/edge.log,listen=127.0.0.1:15881,allow=127.0.0.0/8,deny=127.0.0.2"
@@ -181,7 +181,9 @@ section "Behind a PROXY header"
 # connect from; each is up before a proxy shares its port on another address
 behind=acl.proxy_protocol=required,acl.proxy_from=127.0.0.1
 scram="tls.enabled=true,tls.self_signed=true,auth.type=scram,auth.credentials_file=$RUN/users.toml"
-spawn sink-behind "$BIN" --logging.level=info --source null --sink "http:host=127.0.0.1,port=15886,$scram,$behind,acl.deny=198.51.100.2"
+# debug: past a listener's one WARN a minute, its refusals and failed logins
+# are DEBUG lines, which the login checks read
+spawn sink-behind "$BIN" --logging.level=debug --source null --sink "http:host=127.0.0.1,port=15886,$scram,$behind,acl.deny=198.51.100.2"
 spawn tcp-capped "$BIN" --source null --sink "tcp:host=127.0.0.1,port=15889,$behind,acl.max_connections_per_client=2"
 for t in tcp http; do
 	spawn "agg-$t-behind" "$BIN" --logging.level=info \

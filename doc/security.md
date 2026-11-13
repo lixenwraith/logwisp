@@ -42,6 +42,8 @@ configure it, and — equally important — what it does not yet do.
     comma is not split into patterns that match nothing;
   - the file must be a regular file and is opened without blocking, so a
     FIFO in its place fails a reload rather than hanging it;
+  - a file found without `-c` or a `LOGWISP_CONFIG_*` variable must belong to
+    the user lw runs as, so no other user's file in a shared directory runs;
   - a permission change on the file is reported once and does not stop
     auto-reload;
   - parse and conversion errors name the key, never the value, so a secret
@@ -60,8 +62,9 @@ configure it, and — equally important — what it does not yet do.
   and `auth_rejected` only.
 - More than one identity mode per listener: `auth.identity` takes one of
   `cn`, `san_dns`, `san_uri`, `san_email`.
-- One read of the configuration file: lw's unknown-key check opens it again,
-  blocking, so a FIFO swapped in between the two reads hangs that load.
+- One read of the configuration file: lw's unknown-key check reads it again,
+  as a regular file of at most 10 MiB opened without blocking, so a file
+  replaced between the two reads is checked as replaced.
 
 Two credentials are supported. Certificates (`mtls`) are the one the transport
 already carries: the `tls` block establishes that a peer chains to your CA, and
@@ -97,7 +100,8 @@ min_version          = "1.3"
 Options by role, each with its default:
 
 - Both roles
-  - `enabled` (`false`): master switch; when false the whole block is ignored.
+  - `enabled` (`false`): master switch; without it the block may hold only
+    `min_version`, and another key is refused, as TLS was meant.
   - `cert_file`: local certificate; a listener needs it, `self_signed` or the
     issuer files, a dialer may present it as its client identity.
   - `key_file`: private key for `cert_file`; set the two together.
@@ -111,8 +115,8 @@ Options by role, each with its default:
   - `hosts` (`[]`): names and addresses a made certificate carries, beyond the
     listener's `host`, `os.Hostname()`, `localhost`, `127.0.0.1` and `::1`.
   - `client_auth` (`false`): require and verify a client certificate (mTLS).
-  - `client_ca_file`: CA bundle that verifies client certificates; **required**
-    when `client_auth` is true.
+  - `client_ca_file`: CA bundle that verifies client certificates; set with
+    `client_auth`, and only with it.
 - Dialers
   - `ca_file` (system store): CA bundle that verifies the server certificate.
   - `server_name` (the configured `host`): SNI and certificate name to verify
@@ -132,6 +136,9 @@ Misconfiguration is refused when the configuration loads
 rules only when `enabled`; certificate and key files fail when the plugin is
 built:
 
+- a key other than `min_version` in a block without `enabled = true`: a
+  certificate, CA or pin there means TLS was meant
+
 - a listener with `enabled = true` and none of `cert_file`/`key_file`,
   `self_signed`, `issuer_cert_file`/`issuer_key_file`, or more than one
 - `hosts` on a listener without `self_signed` or the issuer files
@@ -141,7 +148,8 @@ built:
   `issuer_key_file`, `hosts`, `client_auth` or `client_ca_file` on a dialer;
   `ca_file`, `server_name`, `insecure_skip_verify` or `pin_sha256` on a
   listener
-- `client_auth = true` with no `client_ca_file`
+- `client_auth = true` with no `client_ca_file`, or `client_ca_file` without
+  `client_auth`, which asks for no client certificate
 - only one of `cert_file` / `key_file`, or of `issuer_cert_file` /
   `issuer_key_file`
 - a `min_version` that is neither `"1.2"` nor `"1.3"`
@@ -353,7 +361,7 @@ peer costs no handshake and never reaches `auth`.
 [pipelines.plugin_sources.config.acl]
 allow = ["192.0.2.0/24", "198.51.100.7"] # addresses or CIDRs; empty: all
 deny  = ["192.0.2.66"]                   # refused, listed in allow or not
-proxy_protocol = "required"              # off (default), optional, required
+proxy_protocol = "required"              # off (default) or required
 proxy_from = ["10.0.0.5"]                # L4 proxies sending PROXY headers
 max_connections_per_client = 4           # at once; 0 (default): no cap
 requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
@@ -370,8 +378,8 @@ requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
   matches without its zone.
 - A refused connection is closed at once and counted in `acl_denied`, or
   `acl_limited` past a [limit](#per-client-limits) (plugin stats, the `http`
-  sink's status). A WARN names the client, the reason and the counts, at most
-  once a minute per listener; the refusals in between are only counted.
+  sink's status). A WARN names the client, the reason and the counts,
+  [once a minute](#refusals); the refusals in between are DEBUG.
 - The rules see the client: the socket peer, or the client a PROXY header
   names. Behind the `http` sink's `trusted_proxies` they judge the L7 proxy
   as the peer, then each request's forwarded client (`403` when refused,
@@ -398,10 +406,13 @@ requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
 - A client is the address the rules see, an IPv6 one by its /64 and a
   link-local one per link, so the hosts of one /64 (a SLAAC LAN) share a
   budget; behind `trusted_proxies` the request rate counts the forwarded
-  client.
+  client. An address of NAT64's `64:ff9b::/96` is the IPv4 client it carries.
 - Each limit tracks up to 65,536 clients, a client until its budget is whole
   again, and refuses new ones when full, failing closed. SCRAM throttling
   keeps its budgets the same way.
+  - A /48, 65,536 /64s that tunnel brokers hand out free, holds at most a
+    sixteenth: 4,096 clients. A site using more of its /64s at once has the
+    others refused until some go idle.
 
 ### PROXY protocol
 
@@ -418,11 +429,9 @@ client certificates are unchanged.
   - sends its header within `tlsx.HandshakeTimeout` (10 s); a malformed,
     oversized (v1 over 107 bytes, a v2 block over 2048) or late one is
     refused;
-  - under `required` is refused without a header; under `optional` it keeps
-    its socket address, after up to 10 s if it sends nothing at first. A
-    client the proxy forwards without a header then passes as the proxy, so
-    `optional` (which warns at startup) suits only a rollout; set `required`
-    once every route from `proxy_from` sends the header;
+  - is refused without a header: a client the proxy forwarded without one
+    would pass as the proxy. To roll headers out, move the proxy's routes to
+    a second listener that reads them;
   - keeps its socket address for `LOCAL` (v2) and `UNKNOWN` (v1), the proxies'
     health checks, and for v2 families other than TCP over IPv4 and IPv6. TLVs
     are skipped.
@@ -454,15 +463,29 @@ when it is constructed, so startup and every reload repeat them:
   admits any identity the CA vouches for ([The allow list](#the-allow-list))
 - `auth.trusted_proxies` with an entry beyond loopback and `tls` off: the hop
   from the proxy is plaintext
-  ([Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy))
+  ([Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy));
+  with an entry reaching beyond private, loopback and link-local addresses,
+  `tls` on or off: any host there may name any client, as a CDN's ranges do
 - a `key_file`, `issuer_key_file`, `credentials_file` or `password_file` every
   local user can read (once per path per process); terminals, pipes and
   descriptors hold nothing at rest and are not reported
 - an `acl` entry with host bits set (`10.0.0.1/8`), naming the network it
   matches; an `acl.allow` entry of a whole family (`0.0.0.0/0`, `::/0`); a
-  wildcard listener whose `acl` has `deny` but no `allow`; an `acl.proxy_from`
-  entry reaching beyond private, loopback and link-local addresses;
-  `acl.proxy_protocol = "optional"`
+  wildcard listener whose `acl` has `deny` but no `allow`, or neither and no
+  `auth`; an `acl.proxy_from` entry reaching beyond private, loopback and
+  link-local addresses
+
+## Refusals
+
+Each listener logs the peers it refuses through one throttle:
+- By `acl`, `auth`, node binding, a failed TLS handshake or a bad chain hello,
+  and the `http` sink's proxy gate.
+- The first in a minute is a WARN with the client, the reason and
+  `refused_since_last_warn`; the rest are DEBUG (`--logging.level=debug`
+  shows each). No peer floods lw's log, or pushes journald's rate limit over
+  the refusals it means to hide.
+- The counters keep every one: `acl_denied`, `acl_limited`, `auth_rejected`,
+  `rejected_conns`, `tls_handshake_errors`.
 
 ## Certificates made at startup
 
@@ -647,7 +670,9 @@ Checking a login is HMAC work only; Argon2id (3 passes, 64 MiB, 4 threads) runs
 on the dialer or the CLI. The proof is mutual: the dialer accepts the server's
 final message only when it is signed with this user's `ServerKey`, and it
 refuses a challenge asking for less Argon2 work than those defaults, so a rogue
-server cannot request a cheaply crackable proof. An unknown user gets a stable
+server cannot request a cheaply crackable proof, or for more than twice them (6
+passes, 128 MiB), so it cannot spend the dialer's memory; `lw auth add-user`
+writes the defaults. An unknown user gets a stable
 decoy challenge and fails exactly like a wrong password: `authentication
 failed`.
 
@@ -659,7 +684,9 @@ A TLS-terminating proxy or interceptor shows another certificate — CA-valid or
 not — so the proof fails and the relay never obtains a link or a token. The
 dialer is told `authentication failed` either way; the listener compares the
 hash the dialer reports, logs `the client saw another server certificate: TLS
-interception or a terminating proxy`, and counts `auth_binding_mismatch`.
+interception or a terminating proxy`, and counts `auth_binding_mismatch`. It
+does so only for a proof checked against its exchange: a stray proof could
+claim any hash.
 
 An HTTP login takes two requests, and every later request may open a new pooled
 connection. After the challenge the dialer pins the certificate it was bound to:
@@ -698,14 +725,20 @@ client a [PROXY header](#proxy-protocol) names, or on an `http` sink in proxy
 mode the forwarded client; forwarded headers are read only from
 `trusted_proxies`. Each exchange takes a token from a bucket of 10
 that refills at one per second, and a successful login gives it back, so only
-failed or abandoned attempts drain it. At most 4 exchanges per address may be
-unfinished: an HTTP challenge never answered holds its slot for up to 30 s, a
-TCP connection that ends mid-exchange frees it at once. A refused start answers
-`too many attempts` (HTTP `429`) and counts `auth_throttled`; the table holds
+failed or abandoned attempts drain it. A proof for no exchange the client
+holds, a stray one or one later than 30 s, takes a token too. At most 4
+exchanges per address may be unfinished: an HTTP challenge never answered
+holds its slot for up to 30 s, a TCP connection that ends mid-exchange frees
+it at once. A refused start or proof answers `too many attempts` (HTTP `429`)
+and counts `auth_throttled`; the table holds
 65,536 addresses and refuses new ones when full. Separately, at most 4,096
-exchanges may be in flight per listener; beyond that, or while the plugin
-stops, a login gets `busy` (HTTP `503`) and counts `auth_busy`; neither
-counts in `auth_rejected`. Peers behind one NAT, or one passthrough proxy that
+exchanges may be in flight per listener, 256 of them from one /48 (past
+those, `too many attempts`). A login past 4,096 drops the oldest exchange not
+being verified, whose proof then fails (`authentication failed`), so
+challenges nobody answers cannot shut new logins out. Only while all 4,096
+are being verified, or while the plugin stops, does a login get `busy` (HTTP
+`503`), counting `auth_busy`; neither it nor `too many attempts` counts in
+`auth_rejected`. Peers behind one NAT, or one passthrough proxy that
 sends no PROXY header, share a bucket: there, one client can exhaust every
 other client's logins.
 
@@ -729,11 +762,12 @@ Write it with [`lw auth add-user`](cli.md#lw-auth) rather than by hand; a
 note in a comment above a user's `[[users]]` header stays with that user. A
 username, in the file or in `auth.username`, is 1 to 256 bytes of UTF-8
 without `,`, `=` or a control character. The whole file is validated when the
-plugin is built: a `decoy_key` of at least 32 bytes, at least one user, unique
-names, no unknown keys, and one Argon2 profile and salt length for every user,
-since mixed profiles would tell a prober which users exist. `decoy_key` keeps
-unknown-user challenges stable across restarts and edits; the CLI creates it
-once and preserves it. A single probe
+plugin is built: a regular file of at most 10 MiB, opened without blocking (a
+FIFO or a device is refused), a `decoy_key` of at least 32 bytes, at least
+one user, unique names, no unknown keys, and one Argon2 profile and salt
+length for every user, since mixed profiles would tell a prober which users
+exist. `decoy_key` keeps unknown-user challenges stable across restarts and
+edits; the CLI creates it once and preserves it. A single probe
 cannot tell a real user from an unknown one, but a prober polling a name sees
 its salt change when the user is added, rotated or removed. The file is read
 only when the plugin is built and `auto_reload` does not watch it: send
@@ -1041,15 +1075,15 @@ and the next CRL publication.
 
 ## Surfaces Without Access Control
 
-An `auth` block (`mtls` or `scram`) closes each of these. Without one, bind them
-to a trusted interface, front them with an authenticating proxy, or narrow them
-to known networks with `acl.allow`.
+An `auth` block (`mtls` or `scram`) closes each of these. Without one, keep the
+default loopback `host`, front them with an authenticating proxy, or narrow
+them to known networks with `acl.allow`. A listener on every address with
+neither `auth` nor `acl.allow` warns at start.
 
 What each exposes when `auth.type = "none"`:
 
-- `http` sink `stream_path`: the full log stream, with
-  `Access-Control-Allow-Origin: *`, so any browser origin can read it (the
-  header is omitted once an auth policy is set).
+- `http` sink `stream_path`: the full log stream. It sends no CORS header, so a
+  page from another origin cannot read it from a browser.
 - `http` sink `status_path`: version and instance id, host, port, TLS flag,
   the auth and acl policy summary, buffer sizes and limits, endpoints,
   uptime, client counts, throughput and rejection counters.
@@ -1093,7 +1127,8 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 - Never enable `insecure_skip_verify` outside a lab; it disables server
   verification entirely and makes the connection trivially interceptable. It is
   reported at startup.
-- Bind listeners to specific interfaces rather than `0.0.0.0` where you can.
+- Listeners bind `127.0.0.1` unless `host` says otherwise; name a specific
+  interface rather than `0.0.0.0` where you can.
 - On any ingest port reachable from a network you do not fully control, set an
   `auth` block: `mtls` with an explicit `allow` list, or `scram`.
   `trust_node = false` is the fallback when neither is an option; it is

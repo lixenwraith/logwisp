@@ -297,12 +297,12 @@ or
 .Cm raw .
 .It Fl \-logging.sanitization= Ns Ar policy
 How the log's text is cleaned:
-.Cm raw
-.Pq the default: unchanged ,
-.Cm txt
-.Pq Ql < No and non-printable characters as hex ,
 .Cm json
-.Pq control characters escaped
+.Pq the default: control characters escaped ,
+.Cm raw
+.Pq unchanged ,
+.Cm txt
+.Pq Ql < No and non-printable characters as hex
 or
 .Cm shell
 .Pq shell metacharacters, whitespace and control characters removed; lossy .
@@ -705,6 +705,9 @@ as in
 .Ev LOGWISP_LOGGING_LEVEL=debug .
 Command-line options take precedence, and both take precedence over the
 configuration file.
+A
+.Ev LOGWISP_
+variable that names none of the keys or variables here is refused.
 .It Ev LOGWISP_CONFIG_FILE
 The configuration file, relative to
 .Ev LOGWISP_CONFIG_DIR

@@ -40,14 +40,14 @@
 # output = "stderr"                     # file|stdout|stderr|split|all|none; stdout is the console sink's
 # level = "info"                        # debug|info|warn|error; warn without a file
 # format = "txt"                        # raw|txt|json
-# sanitization = ""                     # raw|json|txt|shell; empty = the log default
+# sanitization = "json"                 # json|raw|txt|shell; json escapes control characters
 
 # [logging.file]                        # Used when output is "file" or "all"
-# directory = "./log"                   # lw's alone: the limits below delete any .log file in it
+# directory = "./log"                   # the limits below delete only lw's files in it
 # name = "logwisp"
 # max_size_mb = 100
-# max_total_size_mb = 1000              # past it the oldest .log files there are deleted
-# retention_hours = 168.0               # .log files there older than this are deleted; 0 keeps them
+# max_total_size_mb = 1000              # past it lw's oldest files there are deleted
+# retention_hours = 168.0               # lw's files there older than this are deleted; 0 keeps them
 
 ## Validated but NOT applied: the console destination comes from `output` above.
 # [logging.console]
@@ -102,8 +102,8 @@
 ### client_auth + client_ca_file make it mTLS. Dialers (tcp_chain/http_chain
 ### sinks) verify the server by ca_file + server_name, or by pin_sha256, and
 ### present cert_file + key_file for mTLS. `lw tls ca` / `lw tls cert` make a
-### CA and certificates. A table not enabled has no effect; only its keys
-### and kinds are checked.
+### CA and certificates. A table not enabled takes min_version alone: any
+### other key there means TLS was meant, and is refused.
 ###
 ### enabled                master switch
 ### cert_file, key_file    the certificate presented and its key, set together
@@ -173,10 +173,8 @@
 ### allow                  addresses or CIDRs of the listener's family (either
 ###                        behind proxy_from or trusted_proxies); empty = all
 ### deny                   refused, listed in allow or not
-### proxy_protocol         off | optional | required: PROXY v1/v2 headers, read
-###                        before TLS; the rules then see the client. optional
-###                        lets a headerless stream pass as the proxy: use it
-###                        only while rolling headers out
+### proxy_protocol         off | required: PROXY v1/v2 headers, read before
+###                        TLS; the rules then see the client
 ### proxy_from             the proxies that may send one; a header from any
 ###                        other peer is refused
 ### max_connections_per_client
@@ -236,11 +234,11 @@
 # id = "chain_in"
 # type = "tcp_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
+# host = "127.0.0.1"                    # This machine only; "0.0.0.0" every IPv4 interface, "::" every IPv6 one
 # port = 9440                           # Required (example)
 # buffer_size = 1000
 # max_connections = 0                   # 0 = unlimited
-# read_timeout_ms = 0                   # Idle deadline; 0 = none
+# read_timeout_ms = 300000              # Idle deadline; 0 = none
 # hello_timeout_ms = 10000              # Protocol preamble deadline
 # trust_node = true                     # false: label entries by remote address
 # [pipelines.plugin_sources.config.tls]
@@ -275,7 +273,7 @@
 # id = "hchain_in"
 # type = "http_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
+# host = "127.0.0.1"                    # This machine only; "0.0.0.0" every IPv4 interface, "::" every IPv6 one
 # port = 9441                           # Required (example)
 # ingest_path = "/ingest"               # Must start with "/"; not "/auth"
 # buffer_size = 1000
@@ -342,25 +340,25 @@
 # name = "output"                       # Required (example)
 # max_size_mb = 100
 # max_total_size_mb = 1000
-# min_disk_free_mb = 0                  # 0 = no floor; a negative value means 100
-# retention_hours = 168.0               # .log files there older than this are deleted; 0 keeps them
+# min_disk_free_mb = 100                # the sink's oldest files go, then writing pauses; 0 = no floor
+# retention_hours = 168.0               # the sink's files older than this are deleted; 0 keeps them
 # buffer_size = 1000
 # flush_interval_ms = 100
 
 ## HTTP sink (server-sent events, a JSON status document and a browser viewer)
-## Without an auth table both endpoints are UNAUTHENTICATED and the stream
-## sends Access-Control-Allow-Origin: *. Bind to a trusted interface.
+## Without an auth table both endpoints are UNAUTHENTICATED: keep the loopback
+## host, or narrow who connects with acl.allow.
 # [[pipelines.plugin_sinks]]
 # id = "http_out"
 # type = "http"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
+# host = "127.0.0.1"                    # This machine only; "0.0.0.0" every IPv4 interface, "::" every IPv6 one
 # port = 8081                           # Required (example)
 # stream_path = "/stream"               # Exact; starts with "/", clean (one trailing "/" allowed), none of { } % ? #; not /auth or under it
 # status_path = "/status"               # Same rules; differs from stream_path
 # buffer_size = 1000                    # Sink input queue
 # client_buffer_size = 256              # Per-client send queue
-# write_timeout_ms = 0                  # Per-event deadline; 0 = none
+# write_timeout_ms = 5000               # Per-event deadline, missed: disconnected; 0 = none
 # max_connections = 0                   # 0 = unlimited
 # replay_lines = 0                      # Last entries a new stream gets first; 0 = none
 # login_page = false                    # GET /auth/login; scram behind auth.trusted_proxies only
@@ -399,7 +397,7 @@
 # id = "tcp_out"
 # type = "tcp"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
+# host = "127.0.0.1"                    # This machine only; "0.0.0.0" every IPv4 interface, "::" every IPv6 one
 # port = 9090                           # Required (example)
 # buffer_size = 1000
 # client_buffer_size = 256

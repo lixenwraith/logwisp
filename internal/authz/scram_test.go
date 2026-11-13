@@ -409,16 +409,25 @@ func TestPreAuthInputIsCapped(t *testing.T) {
 	}
 }
 
-// A dialer refuses a challenge below its Argon2 floor before computing a
-// proof, so a hostile server cannot obtain a cheaply guessable one.
-func TestDialerRefusesACheapChallenge(t *testing.T) {
+// A dialer refuses a challenge below its Argon2 floor or over twice it before
+// computing a proof: a hostile server obtains no cheaply guessable proof, and
+// spends none of the dialer's memory.
+func TestDialerRefusesAChallengeOutsideItsCostBand(t *testing.T) {
 	f := newFixture(t) // verifiers at t=1, m=64 KiB
 	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
 	d := f.dialer(t, "edge-01", "edge-01-secret")
-	minArgonTime, minArgonMemory = auth.DefaultArgonTime, auth.DefaultArgonMemory
 	t.Cleanup(func() { minArgonTime, minArgonMemory = 1, 64 })
-	if _, _, err := f.connect(t, l, f.serverTLS, d, nil); !errors.Is(err, auth.ErrSCRAMParamsTooSmall) {
-		t.Fatalf("cheap challenge: %v", err)
+	for _, floor := range []struct {
+		time, memory uint32
+		want         error
+	}{
+		{auth.DefaultArgonTime, auth.DefaultArgonMemory, auth.ErrSCRAMParamsTooSmall},
+		{1, 16, auth.ErrSCRAMParamsTooLarge},
+	} {
+		minArgonTime, minArgonMemory = floor.time, floor.memory
+		if _, _, err := f.connect(t, l, f.serverTLS, d, nil); !errors.Is(err, floor.want) {
+			t.Fatalf("floor t=%d m=%d: %v, want %v", floor.time, floor.memory, err, floor.want)
+		}
 	}
 	if n := l.allowed.Load(); n != 0 {
 		t.Fatalf("logins = %d, want 0", n)
@@ -443,6 +452,29 @@ func TestOnlyFailedAttemptsAreThrottled(t *testing.T) {
 	_, _, err := f.connect(t, l, f.serverTLS, right, nil)
 	if err == nil || !strings.Contains(err.Error(), "too many attempts") || l.listener.throttled.Load() != 1 {
 		t.Fatalf("attempt over budget: %v, throttled %d", err, l.listener.throttled.Load())
+	}
+}
+
+// A proof for no exchange the client holds costs an attempt, as a hello does,
+// and the binding it claims raises no interception alarm: only a proof checked
+// against its exchange tells what the client saw.
+func TestStrayProofCostsAnAttemptAndClaimsNothing(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
+	srv, _ := f.httpListener(t, l, f.serverTLS)
+	client := f.httpClient(f.dialer(t, "edge-01", "edge-01-secret"))
+	stray := `{"proof":{"full_nonce":"` + strings.Repeat("A", 48) + `","client_proof":"AAAA"},"binding":"QUFBQQ=="}`
+	statuses := map[int]int{}
+	for range limitBurst + 1 {
+		resp, err := client.Post(srv.URL+chain.AuthPath, "application/json", strings.NewReader(stray))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		statuses[resp.StatusCode]++
+	}
+	if statuses[http.StatusUnauthorized] != limitBurst || statuses[http.StatusTooManyRequests] != 1 || l.listener.bindingMismatch.Load() != 0 {
+		t.Fatalf("answers %v, binding mismatches %d", statuses, l.listener.bindingMismatch.Load())
 	}
 }
 
@@ -521,6 +553,34 @@ func TestHTTPTokenFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || l.allowed.Load() != logins+1 {
 		t.Fatalf("after Invalidate: %d, logins %d -> %d", resp.StatusCode, logins, l.allowed.Load())
 	}
+}
+
+// Each login gets a token of its own, those of one user within one second
+// too: revoking one at logout leaves the others
+func TestEachLoginGetsATokenOfItsOwn(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
+	srv, _ := f.httpListener(t, l, f.serverTLS)
+	for range 5 {
+		second := time.Now().Unix()
+		var tokens [2]string
+		for i := range tokens {
+			d := f.dialer(t, "edge-01", "edge-01-secret")
+			token, err := d.Token(t.Context(), f.httpClient(d), srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokens[i] = token
+		}
+		if time.Now().Unix() != second {
+			continue // the logins straddled a second: try again
+		}
+		if tokens[0] == tokens[1] {
+			t.Fatal("two logins in one second got the same token")
+		}
+		return
+	}
+	t.Skip("no two logins fit in one second")
 }
 
 // A server that cannot sign the final message with the user's verifier gets

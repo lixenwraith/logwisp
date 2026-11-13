@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -28,13 +29,42 @@ func TestLevelIsTheFirstWordNamingOne(t *testing.T) {
 	}
 }
 
+// LevelWord skips a word only when walking Levels finds no name for it
+func FuzzLevelWordSkipsOnlyWordsNamingNoLevel(f *testing.F) {
+	for _, s := range []string{"warning disk full", "[Info] x", "terror x_ERR", "INFO then ERR", "Dbg_ e E w"} {
+		f.Add(s, "")
+		f.Add(s, "ERROR")
+	}
+	f.Fuzz(func(t *testing.T, text, want string) {
+		var wl string
+		var ws, we int
+		for i, end := 0, 0; i < len(text) && wl == ""; i = end {
+			for i < len(text) && !wordByte(text[i]) {
+				i++
+			}
+			for end = i; end < len(text) && wordByte(text[end]); end++ {
+			}
+			for _, l := range Levels {
+				for _, name := range l.Names {
+					if wl == "" && end-i == len(name) && (want == "" || want == l.Level) && strings.EqualFold(text[i:end], name) {
+						wl, ws, we = l.Level, i, end
+					}
+				}
+			}
+		}
+		if l, s, e := LevelWord(text, want); l != wl || s != ws || e != we {
+			t.Fatalf("%q want %q: got %q [%d:%d], the walk %q [%d:%d]", text, want, l, s, e, wl, ws, we)
+		}
+	})
+}
+
 // A tapped record keeps at most TapEntryBytes of an entry's message, fields
 // and payload and TapNameBytes of its level, source and node, copied, so a
 // viewer's scrollback holds none of the source's line
 func TestTapClipsLongEntriesByCopying(t *testing.T) {
 	line := strings.Repeat("x", MaxLogEntryBytes)
 	payload, fields := []byte(line), json.RawMessage(line)
-	tap := NewTap(1)
+	tap := NewTap(1, 0)
 	tap.Offer(Tapped{Event: TransportEvent{Payload: payload, Entry: LogEntry{Message: line, Fields: fields, Level: line, Source: line, Node: line}}})
 	r := <-tap.Records()
 	e := r.Event.Entry
@@ -58,10 +88,46 @@ func TestTapClipsLongEntriesByCopying(t *testing.T) {
 // reads costs a pipeline nothing
 func TestAFullTapCostsNothing(t *testing.T) {
 	line := strings.Repeat("x", MaxLogEntryBytes)
-	tap := NewTap(1)
+	tap := NewTap(1, 0)
 	rec := Tapped{Event: TransportEvent{Payload: []byte(line), Entry: LogEntry{Message: line, Fields: json.RawMessage(line), Level: line}}}
 	tap.Offer(rec)
 	if allocs := testing.AllocsPerRun(100, func() { tap.Offer(rec) }); allocs != 0 || tap.Dropped() != 101 {
 		t.Fatalf("%v allocations an offer, %d dropped", allocs, tap.Dropped())
+	}
+}
+
+// A tap with a byte bound queues at most that much clipped text, dropping and
+// counting a record past it; a record read and handed back with Took makes
+// room again
+func TestATapsByteBoundDropsPastItUntilTookMakesRoom(t *testing.T) {
+	text := strings.Repeat("x", TapEntryBytes)
+	rec := Tapped{Event: TransportEvent{Payload: []byte(text), Entry: LogEntry{Message: text + "cut", Source: "s"}}}
+	tap := NewTap(10, 3*(2*TapEntryBytes+1))
+	for range 4 {
+		tap.Offer(rec)
+	}
+	queued, dropped := len(tap.Records()), tap.Dropped()
+	tap.Took(<-tap.Records())
+	tap.Offer(rec)
+	if queued != 3 || dropped != 1 || len(tap.Records()) != 3 || tap.Dropped() != 1 {
+		t.Fatalf("queued %d and dropped %d, then %d and %d once one was taken; want 3 and 1 both times",
+			queued, dropped, len(tap.Records()), tap.Dropped())
+	}
+}
+
+// A stats time keeps the instant stored, unset is the zero time, and storing
+// one per entry allocates nothing
+func TestAtomicTimeKeepsTheInstantWithoutAllocating(t *testing.T) {
+	var a AtomicTime
+	if !a.Load().IsZero() {
+		t.Fatalf("unset: %v", a.Load())
+	}
+	at := time.Date(2026, 11, 13, 1, 2, 3, 456789012, time.UTC)
+	a.Store(at)
+	if got := a.Load(); !got.Equal(at) {
+		t.Fatalf("stored %v, loaded %v", at, got)
+	}
+	if n := testing.AllocsPerRun(100, func() { a.Store(time.Now()) }); n != 0 {
+		t.Fatalf("%v allocations per store", n)
 	}
 }

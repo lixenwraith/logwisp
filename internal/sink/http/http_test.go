@@ -13,10 +13,12 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/sink"
 	"github.com/lixenwraith/logwisp/internal/testutil"
 
@@ -133,36 +135,18 @@ func TestHeadOnStreamPathIsRefused(t *testing.T) {
 	}
 }
 
-// A stream gated by an auth policy is not offered to every web origin; an
-// open stream keeps the wildcard so browser dashboards still work.
-func TestWildcardCORSOnlyWithoutAuth(t *testing.T) {
-	pki := testutil.NewPKI(t, "viewer-01")
+// No stream is offered to other web origins: with a CORS wildcard any page a
+// browser on the machine opens could read a loopback or LAN stream
+func TestStreamIsNotOfferedToOtherOrigins(t *testing.T) {
 	open, _ := newTestHTTPSink(t, nil)
-	gated, _ := newTestHTTPSink(t, map[string]any{
-		"tls": map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey,
-			"client_auth": true, "client_ca_file": pki.CA},
-		"auth": map[string]any{"type": "mtls", "allow": []any{"viewer-01"}},
-	})
-	for _, tc := range []struct {
-		name string
-		sink *HTTPSink
-		want string
-	}{{"open", open, "*"}, {"gated", gated, ""}} {
-		client, baseURL := serveTestHTTPSink(t, tc.sink)
-		if tc.sink.tlsConfig != nil {
-			baseURL = trustPKI(t, client, baseURL, pki, true)
-		}
-		resp, err := client.Get(baseURL + "/stream")
-		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("%s: GET /stream = %d", tc.name, resp.StatusCode)
-		}
-		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != tc.want {
-			t.Errorf("%s: Access-Control-Allow-Origin = %q, want %q", tc.name, got, tc.want)
-		}
+	client, baseURL := serveTestHTTPSink(t, open)
+	resp, err := client.Get(baseURL + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("GET /stream = %d, Access-Control-Allow-Origin %q", resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
 	}
 }
 
@@ -398,12 +382,9 @@ func TestUnservableOptionsAreRefused(t *testing.T) {
 // Every line break SSE recognises, a lone CR included, starts another data:
 // line: an entry cannot inject an event:, retry: or id: field.
 func TestSSEFramesEveryLineAsData(t *testing.T) {
-	rec := httptest.NewRecorder()
-	if err := writeSSE(rec, []byte("a\revent: disconnect\r\nretry: 99999999\nid: x\r")); err != nil {
-		t.Fatal(err)
-	}
+	got := appendSSE(nil, []byte("a\revent: disconnect\r\nretry: 99999999\nid: x\r"))
 	want := "data: a\ndata: event: disconnect\ndata: retry: 99999999\ndata: id: x\n\n"
-	if got := rec.Body.String(); got != want {
+	if string(got) != want {
 		t.Fatalf("framed %q, want %q", got, want)
 	}
 }
@@ -518,4 +499,174 @@ func TestLateStreamGetsTheBacklog(t *testing.T) {
 	if !slices.Equal(got, []string{"line 1", "line 2", "line 3"}) {
 		t.Fatalf("stream got %q", got)
 	}
+}
+
+// A burst of streams is admitted up to max_connections and no further: the
+// slot is taken before the check, not once the stream is set up
+func TestStreamBurstIsAdmittedUpToMaxConnections(t *testing.T) {
+	const limit, burst = 4, 64
+	h, _ := newTestHTTPSink(t, map[string]any{"max_connections": int64(limit)})
+	_, baseURL := serveTestHTTPSink(t, h)
+	client := &http.Client{Transport: &http.Transport{}, Timeout: 3 * time.Second}
+	t.Cleanup(client.CloseIdleConnections)
+	type answer struct {
+		code int
+		body io.Closer
+	}
+	answers, ready := make(chan answer, burst), make(chan struct{})
+	for range burst {
+		go func() {
+			<-ready
+			resp, err := client.Get(baseURL + "/stream")
+			if err != nil {
+				answers <- answer{}
+				return
+			}
+			answers <- answer{resp.StatusCode, resp.Body}
+		}()
+	}
+	close(ready)
+	admitted := 0
+	for range burst {
+		a := <-answers
+		if a.body != nil {
+			defer a.body.Close() // an admitted stream holds its slot to the end
+		}
+		if a.code == http.StatusOK {
+			admitted++
+		}
+	}
+	if admitted != limit {
+		t.Fatalf("admitted %d of a burst of %d streams, max_connections %d", admitted, burst, limit)
+	}
+}
+
+// A connection that never sends the body it declared, or idles after a
+// response, is closed; a stream, whose request is read, outlives both bounds
+func TestSlowAndIdleConnectionsCloseButStreamsDoNot(t *testing.T) {
+	defer func(r, i time.Duration) { readTimeout, idleTimeout = r, i }(readTimeout, idleTimeout)
+	readTimeout, idleTimeout = 200*time.Millisecond, 300*time.Millisecond
+	h, _ := newTestHTTPSink(t, nil)
+	_, baseURL := serveTestHTTPSink(t, h)
+	open := func(request string) *bufio.Reader {
+		conn, err := net.Dial("tcp", strings.TrimPrefix(baseURL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		conn.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := io.WriteString(conn, request+"Host: x\r\n\r\n"); err != nil {
+			t.Fatal(err)
+		}
+		return bufio.NewReader(conn)
+	}
+	stream := open("GET /stream HTTP/1.1\r\n")
+	for name, request := range map[string]string{
+		"declared body never sent": "POST /auth HTTP/1.1\r\nContent-Length: 64\r\n",
+		"idle after a response":    "GET /status HTTP/1.1\r\n",
+	} {
+		conn := open(request)
+		resp, err := http.ReadResponse(conn, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if _, err := io.Copy(io.Discard, conn); err != nil {
+			t.Fatalf("%s: connection still open: %v", name, err)
+		}
+	}
+	resp, err := http.ReadResponse(stream, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Input() <- core.TransportEvent{Payload: []byte("past both bounds\n")}
+	for scanner := bufio.NewScanner(resp.Body); scanner.Scan(); {
+		if scanner.Text() == "data: past both bounds" {
+			return
+		}
+	}
+	t.Fatal("stream ended before the entry sent past both bounds")
+}
+
+// A peer that stopped reading expires and its eviction ends its stream, the
+// handler blocked in a write included, so its slot is freed without
+// write_timeout_ms
+func TestStalledStreamIsEndedByItsEviction(t *testing.T) {
+	h, manager := newTestHTTPSink(t, map[string]any{"write_timeout_ms": int64(0), "client_buffer_size": int64(64)})
+	_, baseURL := serveTestHTTPSink(t, h)
+	conn, err := net.Dial("tcp", strings.TrimPrefix(baseURL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if _, err := io.WriteString(conn, "GET /stream HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); h.activeClients.Load() == 0 || manager.GetSessionCount() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("stream never registered")
+		}
+	}
+	padding := strings.Repeat("x", 8192)
+	for range 4000 { // 32 MiB, more than the socket buffers hold: the handler blocks
+		h.Input() <- core.TransportEvent{Payload: []byte(padding + "\n")}
+	}
+	for _, s := range manager.GetActiveSessions() {
+		manager.RemoveSession(s.ID) // as idle expiry does
+	}
+	h.Input() <- core.TransportEvent{Payload: []byte("evicts\n")}
+	for deadline := time.Now().Add(2 * time.Second); h.activeClients.Load() != 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("an evicted stream still holds its slot")
+		}
+	}
+}
+
+// A refused request's path is logged as it was sent, escaped: decoded, a %0a
+// would end lw's log record and start a forged one, and a %1b drive the
+// terminal showing it
+func TestRefusedRequestPathIsLoggedEscaped(t *testing.T) {
+	h := proxySink(t, []any{"127.0.0.1"}, nil)
+	var out lockedBuffer
+	h.logger = log.NewLogger()
+	h.logger.SetConsoleWriter(&out)
+	if err := h.logger.ApplyConfigString("level=info"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.logger.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.logger.Shutdown() })
+	h.refusals = netacl.NewReporter(h.logger, "http_sink", "stream")
+	client, baseURL := serveTestHTTPSink(t, h)
+	resp, err := client.Get(baseURL + "/x%0a2026-11-13T10:00:00Z%20INFO%20forged%1b]0;t%07") // no X-Forwarded-Proto
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if err := h.logger.Flush(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "%0a2026") || strings.Contains(got, "\n2026") || strings.Contains(got, "\x1b") {
+		t.Fatalf("logged:\n%q", got)
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

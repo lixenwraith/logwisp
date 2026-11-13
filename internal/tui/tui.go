@@ -242,6 +242,9 @@ func (a *app) handle(ev terminal.Event) {
 	case !a.inspectKey(ev):
 		a.globalKey(ev)
 	}
+	if a.dialog == nil && len(a.comp.Pipelines) == 0 {
+		a.bar, a.dialog = false, a.presetMenu() // a start's notice or ask may have covered it
+	}
 }
 
 // is reports whether ev is a key or one of the runes
@@ -339,9 +342,6 @@ func (a *app) barKey(ev terminal.Event) {
 		remove := func(a *app) {
 			a.edit(a.comp.RemovePipeline(a.pi))
 			a.pi, a.row, a.insp.open = max(0, a.pi-1), [3]int{}, map[string]bool{} // folds are keyed by index
-			if len(a.comp.Pipelines) == 0 {
-				a.bar, a.dialog = false, a.presetMenu()
-			}
 		}
 		if len(p.PluginSources)+len(p.PluginSinks) == 0 {
 			remove(a)
@@ -495,10 +495,11 @@ func (a *app) draw(r ui.Region) {
 		a.pi = min(a.pi, len(a.comp.Pipelines)-1)
 		a.node() // a delete can leave the row past its column's end
 		a.drawBar(r.Sub(0, 0, r.W, 1))
-		body, l := r.Sub(0, 1, r.W, r.H-1-len(status)), a.layout(r.W)
+		body := r.Sub(0, 1, r.W, r.H-1-len(status))
 		a.view.sync(a.point(), a.live.tap)
 		switch watched := a.viewing || a.live.tap != nil || len(a.view.rows) > 0; {
-		case watched && r.H >= splitMin && (!a.inspect || l.inspector > 0):
+		case watched && r.H >= splitMin && (!a.inspect || r.W >= besideMin):
+			l := a.layout(r.W)
 			top := l.h
 			if a.inspect {
 				top = max(top, body.H/2)
@@ -509,7 +510,7 @@ func (a *app) draw(r ui.Region) {
 		case a.viewing:
 			a.drawView(body)
 		default:
-			a.drawDiagram(body, l, true)
+			a.drawDiagram(body, a.layout(r.W), true)
 		}
 	}
 	for i, row := range status {
@@ -596,6 +597,9 @@ func (a *app) drawBar(r ui.Region) {
 // paint draws the screen into cells, each rune one the font's terminal shows
 func (a *app) paint(cells []terminal.Cell, w, h int) {
 	a.draw(ui.NewRegion(cells, w, 0, 0, w, h))
+	if a.font.folds == nil && !a.font.ascii {
+		return // the Unicode font's terminal shows every rune
+	}
 	for i, c := range cells {
 		cells[i].Rune = a.font.fold(c.Rune)
 	}

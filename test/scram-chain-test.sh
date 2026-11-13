@@ -42,9 +42,11 @@ info "users edge-01, edge-02, viewer-01 in $(short "$USERS")"
 # file with users (the CLI refuses to remove the last one).
 cat >"$CONF/relay.toml" <<EOF
 status_reporter = false
+# debug: past a listener's one WARN a minute, each refusal is a DEBUG line,
+# which the checks count
 [logging]
 output = "stdout"
-level = "info"
+level = "debug"
 
 [[pipelines]]
 name = "relay_tcp"

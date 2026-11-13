@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync/atomic"
@@ -37,6 +38,7 @@ type FileSink struct {
 	writer       *log.Logger // internal logger for file writing
 	writerConfig *log.Config
 	logger       *log.Logger // application logger
+	batch        []byte      // the payloads of one record, reused
 
 	// Runtime
 	done      chan struct{}
@@ -46,7 +48,7 @@ type FileSink struct {
 
 	// Statistics
 	totalProcessed atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
 }
 
 // NewFileSinkPlugin creates a file sink through plugin factory
@@ -68,6 +70,7 @@ func NewFileSinkPlugin(
 	writerConfig.MaxTotalSizeKB = opts.MaxTotalSizeMB * 1000
 	writerConfig.MinDiskFreeKB = opts.MinDiskFreeMB * 1000
 	writerConfig.RetentionPeriodHrs = opts.RetentionHours
+	writerConfig.CleanupOwnFiles = true // the limits delete this sink's files alone
 	writerConfig.BufferSize = opts.BufferSize
 	writerConfig.FlushIntervalMs = opts.FlushIntervalMs
 	// The payload is already formatted: the writer adds nothing and writes the file only
@@ -94,7 +97,6 @@ func NewFileSinkPlugin(
 		exited:       make(chan struct{}),
 		logger:       logger,
 	}
-	fs.lastProcessed.Store(time.Time{})
 
 	fs.session = proxy.CreateSession(
 		fmt.Sprintf("file:///%s/%s", opts.Directory, opts.Name),
@@ -129,7 +131,11 @@ func (fs *FileSink) Input() chan<- core.TransportEvent {
 
 // Start begins the processing loop for the sink
 func (fs *FileSink) Start(ctx context.Context) error {
-	if err := fs.writer.ApplyConfig(fs.writerConfig); err != nil {
+	c := fs.writerConfig
+	if err := config.LogDir(c.Directory, c.Name+"."+c.Extension); err != nil {
+		return fmt.Errorf("file sink: %w", err)
+	}
+	if err := fs.writer.ApplyConfig(c); err != nil {
 		return fmt.Errorf("failed to initialize file writer: %w", err)
 	}
 	if err := fs.writer.Start(); err != nil {
@@ -184,7 +190,8 @@ func (fs *FileSink) Stop() {
 	fs.logger.Info("msg", "File sink stopped",
 		"component", "file_sink",
 		"instance_id", fs.id,
-		"total_processed", fs.totalProcessed.Load())
+		"total_processed", fs.totalProcessed.Load(),
+		"dropped_records", fs.writer.Dropped())
 }
 
 // GetStats returns the sink's statistics
@@ -194,10 +201,11 @@ func (fs *FileSink) GetStats() sink.SinkStats {
 		Type:           "file",
 		TotalProcessed: fs.totalProcessed.Load(),
 		StartTime:      fs.startTime,
-		LastProcessed:  fs.lastProcessed.Load().(time.Time),
+		LastProcessed:  fs.lastProcessed.Load(),
 		Details: map[string]any{
-			"directory": fs.config.Directory,
-			"name":      fs.config.Name,
+			"directory":       fs.config.Directory,
+			"name":            fs.config.Name,
+			"dropped_records": fs.writer.Dropped(),
 		},
 	}
 }
@@ -230,9 +238,23 @@ func (fs *FileSink) drain() {
 	}
 }
 
-// write hands the formatted payload to the writer, which rotates files
+// write hands the writer the payload with those queued behind it, a batch a
+// record, so a burst takes one write and one slot of the writer's queue. The
+// writer keeps what it is handed until it writes it, so it is handed a copy
+// of the batch, no larger than what it holds.
 func (fs *FileSink) write(event core.TransportEvent) {
-	fs.writer.Write(string(event.Payload))
-	fs.totalProcessed.Add(1)
-	fs.lastProcessed.Store(time.Now())
+	for more := true; more; {
+		batch, n := event.Payload, 1
+		more = false
+		if len(fs.input) > 0 && len(batch) < core.SinkWriteBatchBytes {
+			fs.batch, n, event, more = sink.Batch(fs.batch, event, fs.input, payload)
+			batch = bytes.Clone(fs.batch)
+		}
+		fs.writer.Write(batch)
+		fs.totalProcessed.Add(uint64(n))
+		fs.lastProcessed.Store(time.Now())
+	}
+	fs.batch = sink.Kept(fs.batch)
 }
+
+func payload(dst []byte, event core.TransportEvent) []byte { return append(dst, event.Payload...) }

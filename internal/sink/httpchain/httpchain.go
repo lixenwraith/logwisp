@@ -3,7 +3,7 @@ package httpchain
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -61,8 +61,9 @@ type HTTPChainSink struct {
 	logger *log.Logger
 
 	// Batch state owned exclusively by run loop goroutine
-	batch      bytes.Buffer
+	batch      []byte
 	batchCount int64
+	enc        *chain.Encoder
 
 	reqTimeout time.Duration
 	done       chan struct{}
@@ -74,7 +75,8 @@ type HTTPChainSink struct {
 	requestErrors  atomic.Uint64
 	droppedBatches atomic.Uint64
 	synthesized    atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
+	oversized      atomic.Uint64 // entries whose line a chain source would refuse
+	lastProcessed  core.AtomicTime
 }
 
 // NewHTTPChainSinkPlugin creates an http_chain sink through plugin factory
@@ -156,8 +158,8 @@ func NewHTTPChainSinkPlugin(
 		done:       make(chan struct{}),
 		logger:     logger,
 		reqTimeout: time.Duration(opts.RequestTimeoutMS) * time.Millisecond,
+		enc:        chain.NewEncoder(),
 	}
-	t.lastProcessed.Store(time.Time{})
 
 	t.session = proxy.CreateSession(
 		"http_chain://"+addr,
@@ -235,7 +237,7 @@ func (t *HTTPChainSink) Stop() {
 
 // GetStats returns sink statistics
 func (t *HTTPChainSink) GetStats() sink.SinkStats {
-	lastProc, _ := t.lastProcessed.Load().(time.Time)
+	lastProc := t.lastProcessed.Load()
 	details := map[string]any{
 		"target":          t.url,
 		"node":            t.node,
@@ -244,6 +246,7 @@ func (t *HTTPChainSink) GetStats() sink.SinkStats {
 		"request_errors":  t.requestErrors.Load(),
 		"dropped_batches": t.droppedBatches.Load(),
 		"synthesized":     t.synthesized.Load(),
+		"oversized":       t.oversized.Load(),
 	}
 	maps.Copy(details, t.auth.Stats())
 
@@ -300,7 +303,11 @@ func (t *HTTPChainSink) append(event core.TransportEvent) bool {
 	if synthesized {
 		t.synthesized.Add(1)
 	}
-	line, err := json.Marshal(entry)
+	batch, err := t.enc.Append(t.batch, entry)
+	if errors.Is(err, chain.ErrEntryTooLong) {
+		t.oversized.Add(1)
+		return false
+	}
 	if err != nil {
 		// Non-transient: drop entry
 		t.logger.Error("msg", "Failed to marshal chain entry",
@@ -308,18 +315,17 @@ func (t *HTTPChainSink) append(event core.TransportEvent) bool {
 			"error", err)
 		return false
 	}
-	t.batch.Write(line)
-	t.batch.WriteByte('\n')
+	t.batch = batch
 	t.batchCount++
-	return t.batchCount >= t.config.MaxBatchCount || int64(t.batch.Len()) >= t.config.MaxBatchBytes
+	return t.batchCount >= t.config.MaxBatchCount || int64(len(t.batch)) >= t.config.MaxBatchBytes
 }
 
 // flush delivers the pending batch, retrying transient failures with backoff
 // until shutdown drops it
 func (t *HTTPChainSink) flush(ctx context.Context) {
-	body := bytes.Clone(t.batch.Bytes())
+	body := bytes.Clone(t.batch)
 	count := t.batchCount
-	t.batch.Reset()
+	t.batch = t.batch[:0]
 	t.batchCount = 0
 
 	failures := 0

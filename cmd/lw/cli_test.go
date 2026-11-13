@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	shipped "github.com/lixenwraith/logwisp/config"
 	"github.com/lixenwraith/logwisp/internal/compose"
@@ -205,6 +206,37 @@ func TestTheLogDirectoryReadsTildeAsHome(t *testing.T) {
 	logCfg := log.DefaultConfig()
 	if configureFileLogging(logCfg, loadTestConfig(t, empty, "--logging.file.directory=~/lw")); logCfg.Directory != home+"/lw" {
 		t.Fatalf("log directory %q", logCfg.Directory)
+	}
+}
+
+// Control characters a peer puts in lw's own log come out escaped, in either
+// format, unless raw is asked for
+func TestOwnLogEscapesControlCharactersUnlessRaw(t *testing.T) {
+	testLogger(t)
+	empty := filepath.Join(t.TempDir(), "empty.toml")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		flag    string
+		escaped bool
+	}{{"--logging.format=txt", true}, {"--logging.format=json", true}, {"--logging.sanitization=raw", false}} {
+		cfg := loadTestConfig(t, empty, c.flag)
+		cfg.Quiet = false
+		var out bytes.Buffer
+		if err := initializeLogger(cfg); err != nil {
+			t.Fatal(err)
+		}
+		logger.SetConsoleWriter(&out)
+		if err := logger.Start(); err != nil {
+			t.Fatal(err)
+		}
+		logger.Warn("msg", "Login rejected", "error", "a\x1b]0;title\x07\nforged")
+		logger.Flush(time.Second)
+		logger.Shutdown()
+		if got := strings.TrimSuffix(out.String(), "\n"); strings.ContainsAny(got, "\x1b\x07\n") == c.escaped {
+			t.Errorf("%s: %q", c.flag, got)
+		}
 	}
 }
 

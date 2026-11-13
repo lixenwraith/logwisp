@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -21,9 +22,11 @@ import (
 	"github.com/lixenwraith/logwisp/internal/authz"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/logline"
 	"github.com/lixenwraith/logwisp/internal/tlsx"
 
 	"github.com/lixenwraith/auth"
+	"golang.org/x/term"
 )
 
 const reloadHint = "send SIGHUP to logwisp to apply (auto_reload does not watch the credentials file)"
@@ -110,10 +113,12 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 				return err
 			}
 			fmt.Fprintf(stderr, "wrote the generated password to %s\n", *passwordFile)
+			warnReadable(stderr, "--password-file", *passwordFile)
 		}
 		if err := writeAtomic(*path, data); err != nil {
 			return err
 		}
+		warnReadable(stderr, "--credentials", *path)
 		if generated && *passwordFile == "" {
 			fmt.Fprintf(stderr, "generated password for %q, shown once:\n", *user)
 			fmt.Fprintln(stdout, password)
@@ -147,6 +152,7 @@ func defineRemoveUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		warnReadable(stderr, "--credentials", *path)
 		fmt.Fprintf(stderr, "removed user %q from %s\n%s\n", *user, *path, reloadHint)
 		return nil
 	}
@@ -227,7 +233,7 @@ func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			var r io.Reader
 			if r, err = policy.Greet(ctx, conn, ""); err == nil {
 				defer context.AfterFunc(ctx, func() { conn.Close() })()
-				if _, err = io.Copy(stdout, r); err == nil {
+				if err = copyStream(stdout, r); err == nil {
 					err = errors.New("stream closed by server")
 				}
 			}
@@ -236,6 +242,38 @@ func defineStream(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			return nil // interrupted: how a viewer normally ends
 		}
 		return err
+	}
+}
+
+// copyStream copies a tcp sink's stream to stdout, on a terminal escaping
+// each line as the console sink's escape = "auto" does: a pipeline of raw
+// format passes a peer's bytes on unchanged, and an ESC among them would
+// drive the viewer's terminal. A line past the buffer is escaped in parts.
+func copyStream(stdout io.Writer, r io.Reader) error {
+	if f, ok := stdout.(*os.File); !ok || !term.IsTerminal(int(f.Fd())) {
+		_, err := io.Copy(stdout, r)
+		return err
+	}
+	br := bufio.NewReaderSize(r, 64<<10)
+	for {
+		line, err := br.ReadSlice('\n')
+		if _, werr := stdout.Write(logline.EscapeControls(line)); werr != nil {
+			return werr
+		}
+		switch {
+		case errors.Is(err, io.EOF):
+			return nil
+		case err != nil && !errors.Is(err, bufio.ErrBufferFull):
+			return err
+		}
+	}
+}
+
+// warnReadable repeats the daemon's start-up warning for a secret file that
+// every user can read: writeAtomic keeps an existing file's mode
+func warnReadable(stderr io.Writer, flag, path string) {
+	if w := tlsx.SecretFileWarning(flag, path); w != "" {
+		fmt.Fprintln(stderr, "warning:", w)
 	}
 }
 

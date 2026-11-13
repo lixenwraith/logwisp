@@ -31,9 +31,11 @@ The path is resolved before any other configuration is read:
 5. `./logwisp.toml`
 
 A file named by `-c` or a variable must exist (exit code 2); a missing
-discovered one is not an error, and lw runs on built-in defaults. A relative
-path that climbs with `..` is refused; give it absolute. A file may hold at
-most 10 MiB.
+discovered one is not an error, and lw runs on built-in defaults. A
+discovered one must belong to the user lw runs as: another user may have
+put it in a shared directory, or root may run lw in another account's, so
+it is refused there and `-c` names it. A relative path that climbs with `..`
+is refused; give it absolute. A file may hold at most 10 MiB.
 
 ## Global Settings
 
@@ -43,7 +45,8 @@ Top-level keys, each as type and default:
   diagnostics; pipeline output still flows. It overrides every logging
   setting.
 - `status_reporter` (bool, `true` with a configuration file, `false` without):
-  a status report every 30 s, shown only at `logging.level = "debug"`.
+  a status report every 30 s, gathered and shown only at
+  `logging.level = "debug"`.
 - `auto_reload` (bool, `false`): watch the config file and reload pipelines on
   change.
 - `color` (string, `"auto"`): stamps, levels, sources and fields in color on
@@ -63,7 +66,7 @@ It goes to stderr by default, so stdout carries only a console sink's data.
 output = "stderr"      # file | stdout | stderr | split | all | none
 level  = "info"        # debug | info | warn | error; warn without a file
 format = "txt"         # raw | txt | json
-# sanitization = ""    # raw | json | txt | shell
+# sanitization = "json" # json | raw | txt | shell
 
 [logging.file]
 directory         = "./log"
@@ -80,11 +83,20 @@ retention_hours   = 168.0
 - `stderr`: standard error only.
 - `split`: DEBUG/INFO to stdout, WARN/ERROR to stderr.
 - `all`: files plus split console.
-- `none`: no application logging.
+- `none`: no application logging; why lw fails to start still goes to
+  standard error.
+
+`sanitization = "json"`, the default, escapes in either format the control
+characters a peer puts in an address, a name or an error; `raw` writes them as
+they came.
 
 `[logging.file]` applies only to the `file` and `all` modes. Its limits, and a
-floor of 10 MB free on the disk that no key changes, delete any `.log` file in
-`directory`, lw's or not: give lw a directory of its own.
+floor of 10 MB free on the disk that no key changes, delete only lw's own
+files in `directory`, `NAME.log` and its rotations, so it can be shared. As
+for a [file sink](sinks.md#file), what lw creates of the path is `0750`, and
+lw does not start when every user can write `directory` or `NAME.log` is not
+a regular file. The file is synced to disk once a second at most, and only
+after a write.
 `retention_hours = 0` keeps files. The `stdout`, `split` and `all` modes mix
 the log into a console sink's stdout. `[logging.console].target` is validated
 (`stdout`, `stderr`, `split`) but not applied: `logging.output` chooses the
@@ -156,7 +168,8 @@ Options, each as type and default:
 
 - `entries_per_second` (float, `0`): `0` disables the limiter; a negative value
   is refused.
-- `burst_entries` (float, `entries_per_second`): token bucket capacity.
+- `burst_entries` (float, `entries_per_second`): token bucket capacity, at
+  least one entry: below `1/s`, entries pass one at a time.
 - `policy` (string, `pass`): `pass` or `drop`, in lower case like every enum.
   `drop` discards entries over the rate or the size cap; `pass` lets
   everything through.
@@ -213,13 +226,15 @@ pipelines[0].plugin_sinks[http].config: unknown key "tls.enabeld"
   source in the whole configuration.
 - Plugin options are decoded in full: unknown keys at any depth, kinds,
   required keys, enums, ranges, paths, and the `tls`, `auth` and `acl` rules
-  of the plugin's side; a `tls` table's rules only when it is `enabled`.
+  of the plugin's side; a `tls` table's rules only when it is `enabled`, and
+  without it no key but `min_version`.
 - Enums are case-sensitive: `policy = "Drop"` and `target = "STDERR"` are
   refused.
 - In plugin options and flow stages, `0`, or `""` for a string, takes the
   key's default, or the meaning its help gives zero (off, none, unlimited). A
   number below its key's minimum is refused, a negative one included where
-  zero means the default (`buffer_size = -1`).
+  zero means the default (`buffer_size = -1`), and so is an `_ms` key over
+  9223372036854, the most milliseconds a duration holds.
 - Flow stages are checked whether enabled or not: kinds, enums and ranges;
   a filter needs at least one pattern, and each must compile
   ([Filters](filters.md)).
@@ -255,21 +270,23 @@ run without the file.
 
 Reload builds a new service from a detached snapshot of the configuration,
 validated again, and shuts the old one down only if that succeeds: parse,
-validation and construction errors leave the running service intact. Listener
-bind failures occur after the old service has stopped and can leave lw without
-working pipelines; correct the file and signal again.
+validation and construction errors leave the running service intact. A
+listener on a new address that fails to bind does so after the old service has
+stopped and can leave lw without working pipelines; correct the file, or put
+back the one that ran, and the watch or a signal rebuilds.
 
 Watch errors (deletion, permission changes, timeout) are logged without
-rebuilding. Queued changes are combined, and unchanged pipelines and status
-settings do not trigger another rebuild. Removed file keys fall back to the
+rebuilding. Queued changes are combined, and while a service runs, unchanged
+pipelines and status settings do not trigger another rebuild. Removed file keys fall back to the
 remaining sources on the next successful load.
 
 - Reloaded: pipelines, sources, sinks, flow stages, `status_reporter`, `color`
 - Not reloaded: `logging.*` (applied once at startup), `quiet`, `auto_reload`
   (the watcher is not restarted)
 
-The rebuild is total: listeners close and reopen, every connected client is
-disconnected, and chain sinks reconnect on their own backoff schedule. A swap
+The rebuild is total but for the listening sockets, which stay bound: every
+connected client is disconnected, one connecting meanwhile waits for the new
+service, and chain sinks reconnect on their own backoff schedule. A swap
 in place keeps them all, and file sources read on from where they were: the
 next entry takes the new flows, the flow's counters go on, and the new rate
 limiter starts with a full bucket
