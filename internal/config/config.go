@@ -188,7 +188,7 @@ type TCPChainSourceOptions struct {
 	Port           int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
 	BufferSize     int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	MaxConnections int64        `toml:"max_connections" lw:"min=0,zero=unlimited" help:"connections at once"`
-	ReadTimeoutMS  int64        `toml:"read_timeout_ms" lw:"min=0,zero=none" help:"milliseconds a connection may idle"`
+	ReadTimeoutMS  int64        `toml:"read_timeout_ms" default:"300000" lw:"min=0,zero=none" help:"milliseconds a connection may idle"`
 	HelloTimeoutMS int64        `toml:"hello_timeout_ms" default:"10000" lw:"min=1" help:"milliseconds for a peer's hello"`
 	TrustNode      bool         `toml:"trust_node" default:"true" help:"keep the node label a peer declares; off, the label is its address"`
 	Auth           *AuthOptions `toml:"auth" help:"how peers authenticate: mtls by client certificate, scram by user and password"`
@@ -267,7 +267,7 @@ type HTTPSinkOptions struct {
 	StatusPath       string       `toml:"status_path" default:"/status" lw:"hint=path" help:"path of the status document"`
 	BufferSize       int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued for all clients"`
 	ClientBufferSize int64        `toml:"client_buffer_size" default:"256" lw:"min=1,max=1048576" help:"entries queued per client"`
-	WriteTimeoutMS   int64        `toml:"write_timeout_ms" lw:"min=0,zero=none" help:"milliseconds an event write may take"`
+	WriteTimeoutMS   int64        `toml:"write_timeout_ms" default:"5000" lw:"min=0,zero=none" help:"milliseconds an event write may take"`
 	MaxConnections   int64        `toml:"max_connections" lw:"min=0,zero=unlimited" help:"clients at once"`
 	ReplayLines      int64        `toml:"replay_lines" lw:"min=0,zero=none" help:"recent entries a new stream gets first"`
 	LoginPage        bool         `toml:"login_page" help:"scram behind auth.trusted_proxies only: a login page at /auth/login"`

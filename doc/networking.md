@@ -69,19 +69,22 @@ ERROR msg "Failed to initialize service" error "failed to start service pipeline
 
 ## Timeouts
 
-Every network plugin exposes the deadlines relevant to its role. `0` means no
-deadline where the default is `0` (none); elsewhere it selects the default.
+Every network plugin exposes the deadlines relevant to its role. An explicit
+`0` means no deadline on the `http` sink's `write_timeout_ms` and the
+`tcp_chain` source's `read_timeout_ms`; elsewhere it selects the default.
 
 - `tcp` sink
   - `write_timeout_ms`, default `5000`: one write to one client; a miss
     disconnects that client.
 - `http` sink
-  - `write_timeout_ms`, default `0` (none): one SSE event write.
+  - `write_timeout_ms`, default `5000`: one SSE event write; a miss ends that
+    stream, and EventSource reconnects.
 - `tcp_chain` source
   - `hello_timeout_ms`, default `10000`: reading the protocol preamble, and
     under `scram` the whole login.
-  - `read_timeout_ms`, default `0` (none): idle time in which nothing
-    arrives; a line may take longer while its bytes keep coming.
+  - `read_timeout_ms`, default `300000` (5 min): idle time in which nothing
+    arrives; a line may take longer while its bytes keep coming. An entry
+    written in the instant of the close can be lost.
 - `http_chain` source
   - `read_timeout_ms`, default `30000`: reading a whole request, headers and
     body; also how long an idle keep-alive connection waits for its next
@@ -119,8 +122,8 @@ would terminate long-lived SSE streams; per-event deadlines come from
 `tcp_chain` source, and concurrent streams on the `http` sink (other requests
 are not counted); `0` means unlimited.
 
-- A connection or stream counts only after the check that admits it, so a
-  burst can over-admit by several, more the larger the burst.
+- A connection or stream takes its slot before the check, so a burst cannot
+  over-admit.
 - On the `tcp` sink and `tcp_chain` source a connection counts before its TLS
   handshake, so the cap bounds handshakes in progress as well as sessions.
 - Over the limit a TCP connection is closed and counted in `rejected_conns`;

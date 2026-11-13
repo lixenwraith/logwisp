@@ -225,7 +225,7 @@ host             = "0.0.0.0"
 port             = 15801
 buffer_size      = 1000
 max_connections  = 0
-read_timeout_ms  = 0
+read_timeout_ms  = 300000
 hello_timeout_ms = 10000
 trust_node       = true
 
@@ -252,8 +252,9 @@ Options, each as type and default:
 - `port` (int, required): listen port, 1–65535.
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_connections` (int, `0`): concurrent connection cap; `0` = unlimited.
-- `read_timeout_ms` (int, `0`): time a connection may pass with nothing
-  arriving; `0` = none.
+- `read_timeout_ms` (int, `300000`): time a connection may pass with nothing
+  arriving, 5 minutes; `0` = none. An edge idle that long is disconnected and
+  reconnects with its next entry.
 - `hello_timeout_ms` (int, `10000`): deadline for the hello preamble.
 - `trust_node` (bool, `true`): `false` overrides the sender's node label with
   its remote address. `auth.node_binding` `assert` or `force` takes over the

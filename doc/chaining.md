@@ -288,6 +288,8 @@ labelled with the username. See
 - **Rate limits are per pipeline.** An edge limit protects the link; a relay
   limit protects the relay from a noisy edge.
 - **Heartbeats traverse chain links** as ordinary structured entries and keep
-  otherwise-idle links and their sessions warm.
+  otherwise-idle links and their sessions warm. Without them a `tcp_chain`
+  link idle for the source's `read_timeout_ms`, 5 minutes by default, is closed
+  and dialed again with the next entry.
 - **Dial the listener's own literal** when testing locally: a listener on
   `127.0.0.1` takes IPv4 only, and `localhost` may resolve to `::1`.

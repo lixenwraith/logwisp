@@ -179,7 +179,7 @@ stream_path        = "/stream"
 status_path        = "/status"
 buffer_size        = 1000
 client_buffer_size = 256
-write_timeout_ms   = 0
+write_timeout_ms   = 5000
 max_connections    = 0
 
 [pipelines.plugin_sinks.config.tls]
@@ -208,7 +208,8 @@ Options, each as type and default:
   differs from `stream_path`.
 - `buffer_size` (int, `1000`): sink input queue depth.
 - `client_buffer_size` (int, `256`): per-client send queue depth.
-- `write_timeout_ms` (int, `0`): per-write deadline; `0` = none.
+- `write_timeout_ms` (int, `5000`): per-write deadline; `0` = none. A viewer
+  that cannot take one event in time is dropped; EventSource reconnects.
 - `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited. A
   stream past it gets `503` and counts in `rejected_clients`.
 - `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
@@ -289,7 +290,7 @@ Options, each as type and default:
 - Only a stream's own writes refresh its session. Clients whose session has
   been idle-expired by the session manager are evicted by the broker at its
   next entry, a write they block included. With the idle comment above, that
-  reaches only a peer that has stopped accepting bytes on a sink configured
+  reaches only a peer that has stopped accepting bytes on a sink set to
   `write_timeout_ms = 0`.
 - On shutdown (a reload too), each stream writes its queue and what remains
   of the sink's input, then
