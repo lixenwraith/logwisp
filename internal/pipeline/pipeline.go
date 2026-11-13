@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,8 +104,31 @@ func NewPipeline(
 		sessionManager.Stop()
 		return nil, err
 	}
+	pipeline.warnUnlabelled()
 
 	return pipeline, nil
+}
+
+// warnUnlabelled reports, when built and at each flow swap, a pipeline whose
+// raw format writes chain peers' entries without the node they came from; the
+// chain sinks carry entries whole and lose nothing, the null sink writes none
+func (p *Pipeline) warnUnlabelled() {
+	if f := p.Config.Flow; f != nil && f.Format != nil && f.Format.Type != "" && f.Format.Type != "raw" {
+		return
+	}
+	peers := slices.ContainsFunc(p.Config.PluginSources, func(c config.PluginSourceConfig) bool {
+		plugin, _ := config.LookupPlugin("source", c.Type)
+		return plugin.Side == config.ChainListener
+	})
+	writes := slices.ContainsFunc(p.Config.PluginSinks, func(c config.PluginSinkConfig) bool {
+		plugin, _ := config.LookupPlugin("sink", c.Type)
+		return plugin.Side != config.Dialer && c.Type != "null"
+	})
+	if peers && writes {
+		p.logger.Warn("msg", "Pipeline writes chain peers' entries in raw format, without the node each came from",
+			"pipeline", p.Config.Name,
+			"hint", "a txt or json format writes it, as node/source")
+	}
 }
 
 func (p *Pipeline) initializeComponents() error {
@@ -322,6 +346,7 @@ func (p *Pipeline) SetFlow(cfg *config.FlowConfig, f *flow.Flow) {
 	f.Continue(p.flow.Load())
 	p.flow.Store(f)
 	p.Config.Flow = cfg
+	p.warnUnlabelled()
 	select {
 	case p.swapped <- struct{}{}:
 	default:

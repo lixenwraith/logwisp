@@ -48,7 +48,9 @@ Relays preserve `node`, so a label survives any number of hops and identifies
 the original producer, unless a hop's source overwrites it: `trust_node =
 false`, or `node_binding = "force"` (the default under `mtls` or `scram`).
 Formatters write the label as a prefix on the source
-([Formatters](formatters.md#node-identity-in-output)).
+([Formatters](formatters.md#node-identity-in-output)); `raw` writes the
+message alone, so a pipeline with a chain source, `raw` format and a sink
+other than a chain sink or `null` warns when built and at each flow swap.
 
 With an `auth` block the source can instead bind the label to the sender's
 authenticated identity: its certificate identity under `mtls`, its username
