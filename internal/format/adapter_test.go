@@ -97,3 +97,31 @@ func TestLargeFieldsAreWrittenAsText(t *testing.T) {
 		}
 	}
 }
+
+// A fields number keeps its digits: an integer past 2^53 is not rounded, and
+// one past a float64's range does not drop the fields. Shorter numbers, which
+// a float64 holds, are written as before.
+func TestFieldsNumbersKeepTheirDigits(t *testing.T) {
+	fields := []byte(`{"trace":1234567890123456789,"ratio":0.1234567890123456789,"big":1e400,"n":42,"pi":3.14,"s":"1e5"}`)
+	for typ, want := range map[string][]string{
+		"json": {`"trace":1234567890123456789`, `"ratio":0.1234567890123456789`, `"big":1e400`, `"n":42`, `"pi":3.14`, `"s":"1e5"`},
+		"txt":  {`trace:1234567890123456789`, `ratio:0.1234567890123456789`, `big:1e400`, `n:42`, `pi:3.14`, `s:1e5`},
+	} {
+		f, err := NewFormatter(&config.FormatConfig{Type: typ})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, _ := f.Format(core.LogEntry{Time: time.Now(), Message: "m", Fields: fields})
+		for _, w := range want {
+			if !bytes.Contains(out, []byte(w)) {
+				t.Errorf("%s: no %s in %s", typ, w, out)
+			}
+		}
+	}
+	for in, exact := range map[string]bool{`{"a":123456789012345}`: false, `{"a":1234567890123456}`: true, `{"a":1.5,"b":true}`: false,
+		`{"a":2E3}`: true, `{"a":"12345678901234567","e":"1e5"}`: false, `{"a":"\\"}`: false, `{"a":[1.000000000000001]}`: true} {
+		if exactNumbers([]byte(in)) != exact {
+			t.Errorf("%s: exact %v, want %v", in, !exact, exact)
+		}
+	}
+}

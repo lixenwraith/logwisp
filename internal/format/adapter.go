@@ -134,11 +134,48 @@ func formatArgs(argv *[2]any, entry core.LogEntry, flags int64) ([]any, int64) {
 		return argv[:2], flags
 	}
 	var fields map[string]any
-	if err := json.Unmarshal(entry.Fields, &fields); err != nil || len(fields) == 0 {
+	var err error
+	if exactNumbers(entry.Fields) {
+		dec := json.NewDecoder(bytes.NewReader(entry.Fields))
+		dec.UseNumber()
+		err = dec.Decode(&fields)
+	} else {
+		err = json.Unmarshal(entry.Fields, &fields)
+	}
+	if err != nil || len(fields) == 0 {
 		return argv[:1], flags
 	}
 	argv[1] = fields
 	return argv[:2], flags | formatter.FlagStructuredJSON
+}
+
+// exactNumbers reports whether fields hold a number a float64 would alter: 16
+// digits or more, past its exact integers (2^53), or an exponent, which may
+// pass its range and fail the whole decode. Those are kept as json.Number,
+// whose decode costs other entries too much.
+func exactNumbers(fields []byte) bool {
+	digits := 0
+	for i := 0; i < len(fields); i++ {
+		switch c := fields[i]; {
+		case c == '"':
+			for i++; i < len(fields) && fields[i] != '"'; i++ {
+				if fields[i] == '\\' {
+					i++
+				}
+			}
+		case c >= '0' && c <= '9':
+			if digits++; digits >= 16 {
+				return true
+			}
+			continue
+		case c == '.' && digits > 0:
+			continue
+		case (c == 'e' || c == 'E') && digits > 0:
+			return true
+		}
+		digits = 0
+	}
+	return false
 }
 
 // maxDecodedFields bounds the fields JSON decoded into a map, which costs some
