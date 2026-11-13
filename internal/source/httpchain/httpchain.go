@@ -59,7 +59,7 @@ type HTTPChainSource struct {
 	auth *authz.Policy
 	acl  *netacl.Policy
 
-	// Session cache: one session per remote host + node + authenticated identity
+	// Session cache: one session per remote host + authenticated identity
 	sessions   map[string]string // key -> sessionID
 	sweepAt    int               // len(sessions) at which expired keys are dropped
 	sessionsMu sync.Mutex
@@ -388,11 +388,12 @@ func (s *HTTPChainSource) handleAuth(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sessionFor returns the cached session for a remote+node+identity,
-// recreating after idle expiry. Identity is part of the key so two peers
-// sharing a remote address never share a session.
+// sessionFor returns the cached session for a remote+identity, recreating
+// after idle expiry. Two peers sharing an address never share a session; the
+// node label, the sender's to choose, is not in the key, so spinning it makes
+// no sessions: the session shows its first, each entry keeps its own.
 func (s *HTTPChainSource) sessionFor(remoteHost, node, peer string, cs *tls.ConnectionState, ident authz.Identity) string {
-	key := remoteHost + "|" + node + "|" + ident.Name
+	key := remoteHost + "|" + ident.Name
 	s.sessionsMu.Lock()
 	defer s.sessionsMu.Unlock()
 

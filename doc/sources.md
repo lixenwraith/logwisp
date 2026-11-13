@@ -373,9 +373,10 @@ Options, each as type and default:
 - Success is `204 No Content` with `X-Logwisp-Accepted` set to the number of
   entries ingested. A batch still in flight when the source stops, past its
   2 s shutdown bound, gets `503`, which the sink retries.
-- Sessions are cached per remote host + node + authenticated identity, and
-  recreated after idle expiry. Including the identity in the key means two peers
-  sharing a remote address never share a session.
+- Sessions are cached per remote host + authenticated identity, and recreated
+  after idle expiry: two peers sharing an address never share one.
+  - The node label is the sender's to choose, so it is not in the key: a
+    session shows the label of its first batch, each entry keeps its own.
 
 **Statistics**: `host`, `port`, `ingest_path`, `tls`, `total_requests`,
 `rejected_requests`, `parse_errors`, `cached_sessions`, `trust_node`, and the

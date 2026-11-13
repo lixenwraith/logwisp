@@ -74,17 +74,30 @@ func TestBatchIsPublishedWholeOrNotAtAll(t *testing.T) {
 }
 
 // The session cache drops the keys of sessions the manager has expired, not
-// keeping one per label a sender ever declared
+// keeping one per address a sender ever came from
 func TestExpiredSessionsLeaveTheCache(t *testing.T) {
 	manager := session.NewManager(time.Hour)
 	t.Cleanup(manager.Stop)
 	proxy := session.NewProxy(manager, "in")
 	src := &HTTPChainSource{proxy: proxy, sessions: map[string]string{}}
 	for i := range 1000 {
-		proxy.RemoveSession(src.sessionFor("192.0.2.1", "edge-"+strconv.Itoa(i), "", nil, authz.Identity{})) // as idle expiry does
+		proxy.RemoveSession(src.sessionFor("10.0.0."+strconv.Itoa(i), "edge", "", nil, authz.Identity{})) // as idle expiry does
 	}
 	if n := len(src.sessions); n > 64 {
 		t.Fatalf("%d keys cached for no live session", n)
+	}
+}
+
+// A session is one address and identity: the node labels a sender declares
+// share it, another identity at the address gets its own
+func TestSessionIsOneAddressAndIdentity(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	src := &HTTPChainSource{proxy: session.NewProxy(manager, "in"), sessions: map[string]string{}}
+	first := src.sessionFor("192.0.2.1", "edge-1", "", nil, authz.Identity{Name: "a"})
+	if src.sessionFor("192.0.2.1", "edge-2", "", nil, authz.Identity{Name: "a"}) != first ||
+		src.sessionFor("192.0.2.1", "edge-1", "", nil, authz.Identity{Name: "b"}) == first {
+		t.Fatal("a session follows the node label, or two identities share one")
 	}
 }
 
