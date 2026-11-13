@@ -140,8 +140,11 @@ func New(o *config.ACLOptions, host string, kind Kind, l *log.Logger, component,
 
 // ParseHost reads an address with or without a port, an IPv4-mapped one as IPv4
 func ParseHost(s string) (netip.Addr, bool) {
-	if ap, err := netip.ParseAddrPort(s); err == nil {
-		return ap.Addr().Unmap(), true
+	// Only a port form reaches ParseAddrPort, whose failure builds an error
+	if strings.HasPrefix(s, "[") && !strings.HasSuffix(s, "]") || strings.Count(s, ":") == 1 {
+		if ap, err := netip.ParseAddrPort(s); err == nil {
+			return ap.Addr().Unmap(), true
+		}
 	}
 	addr, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(s, "["), "]"))
 	return addr.Unmap(), err == nil

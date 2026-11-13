@@ -479,6 +479,19 @@ func FuzzReadHeader(f *testing.F) {
 	})
 }
 
+// BenchmarkParseHost reads an address bare, as a forwarded client or the
+// SCRAM throttle's peer comes, and with its port, as a socket peer does
+func BenchmarkParseHost(b *testing.B) {
+	for _, s := range []string{"192.0.2.1", "2001:db8::1", "192.0.2.1:40000", "[2001:db8::1]:40000"} {
+		b.Run(s, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				ParseHost(s)
+			}
+		})
+	}
+}
+
 func parseHeader(s string) (client netip.AddrPort, found bool, rest string, err error) {
 	br := bufio.NewReaderSize(strings.NewReader(s), v1Max)
 	client, found, err = readHeader(br)
