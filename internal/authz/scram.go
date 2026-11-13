@@ -45,8 +45,9 @@ const (
 	limitPending = 4  // unfinished exchanges per address; a /48's, 1/16 of the server's
 )
 
-// The dialer's floor on the Argon2 cost a server may ask for. A hostile server
-// could otherwise request a cheaply guessable proof; tests lower it.
+// The dialer's floor on the Argon2 cost a server may ask for, its ceiling
+// twice it: a hostile server could otherwise request a cheaply guessable
+// proof, or spend the dialer's memory; tests lower it.
 var minArgonTime, minArgonMemory uint32 = auth.DefaultArgonTime, auth.DefaultArgonMemory
 
 var errPinMismatch = errors.New("server certificate differs from the one the SCRAM login was bound to")
@@ -825,9 +826,9 @@ func (d *scramDialer) exchangeTCP(conn net.Conn, r *bufio.Reader, node string) (
 		return errors.New("auth: server sent no challenge")
 	}
 	cb := certHash(tc.ConnectionState())
-	proof, err := c.ProcessServerFirstMessage(*step.Challenge, auth.WithChannelBinding(cb))
+	proof, err := answer(c, *step.Challenge, auth.WithChannelBinding(cb))
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrRefused, err)
+		return err
 	}
 	if err := writeStep(conn, authStep{Proof: &proof, Binding: base64.StdEncoding.EncodeToString(cb)}); err != nil {
 		return err
@@ -836,6 +837,21 @@ func (d *scramDialer) exchangeTCP(conn net.Conn, r *bufio.Reader, node string) (
 		return err
 	}
 	return d.verifyFinal(c, step)
+}
+
+// answer proves the dialer to a challenge costing at least its floor, below
+// which a rogue server gets a cheaply guessable proof, and at most twice it,
+// above which the server spends the dialer's memory and time
+func answer(c *auth.ScramClient, ch auth.ServerFirstMessage, bind auth.ExchangeOption) (auth.ClientFinalRequest, error) {
+	if ch.ArgonTime > 2*minArgonTime || ch.ArgonMemory > 2*minArgonMemory {
+		return auth.ClientFinalRequest{}, fmt.Errorf("%w: %w: t=%d, %d KiB, over this dialer's t=%d, %d KiB",
+			ErrRefused, auth.ErrSCRAMParamsTooLarge, ch.ArgonTime, ch.ArgonMemory, 2*minArgonTime, 2*minArgonMemory)
+	}
+	proof, err := c.ProcessServerFirstMessage(ch, bind)
+	if err != nil {
+		return proof, fmt.Errorf("%w: %w", ErrRefused, err)
+	}
+	return proof, nil
 }
 
 func (d *scramDialer) verifyFinal(c *auth.ScramClient, step authStep) error {
@@ -889,9 +905,9 @@ func (p *Policy) Token(ctx context.Context, client *http.Client, baseURL string)
 	if !d.unbound {
 		bind, binding = auth.WithChannelBinding(cb), base64.StdEncoding.EncodeToString(cb)
 	}
-	proof, err := c.ProcessServerFirstMessage(*step.Challenge, bind)
+	proof, err := answer(c, *step.Challenge, bind)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrRefused, err)
+		return "", err
 	}
 	body, err := json.Marshal(authStep{Proof: &proof, Binding: binding})
 	if err != nil {

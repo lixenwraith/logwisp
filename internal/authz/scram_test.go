@@ -409,16 +409,25 @@ func TestPreAuthInputIsCapped(t *testing.T) {
 	}
 }
 
-// A dialer refuses a challenge below its Argon2 floor before computing a
-// proof, so a hostile server cannot obtain a cheaply guessable one.
-func TestDialerRefusesACheapChallenge(t *testing.T) {
+// A dialer refuses a challenge below its Argon2 floor or over twice it before
+// computing a proof: a hostile server obtains no cheaply guessable proof, and
+// spends none of the dialer's memory.
+func TestDialerRefusesAChallengeOutsideItsCostBand(t *testing.T) {
 	f := newFixture(t) // verifiers at t=1, m=64 KiB
 	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, TCP)
 	d := f.dialer(t, "edge-01", "edge-01-secret")
-	minArgonTime, minArgonMemory = auth.DefaultArgonTime, auth.DefaultArgonMemory
 	t.Cleanup(func() { minArgonTime, minArgonMemory = 1, 64 })
-	if _, _, err := f.connect(t, l, f.serverTLS, d, nil); !errors.Is(err, auth.ErrSCRAMParamsTooSmall) {
-		t.Fatalf("cheap challenge: %v", err)
+	for _, floor := range []struct {
+		time, memory uint32
+		want         error
+	}{
+		{auth.DefaultArgonTime, auth.DefaultArgonMemory, auth.ErrSCRAMParamsTooSmall},
+		{1, 16, auth.ErrSCRAMParamsTooLarge},
+	} {
+		minArgonTime, minArgonMemory = floor.time, floor.memory
+		if _, _, err := f.connect(t, l, f.serverTLS, d, nil); !errors.Is(err, floor.want) {
+			t.Fatalf("floor t=%d m=%d: %v, want %v", floor.time, floor.memory, err, floor.want)
+		}
 	}
 	if n := l.allowed.Load(); n != 0 {
 		t.Fatalf("logins = %d, want 0", n)
