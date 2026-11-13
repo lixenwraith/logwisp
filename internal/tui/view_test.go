@@ -196,6 +196,21 @@ func TestARowCountsAllItHolds(t *testing.T) {
 	}
 }
 
+// A row's tag leads with the node its entry came from, as formats write it,
+// in the list, the detail and an export: a chained line's own tag cannot pass
+// it off as another node's, or as lw's
+func TestARowsTagLeadsWithItsNode(t *testing.T) {
+	var v view
+	chained := tapped("p", "in", "", 0, `{"msg":"m","source":"edge-b/payments"}`)
+	chained.Event.Entry.Node = "edge-a"
+	v.take(chained)
+	v.take(tapped("p", "in", "", 0, "plain"))
+	export := string(jsonLines(v.rows))
+	if v.rows[0].Tag != "edge-a/edge-b/payments" || v.rows[1].Tag != "in" || !strings.Contains(export, `"source":"edge-a/edge-b/payments"`) {
+		t.Fatalf("tags %q and %q, export %s", v.rows[0].Tag, v.rows[1].Tag, export)
+	}
+}
+
 // The canvas cursor picks the point and v the verdicts at it: a source's
 // entries, what reaches a stage or a filter, passes it or it drops, the
 // heartbeats, what the flow offered the sinks and what it dropped on the way;

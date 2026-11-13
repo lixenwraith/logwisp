@@ -202,6 +202,9 @@ func (v *view) take(t core.Tapped) int {
 	e := t.Event.Entry
 	r := row{Line: logline.Read(e), pipe: t.Pipeline, source: t.Source,
 		stage: t.Stage, index: t.Index, rank: rank(t.Stage, t.Index), payload: t.Event.Payload}
+	// The node first, as formats write it: what node_binding bound, which a
+	// chained line's own tag cannot pass off as another node's, or lw's
+	r.Tag = core.LogEntry{Node: e.Node, Source: r.Tag}.Label()
 	for _, at := range []time.Time{r.Time, e.Time, t.Event.Time} {
 		if r.at.IsZero() {
 			r.at = at

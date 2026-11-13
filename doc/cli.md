@@ -542,7 +542,9 @@ WebAssembly; `t` runs them under the screen and shows what flows.
   - A row is the entry's time, level, tag, message and fields, read from any
     line shape: LogWisp's json, lw's own log, vif records, pino, zap, slog,
     docker, journald, ECS, GCP, logfmt, or text after an RFC3339 stamp and
-    a level name. A narrow screen drops columns; a rune a terminal would act
+    a level name. An entry from a chain peer has its node before the tag,
+    `node/tag`, as formats write it, in the detail and an export too: the
+    node `node_binding` bound, which the line itself cannot change. A narrow screen drops columns; a rune a terminal would act
     on or draw wider than a cell shows as a placeholder.
   - Keys: arrows or `jk` move (up pauses, down onto the newest follows),
     PgUp/PgDn; `g` or Home the oldest, `G`, End or `f` the newest; Enter the
