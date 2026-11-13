@@ -422,6 +422,23 @@ func TestDispatchCountsEachSinksDrops(t *testing.T) {
 	}
 }
 
+// Once Stop releases dispatch, a backpressure sink with room still takes each
+// entry, and only a full one drops it: a select with the release ready too
+// picks at random, which dropped about half of what was in flight
+func TestReleasedDispatchStillFillsASinkWithRoom(t *testing.T) {
+	const n = 1000
+	room, full := &slowSink{in: make(chan core.TransportEvent, n)}, &slowSink{in: make(chan core.TransportEvent)}
+	p := &Pipeline{halt: make(chan struct{}), outlets: []*outlet{{sink: room, backpressure: true}, {sink: full, backpressure: true}}}
+	close(p.halt)
+	for range n {
+		p.dispatch(core.TransportEvent{})
+	}
+	if len(room.in) != n || p.outlets[0].dropped.Load() != 0 || p.outlets[1].dropped.Load() != n {
+		t.Fatalf("a sink with room took %d of %d, dropped %d; a full one dropped %d",
+			len(room.in), n, p.outlets[0].dropped.Load(), p.outlets[1].dropped.Load())
+	}
+}
+
 // benchSource publishes n copies of entry as fast as the pipeline takes them
 type benchSource struct {
 	n     int

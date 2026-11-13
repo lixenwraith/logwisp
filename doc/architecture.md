@@ -177,9 +177,8 @@ shutdown (`dropped_batches`).
 
 1. Release dispatch waits on backpressure sinks; stop all sources
    concurrently, each closing its subscriber channels. From the release on,
-   dispatch picks at random between a backpressure sink's input and the
-   release, so it drops about half of the entries still in flight for one
-   (`total_dropped_by_sink`) even with room.
+   a backpressure sink with room still takes each entry in flight, and one
+   that is full drops it (`total_dropped_by_sink`) instead of waiting.
 2. Wait for the run loop, which ends when every subscription channel closes.
 3. Stop all sinks concurrently: console and file sinks write their queue;
    network sinks deliver theirs within `sink.FlushBound`, their write or

@@ -333,17 +333,20 @@ func (p *Pipeline) SetFlow(cfg *config.FlowConfig, f *flow.Flow) {
 // waits until Stop.
 func (p *Pipeline) dispatch(event core.TransportEvent) {
 	for _, o := range p.outlets {
-		if o.backpressure {
-			select {
-			case o.sink.Input() <- event:
-			case <-p.halt:
-				o.dropped.Add(1)
-			}
+		// A sink with room takes the event first: a select with the release
+		// ready too picks at random, which dropped half of what was in flight
+		select {
+		case o.sink.Input() <- event:
+			continue
+		default:
+		}
+		if !o.backpressure {
+			o.dropped.Add(1)
 			continue
 		}
 		select {
 		case o.sink.Input() <- event:
-		default:
+		case <-p.halt:
 			o.dropped.Add(1)
 		}
 	}
