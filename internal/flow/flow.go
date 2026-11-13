@@ -78,8 +78,9 @@ func NewFlow(cfg *config.FlowConfig, logger *log.Logger) (*Flow, error) {
 }
 
 // Process applies the flow's stages to an entry and returns the event for the
-// sinks, or the stage that dropped it and, for filters, which one
-func (f *Flow) Process(entry core.LogEntry) (event core.TransportEvent, stage string, index int) {
+// sinks, or the stage that dropped it and, for filters, which one. Without
+// format the event carries the entry alone, all a chain sink sends.
+func (f *Flow) Process(entry core.LogEntry, format bool) (event core.TransportEvent, stage string, index int) {
 	f.totals.processed.Add(1)
 	if f.rateLimiter != nil && !f.rateLimiter.Allow(entry) {
 		f.totals.dropped.Add(1)
@@ -91,6 +92,9 @@ func (f *Flow) Process(entry core.LogEntry) (event core.TransportEvent, stage st
 			f.totals.filtered.Add(1)
 			return core.TransportEvent{Entry: entry}, "filters", i
 		}
+	}
+	if !format {
+		return core.TransportEvent{Time: entry.Time, Entry: entry}, "", 0
 	}
 	formatted, err := f.formatter.Format(entry)
 	if err != nil {

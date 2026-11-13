@@ -524,7 +524,9 @@ func (w *fileWatcher) parseJSON(line string) (core.LogEntry, bool) {
 		case "time":
 			var ts string
 			if json.Unmarshal(val, &ts) == nil {
-				if t, terr := time.Parse(time.RFC3339Nano, ts); terr == nil {
+				// A zero time would mark an event without its entry, which a
+				// chain sink rebuilds from the payload
+				if t, terr := time.Parse(time.RFC3339Nano, ts); terr == nil && !t.IsZero() {
 					entry.Time = t
 				}
 			}

@@ -102,7 +102,10 @@ instance of a single type fails, naming both pipelines.
    passed or the stage that dropped it (a filter by its index), goes to the
    pipeline's tap when a viewer set one, as `lw --tui`'s live view does.
 3. The formatter output becomes a `core.TransportEvent`, which carries both the
-   formatted `Payload` and the original structured `Entry`.
+   formatted `Payload` and the original structured `Entry`. A pipeline whose
+   sinks are all chain sinks, which send the entry, skips the formatter
+   unless a viewer's tap shows the payload: its events carry the entry
+   alone, and `flow.total_formatted` does not count them.
 4. **Dispatch** sends the event to every sink's input channel with a
    non-blocking send, except to a sink declaring `CapBackpressure`.
 

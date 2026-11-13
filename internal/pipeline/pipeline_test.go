@@ -109,9 +109,11 @@ func init() {
 		feed, _ := cfg["feed"].(chan string)
 		return &finiteSource{id: id, n: n, hold: hold, feed: feed}, nil
 	})
-	plugin.RegisterSink("null", func(id string, _ map[string]any, _ *log.Logger, _ *session.Proxy) (sink.Sink, error) {
-		return testSinks[id], nil
-	})
+	for _, typ := range []string{"null", "tcp_chain"} {
+		plugin.RegisterSink(typ, func(id string, _ map[string]any, _ *log.Logger, _ *session.Proxy) (sink.Sink, error) {
+			return testSinks[id], nil
+		})
+	}
 }
 
 func newTestPipeline(t *testing.T, n int, s *slowSink) *Pipeline {
@@ -126,6 +128,37 @@ func newTestPipeline(t *testing.T, n int, s *slowSink) *Pipeline {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// A pipeline whose sinks are all chain sinks, which send the entry itself,
+// formats nothing, unless a viewer's tap shows the payload
+func TestChainSinksAloneSkipFormattingUnlessTapped(t *testing.T) {
+	const n = 10
+	for _, tapped := range []bool{false, true} {
+		s := &fullSink{in: make(chan core.TransportEvent, n)}
+		testSinks[t.Name()] = s
+		p, err := NewPipeline(&config.PipelineConfig{
+			Name:          t.Name(),
+			PluginSources: []config.PluginSourceConfig{{ID: "src", Type: "random", Config: map[string]any{"n": n}}},
+			PluginSinks:   []config.PluginSinkConfig{{ID: t.Name(), Type: "tcp_chain"}},
+		}, log.NewLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tapped {
+			p.SetTap(core.NewTap(n, 0))
+		}
+		if err := p.Start(); err != nil {
+			t.Fatal(err)
+		}
+		<-p.Finished()
+		p.Shutdown()
+		formatted, first := p.flow.Load().GetStats()["total_formatted"], <-s.in
+		if want := map[bool]uint64{true: n}[tapped]; formatted != want || len(s.in) != n-1 ||
+			first.Entry.Message != "0" || (len(first.Payload) > 0) != tapped {
+			t.Errorf("tapped %v: %v formatted, %d events, the first %+v", tapped, formatted, len(s.in)+1, first)
+		}
+	}
 }
 
 // A source that publishes from its first moment loses nothing to a slow sink,

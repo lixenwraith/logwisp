@@ -41,6 +41,7 @@ type Pipeline struct {
 	swapped chan struct{} // a flow set that the heartbeat has not taken up
 
 	outlets []*outlet // the sinks as dispatch offers them events, in order
+	formats bool      // a sink writes the payload: chain sinks send the entry
 
 	tap atomic.Pointer[core.Tap] // a viewer's copy of what the flow decides
 
@@ -105,6 +106,10 @@ func NewPipeline(
 		return nil, err
 	}
 	pipeline.warnUnlabelled()
+	pipeline.formats = slices.ContainsFunc(cfg.PluginSinks, func(c config.PluginSinkConfig) bool {
+		plugin, _ := config.LookupPlugin("sink", c.Type)
+		return plugin.Side != config.Dialer
+	})
 
 	return pipeline, nil
 }
@@ -282,8 +287,10 @@ func (p *Pipeline) run(ids []string, subscriptions []<-chan core.LogEntry) {
 			defer componentWg.Done()
 			// Range drains in-flight entries once the source closes the channel
 			for entry := range ch {
-				event, stage, index := p.flow.Load().Process(entry)
-				if t := p.tap.Load(); t != nil {
+				// A viewer reads the payload, though chain sinks do not
+				t := p.tap.Load()
+				event, stage, index := p.flow.Load().Process(entry, p.formats || t != nil)
+				if t != nil {
 					t.Offer(core.Tapped{Pipeline: p.Config.Name, Source: ids[i], Stage: stage, Index: index, Event: event})
 				}
 				if stage == "" {

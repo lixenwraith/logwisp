@@ -600,3 +600,40 @@ func TestHoleIsWalkedABoundedPartACheck(t *testing.T) {
 		t.Fatalf("a check went %d bytes into the hole", w.position)
 	}
 }
+
+// A JSON line becomes an entry when it is an object of the envelope's keys
+// alone, time, level, msg and fields, named exactly; any other line is text.
+// A time that is not RFC 3339, or is zero, gives way to the time read: a zero
+// time marks an event without its entry.
+func TestJSONLineIsAnEntryOnlyWhenNothingIsLost(t *testing.T) {
+	w := &fileWatcher{directory: "/var/log/app"}
+	stamp := time.Date(2026, 11, 13, 10, 0, 0, 123e6, time.UTC)
+	for _, c := range []struct {
+		line string
+		want *core.LogEntry // nil: text
+	}{
+		{`{"time":"2026-11-13T10:00:00.123Z","level":"INFO","msg":"m","fields":{"a":1}}`,
+			&core.LogEntry{Time: stamp, Source: "app", Level: "INFO", Message: "m", Fields: []byte(`{"a":1}`)}},
+		{` {"msg":"m"}`, nil},
+		{`{"msg":"m","user":"x"}`, nil},
+		{`{"MSG":"m"}`, nil},
+		{`{}`, nil},
+		{`{"msg":"m"} {}`, nil},
+		{`{"level":5,"msg":"m"}`, nil},
+		{`{"msg":"m","time":"yesterday"}`, &core.LogEntry{Source: "app", Message: "m"}},
+		{`{"msg":"m","time":"0001-01-01T00:00:00Z"}`, &core.LogEntry{Source: "app", Message: "m"}},
+		{`{"m\u0073g":"m","fields":[1, 2]}`, &core.LogEntry{Source: "app", Message: "m", Fields: []byte(`[1, 2]`)}},
+	} {
+		got, ok := w.parseJSON(c.line)
+		switch {
+		case c.want == nil && ok:
+			t.Errorf("%s: an entry, want text", c.line)
+		case c.want == nil:
+		case !ok:
+			t.Errorf("%s: text, want an entry", c.line)
+		case c.want.Time.IsZero() && time.Since(got.Time) > time.Minute, !c.want.Time.IsZero() && !got.Time.Equal(c.want.Time),
+			got.Source != c.want.Source || got.Level != c.want.Level || got.Message != c.want.Message || string(got.Fields) != string(c.want.Fields):
+			t.Errorf("%s:\n got %+v\nwant %+v", c.line, got, *c.want)
+		}
+	}
+}

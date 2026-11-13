@@ -49,7 +49,7 @@ func BenchmarkProcess(b *testing.B) {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, stage, _ := f.Process(c.entry); stage != "" {
+				if _, stage, _ := f.Process(c.entry, true); stage != "" {
 					b.Fatal(stage)
 				}
 			}
@@ -59,7 +59,7 @@ func BenchmarkProcess(b *testing.B) {
 			b.ReportAllocs()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					f.Process(c.entry)
+					f.Process(c.entry, true)
 				}
 			})
 		})
