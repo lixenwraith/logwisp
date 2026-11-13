@@ -31,7 +31,7 @@ type LogConfig struct {
 	Output       string `toml:"output" lw:"enum=file|stdout|stderr|split|all|none" help:"where lw's own log goes; split: warn and error to stderr"`
 	Level        string `toml:"level" lw:"enum=debug|info|warn|error" help:"lowest level logged; without a file, warn"`
 	Format       string `toml:"format" lw:"enum=raw|txt|json,zero=the log default" help:"format of lw's own log"`
-	Sanitization string `toml:"sanitization" lw:"enum=raw|json|txt|shell,zero=the log default" help:"how the console log escapes control characters"`
+	Sanitization string `toml:"sanitization" lw:"enum=raw|json|txt|shell,zero=json" help:"how lw's own log escapes control characters"`
 
 	// File output settings (when Output includes "file" or "all")
 	File *LogFileConfig `toml:"file"`

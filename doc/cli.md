@@ -109,7 +109,9 @@ The last `-c` wins; a missing or empty path is an error.
 - `--logging.level`: `debug`, `info`, `warn` or `error`, default `info` with a
   configuration file, `warn` without
 - `--logging.format`: `raw`, `txt` or `json`, default `txt`
-- `--logging.sanitization`: `raw`, `json`, `txt` or `shell`, default `raw`
+- `--logging.sanitization`: `raw`, `json`, `txt` or `shell`, default `json`:
+  control characters a peer puts in an address, a name or an error reach
+  lw's log escaped; `raw` writes them as they came
 - `--logging.file.directory`: a path, default `./log`; the limits below
   delete any `.log` file in it
   ([Application Logging](configuration.md#application-logging))

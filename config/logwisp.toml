@@ -40,7 +40,7 @@
 # output = "stderr"                     # file|stdout|stderr|split|all|none; stdout is the console sink's
 # level = "info"                        # debug|info|warn|error; warn without a file
 # format = "txt"                        # raw|txt|json
-# sanitization = ""                     # raw|json|txt|shell; empty = the log default
+# sanitization = "json"                 # json|raw|txt|shell; json escapes control characters
 
 # [logging.file]                        # Used when output is "file" or "all"
 # directory = "./log"                   # lw's alone: the limits below delete any .log file in it

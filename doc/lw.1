@@ -297,12 +297,12 @@ or
 .Cm raw .
 .It Fl \-logging.sanitization= Ns Ar policy
 How the log's text is cleaned:
-.Cm raw
-.Pq the default: unchanged ,
-.Cm txt
-.Pq Ql < No and non-printable characters as hex ,
 .Cm json
-.Pq control characters escaped
+.Pq the default: control characters escaped ,
+.Cm raw
+.Pq unchanged ,
+.Cm txt
+.Pq Ql < No and non-printable characters as hex
 or
 .Cm shell
 .Pq shell metacharacters, whitespace and control characters removed; lossy .

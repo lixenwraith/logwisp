@@ -169,6 +169,9 @@ func initializeLogger(cfg *config.Config) error {
 	if cfg.Logging.Format != "" {
 		logCfg.Format = cfg.Logging.Format
 	}
+	// Peers write into this log (addresses, names, errors): no control rune
+	// of theirs reaches a terminal showing it unless raw is asked for
+	logCfg.Sanitization = sanitizer.PolicyJSON
 	if cfg.Logging.Sanitization != "" {
 		logCfg.Sanitization = sanitizer.PolicyPreset(cfg.Logging.Sanitization)
 	}

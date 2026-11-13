@@ -64,7 +64,7 @@ It goes to stderr by default, so stdout carries only a console sink's data.
 output = "stderr"      # file | stdout | stderr | split | all | none
 level  = "info"        # debug | info | warn | error; warn without a file
 format = "txt"         # raw | txt | json
-# sanitization = ""    # raw | json | txt | shell
+# sanitization = "json" # json | raw | txt | shell
 
 [logging.file]
 directory         = "./log"
@@ -82,6 +82,10 @@ retention_hours   = 168.0
 - `split`: DEBUG/INFO to stdout, WARN/ERROR to stderr.
 - `all`: files plus split console.
 - `none`: no application logging.
+
+`sanitization = "json"`, the default, escapes in either format the control
+characters a peer puts in an address, a name or an error; `raw` writes them as
+they came.
 
 `[logging.file]` applies only to the `file` and `all` modes. Its limits, and a
 floor of 10 MB free on the disk that no key changes, delete any `.log` file in

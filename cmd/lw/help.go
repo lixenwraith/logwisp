@@ -61,9 +61,9 @@ key alone means true:
                                 configuration file, warn without)
       --logging.format=FORMAT   txt|json|raw (default: txt)
       --logging.sanitization=POLICY
-                                raw (default: unchanged), txt (hex for '<'
-                                and non-printables), json (escapes control
-                                characters) or shell (strips; lossy)
+                                json (default: escapes control characters),
+                                raw (unchanged), txt (hex for '<' and
+                                non-printables) or shell (strips; lossy)
       --logging.file.directory=DIR
                                 Where file and all write (default: ./log);
                                 lw's alone: the limits below delete any old
