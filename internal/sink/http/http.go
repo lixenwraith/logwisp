@@ -65,6 +65,7 @@ type HTTPSink struct {
 
 	// Client registry, and the last replay_lines entries, under clientsMu
 	clients      map[uint64]*sseClient
+	clientsPeak  int // the most clients held since the map was built
 	replay       [][]byte
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
@@ -335,6 +336,7 @@ func (h *HTTPSink) removeClient(id uint64) {
 	c, ok := h.clients[id]
 	if ok {
 		delete(h.clients, id)
+		h.clients, h.clientsPeak = sink.Shrunk(h.clients, h.clientsPeak)
 	}
 	h.clientsMu.Unlock()
 	if ok {
@@ -503,6 +505,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	// backlog is taken under the same lock, so it ends where the queue begins.
 	h.clientsMu.Lock()
 	h.clients[id] = c
+	h.clientsPeak = max(h.clientsPeak, len(h.clients))
 	backlog := sink.Queue(h.replay)
 	h.clientsMu.Unlock()
 	if len(backlog) > 0 && !send(<-backlog, backlog, true) {

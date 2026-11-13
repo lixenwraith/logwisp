@@ -2,6 +2,7 @@ package sink
 
 import (
 	"context"
+	"maps"
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/core"
@@ -117,4 +118,14 @@ func Drain(input <-chan core.TransportEvent) [][]byte {
 			return tail
 		}
 	}
+}
+
+// Shrunk is m rebuilt once it holds under a quarter of peak, the most it held
+// since it was built, with the peak that goes with it: a map keeps its
+// largest table, which a broker's walk over its clients pays for every event
+func Shrunk[K comparable, V any](m map[K]V, peak int) (map[K]V, int) {
+	if len(m) < peak/4 {
+		return maps.Collect(maps.All(m)), len(m)
+	}
+	return m, peak
 }

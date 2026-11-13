@@ -56,6 +56,7 @@ type TCPSink struct {
 	// Client registry. conns holds every accepted connection, so shutdown also
 	// reaches peers still in the handshake, before they become clients.
 	clients      map[uint64]*tcpClient
+	clientsPeak  int // the most clients held since the map was built
 	conns        map[net.Conn]struct{}
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
@@ -416,6 +417,7 @@ func (t *TCPSink) handleConn(conn net.Conn, count int64) {
 		return
 	}
 	t.clients[id] = c
+	t.clientsPeak = max(t.clientsPeak, len(t.clients))
 	t.clientsMu.Unlock()
 
 	t.logger.Debug("msg", "TCP connection opened",
@@ -428,6 +430,7 @@ func (t *TCPSink) handleConn(conn net.Conn, count int64) {
 	defer func() {
 		t.clientsMu.Lock()
 		delete(t.clients, id)
+		t.clients, t.clientsPeak = sink.Shrunk(t.clients, t.clientsPeak)
 		t.clientsMu.Unlock()
 		conn.Close()
 		<-c.closed // reader has exited
