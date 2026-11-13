@@ -344,7 +344,8 @@ func (h *HTTPSink) removeClient(id uint64) {
 
 // brokerLoop fans out transport events to all client queues, non-blocking,
 // and evicts clients whose sessions were idle-expired by the session manager,
-// until flush, which shutdown closes on Stop and on context cancellation.
+// found when their queue is full, until flush, which shutdown closes on Stop
+// and on context cancellation.
 func (h *HTTPSink) brokerLoop() {
 	defer h.wg.Done()
 	for {
@@ -368,19 +369,18 @@ func (h *HTTPSink) brokerLoop() {
 				h.replay = append(h.replay[max(len(h.replay)+1-n, 0):], event.Payload)
 			}
 			for id, c := range h.clients {
-				if _, exists := h.proxy.GetSession(c.sessionID); !exists {
-					// Without write_timeout_ms a stalled peer's write holds its
-					// handler and slot for good; registered, the handler has
-					// not returned, so its controller is still its own
-					_ = c.rc.SetWriteDeadline(time.Now())
-					stale = append(stale, id)
-					continue
-				}
-				// Only the stream's own writes refresh its session: a peer
-				// that stopped reading must expire
 				select {
 				case c.send <- event.Payload:
 				default:
+					// Only a stalled reader lets its session expire, and its
+					// queue fills. Without write_timeout_ms its write holds the
+					// handler and slot for good; registered, the handler has
+					// not returned, so its controller is still its own.
+					if _, exists := h.proxy.GetSession(c.sessionID); !exists {
+						_ = c.rc.SetWriteDeadline(time.Now())
+						stale = append(stale, id)
+						continue
+					}
 					h.droppedWrites.Add(1)
 				}
 			}
@@ -490,7 +490,6 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			if _, err := w.Write(buf); err != nil || rc.Flush() != nil {
 				return false
 			}
-			h.proxy.UpdateActivity(sess.ID)
 			if !more && len(q) > 0 {
 				payload, more = <-q, true
 			}
@@ -510,9 +509,9 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A stream with nothing to carry still has to prove the peer is there. The
-	// comment refreshes the session the broker evicts on, and fails on a peer
-	// that stopped reading.
+	// A stream, busy or quiet, proves its peer is there with a comment each
+	// interval. Only the comment refreshes the session the broker evicts on,
+	// and it fails on a peer that stopped reading.
 	idle := time.NewTicker(h.keepalive)
 	defer idle.Stop()
 

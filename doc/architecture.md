@@ -165,8 +165,8 @@ shutdown (`dropped_batches`).
 ## Concurrency Model
 
 - One goroutine per source drains that source's subscription and feeds the flow.
-- The flow's formatter holds a mutex; the underlying formatter reuses an
-  internal buffer and is not goroutine-safe.
+- A pipeline's sources format at once: the formatter keeps no state between
+  entries, and each record is built in pooled scratch.
 - Each network sink runs one broadcast/broker goroutine plus, per connection, a
   writer goroutine (and for TCP, a reader goroutine that exists only to detect
   disconnects and refresh session activity).
@@ -228,9 +228,10 @@ including `tls` and `tls_peer_cn` for TLS peers, `auth_method` /
 `auth_identity` for authorized ones, and `peer_addr`, the proxy, for a client
 a PROXY header names.
 
-Idle sessions are reaped every 5 minutes against a 30-minute idle limit. The
-HTTP sink's broker treats a vanished session as an eviction signal and closes
-the corresponding SSE client.
+Idle sessions are reaped every 5 minutes against a 30-minute idle limit.
+A session's activity is an atomic, refreshed after a read-locked lookup.
+The HTTP sink's broker treats a vanished session, checked when a client's
+queue is full, as an eviction signal and closes the corresponding SSE client.
 
 Authorization decisions do not read session metadata — `internal/authz` makes
 them from the handshake, the SCRAM exchange or a bearer token, at the point of
@@ -354,11 +355,11 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
 
 ## Performance Notes
 
-- In-memory entry processing is sub-millisecond. Besides the formatter's
-  mutex, an entry can take the rate limiter's bucket lock (`policy = "drop"`)
-  and the pipeline's session-manager lock, which the network plugins and the
-  console and random sources take as entries pass, to refresh session
-  activity.
+- In-memory entry processing is sub-millisecond. An entry can take the rate
+  limiter's bucket lock (`policy = "drop"`) and, shared, the pipeline's
+  session-manager lock, which the network plugins and the console and random
+  sources read as entries pass to find the session whose activity they
+  refresh.
 - File tailing detects new content within roughly 100 ms (fixed poll), while
   `check_interval_ms` governs how quickly a *newly created* file is noticed.
 - `http_chain` trades latency for efficiency: entries wait up to
