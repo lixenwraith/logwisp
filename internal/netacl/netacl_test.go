@@ -401,10 +401,10 @@ func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 }
 
 // Refunded attempts cost nothing and released ones keep their cost; slots are
-// capped from the moment they are taken, so concurrent attempts cannot all
-// pass; a full table refuses new clients, and the sweep frees clients whose
-// holds expired or whose bucket is full again, keeping the rest's budgets as
-// it shrinks the map.
+// capped once taken, so concurrent attempts cannot all pass; a full table
+// refuses new clients; the sweep frees clients whose holds expired or whose
+// bucket is full again, however slow its refill, and keeps the rest's budgets
+// as it shrinks the map.
 func TestTableBounds(t *testing.T) {
 	tb := NewTable(10, 1, 4)
 	for i := range 20 {
@@ -451,6 +451,10 @@ func TestTableBounds(t *testing.T) {
 	rate.Take("10.0.0.4")
 	if rate.sweep(time.Now().Add(1100 * time.Millisecond)); len(rate.clients) != 0 {
 		t.Fatal("a client outlived the refill of its bucket")
+	}
+	slow := NewTable(1, 1e-11, 0) // a refill past a Duration's range
+	if !slow.Take("10.0.0.5") || slow.Take("10.0.0.5") {
+		t.Fatal("a client whose refill outlasts a Duration was admitted again at once")
 	}
 }
 

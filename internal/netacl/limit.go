@@ -58,7 +58,9 @@ type client struct {
 func NewTable(burst, rate float64, slots int) *Table {
 	t := &Table{burst: burst, rate: rate, slots: slots, idle: slotIdle, clients: make(map[string]*client)}
 	if rate > 0 {
-		t.idle = time.Duration(burst / rate * float64(time.Second))
+		// Capped at 1e9 s (~31 years): past a Duration's range the conversion
+		// is the platform's, and amd64's negative idle sweeps every client away
+		t.idle = time.Duration(min(burst/rate, 1e9) * float64(time.Second))
 	}
 	return t
 }
