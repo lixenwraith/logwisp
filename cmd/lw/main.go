@@ -134,6 +134,7 @@ func main() {
 		if svc != nil {
 			svc.Shutdown()
 		}
+		core.ReleaseIdle()
 		manager.Close()
 		logger.Info("msg", "Shutdown complete")
 	}()

@@ -77,10 +77,12 @@ What reload does *not* do:
 
 - Re-apply `logging.*`, `quiet` or `auto_reload`; they take effect at startup
   only.
-- Preserve connections, unless it only swaps flows. Listeners close and
-  reopen, and every SSE, TCP, and chain client is disconnected. Chain sinks
-  reconnect on their own backoff; browsers reconnect SSE automatically; raw
-  TCP consumers must retry themselves.
+- Preserve connections, unless it only swaps flows: every SSE, TCP, and chain
+  client is disconnected. Chain sinks reconnect on their own backoff; browsers
+  reconnect SSE automatically; raw TCP consumers must retry themselves.
+  - The listening sockets stay bound: a client connecting during the rebuild
+    waits in the backlog for the new service. An address the new configuration
+    drops closes once that service runs.
 - Keep bearer tokens, unless it only swaps flows. Each rebuild draws a new
   token key, so every token is revoked: run `lw auth token` again, and
   browser viewers log in again.
@@ -91,9 +93,9 @@ What reload does *not* do:
 Standard input survives a reload: one reader serves the process, so the new
 console source continues where the old one stopped, and no line is read twice.
 
-Plan reloads on a busy relay as you would a restart: a listener that fails to
-bind does so after the old service stopped, leaving lw without working
-pipelines until a corrected configuration reloads
+Plan reloads on a busy relay as you would a restart: a listener on a new
+address that fails to bind does so after the old service stopped, leaving lw
+without working pipelines until a corrected configuration reloads
 ([Hot Reload](configuration.md#hot-reload)).
 
 ### Checking a configuration

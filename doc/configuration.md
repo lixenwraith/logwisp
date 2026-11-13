@@ -265,9 +265,10 @@ run without the file.
 
 Reload builds a new service from a detached snapshot of the configuration,
 validated again, and shuts the old one down only if that succeeds: parse,
-validation and construction errors leave the running service intact. Listener
-bind failures occur after the old service has stopped and can leave lw without
-working pipelines; correct the file and signal again.
+validation and construction errors leave the running service intact. A
+listener on a new address that fails to bind does so after the old service has
+stopped and can leave lw without working pipelines; correct the file and signal
+again.
 
 Watch errors (deletion, permission changes, timeout) are logged without
 rebuilding. Queued changes are combined, and unchanged pipelines and status
@@ -278,8 +279,9 @@ remaining sources on the next successful load.
 - Not reloaded: `logging.*` (applied once at startup), `quiet`, `auto_reload`
   (the watcher is not restarted)
 
-The rebuild is total: listeners close and reopen, every connected client is
-disconnected, and chain sinks reconnect on their own backoff schedule. A swap
+The rebuild is total but for the listening sockets, which stay bound: every
+connected client is disconnected, one connecting meanwhile waits for the new
+service, and chain sinks reconnect on their own backoff schedule. A swap
 in place keeps them all, and file sources read on from where they were: the
 next entry takes the new flows, the flow's counters go on, and the new rate
 limiter starts with a full bucket

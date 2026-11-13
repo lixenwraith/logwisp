@@ -257,8 +257,12 @@ so the pipeline's `total_processed` and `total_filtered` go on; the new rate
 limiter starts with a full bucket, the new filters' own counters at zero, and
 the heartbeat restarts its interval.
 
-A rebuild is total: listening sockets close and reopen, all clients are
-disconnected, and a file source reads from where its `from` says again.
+A rebuild is total but for the listening sockets: `core.Listen` keeps each
+bound once its listener closes, and the new service's listener on that address
+takes it over, so a client connecting meanwhile waits in the backlog;
+`core.ReleaseIdle` then closes the sockets of addresses the new service
+dropped. All clients are disconnected, and a file source reads from where its
+`from` says again.
 Application logging is configured once at startup and is **not** re-applied
 on reload. The `lw --tui` screen takes the same paths, giving each new
 service the screen's tap before it starts: `t` after an edit swaps flows as a

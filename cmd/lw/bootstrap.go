@@ -84,6 +84,9 @@ func handleReload(ctx context.Context, newCfg *config.Config, oldSvc *service.Se
 		oldSvc.Shutdown()
 	}
 
+	// The new service takes over the old one's sockets; those it does not
+	// listen on, as it dropped or moved their addresses, close after
+	defer core.ReleaseIdle()
 	if err := newService.Start(); err != nil {
 		newService.Shutdown()
 		logger.Error("msg", "Failed to start new service pipelines after reload. The application may be in a non-functional state.", "error", err)
