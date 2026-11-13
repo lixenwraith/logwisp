@@ -95,7 +95,7 @@ func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 			for _, f := range flags {
 				names = append(names, "--"+f.Flag)
 			}
-			return nil, fmt.Errorf("%s: not a pipeline flag; paste lw's %s only", words[i], strings.Join(names, ", "))
+			return nil, fmt.Errorf("%s: not a pipeline flag; paste lw's %s only", name, strings.Join(names, ", "))
 		}
 		if !inline {
 			if i++; i == len(words) || strings.HasPrefix(words[i], "-") {

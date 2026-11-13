@@ -166,12 +166,14 @@ A SPEC is `TYPE:key=value,...`, or `key=value,...` without a TYPE:
 - naming a stage turns it on: `--rate-limit` defaults `policy` to `drop`,
   `--heartbeat` defaults `enabled` to `true`
 
-Errors name the flag and the offending part, and nothing starts:
+Errors name the flag, TYPE and key, never a value, which may be a secret
+typed in the wrong place; an entry without `=` goes by its place. Nothing
+starts:
 
 ```
---sink http:port: missing "="
---rate-limit entries_per_second=100,polcy=drop: unknown key "polcy"
---source file,directory=/x: TYPE ends at ':', as in file:directory=/x
+--sink http: entry 1 has no "="
+--rate-limit: unknown key "polcy"
+--source file: TYPE ends at ':', as in file:KEY=VALUE
 ```
 
 A misspelled plugin key fails validation, before anything is built or opened:

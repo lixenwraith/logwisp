@@ -76,14 +76,15 @@ func TestPipelineSpecGrammar(t *testing.T) {
 		t.Fatalf("pipelines:\n got %+v\nwant %+v", got, want)
 	}
 	for want, pairs := range map[string][]string{
-		`--sink http:port: missing "="`:                                         {"sink", "http:port"},
-		`--source file,directory=/x: TYPE ends at ':', as in file:directory=/x`: {"source", "file,directory=/x"},
-		`--source directory=/x: missing TYPE`:                                   {"source", "directory=/x"},
-		`--source file:type=x: TYPE already sets "type"`:                        {"source", "file:type=x"},
-		`--sink http:tls.cert_file=c: "tls" is both a value and a table`:        {"sink", "http:tls=1,tls.cert_file=c"},
-		`--sink requires a value`:                                               {"sink", ""},
-		`--format txt: pipeline "cli" already has one`:                          {"format", "json", "format", "txt"},
-		`--rate-limit entries_per_second=1,polcy=drop: unknown key "polcy"`:     {"rate-limit", "entries_per_second=1,polcy=drop"},
+		`--sink http: entry 1 has no "="`:                       {"sink", "http:port"},
+		`--sink tcp_chain: entry 2 has no "="`:                  {"sink", "tcp_chain:host=h,s3cret"},
+		`--source file: TYPE ends at ':', as in file:KEY=VALUE`: {"source", "file,directory=/x"},
+		`--source: missing TYPE`:                                {"source", "directory=/x"},
+		`--source file: TYPE already sets "type"`:               {"source", "file:type=x"},
+		`--sink http: "tls" is both a value and a table`:        {"sink", "http:tls=1,tls.cert_file=c"},
+		`--sink requires a value`:                               {"sink", ""},
+		`--format txt: pipeline "cli" already has one`:          {"format", "json", "format", "txt"},
+		`--rate-limit: unknown key "polcy"`:                     {"rate-limit", "entries_per_second=1,polcy=drop"},
 	} {
 		if _, err := Load(Args{Specs: specs(pairs...)}); err == nil || err.Error() != want {
 			t.Errorf("%q: err = %v, want %s", pairs, err, want)

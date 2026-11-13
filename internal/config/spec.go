@@ -271,9 +271,12 @@ func buildPipelines(specs []pipelineSpec, isDir IsDir) ([]PipelineConfig, error)
 			seen = map[*specKind]bool{}
 			continue
 		}
+		// Errors name the flag, TYPE and a key, never a value: a secret typed in
+		// the wrong place must not reach a terminal or a service's journal
 		typ, opts, err := parseSpec(s.value, s.kind.typed)
+		at := strings.TrimSuffix(s.name+" "+typ, " ")
 		if err != nil {
-			return nil, fmt.Errorf("%s %w", s.name, err)
+			return nil, fmt.Errorf("%s: %w", at, err)
 		}
 		if pipelines == nil {
 			name := "cli"
@@ -286,13 +289,13 @@ func buildPipelines(specs []pipelineSpec, isDir IsDir) ([]PipelineConfig, error)
 		p := &pipelines[len(pipelines)-1]
 		switch {
 		case seen[s.kind] && !s.kind.many:
-			return nil, fmt.Errorf("%s %s: pipeline %q already has one", s.name, s.value, p.Name)
+			return nil, fmt.Errorf("%s: pipeline %q already has one", at, p.Name)
 		case s.kind.first && len(seen) > 0:
-			return nil, fmt.Errorf("%s %s: must start its pipeline", s.name, s.value)
+			return nil, fmt.Errorf("%s: must start its pipeline", at)
 		}
 		seen[s.kind] = true
 		if err := s.kind.apply(p, typ, opts, isDir); err != nil {
-			return nil, fmt.Errorf("%s %s: %w", s.name, s.value, err)
+			return nil, fmt.Errorf("%s: %w", at, err)
 		}
 	}
 	for i := range pipelines {
@@ -434,34 +437,35 @@ func useStdio(p *PipelineConfig) {
 
 // parseSpec reads TYPE[:key=value,...] or key=value,...: TYPE ends at the
 // first ':', dotted keys nest, a repeated key makes a list, and a backslash
-// escapes ',', '=' and '\'. Errors name the part.
+// escapes ',', '=' and '\'. Errors name a key or an entry's place, and come
+// with the TYPE read.
 func parseSpec(spec string, typed bool) (typ string, opts map[string]any, err error) {
 	rest, more := spec, true
 	if typed {
 		typ, rest, _ = strings.Cut(spec, ":")
 		more = rest != ""
 		if head, _, comma := cutUnescaped(typ, ','); comma && !strings.Contains(head, "=") {
-			return "", nil, fmt.Errorf("%s: TYPE ends at ':', as in %s:%s", spec, head, spec[len(head)+1:])
+			return head, nil, fmt.Errorf("TYPE ends at ':', as in %s:KEY=VALUE", head)
 		}
 		if typ == "" || strings.ContainsAny(typ, "=,\\") {
-			return "", nil, fmt.Errorf("%s: missing TYPE", spec)
+			return "", nil, errors.New("missing TYPE")
 		}
 	}
 	opts = map[string]any{}
-	for more {
+	for n := 1; more; n++ {
 		var part string
 		part, rest, more = cutUnescaped(rest, ',')
 		key, value, eq := cutUnescaped(part, '=')
 		switch key = unescape(key); {
 		case !eq:
-			err = errors.New(`missing "="`)
+			err = fmt.Errorf(`entry %d has no "="`, n) // without one, a key is no surer than a value
 		case typed && key == "type":
 			err = errors.New(`TYPE already sets "type"`)
 		default:
 			err = SetOption(opts, key, unescape(value))
 		}
 		if err != nil {
-			return "", nil, fmt.Errorf("%s: %w", strings.TrimPrefix(typ+":"+part, ":"), err)
+			return typ, nil, err
 		}
 	}
 	return typ, opts, nil
