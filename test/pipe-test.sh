@@ -15,12 +15,13 @@ need
 rm -rf "$RUN"
 mkdir -p "$RUN/bare" "$RUN/withfile" "$LOG"
 printf '[logging]\noutput = "stderr"\n' >"$RUN/withfile/logwisp.toml"
-# lw DIR ARGS...: in DIR, with no user configuration or LOGWISP_ variable
+# lw DIR ARGS...: in DIR, with no user configuration or LOGWISP_ variable,
+# under timeout(1) unless BOUND is set empty
 lw() {
 	(
 		cd "$RUN/$1" || exit 1
 		for v in $(compgen -e LOGWISP_); do unset "$v"; done
-		HOME=$RUN timeout 30 "$BIN" "${@:2}"
+		HOME=$RUN exec ${BOUND-timeout 30} "$BIN" "${@:2}"
 	)
 }
 info "runs lw in $(short "$RUN")/bare (no file) and $(short "$RUN")/withfile"
@@ -49,8 +50,10 @@ check "2.5 MB line: entries of $(awk '{printf "%s ", length($0)}' "$RUN/long.out
 n=$(seq 1 50000 | lw bare | { sleep 1; wc -l; })
 check "slow reader receives all 50000 lines ($n)" "$((n == 50000))"
 
-# 6. a reader that leaves ends lw as it ends cat: SIGPIPE
-seq 1 5000000 | lw bare | head -1 >/dev/null
+# 6. a reader that leaves ends lw as it ends cat: SIGPIPE. The status is lw's
+# own, not timeout(1)'s, which uutils reports as 13 and GNU as 141; the
+# input ends, so nothing needs bounding.
+seq 1 5000000 | BOUND= lw bare | head -1 >/dev/null
 rc=${PIPESTATUS[1]}
 check "reader gone: lw exits on SIGPIPE ($rc)" "$((rc == 141))"
 
