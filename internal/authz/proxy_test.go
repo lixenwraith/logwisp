@@ -318,13 +318,15 @@ func TestFullRevocationListForgetsExpiredTokens(t *testing.T) {
 	if !m.revoke("late-1", now.Add(time.Hour)) { // the scan drops both expired tokens
 		t.Fatal("a full list kept its expired tokens")
 	}
-	if !m.revoke("soon", now.Add(50*time.Millisecond)) {
+	// From here, not the test's start: filling the list takes a while
+	soon := time.Now().Add(250 * time.Millisecond)
+	if !m.revoke("soon", soon) {
 		t.Fatal("a list with room refused a token")
 	}
 	if m.revoke("late-2", now.Add(time.Hour)) {
 		t.Fatal("a list full of live tokens took another")
 	}
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(time.Until(soon) + 10*time.Millisecond)
 	if !m.revoke("late-2", now.Add(time.Hour)) {
 		t.Fatal("a full list kept a token that expired after its last scan")
 	}
