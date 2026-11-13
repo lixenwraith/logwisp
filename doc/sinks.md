@@ -122,7 +122,9 @@ Options, each as type and default:
   What it creates of the path is `0750`. It refuses to start in a directory
   every user can write, where another could plant `NAME.log` as a link, and
   when `NAME.log` is a link, a FIFO or anything but a regular file.
-- `name` (string, **required**): file name base.
+- `name` (string, **required**): file name base. A file sink with the
+  directory and name of lw's own log, or of another file sink, is refused at
+  load: both would rotate the same files.
 - `max_size_mb` (int, `100`): rotate when the active file reaches this size.
 - `max_total_size_mb` (int, `1000`): above this total, the oldest `.log` files
   there are deleted.
@@ -136,7 +138,8 @@ Options, each as type and default:
   entries queued together, up to 4 KiB of them. A record dropped there, or
   refused by the disk, counts in `dropped_records`, and `total_processed`
   still counts its entries. At most `1048576`.
-- `flush_interval_ms` (int, `100`): forced flush interval.
+- `flush_interval_ms` (int, `100`): forced flush interval: the file is synced
+  to disk at most this often.
 
 The sink drives an internal writer configured for raw output with timestamps and
 levels disabled, so what lands on disk is exactly the formatted payload. On stop

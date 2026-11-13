@@ -156,6 +156,22 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 	}
 }
 
+// No two writers share files: a file sink takes neither lw's own log's
+// directory and name nor another file sink's, however the path is spelled
+func TestNoTwoWritersShareFiles(t *testing.T) {
+	sink := func(id, dir, name string) PluginSinkConfig {
+		return PluginSinkConfig{ID: id, Type: "file", Config: map[string]any{"directory": dir, "name": name}}
+	}
+	cfg := &Config{Color: "auto", Logging: &LogConfig{Output: "file", Level: "info", File: &LogFileConfig{Directory: "./log", Name: "logwisp"}},
+		Pipelines: []PipelineConfig{{Name: "p", Flow: &FlowConfig{}, PluginSources: []PluginSourceConfig{{ID: "in", Type: "null"}},
+			PluginSinks: []PluginSinkConfig{sink("own", "log", "logwisp"), sink("a", "/var/log/lw", "app"), sink("b", "/var/log/lw/", "app"), sink("c", "/var/log/lw", "other")}}}}
+	want := "pipelines[0].plugin_sinks[own].config.name: logging.file writes these files already; give this sink another name or directory\n" +
+		"pipelines[0].plugin_sinks[b].config.name: pipelines[0].plugin_sinks[a] writes these files already; give this sink another name or directory"
+	if err := ValidateConfig(cfg); err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant %s", err, want)
+	}
+}
+
 // A configuration that does not load names every problem, a line each: the
 // settings, each flow stage, each plugin and each pipeline, every key's of a
 // part, and the first rule between a table's keys

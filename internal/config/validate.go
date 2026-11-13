@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -32,17 +34,37 @@ func ValidateConfig(cfg *Config) error {
 		return fmt.Errorf("config is nil")
 	}
 	errs := []error{checkTags(reflect.ValueOf(cfg).Elem(), "")}
+	writers := map[string]string{}
 	if l := cfg.Logging; l != nil {
 		errs = append(errs, checkTags(reflect.ValueOf(l).Elem(), "logging."))
 		if l.Console != nil {
 			errs = append(errs, checkTags(reflect.ValueOf(l.Console).Elem(), "logging.console."))
 		}
+		if (l.Output == "file" || l.Output == "all") && l.File != nil {
+			writers[writes(l.File.Directory, l.File.Name)] = "logging.file"
+		}
 	}
-	return errors.Join(append(errs, ValidatePipelines(cfg.Pipelines))...)
+	return errors.Join(append(errs, validatePipelines(cfg.Pipelines, writers))...)
 }
 
 // ValidatePipelines is ValidateConfig's check of the pipelines
 func ValidatePipelines(pipelines []PipelineConfig) error {
+	return validatePipelines(pipelines, map[string]string{})
+}
+
+// writes is the files a log writer makes in directory under name, as a key:
+// two writers sharing it would rotate, and delete, each other's
+func writes(directory, name string) string {
+	dir, err := filepath.Abs(ExpandHome(directory))
+	if err != nil {
+		dir = filepath.Clean(directory)
+	}
+	return filepath.Join(dir, name)
+}
+
+// validatePipelines checks the pipelines; writers holds the files written
+// already, by the path of what writes them
+func validatePipelines(pipelines []PipelineConfig, writers map[string]string) error {
 	if len(pipelines) == 0 {
 		return fmt.Errorf("no pipelines configured")
 	}
@@ -84,8 +106,15 @@ func ValidatePipelines(pipelines []PipelineConfig) error {
 				if plugin.Single {
 					single[role+typ] = p.Name
 				}
-				if _, err := decode(role, typ, m); err != nil {
+				v, err := decode(role, typ, m)
+				if err != nil {
 					at(path+".config", err)
+				} else if o, ok := v.(*FileSinkOptions); ok {
+					key := writes(o.Directory, o.Name)
+					if first, taken := writers[key]; taken {
+						at(path+".config.name", fmt.Errorf("%s writes these files already; give this sink another name or directory", first))
+					}
+					writers[key] = cmp.Or(writers[key], path)
 				}
 			}
 		}
