@@ -30,6 +30,7 @@ type proxyMode struct {
 	plaintext bool // no tls on the hop from the proxies
 	mu        sync.Mutex
 	revoked   map[[32]byte]time.Time
+	firstOut  time.Time // no revoked token expires before; a full list is not rescanned until then
 }
 
 func parseProxies(entries []string) (*proxyMode, error) {
@@ -56,39 +57,48 @@ func (m *proxyMode) exposedHop() bool {
 // client is the rightmost X-Forwarded-For hop that is not a trusted proxy:
 // hops to its left come from the client and prove nothing. When every hop is
 // trusted, the client sits inside a proxy range and the leftmost hop is it.
+// The walk stops there, so a client padding the header costs nothing more.
 func (m *proxyMode) client(peer string, h http.Header) (netip.Addr, error) {
 	if addr, ok := netacl.ParseHost(peer); !ok || !m.trusts(addr) {
 		return netip.Addr{}, fmt.Errorf("%s is not a trusted proxy", peer)
 	}
-	protos := headerList(h, "X-Forwarded-Proto")
-	if len(protos) == 0 || slices.ContainsFunc(protos, func(v string) bool { return !strings.EqualFold(v, "https") }) {
-		return netip.Addr{}, fmt.Errorf("proxy forwarded X-Forwarded-Proto %q; sessions need https", strings.Join(protos, ","))
-	}
-	hops := headerList(h, "X-Forwarded-For")
-	if len(hops) == 0 {
-		return netip.Addr{}, errors.New("proxy sent no client address in X-Forwarded-For")
-	}
-	for i := len(hops) - 1; ; i-- {
-		addr, ok := netacl.ParseHost(hops[i])
-		if !ok {
-			return netip.Addr{}, fmt.Errorf("malformed X-Forwarded-For hop %q", hops[i])
-		}
-		if i == 0 || !m.trusts(addr) {
-			return addr, nil
-		}
-	}
-}
-
-func headerList(h http.Header, key string) []string {
-	var out []string
-	for _, v := range h.Values(key) {
+	https := false
+	for _, v := range h.Values("X-Forwarded-Proto") {
 		for e := range strings.SplitSeq(v, ",") {
-			if e = strings.TrimSpace(e); e != "" {
-				out = append(out, e)
+			if e = strings.TrimSpace(e); e == "" {
+				continue
+			} else if !strings.EqualFold(e, "https") {
+				return netip.Addr{}, fmt.Errorf("proxy forwarded X-Forwarded-Proto %q; sessions need https", e)
+			}
+			https = true
+		}
+	}
+	if !https {
+		return netip.Addr{}, errors.New("proxy forwarded no X-Forwarded-Proto; sessions need https")
+	}
+	var client netip.Addr
+	hops := h.Values("X-Forwarded-For")
+	for i := len(hops) - 1; i >= 0; i-- {
+		for rest := hops[i]; rest != ""; {
+			j := strings.LastIndexByte(rest, ',')
+			hop := strings.TrimSpace(rest[j+1:])
+			rest = rest[:max(j, 0)]
+			if hop == "" {
+				continue
+			}
+			addr, ok := netacl.ParseHost(hop)
+			if !ok {
+				return netip.Addr{}, fmt.Errorf("malformed X-Forwarded-For hop %q", hop)
+			}
+			if client = addr; !m.trusts(addr) {
+				return addr, nil
 			}
 		}
 	}
-	return out
+	if !client.IsValid() {
+		return netip.Addr{}, errors.New("proxy sent no client address in X-Forwarded-For")
+	}
+	return client, nil
 }
 
 func (m *proxyMode) revoke(token string, until time.Time) bool {
@@ -99,17 +109,23 @@ func (m *proxyMode) revoke(token string, until time.Time) bool {
 	if m.revoked == nil {
 		m.revoked = make(map[[32]byte]time.Time)
 	}
-	if len(m.revoked) >= maxRevoked {
+	if len(m.revoked) >= maxRevoked && now.After(m.firstOut) {
+		m.firstOut = until
 		for k, expiry := range m.revoked {
 			if now.After(expiry) {
 				delete(m.revoked, k)
+			} else if expiry.Before(m.firstOut) {
+				m.firstOut = expiry
 			}
 		}
-		if len(m.revoked) >= maxRevoked {
-			return false
-		}
+	}
+	if len(m.revoked) >= maxRevoked {
+		return false
 	}
 	m.revoked[key] = until
+	if until.Before(m.firstOut) {
+		m.firstOut = until
+	}
 	return true
 }
 

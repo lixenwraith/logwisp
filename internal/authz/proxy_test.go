@@ -6,8 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lixenwraith/logwisp/internal/chain"
 	"github.com/lixenwraith/logwisp/internal/config"
@@ -283,5 +285,47 @@ func TestAuthTakesOnlyJSON(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnsupportedMediaType {
 		t.Fatalf("text/plain /auth: %d, want 415", resp.StatusCode)
+	}
+}
+
+// The client is found walking X-Forwarded-For from the right, so the hops a
+// client pads the header with cost nothing: no more allocations than one hop
+func TestPaddedForwardedForCostsNoMore(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{TrustedProxies: []string{"127.0.0.1"}}, nil, config.Listener, HTTP)
+	allocs := func(xff string) float64 {
+		r := httptest.NewRequest(http.MethodGet, "/status", nil)
+		r.RemoteAddr = "127.0.0.1:5000"
+		r.Header.Set("X-Forwarded-For", xff)
+		r.Header.Set("X-Forwarded-Proto", "https")
+		return testing.AllocsPerRun(10, func() { l.ClientAddr(r) })
+	}
+	if one, padded := allocs("203.0.113.7"), allocs(strings.Repeat("198.51.100.1, ", 4096)+"203.0.113.7"); padded > one {
+		t.Fatalf("a padded header allocates %v times a call, one hop %v", padded, one)
+	}
+}
+
+// A full revocation list refuses a logout only while every token in it is
+// live, a token revoked after the list was last scanned included
+func TestFullRevocationListForgetsExpiredTokens(t *testing.T) {
+	m := &proxyMode{}
+	now := time.Now()
+	for i := range maxRevoked - 2 {
+		m.revoke(strconv.Itoa(i), now.Add(time.Hour))
+	}
+	m.revoke("expired-1", now.Add(-time.Second))
+	m.revoke("expired-2", now.Add(-time.Second))
+	if !m.revoke("late-1", now.Add(time.Hour)) { // the scan drops both expired tokens
+		t.Fatal("a full list kept its expired tokens")
+	}
+	if !m.revoke("soon", now.Add(50*time.Millisecond)) {
+		t.Fatal("a list with room refused a token")
+	}
+	if m.revoke("late-2", now.Add(time.Hour)) {
+		t.Fatal("a list full of live tokens took another")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if !m.revoke("late-2", now.Add(time.Hour)) {
+		t.Fatal("a full list kept a token that expired after its last scan")
 	}
 }

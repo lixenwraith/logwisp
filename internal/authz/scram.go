@@ -39,7 +39,6 @@ const (
 	// DefaultTokenLifetime is how long a bearer token from /auth stays valid
 	DefaultTokenLifetime = 15 * time.Minute
 	maxAuthLine          = 4096 // pre-auth lines and /auth bodies come from unauthenticated peers
-	streamBuffer         = 64 * 1024
 
 	limitBurst   = 10 // failed or abandoned exchanges per address before throttling
 	limitRate    = 1  // per second
@@ -1018,23 +1017,17 @@ func AwaitClose(r *bufio.Reader) error {
 
 // --- Wire helpers ---
 
-// readLine refuses a line over maxAuthLine as soon as it arrives: r buffers
-// far more, for the stream after the exchange.
+// readLine refuses a line over maxAuthLine as soon as it arrives: r holds
+// exactly that much.
 func readLine(r *bufio.Reader) ([]byte, error) {
-	for {
-		b, _ := r.Peek(r.Buffered())
-		if i := bytes.IndexByte(b, '\n'); i >= 0 && i < maxAuthLine {
-			line := bytes.Clone(bytes.TrimRight(b[:i+1], "\r\n"))
-			r.Discard(i + 1)
-			return line, nil
-		}
-		if len(b) >= maxAuthLine {
-			return nil, fmt.Errorf("line exceeds %d bytes", maxAuthLine)
-		}
-		if _, err := r.Peek(len(b) + 1); err != nil {
-			return nil, err
-		}
+	line, err := r.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return nil, fmt.Errorf("line exceeds %d bytes", maxAuthLine)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return bytes.Clone(bytes.TrimRight(line, "\r\n")), nil
 }
 
 func readStep(r *bufio.Reader) (authStep, error) {
