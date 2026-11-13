@@ -24,8 +24,8 @@ log capture, and resource limits belong. See [Installation](installation.md).
 A supervisor's stdin is `/dev/null` (systemd's default, `docker run` without
 `-i`), where a console source ends at once. So a service defines its
 pipelines: a file without `[[pipelines]]` runs the built-in stdin-to-stdout
-pipeline and exits 0 at once, which `Restart=on-failure` does not restart, and
-a container configured through variables needs a `LOGWISP_SOURCE`, or a
+pipeline and exits 0 at once, which `Restart=on-failure` does not restart and
+rc.d restarts every 5 s, and a container configured through variables needs a `LOGWISP_SOURCE`, or a
 `LOGWISP_PRESET` with a source of its own (`aggregator`, or one given a `path`).
 
 **systemd**

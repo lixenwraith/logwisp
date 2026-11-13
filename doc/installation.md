@@ -166,7 +166,10 @@ sudo systemctl reload logwisp
 
 `$PREFIX/etc/rc.d/logwisp` runs `lw` through `daemon(8)` as `logwisp_user`,
 with its output in syslog under the tag `logwisp`; `service logwisp reload`
-sends `SIGHUP`. The port in `deploy/package/freebsd/` places the
+sends `SIGHUP`. `daemon(8)` restarts `lw` 5 s after it exits, as the systemd
+unit does after a failure, and after a clean exit too: a configuration whose
+input ends, such as a console source, restarts every 5 s. `service logwisp
+status` reports `lw`, which `daemon(8)` outlives. The port in `deploy/package/freebsd/` places the
 configuration the ports way, to the same effect: `@sample` installs
 `logwisp.toml.sample` and copies it to `logwisp.toml` when none exists.
 
