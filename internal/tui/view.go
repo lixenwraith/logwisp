@@ -177,7 +177,8 @@ func (a *app) point() point {
 	}
 	p.pipe = a.pipeline().Name
 	n, ok := a.node()
-	if l := a.lines(); a.inspect && ok && n.Role == "filters" && len(l) > 0 {
+	if a.inspect && ok && n.Role == "filters" {
+		l := a.lines() // ends with the row adding a filter
 		if m := l[min(a.insp.cursor, len(l)-1)].node; m.Index < len(a.pipeline().Flow.Filters) {
 			r := rank("filters", m.Index)
 			return point{pipe: p.pipe, name: fmt.Sprintf("filter %d", m.Index+1), all: "all that reaches it", reach: r, lo: r, hi: r}
