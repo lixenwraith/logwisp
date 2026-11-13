@@ -195,16 +195,20 @@ func (t *Table) Release(k Client) {
 	}
 }
 
-// Done frees the slot id holds
-func (t *Table) Done(k Client, id string) {
+// Done frees the slot id holds, reporting whether k held it
+func (t *Table) Done(k Client, id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if c := t.clients[k.key]; c != nil {
-		if _, ok := c.held[id]; ok {
-			delete(c.held, id)
-			t.used(c, -1)
-		}
+	c := t.clients[k.key]
+	if c == nil {
+		return false
 	}
+	if _, ok := c.held[id]; !ok {
+		return false
+	}
+	delete(c.held, id)
+	t.used(c, -1)
+	return true
 }
 
 // Refund returns the token of an attempt that turned out not to count

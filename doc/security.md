@@ -682,7 +682,9 @@ A TLS-terminating proxy or interceptor shows another certificate — CA-valid or
 not — so the proof fails and the relay never obtains a link or a token. The
 dialer is told `authentication failed` either way; the listener compares the
 hash the dialer reports, logs `the client saw another server certificate: TLS
-interception or a terminating proxy`, and counts `auth_binding_mismatch`.
+interception or a terminating proxy`, and counts `auth_binding_mismatch`. It
+does so only for a proof checked against its exchange: a stray proof could
+claim any hash.
 
 An HTTP login takes two requests, and every later request may open a new pooled
 connection. After the challenge the dialer pins the certificate it was bound to:
@@ -721,10 +723,12 @@ client a [PROXY header](#proxy-protocol) names, or on an `http` sink in proxy
 mode the forwarded client; forwarded headers are read only from
 `trusted_proxies`. Each exchange takes a token from a bucket of 10
 that refills at one per second, and a successful login gives it back, so only
-failed or abandoned attempts drain it. At most 4 exchanges per address may be
-unfinished: an HTTP challenge never answered holds its slot for up to 30 s, a
-TCP connection that ends mid-exchange frees it at once. A refused start answers
-`too many attempts` (HTTP `429`) and counts `auth_throttled`; the table holds
+failed or abandoned attempts drain it. A proof for no exchange the client
+holds, a stray one or one later than 30 s, takes a token too. At most 4
+exchanges per address may be unfinished: an HTTP challenge never answered
+holds its slot for up to 30 s, a TCP connection that ends mid-exchange frees
+it at once. A refused start or proof answers `too many attempts` (HTTP `429`)
+and counts `auth_throttled`; the table holds
 65,536 addresses and refuses new ones when full. Separately, at most 4,096
 exchanges may be in flight per listener, 256 of them from one /48 (past
 those, `too many attempts`); beyond 4,096, or while the plugin stops, a login

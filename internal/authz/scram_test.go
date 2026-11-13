@@ -455,6 +455,29 @@ func TestOnlyFailedAttemptsAreThrottled(t *testing.T) {
 	}
 }
 
+// A proof for no exchange the client holds costs an attempt, as a hello does,
+// and the binding it claims raises no interception alarm: only a proof checked
+// against its exchange tells what the client saw.
+func TestStrayProofCostsAnAttemptAndClaimsNothing(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
+	srv, _ := f.httpListener(t, l, f.serverTLS)
+	client := f.httpClient(f.dialer(t, "edge-01", "edge-01-secret"))
+	stray := `{"proof":{"full_nonce":"` + strings.Repeat("A", 48) + `","client_proof":"AAAA"},"binding":"QUFBQQ=="}`
+	statuses := map[int]int{}
+	for range limitBurst + 1 {
+		resp, err := client.Post(srv.URL+chain.AuthPath, "application/json", strings.NewReader(stray))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		statuses[resp.StatusCode]++
+	}
+	if statuses[http.StatusUnauthorized] != limitBurst || statuses[http.StatusTooManyRequests] != 1 || l.listener.bindingMismatch.Load() != 0 {
+		t.Fatalf("answers %v, binding mismatches %d", statuses, l.listener.bindingMismatch.Load())
+	}
+}
+
 // httpListener serves /auth and one protected endpoint over TLS
 func (f *fixture) httpListener(t *testing.T, p *Policy, tlsCfg *tls.Config) (*httptest.Server, *atomic.Int64) {
 	t.Helper()

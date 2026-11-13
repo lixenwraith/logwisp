@@ -522,26 +522,38 @@ func (p *Policy) begin(ip netacl.Client, first json.RawMessage) (challenge auth.
 }
 
 // finish verifies a proof, binding it to this listener's certificate, then
-// the client certificate to the user when configured.
-func (p *Policy) finish(ip netacl.Client, nonce string, step authStep, cs *tls.ConnectionState) (auth.ServerFinalMessage, error) {
+// the client certificate to the user when configured. On failure, status is
+// the HTTP answer and public the only detail sent.
+func (p *Policy) finish(ip netacl.Client, nonce string, step authStep, cs *tls.ConnectionState) (final auth.ServerFinalMessage, status int, public string, err error) {
 	l := p.listener
-	l.limit.Done(ip, nonce)
+	// A proof for no exchange the client holds, a stray one or one past the
+	// exchange's timeout, costs an attempt as a hello does
+	if !l.limit.Done(ip, nonce) {
+		if !l.limit.Take(ip) {
+			l.throttled.Add(1)
+			return final, http.StatusTooManyRequests, "too many attempts", fmt.Errorf("%w: %s throttled", ErrRefused, ip)
+		}
+		l.limit.Release(ip)
+	}
 	s := l.server.Load()
 	if s == nil {
 		l.busy.Add(1)
-		return auth.ServerFinalMessage{}, errors.New("auth: scram server is not running")
+		return final, http.StatusServiceUnavailable, "authentication failed", errors.New("auth: scram server is not running")
 	}
 	var bind auth.ExchangeOption // nil, so unbound, behind proxies
 	if l.cb != nil {
 		bind = auth.WithChannelBinding(l.cb)
 	}
-	final, err := s.ProcessClientFinalMessage(nonce, step.Proof.ClientProof, bind)
+	final, err = s.ProcessClientFinalMessage(nonce, step.Proof.ClientProof, bind)
 	if err == nil {
 		err = p.bindCertificate(cs, final.Username)
 	}
 	if err != nil {
 		p.rejected.Add(1)
-		switch {
+		// Only a proof checked against its exchange tells what the client saw;
+		// a stray one may claim any binding
+		switch checked := errors.Is(err, auth.ErrInvalidCredentials); {
+		case !checked:
 		case step.Binding != "" && l.proxy != nil:
 			err = fmt.Errorf("%w; the client bound its proof to the proxy's certificate: behind trusted_proxies, log in unbound (lw auth token --unbound)", err)
 		case step.Binding == "" && l.cb != nil:
@@ -550,11 +562,11 @@ func (p *Policy) finish(ip netacl.Client, nonce string, step authStep, cs *tls.C
 			l.bindingMismatch.Add(1)
 			err = fmt.Errorf("%w; the client saw another server certificate: TLS interception or a terminating proxy", err)
 		}
-		return auth.ServerFinalMessage{}, fmt.Errorf("%w: %w", ErrRefused, err)
+		return auth.ServerFinalMessage{}, http.StatusUnauthorized, "authentication failed", fmt.Errorf("%w: %w", ErrRefused, err)
 	}
 	p.allowed.Add(1)
 	l.limit.Refund(ip)
-	return final, nil
+	return final, 0, "", nil
 }
 
 func (p *Policy) bindCertificate(cs *tls.ConnectionState, username string) error {
@@ -604,9 +616,9 @@ func (p *Policy) exchangeTCP(a *Admission, cs *tls.ConnectionState) (Identity, [
 		return Identity{}, nil, fmt.Errorf("%w: malformed proof", ErrRefused)
 	}
 	settled = true
-	final, err := p.finish(ip, challenge.FullNonce, step, cs)
+	final, _, public, err := p.finish(ip, challenge.FullNonce, step, cs)
 	if err != nil {
-		writeStep(a.conn, authStep{Error: "authentication failed"})
+		writeStep(a.conn, authStep{Error: public})
 		return Identity{}, nil, err
 	}
 	out, err := json.Marshal(authStep{Final: &final})
@@ -674,13 +686,9 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 		writeJSON(w, http.StatusOK, authStep{Challenge: &challenge})
 		return Identity{}, nil
 	case req.Proof != nil:
-		final, err := p.finish(ip, req.Proof.FullNonce, req.authStep, r.TLS)
+		final, status, public, err := p.finish(ip, req.Proof.FullNonce, req.authStep, r.TLS)
 		if err != nil {
-			status := http.StatusUnauthorized
-			if !errors.Is(err, ErrRefused) {
-				status = http.StatusServiceUnavailable
-			}
-			writeJSON(w, status, authStep{Error: "authentication failed"})
+			writeJSON(w, status, authStep{Error: public})
 			return Identity{}, err
 		}
 		// sid tells apart the logins of one user within a second, whose claims
