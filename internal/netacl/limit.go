@@ -44,7 +44,7 @@ type Table struct {
 
 type client struct {
 	bucket *tokenbucket.TokenBucket // nil without a rate
-	held   map[string]time.Time     // slots held by id, until their expiry
+	held   map[string]time.Time     // slots held by id, until their expiry; nil until a Hold, which only SCRAM makes
 	taken  int                      // slots taken and not yet held or released
 	seen   time.Time
 }
@@ -73,7 +73,7 @@ func (t *Table) Take(key string) bool {
 		if len(t.clients) >= maxClients {
 			return false
 		}
-		c = &client{held: make(map[string]time.Time)}
+		c = &client{}
 		if t.rate > 0 {
 			c.bucket = tokenbucket.New(t.burst, t.rate)
 		}
@@ -97,6 +97,9 @@ func (t *Table) Hold(key, id string, until time.Time) {
 	defer t.mu.Unlock()
 	if c := t.clients[key]; c != nil {
 		c.taken--
+		if c.held == nil {
+			c.held = make(map[string]time.Time)
+		}
 		c.held[id] = until
 	}
 }

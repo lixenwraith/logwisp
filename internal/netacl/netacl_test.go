@@ -522,6 +522,27 @@ func BenchmarkRefuse(b *testing.B) {
 	}
 }
 
+// BenchmarkTable is a client's entry made, used and dropped: a capped
+// connection's slot, taken at accept and released at close, and a rate
+// client's first request, made again whenever it idles past its refill
+func BenchmarkTable(b *testing.B) {
+	conns, rate := NewTable(0, 0, 4), NewTable(1, 1, 0)
+	for _, c := range []struct {
+		name string
+		take func()
+	}{
+		{"connection", func() { conns.Take("192.0.2.1"); conns.Release("192.0.2.1") }},
+		{"rate-client", func() { rate.Take("192.0.2.1"); delete(rate.clients, "192.0.2.1") }},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				c.take()
+			}
+		})
+	}
+}
+
 func parseHeader(s string) (client netip.AddrPort, found bool, rest string, err error) {
 	br := bufio.NewReaderSize(strings.NewReader(s), v1Max)
 	client, found, err = readHeader(br)
