@@ -596,6 +596,9 @@ func (a *app) drawBar(r ui.Region) {
 // paint draws the screen into cells, each rune one the font's terminal shows
 func (a *app) paint(cells []terminal.Cell, w, h int) {
 	a.draw(ui.NewRegion(cells, w, 0, 0, w, h))
+	if a.font.folds == nil && !a.font.ascii {
+		return // the Unicode font's terminal shows every rune
+	}
 	for i, c := range cells {
 		cells[i].Rune = a.font.fold(c.Rune)
 	}
