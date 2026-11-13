@@ -185,7 +185,8 @@ func (fs *FileSink) Stop() {
 	fs.logger.Info("msg", "File sink stopped",
 		"component", "file_sink",
 		"instance_id", fs.id,
-		"total_processed", fs.totalProcessed.Load())
+		"total_processed", fs.totalProcessed.Load(),
+		"dropped_records", fs.writer.Dropped())
 }
 
 // GetStats returns the sink's statistics
@@ -197,8 +198,9 @@ func (fs *FileSink) GetStats() sink.SinkStats {
 		StartTime:      fs.startTime,
 		LastProcessed:  fs.lastProcessed.Load(),
 		Details: map[string]any{
-			"directory": fs.config.Directory,
-			"name":      fs.config.Name,
+			"directory":       fs.config.Directory,
+			"name":            fs.config.Name,
+			"dropped_records": fs.writer.Dropped(),
 		},
 	}
 }

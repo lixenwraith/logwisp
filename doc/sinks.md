@@ -125,13 +125,16 @@ Options, each as type and default:
   deleted; `0` keeps them.
 - `buffer_size` (int, `1000`): sink input queue depth, and the depth of the
   internal writer's queue, which drops when full. A record there holds the
-  entries queued together, up to 4 KiB of them. That drop is reported
-  nowhere, and `total_processed` still counts the entries. At most `1048576`.
+  entries queued together, up to 4 KiB of them. A record dropped there, or
+  refused by the disk, counts in `dropped_records`, and `total_processed`
+  still counts its entries. At most `1048576`.
 - `flush_interval_ms` (int, `100`): forced flush interval.
 
 The sink drives an internal writer configured for raw output with timestamps and
 levels disabled, so what lands on disk is exactly the formatted payload. On stop
 it hands the writer what is queued before closing the file.
+
+**Statistics**: `directory`, `name`, `dropped_records`.
 
 ---
 

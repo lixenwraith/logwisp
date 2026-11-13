@@ -65,3 +65,25 @@ func TestQueuedEntriesReachTheFileWholeAndInOrder(t *testing.T) {
 		t.Fatalf("counted %d entries processed, want %d", processed, n)
 	}
 }
+
+// A record the writer loses is counted: here a disk that never has the space
+// kept free refuses every one, and each batch of the queued entries is a record.
+func TestRecordsTheWriterLosesAreCounted(t *testing.T) {
+	const n, size = 1000, 100
+	dir := t.TempDir()
+	fs := newSink(t, dir, map[string]any{"buffer_size": int64(n), "min_disk_free_mb": int64(1) << 40})
+	for range n {
+		fs.Input() <- core.TransportEvent{Payload: append(bytes.Repeat([]byte{'x'}, size-1), '\n')}
+	}
+	if err := fs.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fs.Stop()
+	records := uint64(n / (core.SinkWriteBatchBytes / size))
+	if dropped, _ := fs.GetStats().Details["dropped_records"].(uint64); dropped < records {
+		t.Fatalf("counted %d records dropped, want at least the %d handed to a full disk", dropped, records)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "out.log")); len(got) > 0 {
+		t.Fatalf("a full disk took %d bytes", len(got))
+	}
+}
