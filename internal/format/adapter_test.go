@@ -2,6 +2,9 @@ package format
 
 import (
 	"bytes"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,4 +50,30 @@ func TestLevelIsWrittenAsTheLevelItsWordNames(t *testing.T) {
 			t.Errorf("level %q: %s", level, out)
 		}
 	}
+}
+
+// A pipeline's sources share its formatter and format at once: each record is
+// its own entry's, whole, however the calls interleave
+func TestSourcesFormatAtOnce(t *testing.T) {
+	f, err := NewFormatter(&config.FormatConfig{Type: "txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := func(g, i int) core.LogEntry {
+		return core.LogEntry{Time: time.Unix(int64(i), 0), Source: "s", Level: "INFO",
+			Message: strings.Repeat(strconv.Itoa(g), 1+i%300)}
+	}
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Go(func() {
+			for i := range 2000 {
+				got, _ := f.Format(entry(g, i))
+				if want, _ := f.Format(entry(g, i)); !bytes.Equal(got, want) || !bytes.Contains(got, []byte(entry(g, i).Message+"\n")) {
+					t.Errorf("source %d entry %d: %q", g, i, got)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
 }
