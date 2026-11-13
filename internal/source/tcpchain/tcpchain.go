@@ -232,25 +232,44 @@ func (s *TCPChainSource) GetStats() source.SourceStats {
 // acceptLoop accepts upstream connections until listener close
 func (s *TCPChainSource) acceptLoop() {
 	defer s.wg.Done()
+	var delay time.Duration
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || s.ctx.Err() != nil {
 				return
 			}
+			// EMFILE and the like persist: an immediate retry spins
+			delay = min(max(2*delay, 5*time.Millisecond), time.Second)
 			s.logger.Warn("msg", "Accept error",
 				"component", "tcp_chain_source",
-				"error", err)
+				"error", err,
+				"retry_in", delay)
+			select {
+			case <-time.After(delay):
+			case <-s.ctx.Done():
+				return
+			}
 			continue
 		}
+		delay = 0
 
-		if s.config.MaxConnections > 0 && s.activeConns.Load() >= s.config.MaxConnections {
+		// The slot is taken before the check, so a burst cannot pass it while
+		// no handleConn has run
+		if n := s.activeConns.Add(1); s.config.MaxConnections > 0 && n > s.config.MaxConnections {
+			s.activeConns.Add(-1)
 			s.rejectedConns.Add(1)
 			conn.Close()
 			continue
 		}
 
 		s.mu.Lock()
+		if s.ctx.Err() != nil { // Stop has swept conns: this one would outlive it
+			s.mu.Unlock()
+			s.activeConns.Add(-1)
+			conn.Close()
+			return
+		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
 
@@ -263,7 +282,6 @@ func (s *TCPChainSource) acceptLoop() {
 func (s *TCPChainSource) handleConn(conn net.Conn) {
 	defer s.wg.Done()
 	remote := conn.RemoteAddr().String()
-	s.activeConns.Add(1)
 
 	var sessID string
 	defer func() {
