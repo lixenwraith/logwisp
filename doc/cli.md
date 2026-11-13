@@ -544,8 +544,13 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     docker, journald, ECS, GCP, logfmt, or text after an RFC3339 stamp and
     a level name. An entry from a chain peer has its node before the tag,
     `node/tag`, as formats write it, in the detail and an export too: the
-    node `node_binding` bound, which the line itself cannot change. A narrow screen drops columns; a rune a terminal would act
-    on or draw wider than a cell shows as a placeholder.
+    node `node_binding` bound, which the line itself cannot change. A narrow
+    screen drops columns; a rune a terminal would act on or draw wider than
+    a cell shows as a placeholder.
+  - A nested object's members are fields at dotted keys, eight levels deep
+    and while the key is at most 64 bytes; deeper, or under a longer key,
+    the object is one field. A row keeps 32 KiB of field keys and values, and
+    its layout ends `fields cut` when it holds fewer than the entry had.
   - Keys: arrows or `jk` move (up pauses, down onto the newest follows),
     PgUp/PgDn; `g` or Home the oldest, `G`, End or `f` the newest; Enter the
     row's detail, `J`/`K` scroll it; `i` the row full screen, scrolled by

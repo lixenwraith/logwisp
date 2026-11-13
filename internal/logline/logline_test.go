@@ -108,9 +108,12 @@ func TestReadFindsTheRolesWhereTheirWriterPutsThem(t *testing.T) {
 		// a line the tap clipped keeps the roles before the cut
 		{arrived(`{"time":"2026-10-10T12:00:00Z","level":"INFO","msg":"clipped","big":"aaaa`),
 			`json, cut short, message in msg | 2026-10-10T12:00:00Z=2026-10-10T12:00:00Z | INFO | app.log | "clipped" | `},
-		// nesting past nestMax stays one value, bounding the paths
+		// nesting past nestMax, or under a key past pathMax, stays one value,
+		// bounding the paths
 		{arrived(`{"msg":"deep","a":{"b":{"c":{"d":{"e":{"f":{"g":{"h":{"i":{"j":1}}}}}}}}}}`),
 			`json, message in msg | =- |  | app.log | "deep" | a.b.c.d.e.f.g.h.i="{\"j\":1}"`},
+		{arrived(`{"msg":"long","` + strings.Repeat("k", 65) + `":{"b":1}}`),
+			`json, message in msg | =- |  | app.log | "long" | ` + strings.Repeat("k", 65) + `="{\"b\":1}"`},
 		{arrived(`2026-10-10T12:00:00+02:00 ERROR db: connection refused`),
 			`text, stamped, level word | 2026-10-10T12:00:00+02:00=2026-10-10T10:00:00Z | ERROR | app.log | "db: connection refused" | `},
 		{arrived(`2026-10-10T12:00:00.5 a stamp without a zone is UTC`),

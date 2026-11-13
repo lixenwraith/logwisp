@@ -226,11 +226,17 @@ func (v *view) take(t core.Tapped) int {
 // and its size is what it holds; own returns those bytes.
 func (r *row) own() int {
 	l := &r.Line
-	roles := [...]*string{&l.Stamp, &l.Level, &l.Tag, &l.Message, &l.Layout}
+	// Fields past what the tap keeps of a message and its fields are cut:
+	// flattened, a key repeats in every path under it
 	n := 0
-	for _, f := range l.Fields {
+	for i, f := range l.Fields {
+		if n+len(f.Key)+len(f.Value) > 2*core.TapEntryBytes {
+			l.Fields, l.Layout = l.Fields[:i], l.Layout+", fields cut"
+			break
+		}
 		n += len(f.Key) + len(f.Value) + 2 // '=' and a space at most
 	}
+	roles := [...]*string{&l.Stamp, &l.Level, &l.Tag, &l.Message, &l.Layout}
 	for _, s := range roles {
 		n += len(*s)
 	}

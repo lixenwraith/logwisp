@@ -60,8 +60,12 @@ var (
 	discriminators = []string{"msg", "type", "ev", "message"}
 )
 
-// nestMax bounds the depth flattened into dotted paths, and so their length
-const nestMax = 8
+// nestMax and pathMax bound the dotted paths: an object deeper, or under a
+// longer key, stays one leaf, so a line's keys cost a bounded multiple of it
+const (
+	nestMax = 8
+	pathMax = 64
+)
 
 // member is one leaf of a record; no role takes the envelope's
 type member struct {
@@ -85,7 +89,7 @@ func Read(e core.LogEntry) Line {
 	}
 	if f := strings.TrimSpace(string(e.Fields)); f != "" {
 		_, kind, _ := scanValue(f, 0)
-		ms, msg, at := envelope(nil, "fields", f, kind)
+		ms, msg, at := envelope(make([]member, 0, 16), "fields", f, kind)
 		if l.Message == "" && msg >= 0 {
 			ms[msg].used = true
 			l.Message, l.Layout = unquote(ms[msg].val, kStr), "entry, message in "+at
@@ -106,7 +110,7 @@ func Read(e core.LogEntry) Line {
 // message, at where s's own message is. The members before a malformed part
 // count, so a clipped line still shows its roles; ok is false without any.
 func record(s, in string) (l Line, at string, ok bool) {
-	var top []member
+	top := make([]member, 0, 16)
 	whole := eachField(s, 0, func(k, v string, kind byte) bool {
 		top = append(top, member{key: k, val: v, kind: kind})
 		return true
@@ -122,7 +126,7 @@ func record(s, in string) (l Line, at string, ok bool) {
 			}
 		}
 	}
-	var ms []member
+	ms := make([]member, 0, 32)
 	msg, envAt := -1, ""
 	for i, m := range top {
 		if i == env {
@@ -136,7 +140,7 @@ func record(s, in string) (l Line, at string, ok bool) {
 		ms[msg].used = true
 		l.Message, at = unquote(ms[msg].val, kStr), envAt
 	}
-	l.Fields = appendFields(nil, ms)
+	l.Fields = appendFields(make([]Field, 0, len(ms)), ms)
 
 	l.Layout = "json"
 	if in != "" {
@@ -163,7 +167,7 @@ func text(s string) Line {
 			}
 		}
 	}
-	var ms []member
+	ms := make([]member, 0, 16)
 	named := false
 	pairs := eachPair(l.Message, func(k, v string) {
 		ms = append(ms, member{key: k, val: v, kind: kText})
@@ -175,7 +179,7 @@ func text(s string) Line {
 	}
 	l.Message = ""
 	at := l.take(ms)
-	l.Fields = appendFields(nil, ms)
+	l.Fields = appendFields(make([]Field, 0, len(ms)), ms)
 	l.Layout = "logfmt" + layout + messageIn(at)
 	return l
 }
@@ -268,7 +272,7 @@ func envelope(ms []member, name, v string, kind byte) (_ []member, msg int, at s
 // leaves appends v under key, an object as one leaf per member at its dotted
 // path, so roles and readers see nested keys as if written flat
 func leaves(ms []member, key, v string, kind byte, env bool, depth int) []member {
-	if kind == kObj && depth < nestMax {
+	if kind == kObj && depth < nestMax && len(key) <= pathMax {
 		n := len(ms)
 		if eachField(v, 0, func(k, fv string, fk byte) bool {
 			if key != "" {

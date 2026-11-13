@@ -196,6 +196,28 @@ func TestARowCountsAllItHolds(t *testing.T) {
 	}
 }
 
+// A row keeps its fields up to twice what the tap keeps of an entry's text:
+// an object flattened under a long key repeats the key in every path, so its
+// fields are cut there, and the layout says so
+func TestARowsFieldsStopAtWhatTheTapKeeps(t *testing.T) {
+	var msg strings.Builder
+	msg.WriteString(`{"msg":"x","` + strings.Repeat("k", 60) + `":{`)
+	for i := 0; msg.Len() < core.TapEntryBytes-16; i++ {
+		fmt.Fprintf(&msg, `"%d":1,`, i)
+	}
+	msg.WriteString(`"end":1}}`)
+	var v view
+	v.take(tapped("p", "null", "", 0, msg.String()))
+	r := v.rows[len(v.rows)-1]
+	n := 0
+	for _, f := range r.Fields {
+		n += len(f.Key) + len(f.Value)
+	}
+	if n > 2*core.TapEntryBytes || !strings.HasSuffix(r.Layout, ", fields cut") {
+		t.Fatalf("kept %d bytes in %d fields, layout %q", n, len(r.Fields), r.Layout)
+	}
+}
+
 // A row's tag leads with the node its entry came from, as formats write it,
 // in the list, the detail and an export: a chained line's own tag cannot pass
 // it off as another node's, or as lw's
