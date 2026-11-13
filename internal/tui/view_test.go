@@ -227,7 +227,9 @@ func TestARowsTagLeadsWithItsNode(t *testing.T) {
 	chained.Event.Entry.Node = "edge-a"
 	v.take(chained)
 	v.take(tapped("p", "in", "", 0, "plain"))
-	export := string(jsonLines(v.rows))
+	var b strings.Builder
+	jsonLines(v.rows).WriteTo(&b)
+	export := b.String()
 	if v.rows[0].Tag != "edge-a/edge-b/payments" || v.rows[1].Tag != "in" || !strings.Contains(export, `"source":"edge-a/edge-b/payments"`) {
 		t.Fatalf("tags %q and %q, export %s", v.rows[0].Tag, v.rows[1].Tag, export)
 	}
@@ -902,7 +904,9 @@ func TestXExportsThePinsOrTheRowsShown(t *testing.T) {
 func TestAnExportHoldsNoRuneATerminalActsOn(t *testing.T) {
 	var v view
 	v.take(tapped("p", "null", "", 0, "{\"msg\":\"pay \u009b2J\u009d52;c;aGk=\u009c ‮evil‬\x7f\",\"k\":\"⁦v\u0085\"}"))
-	out := strings.TrimSuffix(string(jsonLines(v.rows)), "\n")
+	var b strings.Builder
+	jsonLines(v.rows).WriteTo(&b)
+	out := strings.TrimSuffix(b.String(), "\n")
 	if i := strings.IndexAny(out, "\u009b\u009c\u009d\u0085\x7f‬‮⁦"); i >= 0 {
 		t.Fatalf("raw at %d: %q", i, out)
 	}
@@ -910,6 +914,30 @@ func TestAnExportHoldsNoRuneATerminalActsOn(t *testing.T) {
 	if back.Message != was.Message || !slices.Equal(back.Fields, was.Fields) {
 		t.Fatalf("%s\nreads back %+v\nwas        %+v", out, back, was)
 	}
+}
+
+// An export reaches its file in pieces of about 64 KiB, so a full view is
+// never held twice
+func TestAnExportReachesItsFileInPieces(t *testing.T) {
+	var v view
+	for range 64 {
+		v.take(tapped("p", "null", "x", 0, strings.Repeat("<a&b> ", 1000)))
+	}
+	var w pieces
+	n, err := jsonLines(v.rows).WriteTo(&w)
+	if err != nil || n != w.n || len(w.sizes) < 5 || slices.Max(w.sizes) > 72<<10 {
+		t.Fatalf("%d of %d bytes in pieces %v: %v", n, w.n, w.sizes, err)
+	}
+}
+
+type pieces struct {
+	sizes []int
+	n     int64
+}
+
+func (w *pieces) Write(p []byte) (int, error) {
+	w.sizes, w.n = append(w.sizes, len(p)), w.n+int64(len(p))
+	return len(p), nil
 }
 
 // A sink's drops show on its node while it runs

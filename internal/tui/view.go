@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -537,27 +538,48 @@ func (a *app) export() {
 // they were read: the time, the tag as source, level, message and the fields
 // in their order, each value a string. json leaves DEL, C1 and bidi controls
 // raw, which a terminal showing the file would act on: they are \u escapes.
-func jsonLines(rows []row) []byte {
-	var b bytes.Buffer
+type jsonLines []row
+
+// WriteTo hands w the lines 64 KiB at a time, so a full view is never held
+// twice. < > & stay as they are: a JSONL file is no HTML page.
+func (rows jsonLines) WriteTo(w io.Writer) (n int64, err error) {
+	var b, q bytes.Buffer
+	enc := json.NewEncoder(&q)
+	enc.SetEscapeHTML(false)
 	put := func(v string) {
-		q, _ := json.Marshal(v) // invalid UTF-8 as U+FFFD
-		for len(q) > 0 {
-			r, n := utf8.DecodeRune(q)
-			if logline.Control(r, n) {
-				fmt.Fprintf(&b, `\u%04x`, r)
-			} else {
-				b.Write(q[:n])
+		q.Reset()
+		enc.Encode(v) // a string never fails; invalid UTF-8 as U+FFFD
+		p, start := q.Bytes(), 0
+		p = p[:len(p)-1] // less Encode's newline
+		for i := 0; i < len(p); {
+			if p[i] < 0x7f { // json escaped the controls under DEL
+				i++
+				continue
 			}
-			q = q[n:]
+			r, size := utf8.DecodeRune(p[i:])
+			if logline.Control(r, size) {
+				b.Write(p[start:i])
+				fmt.Fprintf(&b, `\u%04x`, r)
+				start = i + size
+			}
+			i += size
 		}
+		b.Write(p[start:])
+	}
+	flush := func() error {
+		m, err := w.Write(b.Bytes())
+		n += int64(m)
+		b.Reset()
+		return err
 	}
 	for i := range rows {
 		r := &rows[i]
-		b.WriteString(`{"time":`)
-		put(r.at.Format(time.RFC3339Nano))
-		for _, kv := range [][2]string{{"source", r.Tag}, {"level", r.Level}} {
+		b.WriteString(`{"time":"`) // RFC 3339 needs no escape
+		b.Write(r.at.AppendFormat(b.AvailableBuffer(), time.RFC3339Nano))
+		b.WriteByte('"')
+		for _, kv := range [][2]string{{`,"source":`, r.Tag}, {`,"level":`, r.Level}} {
 			if kv[1] != "" {
-				b.WriteString(`,"` + kv[0] + `":`)
+				b.WriteString(kv[0])
 				put(kv[1])
 			}
 		}
@@ -576,8 +598,14 @@ func jsonLines(rows []row) []byte {
 			b.WriteByte('}')
 		}
 		b.WriteString("}\n")
+		if b.Len() >= 64<<10 {
+			if err := flush(); err != nil {
+				return n, err
+			}
+		}
 	}
-	return b.Bytes()
+	err = flush() // before n is read: a return's order of the two is open
+	return n, err
 }
 
 // drain reads taps into the view until they are empty or it read budget

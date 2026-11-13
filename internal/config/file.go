@@ -11,12 +11,12 @@ import (
 
 // WriteNew writes data to a file it creates, mode as given: it never replaces
 // a file, and removes what it created when the write fails
-func WriteNew(path string, data []byte, mode os.FileMode) error {
+func WriteNew(path string, data io.WriterTo, mode os.FileMode) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(data)
+	_, err = data.WriteTo(f)
 	if err == nil {
 		err = f.Sync()
 	}

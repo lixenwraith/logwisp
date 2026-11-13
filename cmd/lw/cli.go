@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 	"flag"
@@ -331,7 +332,7 @@ func defineConfigInit(flags *flag.FlagSet) func(stdout, stderr io.Writer) error 
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		if err := config.WriteNew(path, shipped.Sample, 0o644); errors.Is(err, fs.ErrExist) {
+		if err := config.WriteNew(path, bytes.NewReader(shipped.Sample), 0o644); errors.Is(err, fs.ErrExist) {
 			if fi, err := os.Stat(path); err == nil && fi.IsDir() {
 				return fmt.Errorf("%s is a directory: name the file, as in %s", path, filepath.Join(path, "logwisp.toml"))
 			}
