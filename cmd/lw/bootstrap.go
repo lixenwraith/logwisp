@@ -153,8 +153,8 @@ func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
 	logCfg := log.DefaultConfig()
 
-	if cfg.Quiet {
-		logCfg.Level = 255 // A level that disables all output
+	if cfg.Quiet || cfg.Logging.Output == "none" {
+		logCfg.Level = 255 // A level that disables all output, so no record is built
 		logCfg.EnableFile = false
 		logCfg.EnableConsole = false
 		return logger.ApplyConfig(logCfg)
@@ -174,9 +174,6 @@ func initializeLogger(cfg *config.Config) error {
 	}
 
 	switch cfg.Logging.Output {
-	case "none":
-		logCfg.EnableFile = false
-		logCfg.EnableConsole = false
 	case "stdout":
 		logCfg.EnableFile = false
 		logCfg.EnableConsole = true

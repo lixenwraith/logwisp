@@ -43,7 +43,8 @@ Top-level keys, each as type and default:
   diagnostics; pipeline output still flows. It overrides every logging
   setting.
 - `status_reporter` (bool, `true` with a configuration file, `false` without):
-  a status report every 30 s, shown only at `logging.level = "debug"`.
+  a status report every 30 s, gathered and shown only at
+  `logging.level = "debug"`.
 - `auto_reload` (bool, `false`): watch the config file and reload pipelines on
   change.
 - `color` (string, `"auto"`): stamps, levels, sources and fields in color on

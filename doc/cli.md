@@ -92,7 +92,8 @@ pipelines have [their own flags](#pipelines):
 - `-q`, `--quiet`: silence lw's own log and notices, default `false`;
   pipeline output still flows
 - `--status_reporter=BOOL`: pipeline statistics every 30 s, logged at
-  `debug`, default `true` with a configuration file, `false` without
+  `debug` and gathered only then, default `true` with a configuration file,
+  `false` without
 - `--auto_reload=BOOL`: reload when the configuration file changes, default
   `false`
 - `-V`, `--version`: print the version and exit
@@ -595,7 +596,8 @@ lw auth stream      --addr HOST:PORT -u NAME [--password-file FILE] [TLS flags]
 - `token`: logs in to an `http` sink or `http_chain` source and prints a
   bearer token
 - `stream`: logs in to a `tcp` sink and copies its stream to stdout until
-  interrupted
+  interrupted; on a terminal, control characters are escaped as by the
+  console sink's `escape = "auto"`
 
 `lw auth COMMAND -h` lists a command's flags. The exit status is `0` on
 success, `1` on failure and `2` on a usage error.
@@ -613,7 +615,8 @@ cannot replace a working password; `--generate` always generates, overwriting
 Both file commands rewrite atomically (a temporary file in the same directory
 as the file, or a symlink's target, then a rename), create files `0600`, keep an
 existing file's mode and owner, and refuse to write anything the daemon would
-not load. Comments above a user's `[[users]]` header stay with that user, and
+not load, warning when a file it wrote is readable by all users. Comments
+above a user's `[[users]]` header stay with that user, and
 those outside the users' tables stay where they are; a comment inside a user's
 table is dropped, and a new user goes last. A change that cannot keep the
 owner fails: run it as root or as the owner. A symlink to a missing file is
