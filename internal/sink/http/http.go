@@ -36,7 +36,11 @@ func init() {
 	}
 }
 
-const HTTPReadHeaderTimeout = 10 * time.Second
+// A request, headers and body, is read within readTimeout, which also bounds
+// the TLS handshake; a connection idle between requests closes after
+// idleTimeout, past the 60 s upstream keep-alive of common proxies so that
+// they close first. Vars so tests can shorten them.
+var readTimeout, idleTimeout = 10 * time.Second, 2 * time.Minute
 
 // HTTPSink streams log entries via Server-Sent Events
 // Server.WriteTimeout is deliberately unset (it would terminate long-lived SSE streams)
@@ -240,13 +244,13 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 	}
 
 	h.server = &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: HTTPReadHeaderTimeout,
-		ConnContext:       netacl.ConnContext,
-		// WriteTimeout unset by design: SSE responses are long-lived.
-		// net/http bounds the TLS handshake by min(ReadHeaderTimeout,
-		// ReadTimeout, WriteTimeout), so ReadHeaderTimeout covers it here.
-		ErrorLog: tlsx.HTTPErrorLog(h.logger, "http_sink"),
+		Handler: handler,
+		// net/http clears the read deadline once a body-less request reaches
+		// its handler, so streams outlive ReadTimeout; WriteTimeout would not.
+		ReadTimeout: readTimeout,
+		IdleTimeout: idleTimeout,
+		ConnContext: netacl.ConnContext,
+		ErrorLog:    tlsx.HTTPErrorLog(h.logger, "http_sink"),
 	}
 	h.startTime = time.Now()
 

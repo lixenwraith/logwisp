@@ -94,7 +94,10 @@ Fixed, non-configurable bounds:
 
 - TLS handshake: 10 s, on all TLS listeners and dialers; on the `http_chain`
   source, `read_timeout_ms` when shorter.
-- HTTP read-header timeout: 10 s, on the `http` sink and `http_chain` source.
+- HTTP request read: 10 s, headers and body on the `http` sink, headers on the
+  `http_chain` source.
+- HTTP idle keep-alive: 2 min on the `http` sink, past the 60 s of common
+  proxies so that they close first.
 - HTTP server shutdown grace: 2 s on the `http_chain` source and the `http`
   sink; on the `http` sink, `write_timeout_ms` instead when set below 2 s.
 - Single entry line: at most 1 MiB, on chain listeners.

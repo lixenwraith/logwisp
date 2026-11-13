@@ -558,6 +558,54 @@ func TestStreamBurstIsAdmittedUpToMaxConnections(t *testing.T) {
 	}
 }
 
+// A connection that never sends the body it declared, or idles after a
+// response, is closed; a stream, whose request is read, outlives both bounds
+func TestSlowAndIdleConnectionsCloseButStreamsDoNot(t *testing.T) {
+	defer func(r, i time.Duration) { readTimeout, idleTimeout = r, i }(readTimeout, idleTimeout)
+	readTimeout, idleTimeout = 200*time.Millisecond, 300*time.Millisecond
+	h, _ := newTestHTTPSink(t, nil)
+	_, baseURL := serveTestHTTPSink(t, h)
+	open := func(request string) *bufio.Reader {
+		conn, err := net.Dial("tcp", strings.TrimPrefix(baseURL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		conn.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := io.WriteString(conn, request+"Host: x\r\n\r\n"); err != nil {
+			t.Fatal(err)
+		}
+		return bufio.NewReader(conn)
+	}
+	stream := open("GET /stream HTTP/1.1\r\n")
+	for name, request := range map[string]string{
+		"declared body never sent": "POST /auth HTTP/1.1\r\nContent-Length: 64\r\n",
+		"idle after a response":    "GET /status HTTP/1.1\r\n",
+	} {
+		conn := open(request)
+		resp, err := http.ReadResponse(conn, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if _, err := io.Copy(io.Discard, conn); err != nil {
+			t.Fatalf("%s: connection still open: %v", name, err)
+		}
+	}
+	resp, err := http.ReadResponse(stream, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Input() <- core.TransportEvent{Payload: []byte("past both bounds\n")}
+	for scanner := bufio.NewScanner(resp.Body); scanner.Scan(); {
+		if scanner.Text() == "data: past both bounds" {
+			return
+		}
+	}
+	t.Fatal("stream ended before the entry sent past both bounds")
+}
+
 // A refused request's path is logged as it was sent, escaped: decoded, a %0a
 // would end lw's log record and start a forged one, and a %1b drive the
 // terminal showing it
