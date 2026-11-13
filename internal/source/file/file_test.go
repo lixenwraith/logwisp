@@ -3,6 +3,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -602,7 +603,8 @@ func TestHoleIsWalkedABoundedPartACheck(t *testing.T) {
 }
 
 // A JSON line becomes an entry when it is an object of the envelope's keys
-// alone, time, level, msg and fields, named exactly; any other line is text.
+// alone, time, level, msg and fields, each named exactly and once; any other
+// line is text.
 // A time that is not RFC 3339, or is zero, gives way to the time read: a zero
 // time marks an event without its entry.
 func TestJSONLineIsAnEntryOnlyWhenNothingIsLost(t *testing.T) {
@@ -617,6 +619,7 @@ func TestJSONLineIsAnEntryOnlyWhenNothingIsLost(t *testing.T) {
 		{` {"msg":"m"}`, nil},
 		{`{"msg":"m","user":"x"}`, nil},
 		{`{"MSG":"m"}`, nil},
+		{`{"msg":"a","msg":"b"}`, nil},
 		{`{}`, nil},
 		{`{"msg":"m"} {}`, nil},
 		{`{"level":5,"msg":"m"}`, nil},
@@ -636,4 +639,92 @@ func TestJSONLineIsAnEntryOnlyWhenNothingIsLost(t *testing.T) {
 			t.Errorf("%s:\n got %+v\nwant %+v", c.line, got, *c.want)
 		}
 	}
+}
+
+// The envelope's keys are read by hand before any decode, so decoding the
+// whole line into a map, as parseJSON did, is the reference: the same lines
+// become the same entries, but for a key named twice, which now makes text
+func FuzzJSONLineReadsAsTheMapDecodeDid(f *testing.F) {
+	for _, line := range []string{
+		`{"time":"2026-11-13T10:00:00.123Z","level":"INFO","msg":"m","fields":{"a":[1,{"b":"}"}]}}`,
+		`{"level":"info","ts":1731492000.123,"caller":"main.go:42","msg":"m"}`,
+		`{"msg":"a\"b\\","fields":null}`, `{"fields":1}`, `{"fields":[]}`, `{"level":null}`, `{"time":{"a":1}}`,
+		`{"m\u0073g":"x"}`, `{"msg":"x"}  `, `{"msg":"x"} {}`, `{"msg":"\ud800"}`, "{\"msg\":\"\xff\"}",
+		`{"fields":1e999}`, `{"msg":"a","msg":"b"}`, `{ "msg" : "x" , "level" : "W" }`, `{"msg":}`, `{"msg"`,
+	} {
+		f.Add(line)
+	}
+	w := &fileWatcher{directory: "/var/log/app"}
+	f.Fuzz(func(t *testing.T, line string) {
+		got, ok := w.parseJSON(line)
+		want, wantOK := mapEnvelope(line)
+		wantOK = wantOK && !repeatsAKey(line)
+		switch {
+		case ok != wantOK:
+			t.Fatalf("%q: an entry %v, by the map decode %v", line, ok, wantOK)
+		case !ok:
+		case got.Level != want.Level || got.Message != want.Message || string(got.Fields) != string(want.Fields),
+			!want.Time.IsZero() && !got.Time.Equal(want.Time), want.Time.IsZero() && time.Since(got.Time) > time.Minute:
+			t.Fatalf("%q:\n got %+v\nwant %+v", line, got, want)
+		}
+	})
+}
+
+// mapEnvelope is parseJSON as it decoded the whole line into a map, but for
+// the time read, which it leaves zero
+func mapEnvelope(line string) (core.LogEntry, bool) {
+	if len(line) == 0 || line[0] != '{' {
+		return core.LogEntry{}, false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &obj); err != nil || len(obj) == 0 {
+		return core.LogEntry{}, false
+	}
+	var entry core.LogEntry
+	for key, val := range obj {
+		var err error
+		switch key {
+		case "time":
+			var ts string
+			if json.Unmarshal(val, &ts) == nil {
+				if t, terr := time.Parse(time.RFC3339Nano, ts); terr == nil && !t.IsZero() {
+					entry.Time = t
+				}
+			}
+		case "level":
+			err = json.Unmarshal(val, &entry.Level)
+		case "msg":
+			err = json.Unmarshal(val, &entry.Message)
+		case "fields":
+			entry.Fields = val
+		default:
+			return core.LogEntry{}, false
+		}
+		if err != nil {
+			return core.LogEntry{}, false
+		}
+	}
+	return entry, true
+}
+
+// repeatsAKey reports whether a JSON object names a top-level key twice
+func repeatsAKey(line string) bool {
+	dec := json.NewDecoder(strings.NewReader(line))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, isKey := tok.(string)
+		if err != nil || !isKey || seen[key] {
+			return err == nil && isKey
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return false
+		}
+	}
+	return false
 }

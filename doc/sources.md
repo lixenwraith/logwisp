@@ -100,9 +100,11 @@ Options, each as type and default:
   unfinished read left behind, never the whole archive a second time.
 - A line is parsed as JSON only when it is a non-empty object whose top-level
   keys are all drawn from `time`, `level`, `msg` and `fields` (the four an
-  entry can carry), with any `level` or `msg` a string. `time` is read as
-  RFC3339Nano; the read time stands in when it is missing or does not parse.
-  Any other line is kept whole as text, so nothing in it is dropped. `level` is
+  entry can carry), each named once, with any `level` or `msg` a string.
+  `time` is read as RFC3339Nano; the read time stands in when it is missing,
+  zero or does not parse. Any other line is kept whole as text, so nothing in
+  it is dropped. The keys are read before the line is decoded, so a zap,
+  slog or logrus line costs a scan of its keys only. `level` is
   kept as written (a filter sees `Error` or `fatal` as is), and a line without
   `level` has none; only text lines get the inference below.
 - A text line's level is its first whole word, in any case, naming one:

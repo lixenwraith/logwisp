@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -505,44 +507,129 @@ func (w *fileWatcher) parseLine(line string) core.LogEntry {
 }
 
 // parseJSON decodes a line into the entry envelope. A top-level key LogEntry
-// cannot carry refuses the whole line, so a richer record reaches the pipeline
-// as text rather than silently reduced to the four keys kept here.
+// cannot carry, or one named twice, refuses the whole line, so a richer record
+// reaches the pipeline as text rather than silently reduced to the four keys
+// kept here. The keys are read first: zap, slog and logrus lines carry others
+// and cost no decode.
 func (w *fileWatcher) parseJSON(line string) (core.LogEntry, bool) {
+	if !envelopeKeys(line) {
+		return core.LogEntry{}, false
+	}
+	var env struct {
+		Time   json.RawMessage `json:"time"`
+		Level  string          `json:"level"`
+		Msg    string          `json:"msg"`
+		Fields json.RawMessage `json:"fields"`
+	}
+	if json.Unmarshal([]byte(line), &env) != nil {
+		return core.LogEntry{}, false
+	}
+	entry := core.LogEntry{Time: time.Now(), Source: filepath.Base(w.directory), Level: env.Level, Message: env.Msg, Fields: env.Fields}
+	var ts string
+	if env.Time != nil && json.Unmarshal(env.Time, &ts) == nil {
+		// A zero time would mark an event without its entry, which a chain
+		// sink rebuilds from the payload
+		if t, err := time.Parse(time.RFC3339Nano, ts); err == nil && !t.IsZero() {
+			entry.Time = t
+		}
+	}
+	return entry, true
+}
+
+// envelopeNames are the keys parseJSON keeps
+var envelopeNames = [...]string{"time", "level", "msg", "fields"}
+
+// envelopeKeys reports whether line is an object of envelopeNames alone, each
+// at most once. It reads valid JSON exactly; whatever else it passes, the
+// decode refuses.
+func envelopeKeys(line string) bool {
 	if len(line) == 0 || line[0] != '{' {
-		return core.LogEntry{}, false
+		return false
 	}
-
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(line), &obj); err != nil || len(obj) == 0 {
-		return core.LogEntry{}, false
+	var seen [len(envelopeNames)]bool
+	for i := 1; ; i++ { // i++ steps past each comma
+		if i = jsonSpace(line, i); i >= len(line) || line[i] != '"' {
+			return false // {} too, an envelope of nothing
+		}
+		end := jsonValueEnd(line, i)
+		if end < 0 {
+			return false
+		}
+		name := line[i+1 : end-1]
+		if strings.IndexByte(name, '\\') >= 0 {
+			var unquoted string
+			if json.Unmarshal([]byte(line[i:end]), &unquoted) != nil {
+				return false
+			}
+			name = unquoted
+		}
+		k := slices.Index(envelopeNames[:], name)
+		if k < 0 || seen[k] {
+			return false
+		}
+		seen[k] = true
+		if i = jsonSpace(line, end); i >= len(line) || line[i] != ':' {
+			return false
+		}
+		if i = jsonValueEnd(line, jsonSpace(line, i+1)); i < 0 {
+			return false
+		}
+		if i = jsonSpace(line, i); i >= len(line) || line[i] != ',' {
+			return i < len(line) && line[i] == '}'
+		}
 	}
+}
 
-	entry := core.LogEntry{Time: time.Now(), Source: filepath.Base(w.directory)}
-	for key, val := range obj {
-		var err error
-		switch key {
-		case "time":
-			var ts string
-			if json.Unmarshal(val, &ts) == nil {
-				// A zero time would mark an event without its entry, which a
-				// chain sink rebuilds from the payload
-				if t, terr := time.Parse(time.RFC3339Nano, ts); terr == nil && !t.IsZero() {
-					entry.Time = t
+// jsonValueEnd is the index past the JSON value at s[i], or -1 when there is
+// none. Objects and arrays are matched by depth alone.
+func jsonValueEnd(s string, i int) int {
+	if i >= len(s) {
+		return -1
+	}
+	switch s[i] {
+	case '"':
+		for j := i + 1; j < len(s); j++ {
+			switch s[j] {
+			case '\\':
+				j++
+			case '"':
+				return j + 1
+			}
+		}
+		return -1
+	case '{', '[':
+		depth := 0
+		for j := i; j < len(s); j++ {
+			switch s[j] {
+			case '"':
+				if j = jsonValueEnd(s, j) - 1; j < 0 {
+					return -1
+				}
+			case '{', '[':
+				depth++
+			case '}', ']':
+				if depth--; depth == 0 {
+					return j + 1
 				}
 			}
-		case "level":
-			err = json.Unmarshal(val, &entry.Level)
-		case "msg":
-			err = json.Unmarshal(val, &entry.Message)
-		case "fields":
-			entry.Fields = val
-		default:
-			return core.LogEntry{}, false
 		}
-		if err != nil {
-			return core.LogEntry{}, false
+		return -1
+	}
+	for j := i; j < len(s); j++ {
+		switch s[j] {
+		case ',', '}', ']', ' ', '\t', '\r', '\n':
+			if j == i {
+				return -1
+			}
+			return j
 		}
 	}
+	return len(s)
+}
 
-	return entry, true
+func jsonSpace(s string, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n') {
+		i++
+	}
+	return i
 }
