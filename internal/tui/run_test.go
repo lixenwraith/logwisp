@@ -347,7 +347,7 @@ func TestAClosedStdoutFailsWritesOnScreen(t *testing.T) {
 
 // SIGTERM and SIGHUP stop what runs and leave
 func TestSignalsStopTheRunAndLeave(t *testing.T) {
-	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
 		f := &fakeRunner{}
 		a := running(t, pipeline(t, []string{"null"}, []string{"null"}), f)
 		stop := a.live.onSignals()

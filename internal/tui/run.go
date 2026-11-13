@@ -141,13 +141,14 @@ func (r *run) watch(every time.Duration) {
 
 func holds(t *core.Tap) bool { return t != nil && len(t.Records()) > 0 }
 
-// onSignals leaves on SIGTERM and SIGHUP (an ssh session's end), stopping
-// what runs, so sinks flush and the terminal is restored. A closed stdout or
-// stderr fails the write with EPIPE, which the run logs, instead of killing lw
-// on screen; stop gives SIGPIPE back to the runtime.
+// onSignals leaves on SIGINT (raw mode makes Ctrl-C a key, so another
+// process sent it), SIGTERM and SIGHUP (an ssh session's end), stopping what
+// runs, so sinks flush and the terminal is restored. A closed stdout or stderr
+// fails the write with EPIPE, which the run logs, instead of killing lw on
+// screen; stop gives SIGINT and SIGPIPE back to the runtime.
 func (r *run) onSignals() (stop func()) {
 	sigs, pipe := make(chan os.Signal, 1), make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	signal.Notify(pipe, syscall.SIGPIPE)
 	go func() {
 		select {

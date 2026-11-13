@@ -343,9 +343,10 @@ docker run --rm -p 8080:8080 -v /var/log/app:/logs:ro \
   ([Hot Reload](configuration.md#hot-reload))
 - `SIGHUP` before the signal handler is installed is ignored, so LogWisp
   survives a terminal hang-up like `nohup`
-- On the `lw --tui` screen, `SIGTERM` and `SIGHUP` close it, stopping what
-  `t` runs, and lw exits 0; so does a hangup no signal reports, where the
-  screen's terminal is not lw's controlling one and its read fails
+- On the `lw --tui` screen, `SIGINT` (from another process: Ctrl-C there is
+  a key), `SIGTERM` and `SIGHUP` close it, stopping what `t` runs, and lw
+  exits 0; so does a hangup no signal reports, where the screen's terminal
+  is not lw's controlling one and its read fails
 
 ## Exit Codes
 
@@ -523,9 +524,9 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     again. A rule in the view marks where the swapped flows or the new run
     begin. When the new pipelines do not build, the earlier ones keep
     running and the error chooses the part it names. `q` asks before it
-    stops them, `r` and `o`'s choices stop them first, and `SIGTERM` or
-    `SIGHUP` (an ssh session's end) stops them and closes the screen, as
-    does a hangup no signal reports.
+    stops them, `r` and `o`'s choices stop them first, and `SIGINT`,
+    `SIGTERM` or `SIGHUP` (an ssh session's end) stops them and closes the
+    screen, as does a hangup no signal reports.
   - The bar counts the shown pipeline's entries in, filtered by the flow,
     dropped by sinks, and missed by the screen: the view never slows a
     pipeline. A sink that dropped entries shows how many on its node.
