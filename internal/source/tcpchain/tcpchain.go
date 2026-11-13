@@ -352,11 +352,6 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 	if err := adm.Accept(); err != nil {
 		return
 	}
-	scanner := bufio.NewScanner(adm.Reader)
-	// Oversized line (> MaxLogEntryBytes) is a protocol violation; scanner is
-	// unrecoverable after ErrTooLong, connection terminates
-	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
-
 	// force relabels every entry, so an edge cannot smuggle a foreign origin
 	// through the per-entry node field either
 	trustEntryNode := s.auth.TrustsEntryNode(s.config.TrustNode)
@@ -384,13 +379,23 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		"node", connNode,
 		"auth_identity", ident.Name)
 
+	// The deadline and the session's activity go per read, not per line: a
+	// burst costs one of each, and a link idles only while nothing arrives
 	idle := time.Duration(s.config.ReadTimeoutMS) * time.Millisecond
-	for {
+	scanner := bufio.NewScanner(readFunc(func(p []byte) (int, error) {
 		if idle > 0 {
 			conn.SetReadDeadline(time.Now().Add(idle))
-		} else {
-			conn.SetReadDeadline(time.Time{})
 		}
+		n, err := adm.Reader.Read(p)
+		if n > 0 {
+			s.proxy.UpdateActivity(sessID)
+		}
+		return n, err
+	}))
+	// A line past MaxLogEntryBytes ends the link, as the scanner cannot go on
+	// after ErrTooLong. Its buffer grows from 4 KiB only for a longer line.
+	scanner.Buffer(nil, core.MaxLogEntryBytes)
+	for {
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
 				s.logger.Debug("msg", "Chain read terminated",
@@ -404,8 +409,6 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		if len(line) == 0 {
 			continue
 		}
-		s.proxy.UpdateActivity(sessID)
-
 		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
 		if err != nil {
 			s.parseErrors.Add(1)
@@ -417,6 +420,11 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		s.publish(entry)
 	}
 }
+
+// readFunc is a Read method from a function
+type readFunc func([]byte) (int, error)
+
+func (f readFunc) Read(p []byte) (int, error) { return f(p) }
 
 // publish sends a log entry to all subscribers
 func (s *TCPChainSource) publish(entry core.LogEntry) {

@@ -250,7 +250,8 @@ Options, each as type and default:
 - `port` (int, required): listen port, 1–65535.
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_connections` (int, `0`): concurrent connection cap; `0` = unlimited.
-- `read_timeout_ms` (int, `0`): per-connection idle read deadline; `0` = none.
+- `read_timeout_ms` (int, `0`): time a connection may pass with nothing
+  arriving; `0` = none.
 - `hello_timeout_ms` (int, `10000`): deadline for the hello preamble.
 - `trust_node` (bool, `true`): `false` overrides the sender's node label with
   its remote address. `auth.node_binding` `assert` or `force` takes over the

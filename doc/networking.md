@@ -78,14 +78,15 @@ deadline where the default is `0` (none); elsewhere it selects the default.
 - `tcp_chain` source
   - `hello_timeout_ms`, default `10000`: reading the protocol preamble, and
     under `scram` the whole login.
-  - `read_timeout_ms`, default `0` (none): idle time between entries.
+  - `read_timeout_ms`, default `0` (none): idle time in which nothing
+    arrives; a line may take longer while its bytes keep coming.
 - `http_chain` source
   - `read_timeout_ms`, default `30000`: reading a whole request, headers and
     body; also how long an idle keep-alive connection waits for its next
     request.
 - `tcp_chain` sink
   - `dial_timeout_ms`, default `5000`: TCP connect.
-  - `write_timeout_ms`, default `5000`: one line write.
+  - `write_timeout_ms`, default `5000`: one write, up to 4 KiB of lines.
 - `http_chain` sink
   - `request_timeout_ms`, default `10000`: dial plus write plus response, and
     a SCRAM login when one is due.
