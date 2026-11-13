@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -250,4 +252,21 @@ func TestWrittenSpecsBuildWhatAFileWould(t *testing.T) {
 		{"rate-limit", "entries_per_second=5,policy=pass"}, {"heartbeat", "enabled=false"}}; !reflect.DeepEqual(specs, want) {
 		t.Fatalf("specs %v, want %v", specs, want)
 	}
+}
+
+// FreeID is TYPE, or TYPE_N with the least N from 2 that no id holds as
+// written: TYPE_02, TYPE_+2 and TYPE_X_2 hold none
+func FuzzFreeIDIsTheLeastSuffixFree(f *testing.F) {
+	f.Add("null", "null,null_2,null_02,null_+3,null_1,null_2_3,null_,tcp_chain_2")
+	f.Add("tcp", "tcp_chain,tcp,tcp_3,tcp_2")
+	f.Fuzz(func(t *testing.T, typ, ids string) {
+		taken := strings.Split(ids, ",")
+		want := typ
+		for n := 2; slices.Contains(taken, want); n++ {
+			want = typ + "_" + strconv.Itoa(n)
+		}
+		if got := FreeID(typ, taken); got != want {
+			t.Fatalf("FreeID(%q, %q) = %q, want %q", typ, taken, got, want)
+		}
+	})
 }

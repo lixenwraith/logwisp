@@ -579,11 +579,22 @@ func instanceID(typ string, opts map[string]any, taken []string) (string, error)
 }
 
 // FreeID is the first of TYPE, TYPE_2, TYPE_3... that no earlier instance of
-// its role holds
+// its role holds. One pass marks the suffixes held, so naming many parts is
+// not a scan of the list per candidate: one of the first len(taken)+1 is free.
 func FreeID(typ string, taken []string) string {
-	id := typ
-	for n := 2; slices.Contains(taken, id); n++ {
-		id = typ + "_" + strconv.Itoa(n)
+	held, prefix := make([]bool, len(taken)+2), typ+"_" // by suffix, TYPE alone at 1
+	for _, id := range taken {
+		suffix, ok := strings.CutPrefix(id, prefix)
+		if id == typ {
+			held[1] = true
+		} else if ok && suffix != "" && suffix[0] != '0' && suffix[0] != '+' { // not TYPE_02 or TYPE_+2
+			if n, err := strconv.Atoi(suffix); err == nil && n >= 2 && n < len(held) {
+				held[n] = true
+			}
+		}
 	}
-	return id
+	if n := slices.Index(held[1:], false) + 1; n > 1 {
+		return typ + "_" + strconv.Itoa(n)
+	}
+	return typ
 }
