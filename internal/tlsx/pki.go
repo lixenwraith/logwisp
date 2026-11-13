@@ -81,7 +81,8 @@ func (l Leaf) Issue(pub crypto.PublicKey, issuer *x509.Certificate, issuerKey cr
 		t.ExtKeyUsage = append(t.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
 	}
 	for _, h := range l.Hosts {
-		if ip := net.ParseIP(h); ip != nil {
+		addr, _, _ := strings.Cut(h, "%") // a zone names a local interface, which no certificate carries
+		if ip := net.ParseIP(addr); ip != nil {
 			t.IPAddresses = append(t.IPAddresses, ip)
 		} else {
 			t.DNSNames = append(t.DNSNames, h)

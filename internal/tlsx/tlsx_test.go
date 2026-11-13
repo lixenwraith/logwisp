@@ -19,8 +19,9 @@ import (
 )
 
 // A dialer verifies an IPv6 target by its address: the zone names a local
-// interface, which no certificate carries.
-func TestClientServerNameDropsTheZone(t *testing.T) {
+// interface, which no certificate carries, and a listener's made certificate
+// names its host by the address alone.
+func TestZoneIsNoPartOfTheName(t *testing.T) {
 	for host, want := range map[string]string{"fe80::1%eth0": "fe80::1", "::1": "::1", "relay.example": "relay.example"} {
 		cfg, err := Client(&config.TLSOptions{Enabled: true}, host)
 		if err != nil {
@@ -28,6 +29,13 @@ func TestClientServerNameDropsTheZone(t *testing.T) {
 		}
 		if cfg.ServerName != want {
 			t.Errorf("Client(%q).ServerName = %q, want %q", host, cfg.ServerName, want)
+		}
+		server, err := Server(&config.TLSOptions{Enabled: true, SelfSigned: true}, host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := server.Certificates[0].Leaf.VerifyHostname(want); err != nil {
+			t.Errorf("listener on %q: %v", host, err)
 		}
 	}
 }
