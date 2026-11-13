@@ -72,9 +72,10 @@ func (o *OutputHandler) Error(format string, args ...any) {
 	}
 }
 
-// FatalError writes a formatted string to stderr and exits with the given code.
+// FatalError writes a formatted string to stderr, quiet or not: why lw exits
+// is neither its log nor a notice. It exits with the given code.
 func (o *OutputHandler) FatalError(code int, format string, args ...any) {
-	o.Error(format, args...)
+	fmt.Fprintf(o.stderr, format, args...)
 	os.Exit(code)
 }
 

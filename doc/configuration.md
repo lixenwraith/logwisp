@@ -83,7 +83,8 @@ retention_hours   = 168.0
 - `stderr`: standard error only.
 - `split`: DEBUG/INFO to stdout, WARN/ERROR to stderr.
 - `all`: files plus split console.
-- `none`: no application logging.
+- `none`: no application logging; why lw fails to start still goes to
+  standard error.
 
 `sanitization = "json"`, the default, escapes in either format the control
 characters a peer puts in an address, a name or an error; `raw` writes them as
@@ -270,12 +271,12 @@ Reload builds a new service from a detached snapshot of the configuration,
 validated again, and shuts the old one down only if that succeeds: parse,
 validation and construction errors leave the running service intact. A
 listener on a new address that fails to bind does so after the old service has
-stopped and can leave lw without working pipelines; correct the file and signal
-again.
+stopped and can leave lw without working pipelines; correct the file, or put
+back the one that ran, and the watch or a signal rebuilds.
 
 Watch errors (deletion, permission changes, timeout) are logged without
-rebuilding. Queued changes are combined, and unchanged pipelines and status
-settings do not trigger another rebuild. Removed file keys fall back to the
+rebuilding. Queued changes are combined, and while a service runs, unchanged
+pipelines and status settings do not trigger another rebuild. Removed file keys fall back to the
 remaining sources on the next successful load.
 
 - Reloaded: pipelines, sources, sinks, flow stages, `status_reporter`, `color`

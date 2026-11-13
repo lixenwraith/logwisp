@@ -90,7 +90,7 @@ pipelines have [their own flags](#pipelines):
   writes the codes into a pipe and overrides `NO_COLOR`. A console sink's
   own `color` wins ([console sink](sinks.md#console))
 - `-q`, `--quiet`: silence lw's own log and notices, default `false`;
-  pipeline output still flows
+  pipeline output still flows, and why lw fails to start still prints
 - `--status_reporter=BOOL`: pipeline statistics every 30 s, logged at
   `debug` and gathered only then, default `true` with a configuration file,
   `false` without
