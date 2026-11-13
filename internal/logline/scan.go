@@ -349,7 +349,7 @@ func Marks(s string, e core.LogEntry, fn func(Mark)) {
 		}
 		ke := keyEnd(s, k)
 		if ke == k || ke == len(s) || s[ke] != '=' {
-			k, i = i, wordEnd(s, i)
+			k, i = i, wordEnd(s, i+1) // past a control byte, which skipSpace leaves
 			word(k, i)
 			continue
 		}

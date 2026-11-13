@@ -228,9 +228,11 @@ func TestMarksNameEachRoleWhereTheLineWritesIt(t *testing.T) {
 	}
 }
 
-// Marks of any line, its level any word, are in order, apart and in bounds
+// Marks of any line, its level any word, are in order, apart and in bounds,
+// and come to an end: a line unescaped may hold control bytes
 func FuzzMarksStayInOrderWithinTheLine(f *testing.F) {
 	f.Add(`2026-11-05 07:51:44,001 WARN edge-01/app "time=07:51:44 level=warn msg=\"slow\""`, "WARN")
+	f.Add("a \x01b \x1b[31mERROR\x1b[0m \x00", "ERROR")
 	f.Add(`Nov  5 07:51:45 edge-01 sshd[2211]: error: auth failed`, "ERROR")
 	f.Add(`{"level":30,"ts":1.5,"n":[1,{"k":"x"}],"logger":"db"} tail {"a":`, "INFO")
 	f.Add(`[warning] k="unterminated \"`, "warning")
