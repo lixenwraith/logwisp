@@ -495,10 +495,11 @@ func (a *app) draw(r ui.Region) {
 		a.pi = min(a.pi, len(a.comp.Pipelines)-1)
 		a.node() // a delete can leave the row past its column's end
 		a.drawBar(r.Sub(0, 0, r.W, 1))
-		body, l := r.Sub(0, 1, r.W, r.H-1-len(status)), a.layout(r.W)
+		body := r.Sub(0, 1, r.W, r.H-1-len(status))
 		a.view.sync(a.point(), a.live.tap)
 		switch watched := a.viewing || a.live.tap != nil || len(a.view.rows) > 0; {
-		case watched && r.H >= splitMin && (!a.inspect || l.inspector > 0):
+		case watched && r.H >= splitMin && (!a.inspect || r.W >= besideMin):
+			l := a.layout(r.W)
 			top := l.h
 			if a.inspect {
 				top = max(top, body.H/2)
@@ -509,7 +510,7 @@ func (a *app) draw(r ui.Region) {
 		case a.viewing:
 			a.drawView(body)
 		default:
-			a.drawDiagram(body, l, true)
+			a.drawDiagram(body, a.layout(r.W), true)
 		}
 	}
 	for i, row := range status {
