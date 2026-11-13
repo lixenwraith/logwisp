@@ -32,6 +32,8 @@ type NullSink struct {
 	logger *log.Logger
 
 	done      chan struct{}
+	exited    chan struct{} // closed when processLoop has counted what was queued
+	started   atomic.Bool
 	startTime time.Time
 
 	totalReceived atomic.Uint64
@@ -53,6 +55,7 @@ func NewNullSinkPlugin(
 		proxy:  proxy,
 		input:  make(chan core.TransportEvent, 1000),
 		done:   make(chan struct{}),
+		exited: make(chan struct{}),
 		logger: logger,
 	}
 
@@ -84,6 +87,7 @@ func (ns *NullSink) Input() chan<- core.TransportEvent {
 
 func (ns *NullSink) Start(ctx context.Context) error {
 	ns.startTime = time.Now()
+	ns.started.Store(true)
 	go ns.processLoop(ctx)
 	ns.logger.Debug("msg", "Null sink started",
 		"component", "null_sink",
@@ -96,6 +100,9 @@ func (ns *NullSink) Stop() {
 		ns.proxy.RemoveSession(ns.session.ID)
 	}
 	close(ns.done)
+	if ns.started.Load() {
+		<-ns.exited // its counts then include what was queued
+	}
 	ns.logger.Debug("msg", "Null sink stopped",
 		"instance_id", ns.id,
 		"total_received", ns.totalReceived.Load())
@@ -116,21 +123,37 @@ func (ns *NullSink) GetStats() sink.SinkStats {
 	}
 }
 
+// processLoop counts events until stopped, then what is queued: what a
+// measured source or flow sent must appear in the counts
 func (ns *NullSink) processLoop(ctx context.Context) {
+	defer close(ns.exited)
 	for {
 		select {
-		case event, ok := <-ns.input:
-			if !ok {
-				return
-			}
-			ns.totalReceived.Add(1)
-			ns.totalBytes.Add(uint64(len(event.Payload)))
-			ns.lastReceived.Store(time.Now())
-
+		case event := <-ns.input:
+			ns.count(event)
 		case <-ctx.Done():
+			ns.drain()
 			return
 		case <-ns.done:
+			ns.drain()
 			return
 		}
 	}
+}
+
+func (ns *NullSink) drain() {
+	for {
+		select {
+		case event := <-ns.input:
+			ns.count(event)
+		default:
+			return
+		}
+	}
+}
+
+func (ns *NullSink) count(event core.TransportEvent) {
+	ns.totalReceived.Add(1)
+	ns.totalBytes.Add(uint64(len(event.Payload)))
+	ns.lastReceived.Store(time.Now())
 }

@@ -2,9 +2,16 @@ package console
 
 import (
 	"io"
+	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/session"
+
+	"github.com/lixenwraith/log"
 	"github.com/lixenwraith/terminal/inline"
 )
 
@@ -29,4 +36,57 @@ func TestPaintStylesEachMarkAndKeepsTheText(t *testing.T) {
 			t.Errorf("%q:\n got %q\nwant %q", c.in, got, c.want)
 		}
 	}
+}
+
+// A failed write counts the entries it lost, and is logged once until its
+// error changes: a hung-up terminal or a full disk fails every write
+func TestWriteFailuresAreCountedAndLoggedOncePerError(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	var logged lockedLog
+	logger := log.NewLogger()
+	logger.SetConsoleWriter(&logged)
+	if err := logger.ApplyConfigString("level=info"); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logger.Shutdown() })
+	created, err := NewConsoleSinkPlugin("out", map[string]any{"target": "stdout"}, logger, session.NewProxy(manager, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := created.(*ConsoleSink)
+	cs.output = failingWriter{}
+	for i := range 3 {
+		cs.write(core.TransportEvent{Payload: []byte{'a' + byte(i), '\n'}})
+	}
+	if err := logger.Flush(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if n, logs := cs.GetStats().Details["write_errors"], strings.Count(logged.String(), "Failed to write to console"); n != uint64(3) || logs != 1 {
+		t.Fatalf("%v write errors counted, %d logged; want 3 and 1", n, logs)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, syscall.EIO }
+
+type lockedLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }

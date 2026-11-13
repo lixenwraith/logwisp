@@ -58,6 +58,8 @@ type ConsoleSink struct {
 	// Statistics
 	totalProcessed atomic.Uint64
 	lastProcessed  core.AtomicTime
+	writeErrors    atomic.Uint64 // entries a failed write lost
+	lastErr        string        // the last write error logged; processLoop alone writes it
 }
 
 // levelStyles and markStyles are ANSI 16, so the terminal's theme picks the
@@ -201,10 +203,11 @@ func (cs *ConsoleSink) GetStats() sink.SinkStats {
 		StartTime:      cs.startTime,
 		LastProcessed:  lastProc,
 		Details: map[string]any{
-			"target":      cs.config.Target,
-			"buffer_size": cs.config.BufferSize,
-			"escape":      cs.escape,
-			"color":       cs.palette != nil,
+			"target":       cs.config.Target,
+			"buffer_size":  cs.config.BufferSize,
+			"escape":       cs.escape,
+			"write_errors": cs.writeErrors.Load(),
+			"color":        cs.palette != nil,
 		},
 	}
 }
@@ -244,12 +247,19 @@ func (cs *ConsoleSink) write(event core.TransportEvent) {
 		var n int
 		cs.batch, n, event, more = sink.Batch(cs.batch, event, cs.input, cs.line)
 		if _, err := cs.output.Write(cs.batch); err != nil {
-			cs.logger.Error("msg", "Failed to write to console",
-				"component", "console_sink",
-				"target", cs.config.Target,
-				"error", err)
+			// A hung-up terminal or a full disk fails every write: the count
+			// keeps them, the log only a new error
+			cs.writeErrors.Add(uint64(n))
+			if msg := err.Error(); msg != cs.lastErr {
+				cs.lastErr = msg
+				cs.logger.Error("msg", "Failed to write to console",
+					"component", "console_sink",
+					"target", cs.config.Target,
+					"error", err)
+			}
 			continue
 		}
+		cs.lastErr = ""
 		cs.totalProcessed.Add(uint64(n))
 		cs.lastProcessed.Store(time.Now())
 	}

@@ -84,8 +84,12 @@ Payloads are written as the formatter made them, one record per line.
   output is slow (a slow reader, a paused terminal, a stalled log collector)
   the pipeline waits for it, with its other sinks. A service whose stdout may
   stall writes to a `file` sink instead. A closed stdout pipe ends lw with
-  `SIGPIPE`, as it ends `cat`.
+  `SIGPIPE`, as it ends `cat`. Entries a failed write loses (a hung-up
+  terminal, a full disk) count in `write_errors`; each new error is logged
+  once.
 - On stop it writes what is queued.
+
+**Statistics**: `target`, `buffer_size`, `escape`, `color`, `write_errors`.
 
 ---
 
@@ -145,7 +149,8 @@ it hands the writer what is queued before closing the file.
 
 Discards; holds a sink's place until one is chosen, so a pipeline can be set
 up before its sink is. It counts entries and bytes (`total_processed`,
-`total_bytes`), so it also isolates a source or flow when measuring it.
+`total_bytes`), what is queued at stop included, so it also isolates a
+source or flow when measuring it.
 
 ```toml
 [[pipelines.plugin_sinks]]
