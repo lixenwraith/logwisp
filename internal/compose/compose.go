@@ -535,6 +535,28 @@ func (c *Composition) Options(pi int, n Node) (map[string]any, bool, error) {
 	return nil, false, n.missing()
 }
 
+// Value is the value at a dotted key of a part's options, nil while unset.
+// A source's or sink's is read where it is stored, uncopied, as Options
+// would clone the whole map: callers only read it.
+func (c *Composition) Value(pi int, n Node, key string) any {
+	var v any
+	if p, err := c.pipeline(pi); err == nil {
+		switch i := index(p, n); {
+		case i >= 0 && n.Role == "source":
+			v = p.PluginSources[i].Config
+		case i >= 0 && n.Role == "sink":
+			v = p.PluginSinks[i].Config
+		default:
+			v, _, _ = c.Options(pi, n)
+		}
+	}
+	for part := range strings.SplitSeq(key, ".") {
+		m, _ := v.(map[string]any)
+		v = m[part]
+	}
+	return v
+}
+
 // Validate applies every rule lw applies at load: its error joins every
 // problem, one a part, which Problems splits and Locate places
 func (c *Composition) Validate() error { return config.ValidatePipelines(c.Pipelines) }

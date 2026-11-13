@@ -92,15 +92,7 @@ func (a *app) keyLines(out []line, n compose.Node, keys []config.Key, prefix str
 }
 
 // value is a key's value at its dotted path, nil while unset
-func (a *app) value(n compose.Node, path string) any {
-	opts, _, _ := a.comp.Options(a.pi, n)
-	var v any = opts
-	for _, part := range strings.Split(path, ".") {
-		m, _ := v.(map[string]any)
-		v = m[part]
-	}
-	return v
-}
+func (a *app) value(n compose.Node, path string) any { return a.comp.Value(a.pi, n, path) }
 
 func (a *app) items(n compose.Node, path string) []string {
 	var out []string
