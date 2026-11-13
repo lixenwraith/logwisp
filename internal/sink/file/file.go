@@ -70,6 +70,7 @@ func NewFileSinkPlugin(
 	writerConfig.MaxTotalSizeKB = opts.MaxTotalSizeMB * 1000
 	writerConfig.MinDiskFreeKB = opts.MinDiskFreeMB * 1000
 	writerConfig.RetentionPeriodHrs = opts.RetentionHours
+	writerConfig.CleanupOwnFiles = true // the limits delete this sink's files alone
 	writerConfig.BufferSize = opts.BufferSize
 	writerConfig.FlushIntervalMs = opts.FlushIntervalMs
 	// The payload is already formatted: the writer adds nothing and writes the file only

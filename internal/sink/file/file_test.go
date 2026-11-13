@@ -104,3 +104,29 @@ func TestUnsafeLogFileIsRefusedAtStart(t *testing.T) {
 		t.Fatal("the link's target was created")
 	}
 }
+
+// The limits count and delete the sink's own files alone: another program's
+// .log file in the directory, older and over max_total_size_mb, stays
+func TestTheLimitsDeleteOnlyTheSinksOwnFiles(t *testing.T) {
+	dir := t.TempDir()
+	other, rotated := filepath.Join(dir, "app.log"), filepath.Join(dir, "out_260101_000000.log")
+	for _, p := range []string{other, rotated} {
+		if err := os.WriteFile(p, bytes.Repeat([]byte("x\n"), 1<<20), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fs := newSink(t, dir, map[string]any{"max_total_size_mb": int64(1)})
+	if err := fs.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fs.Stop()
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("another program's file: %v", err)
+	}
+	if _, err := os.Stat(rotated); err == nil {
+		t.Fatal("the sink's own rotated file, over the limit, was kept")
+	}
+}

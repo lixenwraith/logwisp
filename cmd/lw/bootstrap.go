@@ -217,6 +217,9 @@ func configureFileLogging(logCfg *log.Config, cfg *config.Config) {
 	// lw's log is sparse, startup and warnings: one fsync a second at most,
 	// not ten, bounds what a crash loses without costing a busy disk
 	logCfg.FlushIntervalMs = 1000
+	// The limits delete lw's files alone, so the directory can be shared,
+	// with a file sink among others
+	logCfg.CleanupOwnFiles = true
 	if cfg.Logging.File != nil {
 		logCfg.Directory = config.ExpandHome(cfg.Logging.File.Directory)
 		logCfg.Name = cfg.Logging.File.Name

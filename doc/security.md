@@ -733,8 +733,11 @@ it at once. A refused start or proof answers `too many attempts` (HTTP `429`)
 and counts `auth_throttled`; the table holds
 65,536 addresses and refuses new ones when full. Separately, at most 4,096
 exchanges may be in flight per listener, 256 of them from one /48 (past
-those, `too many attempts`); beyond 4,096, or while the plugin stops, a login
-gets `busy` (HTTP `503`) and counts `auth_busy`; neither counts in
+those, `too many attempts`). A login past 4,096 drops the oldest exchange not
+being verified, whose proof then fails (`authentication failed`), so
+challenges nobody answers cannot shut new logins out. Only while all 4,096
+are being verified, or while the plugin stops, does a login get `busy` (HTTP
+`503`), counting `auth_busy`; neither it nor `too many attempts` counts in
 `auth_rejected`. Peers behind one NAT, or one passthrough proxy that
 sends no PROXY header, share a bucket: there, one client can exhaust every
 other client's logins.

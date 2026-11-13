@@ -113,7 +113,7 @@ The last `-c` wins; a missing or empty path is an error.
   control characters a peer puts in an address, a name or an error reach
   lw's log escaped; `raw` writes them as they came
 - `--logging.file.directory`: a path, default `./log`; the limits below
-  delete any `.log` file in it
+  delete only lw's own files in it
   ([Application Logging](configuration.md#application-logging))
 - `--logging.file.name`: a string, default `logwisp`
 - `--logging.file.max_size_mb`, `--logging.file.max_total_size_mb`: integers,

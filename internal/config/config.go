@@ -42,11 +42,11 @@ type LogConfig struct {
 
 // LogFileConfig defines settings for file-based application logging
 type LogFileConfig struct {
-	Directory      string  `toml:"directory" lw:"hint=dir" help:"where file and all write; the limits below delete old .log files in it"`
+	Directory      string  `toml:"directory" lw:"hint=dir" help:"where file and all write; the limits below delete only lw's files in it"`
 	Name           string  `toml:"name" help:"base name of the files"`
 	MaxSizeMB      int64   `toml:"max_size_mb" help:"size at which a file rotates"`
-	MaxTotalSizeMB int64   `toml:"max_total_size_mb" help:"size of all .log files there, beyond which the oldest go"`
-	RetentionHours float64 `toml:"retention_hours" help:"hours a .log file is kept; 0 keeps them"`
+	MaxTotalSizeMB int64   `toml:"max_total_size_mb" help:"size of all lw's files there, beyond which the oldest go"`
+	RetentionHours float64 `toml:"retention_hours" help:"hours a file is kept; 0 keeps them"`
 }
 
 // LogConsoleConfig is logging.console, whose target has no effect:
@@ -237,8 +237,8 @@ type FileSinkOptions struct {
 	Name            string  `toml:"name" lw:"required" help:"base name of the files"`
 	MaxSizeMB       int64   `toml:"max_size_mb" default:"100" lw:"min=1" help:"size at which a file rotates"`
 	MaxTotalSizeMB  int64   `toml:"max_total_size_mb" default:"1000" lw:"min=1" help:"size of all files, beyond which the oldest go"`
-	MinDiskFreeMB   int64   `toml:"min_disk_free_mb" default:"100" lw:"zero=none" help:"megabytes kept free on the disk, the oldest .log files deleted for it, then writing paused; a negative value means 100"`
-	RetentionHours  float64 `toml:"retention_hours" default:"168" lw:"min=0,zero=kept" help:"hours a .log file is kept; 0 keeps them"`
+	MinDiskFreeMB   int64   `toml:"min_disk_free_mb" default:"100" lw:"zero=none" help:"megabytes kept free on the disk, the sink's oldest files deleted for it, then writing paused; a negative value means 100"`
+	RetentionHours  float64 `toml:"retention_hours" default:"168" lw:"min=0,zero=kept" help:"hours a file is kept; 0 keeps them"`
 	BufferSize      int64   `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	FlushIntervalMs int64   `toml:"flush_interval_ms" default:"100" lw:"min=1" help:"milliseconds between flushes"`
 }

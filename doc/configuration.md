@@ -91,11 +91,12 @@ characters a peer puts in an address, a name or an error; `raw` writes them as
 they came.
 
 `[logging.file]` applies only to the `file` and `all` modes. Its limits, and a
-floor of 10 MB free on the disk that no key changes, delete any `.log` file in
-`directory`, lw's or not: give lw a directory of its own. As for a
-[file sink](sinks.md#file), what lw creates of the path is `0750`, and lw does
-not start when every user can write `directory` or `NAME.log` is not a
-regular file. The file is synced to disk once a second at most.
+floor of 10 MB free on the disk that no key changes, delete only lw's own
+files in `directory`, `NAME.log` and its rotations, so it can be shared. As
+for a [file sink](sinks.md#file), what lw creates of the path is `0750`, and
+lw does not start when every user can write `directory` or `NAME.log` is not
+a regular file. The file is synced to disk once a second at most, and only
+after a write.
 `retention_hours = 0` keeps files. The `stdout`, `split` and `all` modes mix
 the log into a console sink's stdout. `[logging.console].target` is validated
 (`stdout`, `stderr`, `split`) but not applied: `logging.output` chooses the

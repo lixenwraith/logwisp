@@ -300,8 +300,9 @@ preamble, headers, and entry encoding.
 - `too many attempts` — the address failed or abandoned logins faster than one
   per second beyond a burst of 10, or has 4 unfinished; it clears within seconds
   once the failing peer stops. Peers behind one NAT, or one passthrough proxy
-  that sends no PROXY header, share the budget. `busy` — 4,096 logins in
-  flight, or the listener is stopping.
+  that sends no PROXY header, share the budget. `busy` — 4,096 logins being
+  verified at once, or the listener is stopping; past 4,096 unanswered ones,
+  the oldest is dropped instead.
 - `authentication not enabled` — the dialer has `scram`; the listener's
   `auth.type` is `none` or `mtls`.
 - `no challenge within 10s (older logwisp, or not a scram listener)` — the

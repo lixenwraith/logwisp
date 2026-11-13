@@ -43,11 +43,11 @@
 # sanitization = "json"                 # json|raw|txt|shell; json escapes control characters
 
 # [logging.file]                        # Used when output is "file" or "all"
-# directory = "./log"                   # lw's alone: the limits below delete any .log file in it
+# directory = "./log"                   # the limits below delete only lw's files in it
 # name = "logwisp"
 # max_size_mb = 100
-# max_total_size_mb = 1000              # past it the oldest .log files there are deleted
-# retention_hours = 168.0               # .log files there older than this are deleted; 0 keeps them
+# max_total_size_mb = 1000              # past it lw's oldest files there are deleted
+# retention_hours = 168.0               # lw's files there older than this are deleted; 0 keeps them
 
 ## Validated but NOT applied: the console destination comes from `output` above.
 # [logging.console]
@@ -340,8 +340,8 @@
 # name = "output"                       # Required (example)
 # max_size_mb = 100
 # max_total_size_mb = 1000
-# min_disk_free_mb = 100                # oldest .log files go, then writing pauses; 0 = no floor
-# retention_hours = 168.0               # .log files there older than this are deleted; 0 keeps them
+# min_disk_free_mb = 100                # the sink's oldest files go, then writing pauses; 0 = no floor
+# retention_hours = 168.0               # the sink's files older than this are deleted; 0 keeps them
 # buffer_size = 1000
 # flush_interval_ms = 100
 
