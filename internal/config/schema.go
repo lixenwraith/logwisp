@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	lconfig "github.com/lixenwraith/config"
 )
@@ -417,6 +418,8 @@ func checkTags(v reflect.Value, prefix string) error {
 			switch {
 			case math.IsNaN(n) || math.IsInf(n, 0):
 				err = errors.New("must be a finite number")
+			case strings.HasSuffix(o.Name, "_ms") && n > maxMS:
+				err = fmt.Errorf("must be at most %s, got %s", num(maxMS), num(n))
 			case o.Min != nil && o.Max != nil && !(n >= *o.Min && n <= *o.Max):
 				err = fmt.Errorf("must be from %s to %s, got %s", num(*o.Min), num(*o.Max), num(n))
 			case o.Min != nil && !(n >= *o.Min):
@@ -433,6 +436,10 @@ func checkTags(v reflect.Value, prefix string) error {
 }
 
 func num(n float64) string { return strconv.FormatFloat(n, 'f', -1, 64) }
+
+// maxMS is the most milliseconds a time.Duration holds: more, at any key
+// ending in _ms, would wrap to a negative interval, which a ticker panics on
+const maxMS = float64(math.MaxInt64 / int64(time.Millisecond))
 
 // sideKeys lists, in order, the keys of a table tagged for side
 func sideKeys(t reflect.Type, side string) []string {

@@ -219,7 +219,8 @@ pipelines[0].plugin_sinks[http].config: unknown key "tls.enabeld"
 - In plugin options and flow stages, `0`, or `""` for a string, takes the
   key's default, or the meaning its help gives zero (off, none, unlimited). A
   number below its key's minimum is refused, a negative one included where
-  zero means the default (`buffer_size = -1`).
+  zero means the default (`buffer_size = -1`), and so is an `_ms` key over
+  9223372036854, the most milliseconds a duration holds.
 - Flow stages are checked whether enabled or not: kinds, enums and ranges;
   a filter needs at least one pattern, and each must compile
   ([Filters](filters.md)).

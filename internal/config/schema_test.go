@@ -241,3 +241,33 @@ func TestTildeIsHomeInPathKeys(t *testing.T) {
 		t.Fatalf("without a home directory: %+v %v", src, err)
 	}
 }
+
+// Every key in milliseconds takes at most what a time.Duration holds, so no
+// setting wraps to a negative interval
+func TestMillisecondKeysFitADuration(t *testing.T) {
+	over := int64(maxMS) + 1
+	for _, p := range plugins {
+		for _, o := range options(p.options) {
+			if !strings.HasSuffix(o.Name, "_ms") {
+				continue
+			}
+			m := map[string]any{o.Name: over}
+			for _, r := range options(p.options) {
+				if r.Required {
+					m[r.Name] = "1"
+				}
+			}
+			if err := Coerce(p.Role, p.Type, m); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decode(p.Role, p.Type, m); err == nil || !strings.Contains(err.Error(), o.Name+": must be at most") {
+				t.Errorf("%s %s %s %d: %v", p.Type, p.Role, o.Name, over, err)
+			}
+		}
+	}
+	for _, stage := range []any{&HeartbeatConfig{IntervalMS: over}} {
+		if err := Settle(stage); err == nil || !strings.Contains(err.Error(), "must be at most") {
+			t.Errorf("%T: %v", stage, err)
+		}
+	}
+}
