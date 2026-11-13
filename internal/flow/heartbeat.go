@@ -21,7 +21,7 @@ type HeartbeatGenerator struct {
 	formatter format.Formatter // Use flow's formatter
 	logger    *log.Logger
 	beatCount atomic.Uint64
-	lastBeat  atomic.Value // time.Time
+	lastBeat  core.AtomicTime
 }
 
 // NewHeartbeatGenerator creates a new heartbeat generator
@@ -39,7 +39,6 @@ func NewHeartbeatGenerator(cfg *config.HeartbeatConfig, formatter format.Formatt
 		formatter: formatter,
 		logger:    logger,
 	}
-	hg.lastBeat.Store(time.Time{})
 	return hg, nil
 }
 
@@ -89,7 +88,7 @@ func (hg *HeartbeatGenerator) generateHeartbeat(t time.Time) core.TransportEvent
 			"beat_count": hg.beatCount.Load(),
 		}
 
-		if last, ok := hg.lastBeat.Load().(time.Time); ok && !last.IsZero() {
+		if last := hg.lastBeat.Load(); !last.IsZero() {
 			fields["interval_ms"] = t.Sub(last).Milliseconds()
 		}
 

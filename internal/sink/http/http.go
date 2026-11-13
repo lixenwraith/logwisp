@@ -92,7 +92,7 @@ type HTTPSink struct {
 	totalProcessed  atomic.Uint64
 	droppedWrites   atomic.Uint64
 	rejectedClients atomic.Uint64
-	lastProcessed   atomic.Value // time.Time
+	lastProcessed   core.AtomicTime
 }
 
 // sseClient is a registered stream consumer with a bounded send queue
@@ -156,7 +156,6 @@ func NewHTTPSinkPlugin(
 		acl:          aclPolicy,
 		web:          web,
 	}
-	h.lastProcessed.Store(time.Time{})
 
 	logger.Info("msg", " HTTP sink initialized",
 		"component", "http_sink",
@@ -586,7 +585,7 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // GetStats returns sink statistics
 func (h *HTTPSink) GetStats() sink.SinkStats {
-	lastProc, _ := h.lastProcessed.Load().(time.Time)
+	lastProc := h.lastProcessed.Load()
 	details := map[string]any{
 		"host":               h.config.Host,
 		"port":               h.config.Port,

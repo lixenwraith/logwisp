@@ -46,7 +46,7 @@ type FileSink struct {
 
 	// Statistics
 	totalProcessed atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
 }
 
 // NewFileSinkPlugin creates a file sink through plugin factory
@@ -94,7 +94,6 @@ func NewFileSinkPlugin(
 		exited:       make(chan struct{}),
 		logger:       logger,
 	}
-	fs.lastProcessed.Store(time.Time{})
 
 	fs.session = proxy.CreateSession(
 		fmt.Sprintf("file:///%s/%s", opts.Directory, opts.Name),
@@ -194,7 +193,7 @@ func (fs *FileSink) GetStats() sink.SinkStats {
 		Type:           "file",
 		TotalProcessed: fs.totalProcessed.Load(),
 		StartTime:      fs.startTime,
-		LastProcessed:  fs.lastProcessed.Load().(time.Time),
+		LastProcessed:  fs.lastProcessed.Load(),
 		Details: map[string]any{
 			"directory": fs.config.Directory,
 			"name":      fs.config.Name,

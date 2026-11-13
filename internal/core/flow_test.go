@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -63,5 +64,22 @@ func TestAFullTapCostsNothing(t *testing.T) {
 	tap.Offer(rec)
 	if allocs := testing.AllocsPerRun(100, func() { tap.Offer(rec) }); allocs != 0 || tap.Dropped() != 101 {
 		t.Fatalf("%v allocations an offer, %d dropped", allocs, tap.Dropped())
+	}
+}
+
+// A stats time keeps the instant stored, unset is the zero time, and storing
+// one per entry allocates nothing
+func TestAtomicTimeKeepsTheInstantWithoutAllocating(t *testing.T) {
+	var a AtomicTime
+	if !a.Load().IsZero() {
+		t.Fatalf("unset: %v", a.Load())
+	}
+	at := time.Date(2026, 11, 13, 1, 2, 3, 456789012, time.UTC)
+	a.Store(at)
+	if got := a.Load(); !got.Equal(at) {
+		t.Fatalf("stored %v, loaded %v", at, got)
+	}
+	if n := testing.AllocsPerRun(100, func() { a.Store(time.Now()) }); n != 0 {
+		t.Fatalf("%v allocations per store", n)
 	}
 }

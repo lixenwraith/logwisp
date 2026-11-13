@@ -36,7 +36,7 @@ type NullSink struct {
 
 	totalReceived atomic.Uint64
 	totalBytes    atomic.Uint64
-	lastReceived  atomic.Value // time.Time
+	lastReceived  core.AtomicTime
 }
 
 func NewNullSinkPlugin(
@@ -55,7 +55,6 @@ func NewNullSinkPlugin(
 		done:   make(chan struct{}),
 		logger: logger,
 	}
-	ns.lastReceived.Store(time.Time{})
 
 	ns.session = proxy.CreateSession(
 		"null://devnull",
@@ -103,7 +102,7 @@ func (ns *NullSink) Stop() {
 }
 
 func (ns *NullSink) GetStats() sink.SinkStats {
-	lastRcv, _ := ns.lastReceived.Load().(time.Time)
+	lastRcv := ns.lastReceived.Load()
 
 	return sink.SinkStats{
 		ID:             ns.id,

@@ -68,7 +68,7 @@ type HTTPChainSource struct {
 	parseErrors      atomic.Uint64
 	totalRequests    atomic.Uint64
 	rejectedRequests atomic.Uint64
-	lastEntryTime    atomic.Value // time.Time
+	lastEntryTime    core.AtomicTime
 }
 
 // NewHTTPChainSourcePlugin creates an http_chain source through plugin factory
@@ -111,7 +111,6 @@ func NewHTTPChainSourcePlugin(
 		auth:        authPolicy,
 		acl:         aclPolicy,
 	}
-	s.lastEntryTime.Store(time.Time{})
 
 	logger.Info("msg", "HTTP chain source initialized",
 		"component", "http_chain_source",
@@ -229,7 +228,7 @@ func (s *HTTPChainSource) Stop() {
 
 // GetStats returns the source's statistics
 func (s *HTTPChainSource) GetStats() source.SourceStats {
-	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
+	lastEntry := s.lastEntryTime.Load()
 
 	s.sessionsMu.Lock()
 	cachedSessions := len(s.sessions)

@@ -60,7 +60,7 @@ type FileSource struct {
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
 	startTime      time.Time
-	lastEntryTime  atomic.Value // time.Time
+	lastEntryTime  core.AtomicTime
 }
 
 // NewFileSourcePlugin creates a file source through plugin factory
@@ -89,7 +89,6 @@ func NewFileSourcePlugin(
 			fs.own = append(fs.own, info)
 		}
 	}
-	fs.lastEntryTime.Store(time.Time{})
 
 	fs.session = proxy.CreateSession(
 		fmt.Sprintf("file:///%s/%s", opts.Directory, opts.Pattern),
@@ -171,7 +170,7 @@ func (fs *FileSource) Stop() {
 
 // GetStats returns the source's statistics, including active watchers.
 func (fs *FileSource) GetStats() source.SourceStats {
-	lastEntry, _ := fs.lastEntryTime.Load().(time.Time)
+	lastEntry := fs.lastEntryTime.Load()
 
 	fs.mu.RLock()
 	watcherCount := int64(len(fs.watchers))

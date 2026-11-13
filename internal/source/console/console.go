@@ -103,8 +103,8 @@ type ConsoleSource struct {
 	// Statistics
 	totalEntries  atomic.Uint64
 	startTime     time.Time
-	lastEntryTime atomic.Value // time.Time
-	ended         atomic.Bool  // standard input reached its end
+	lastEntryTime core.AtomicTime
+	ended         atomic.Bool // standard input reached its end
 }
 
 // NewConsoleSourcePlugin creates a console source through plugin factory
@@ -127,7 +127,6 @@ func NewConsoleSourcePlugin(
 		done:        make(chan struct{}),
 		logger:      logger,
 	}
-	cs.lastEntryTime.Store(time.Time{})
 
 	// Create session
 	cs.session = proxy.CreateSession(
@@ -189,7 +188,7 @@ func (s *ConsoleSource) Stop() {
 
 // GetStats returns the source's statistics
 func (s *ConsoleSource) GetStats() source.SourceStats {
-	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
+	lastEntry := s.lastEntryTime.Load()
 
 	return source.SourceStats{
 		ID:            s.id,

@@ -33,7 +33,7 @@ type NullSource struct {
 
 	totalEntries  atomic.Uint64
 	startTime     time.Time
-	lastEntryTime atomic.Value // time.Time
+	lastEntryTime core.AtomicTime
 }
 
 func NewNullSourcePlugin(
@@ -52,7 +52,6 @@ func NewNullSourcePlugin(
 		done:        make(chan struct{}),
 		logger:      logger,
 	}
-	ns.lastEntryTime.Store(time.Time{})
 
 	ns.session = proxy.CreateSession(
 		"null://void",
@@ -104,7 +103,7 @@ func (ns *NullSource) Stop() {
 }
 
 func (ns *NullSource) GetStats() source.SourceStats {
-	lastEntry, _ := ns.lastEntryTime.Load().(time.Time)
+	lastEntry := ns.lastEntryTime.Load()
 
 	return source.SourceStats{
 		ID:            ns.id,

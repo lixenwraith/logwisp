@@ -63,7 +63,7 @@ type TCPChainSource struct {
 	parseErrors    atomic.Uint64
 	rejectedConns  atomic.Uint64
 	activeConns    atomic.Int64
-	lastEntryTime  atomic.Value // time.Time
+	lastEntryTime  core.AtomicTime
 }
 
 // NewTCPChainSourcePlugin creates a tcp_chain source through plugin factory
@@ -106,7 +106,6 @@ func NewTCPChainSourcePlugin(
 		auth:        authPolicy,
 		acl:         aclPolicy,
 	}
-	s.lastEntryTime.Store(time.Time{})
 
 	logger.Info("msg", "TCP chain source initialized",
 		"component", "tcp_chain_source",
@@ -205,7 +204,7 @@ func (s *TCPChainSource) Stop() {
 
 // GetStats returns the source's statistics
 func (s *TCPChainSource) GetStats() source.SourceStats {
-	lastEntry, _ := s.lastEntryTime.Load().(time.Time)
+	lastEntry := s.lastEntryTime.Load()
 	details := map[string]any{
 		"host":                 s.config.Host,
 		"port":                 s.config.Port,

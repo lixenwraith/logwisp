@@ -56,7 +56,7 @@ type ConsoleSink struct {
 
 	// Statistics
 	totalProcessed atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
 }
 
 // levelStyles and markStyles are ANSI 16, so the terminal's theme picks the
@@ -115,7 +115,6 @@ func NewConsoleSinkPlugin(
 		exited:  make(chan struct{}),
 		logger:  logger,
 	}
-	cs.lastProcessed.Store(time.Time{})
 
 	// Create session for output
 	cs.session = proxy.CreateSession(
@@ -192,7 +191,7 @@ func (cs *ConsoleSink) Stop() {
 
 // GetStats returns sink statistics
 func (cs *ConsoleSink) GetStats() sink.SinkStats {
-	lastProc, _ := cs.lastProcessed.Load().(time.Time)
+	lastProc := cs.lastProcessed.Load()
 
 	return sink.SinkStats{
 		ID:             cs.id,

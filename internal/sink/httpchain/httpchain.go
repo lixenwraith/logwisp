@@ -74,7 +74,7 @@ type HTTPChainSink struct {
 	requestErrors  atomic.Uint64
 	droppedBatches atomic.Uint64
 	synthesized    atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
 }
 
 // NewHTTPChainSinkPlugin creates an http_chain sink through plugin factory
@@ -157,7 +157,6 @@ func NewHTTPChainSinkPlugin(
 		logger:     logger,
 		reqTimeout: time.Duration(opts.RequestTimeoutMS) * time.Millisecond,
 	}
-	t.lastProcessed.Store(time.Time{})
 
 	t.session = proxy.CreateSession(
 		"http_chain://"+addr,
@@ -235,7 +234,7 @@ func (t *HTTPChainSink) Stop() {
 
 // GetStats returns sink statistics
 func (t *HTTPChainSink) GetStats() sink.SinkStats {
-	lastProc, _ := t.lastProcessed.Load().(time.Time)
+	lastProc := t.lastProcessed.Load()
 	details := map[string]any{
 		"target":          t.url,
 		"node":            t.node,

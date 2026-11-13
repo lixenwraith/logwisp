@@ -64,7 +64,7 @@ type fileWatcher struct {
 	prevPosition int64
 	prevTail     []byte
 	entriesRead  atomic.Uint64
-	lastReadTime atomic.Value // time.Time
+	lastReadTime core.AtomicTime
 	logger       *log.Logger
 	failed       string      // the last check's error, "" for none; watch's
 	tail         []byte      // the lines before position (lastLines), set with it under mu
@@ -89,7 +89,6 @@ func newFileWatcher(directory string, raw, fromStart bool, callback func(core.Lo
 		logger:    logger,
 		others:    func(*os.File, os.FileInfo) (int64, bool) { return 0, false },
 	}
-	w.lastReadTime.Store(time.Time{})
 	return w
 }
 
@@ -143,10 +142,7 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 	}
 	w.mu.Unlock()
 
-	if lastRead, ok := w.lastReadTime.Load().(time.Time); ok {
-		info.LastReadTime = lastRead
-	}
-
+	info.LastReadTime = w.lastReadTime.Load()
 	return info
 }
 

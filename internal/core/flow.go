@@ -40,6 +40,21 @@ type TransportEvent struct {
 	Entry LogEntry
 }
 
+// AtomicTime is a time stats report, such as a plugin's last entry: stored
+// and loaded atomically, without the allocation each store of a time.Time in
+// an atomic.Value costs. It keeps the years 1678 to 2262; zero is unset.
+type AtomicTime struct{ ns atomic.Int64 }
+
+func (a *AtomicTime) Store(t time.Time) { a.ns.Store(t.UnixNano()) }
+
+// Load returns the time last stored, or the zero time when none was
+func (a *AtomicTime) Load() time.Time {
+	if ns := a.ns.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
+}
+
 // Tapped is what a pipeline's flow decided about one entry: Stage names the
 // stage that dropped Event.Entry (rate_limit, filters at Index, format), or is
 // "" when it passed and Event.Payload is what dispatch offered the sinks; a

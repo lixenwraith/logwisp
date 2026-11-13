@@ -69,7 +69,7 @@ type TCPChainSink struct {
 	reconnects     atomic.Uint64
 	synthesized    atomic.Uint64
 	connected      atomic.Bool
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
 }
 
 // NewTCPChainSinkPlugin creates a tcp_chain sink through plugin factory
@@ -126,7 +126,6 @@ func NewTCPChainSinkPlugin(
 		dialTimeout:  time.Duration(opts.DialTimeoutMS) * time.Millisecond,
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
 	}
-	t.lastProcessed.Store(time.Time{})
 
 	t.session = proxy.CreateSession(
 		"tcp_chain://"+t.addr,
@@ -203,7 +202,7 @@ func (t *TCPChainSink) Stop() {
 
 // GetStats returns sink statistics
 func (t *TCPChainSink) GetStats() sink.SinkStats {
-	lastProc, _ := t.lastProcessed.Load().(time.Time)
+	lastProc := t.lastProcessed.Load()
 	var active int64
 	if t.connected.Load() {
 		active = 1

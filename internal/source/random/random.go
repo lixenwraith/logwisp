@@ -43,7 +43,7 @@ type RandomSource struct {
 	totalEntries   atomic.Uint64
 	droppedEntries atomic.Uint64
 	startTime      time.Time
-	lastEntryTime  atomic.Value // time.Time
+	lastEntryTime  core.AtomicTime
 }
 
 func NewRandomSourcePlugin(
@@ -67,7 +67,6 @@ func NewRandomSourcePlugin(
 		logger:      logger,
 		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-	rs.lastEntryTime.Store(time.Time{})
 
 	rs.session = proxy.CreateSession(
 		fmt.Sprintf("random://%s", id),
@@ -136,7 +135,7 @@ func (rs *RandomSource) Stop() {
 }
 
 func (rs *RandomSource) GetStats() source.SourceStats {
-	lastEntry, _ := rs.lastEntryTime.Load().(time.Time)
+	lastEntry := rs.lastEntryTime.Load()
 
 	return source.SourceStats{
 		ID:             rs.id,

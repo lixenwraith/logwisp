@@ -87,7 +87,7 @@ type TCPSink struct {
 	writeErrors    atomic.Uint64
 	droppedWrites  atomic.Uint64
 	rejectedConns  atomic.Uint64
-	lastProcessed  atomic.Value // time.Time
+	lastProcessed  core.AtomicTime
 }
 
 // tcpClient is a registered connection's bounded send queue.
@@ -147,7 +147,6 @@ func NewTCPSinkPlugin(
 		auth:         authPolicy,
 		acl:          aclPolicy,
 	}
-	t.lastProcessed.Store(time.Time{})
 
 	logger.Info("msg", " TCP sink initialized",
 		"component", "tcp_sink",
@@ -532,7 +531,7 @@ func (t *TCPSink) flushInput() {
 
 // GetStats returns sink statistics
 func (t *TCPSink) GetStats() sink.SinkStats {
-	lastProc, _ := t.lastProcessed.Load().(time.Time)
+	lastProc := t.lastProcessed.Load()
 	details := map[string]any{
 		"host":                 t.config.Host,
 		"port":                 t.config.Port,
