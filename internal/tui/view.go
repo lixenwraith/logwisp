@@ -202,45 +202,69 @@ func (v *view) take(t core.Tapped) int {
 	e := t.Event.Entry
 	r := row{Line: logline.Read(e), pipe: t.Pipeline, source: t.Source,
 		stage: t.Stage, index: t.Index, rank: rank(t.Stage, t.Index), payload: t.Event.Payload}
-	r.at = r.Time
-	for _, at := range []time.Time{e.Time, t.Event.Time, time.Now()} {
+	for _, at := range []time.Time{r.Time, e.Time, t.Event.Time} {
 		if r.at.IsZero() {
 			r.at = at
 		}
 	}
-	r.level = slices.IndexFunc(core.Levels, func(l core.Level) bool { return l.Level == r.Level })
-	var b strings.Builder
-	for _, f := range r.Fields {
-		if b.Len() > 0 {
-			b.WriteByte(' ')
-		}
-		if f.Key != "" {
-			b.WriteString(f.Key + "=")
-		}
-		b.WriteString(f.Value)
+	if r.at.IsZero() {
+		r.at = time.Now() // not in the list, which would call it for every entry
 	}
-	r.fields = b.String()
-	r.size = rowBytes + r.own() + len(r.fields) + len(r.payload)
+	r.level = slices.IndexFunc(core.Levels, func(l core.Level) bool { return l.Level == r.Level })
+	r.size = rowBytes + r.own() + len(r.payload)
 	v.tagW = max(v.tagW, ui.RuneLen(r.Tag))
 	v.add(r)
 	return r.size
 }
 
-// own copies the line's text, which logline cuts from the entry's, so a row
-// pins no entry and its size is what it holds; it returns those bytes
+// own copies the line's text, which logline cuts from the entry's, into one
+// string the row's strings are cut from: the fields as the list shows them,
+// k=v, then the roles. So a row pins no entry, holds the fields' text once,
+// and its size is what it holds; own returns those bytes.
 func (r *row) own() int {
 	l := &r.Line
-	for _, s := range []*string{&l.Stamp, &l.Level, &l.Tag, &l.Message, &l.Layout} {
-		*s = strings.Clone(*s)
+	roles := [...]*string{&l.Stamp, &l.Level, &l.Tag, &l.Message, &l.Layout}
+	n := 0
+	for _, f := range l.Fields {
+		n += len(f.Key) + len(f.Value) + 2 // '=' and a space at most
 	}
-	n := len(l.Stamp) + len(l.Level) + len(l.Tag) + len(l.Message) + len(l.Layout)
+	for _, s := range roles {
+		n += len(*s)
+	}
+	var b strings.Builder
+	b.Grow(n)
+	for _, f := range l.Fields {
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		if f.Key != "" {
+			b.WriteString(f.Key)
+			b.WriteByte('=')
+		}
+		b.WriteString(f.Value)
+	}
+	at := b.Len()
+	for _, s := range roles {
+		b.WriteString(*s)
+	}
+	all := b.String()
+	r.fields = all[:at]
+	for _, s := range roles {
+		*s, at = all[at:at+len(*s)], at+len(*s)
+	}
 	fields := make([]logline.Field, len(l.Fields))
+	at = 0
 	for i, f := range l.Fields {
-		fields[i] = logline.Field{Key: strings.Clone(f.Key), Value: strings.Clone(f.Value)}
-		n += fieldBytes + len(f.Key) + len(f.Value)
+		if at > 0 {
+			at++
+		}
+		if f.Key != "" {
+			fields[i].Key, at = all[at:at+len(f.Key)], at+len(f.Key)+1
+		}
+		fields[i].Value, at = all[at:at+len(f.Value)], at+len(f.Value)
 	}
 	l.Fields = fields
-	return n
+	return n + fieldBytes*len(fields)
 }
 
 // dropped reports whether the flow dropped the row

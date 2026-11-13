@@ -164,7 +164,7 @@ func TestAFilterChangeKeepsTheFocusedRowInPlace(t *testing.T) {
 }
 
 // A row keeps copies of its text, none of the entry's, and its size counts
-// every string it keeps, so the ring's bound holds for any line
+// every byte it keeps, so the ring's bound holds for any line
 func TestARowCountsAllItHolds(t *testing.T) {
 	long := strings.Repeat("y", 4096)
 	rec := tapped("p", "null", "", 0, `{"msg":"`+long+`","sub":"`+long+`","k":"`+long+`","t":"2026-10-10T12:00:00Z"}`)
@@ -172,20 +172,26 @@ func TestARowCountsAllItHolds(t *testing.T) {
 	var v view
 	size := v.take(rec)
 	r := v.rows[0]
+	in := func(s, of string) bool {
+		p, start := uintptr(unsafe.Pointer(unsafe.StringData(s))), uintptr(unsafe.Pointer(unsafe.StringData(of)))
+		return s != "" && p >= start && p < start+uintptr(len(of))
+	}
 	held := rowBytes + len(r.Stamp) + len(r.Level) + len(r.Tag) + len(r.Message) + len(r.Layout) + len(r.fields) + len(r.payload)
-	strs := []string{r.Stamp, r.Level, r.Tag, r.Message, r.Layout}
+	strs := []string{r.Stamp, r.Level, r.Tag, r.Message, r.Layout, r.fields}
 	for _, f := range r.Fields {
-		held += int(unsafe.Sizeof(f)) + len(f.Key) + len(f.Value)
-		strs = append(strs, f.Key, f.Value)
+		held += int(unsafe.Sizeof(f))
+		for _, s := range []string{f.Key, f.Value} {
+			if strs = append(strs, s); !in(s, r.fields) {
+				held += len(s) // held apart from the list
+			}
+		}
 	}
 	if size < held || v.bytes != size {
 		t.Fatalf("size %d, ring %d, for %d held", size, v.bytes, held)
 	}
 	for _, s := range strs {
-		for _, from := range []string{rec.Event.Entry.Message, rec.Event.Entry.Level} {
-			if p, start := uintptr(unsafe.Pointer(unsafe.StringData(s))), uintptr(unsafe.Pointer(unsafe.StringData(from))); s != "" && p >= start && p < start+uintptr(len(from)) {
-				t.Fatalf("%.20q is the entry's", s)
-			}
+		if in(s, rec.Event.Entry.Message) || in(s, rec.Event.Entry.Level) {
+			t.Fatalf("%.20q is the entry's", s)
 		}
 	}
 }
