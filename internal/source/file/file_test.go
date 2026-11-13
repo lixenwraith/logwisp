@@ -508,3 +508,49 @@ func TestShiftedArchiveResumesWhereItWasRead(t *testing.T) {
 		})
 	}
 }
+
+// A check reads or skips a bounded part of a file, so a sparse file's hole,
+// terabytes that cost nothing to make, neither holds the watcher for hours
+// nor becomes entries of NULs
+func TestHoleIsWalkedABoundedPartACheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	testutil.WriteFile(t, path, "first\n")
+	var got []string
+	w := newFileWatcher(path, true, true, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	if err := w.checkFile(); err != nil {
+		t.Fatal(err)
+	}
+	// copytruncate under a writer that goes on at an offset a terabyte on
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("far\n"), 1<<40); err != nil {
+		t.Skipf("no sparse file here: %v", err)
+	}
+	f.Close()
+	done := make(chan error, 1)
+	go func() { // the first check holds the changed file, the second judges it
+		err := w.checkFile()
+		if err == nil {
+			err = w.checkFile()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a check still walking the hole after 10 s")
+	}
+	for _, e := range got {
+		if strings.Contains(e, "\x00") {
+			t.Fatalf("published an entry of %d NULs", strings.Count(e, "\x00"))
+		}
+	}
+	if w.position > int64(len("first\n"))+2*readPerCheck { // what pastHole skips and what is read
+		t.Fatalf("a check went %d bytes into the hole", w.position)
+	}
+}

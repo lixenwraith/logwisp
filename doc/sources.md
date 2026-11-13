@@ -53,7 +53,7 @@ Options, each as type and default:
   warning: `lw > out.log` in the directory would read its own output back.
 - A line longer than 1 MiB continues in the next entry, as on the console
   source; so does the rest of a line a poll reads while it is still being
-  written.
+  written, or past the 64 MiB a poll reads at most.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
   restart or a reload resumes from the current end of each file, and content
   written meanwhile is not read. A file created while lw runs gets its watcher
@@ -104,7 +104,8 @@ Options, each as type and default:
   console sink paints that word and the http sink's viewer filters on it.
 - `raw = true` skips the JSON branch. The line, with its terminator (`\n` or
   `\r\n`) removed, becomes the message. `fields` stays empty, the time is the
-  read time, and the level is inferred from the text. Empty lines are skipped.
+  read time, and the level is inferred from the text. Empty lines, and lines
+  of NULs only (a sparse file's hole), are skipped.
   With `format.type = "raw"` each line is written back with one `\n`, which
   carries records the envelope cannot hold but is not byte-exact; see
   [Formatters](formatters.md#raw).

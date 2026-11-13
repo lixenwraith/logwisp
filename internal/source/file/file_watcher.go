@@ -48,6 +48,11 @@ const settleChecks = 20
 // position must be NUL to take them for a hole (see pastHole)
 const holeProbe = 4 << 10
 
+// readPerCheck bounds what one check reads or skips, so that a watcher sees
+// stop between checks however large a file, or a hole in it, grows: a sparse
+// file's terabytes cost nothing to make and hours to read
+const readPerCheck = 64 << 20
+
 // fileWatcher tails a single file, handles rotations, and sends new lines to a callback
 type fileWatcher struct {
 	directory    string
@@ -223,14 +228,14 @@ func (w *fileWatcher) checkFile() error {
 	if _, err := file.Seek(pos, io.SeekStart); err != nil {
 		return err
 	}
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(io.LimitReader(file, readPerCheck))
 	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
 	scanner.Split(scanLinesCapped)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
+		if len(bytes.TrimLeft(scanner.Bytes(), "\x00")) == 0 {
+			continue // empty, or a hole's NULs, which nothing wrote
 		}
+		line := scanner.Text()
 
 		entry := w.parseLine(line)
 		entry.RawSize = int64(len(line))
@@ -320,7 +325,8 @@ func (w *fileWatcher) find(file *os.File, pos, size int64) (at int64, which int,
 
 // pastHole is where a rotated file is read from: its start, or its first data
 // past the position when the bytes before it are NUL, the hole copytruncate
-// leaves under a writer that does not append and goes on at its offset
+// leaves under a writer that does not append and goes on at its offset. It
+// walks readPerCheck of the hole at most; the reads after skip the rest.
 func pastHole(file *os.File, pos, size int64) int64 {
 	at := min(pos, size)
 	for _, from := range []int64{0, max(0, at-holeProbe)} {
@@ -329,8 +335,8 @@ func pastHole(file *os.File, pos, size int64) int64 {
 		}
 	}
 	buf := make([]byte, holeProbe)
-	for at < size {
-		n, err := file.ReadAt(buf[:min(int64(len(buf)), size-at)], at)
+	for end := at + min(size-at, readPerCheck); at < end; {
+		n, err := file.ReadAt(buf[:min(int64(len(buf)), end-at)], at)
 		if i := bytes.IndexFunc(buf[:n], func(r rune) bool { return r != 0 }); i >= 0 {
 			return at + int64(i)
 		}
