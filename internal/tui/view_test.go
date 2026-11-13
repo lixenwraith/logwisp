@@ -903,11 +903,11 @@ func TestXExportsThePinsOrTheRowsShown(t *testing.T) {
 // DEL and bidi controls raw: each is a \u escape, which a value reads back as
 func TestAnExportHoldsNoRuneATerminalActsOn(t *testing.T) {
 	var v view
-	v.take(tapped("p", "null", "", 0, "{\"msg\":\"pay \u009b2J\u009d52;c;aGk=\u009c ‮evil‬\x7f\",\"k\":\"⁦v\u0085\"}"))
+	v.take(tapped("p", "null", "", 0, "{\"msg\":\"pay \u009b2J\u009d52;c;aGk=\u009c \u202eevil\u202c\x7f\",\"k\":\"\u2066v\u0085\"}"))
 	var b strings.Builder
 	jsonLines(v.rows).WriteTo(&b)
 	out := strings.TrimSuffix(b.String(), "\n")
-	if i := strings.IndexAny(out, "\u009b\u009c\u009d\u0085\x7f‬‮⁦"); i >= 0 {
+	if i := strings.IndexAny(out, "\u009b\u009c\u009d\u0085\x7f\u202c\u202e\u2066"); i >= 0 {
 		t.Fatalf("raw at %d: %q", i, out)
 	}
 	was, back := v.rows[0].Line, logline.Read(core.LogEntry{Message: out})
