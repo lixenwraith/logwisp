@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -487,6 +488,35 @@ func BenchmarkParseHost(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				ParseHost(s)
+			}
+		})
+	}
+}
+
+// BenchmarkRefuse is a refusal past its close, its WARN muted as all but one
+// a minute are: a direct peer, a client a PROXY header names, and a client a
+// trusted proxy forwards
+func BenchmarkRefuse(b *testing.B) {
+	p := &Policy{deny: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}, epoch: time.Now()}
+	p.nextWarn.Store(math.MaxInt64)
+	server, client := net.Pipe()
+	client.Close()
+	var direct net.Conn = remoteConn{server, net.TCPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.1:40000"))}
+	proxied := &conn{Conn: remoteConn{server, net.TCPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:40000"))},
+		client: net.TCPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.1:40000"))}
+	forwarded := netip.MustParseAddr("192.0.2.1")
+	for _, c := range []struct {
+		name   string
+		refuse func()
+	}{
+		{"direct", func() { p.refuse(direct, &p.denied, "address rules") }},
+		{"proxied", func() { p.refuse(proxied, &p.denied, "address rules") }},
+		{"forwarded", func() { p.Forwarded(forwarded, "127.0.0.1:40000") }},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				c.refuse()
 			}
 		})
 	}

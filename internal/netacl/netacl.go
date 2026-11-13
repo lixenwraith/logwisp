@@ -347,15 +347,19 @@ func (l *listener) deliver(c net.Conn, err error) bool {
 func (p *Policy) refuse(c net.Conn, count *atomic.Uint64, reason string) {
 	count.Add(1)
 	c.Close()
-	p.report("Connection", fmt.Sprint(c.RemoteAddr()), PeerAddr(c), reason)
+	if p.due() {
+		p.report("Connection", fmt.Sprint(c.RemoteAddr()), PeerAddr(c), reason)
+	}
 }
 
-// report WARNs of a refusal at most once per warnEvery; the counts keep the rest
-func (p *Policy) report(what, client, peer, reason string) {
+// due reports whether a refusal's WARN is due, at most once per warnEvery; the
+// counts keep the rest, so callers build its fields only when it is
+func (p *Policy) due() bool {
 	now, next := int64(time.Since(p.epoch)), p.nextWarn.Load()
-	if now < next || !p.nextWarn.CompareAndSwap(next, now+int64(warnEvery)) {
-		return
-	}
+	return now >= next && p.nextWarn.CompareAndSwap(next, now+int64(warnEvery))
+}
+
+func (p *Policy) report(what, client, peer, reason string) {
 	fields := []any{"msg", what + " refused by acl; more within a minute are only counted",
 		"component", p.component,
 		"instance_id", p.id,
@@ -384,7 +388,9 @@ func (p *Policy) Requests(next http.Handler, client func(*http.Request) string) 
 		addr, _ := ParseHost(client(r))
 		if !p.requests.Take(Key(addr)) {
 			p.limited.Add(1)
-			p.report("Request", client(r), ContextPeerAddr(r.Context()), "requests_per_second_per_client")
+			if p.due() {
+				p.report("Request", client(r), ContextPeerAddr(r.Context()), "requests_per_second_per_client")
+			}
 			w.Header().Set("Retry-After", retry)
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return
@@ -400,7 +406,9 @@ func (p *Policy) Forwarded(client netip.Addr, peer string) error {
 		return nil
 	}
 	p.denied.Add(1)
-	p.report("Request", client.String(), peer, "address rules")
+	if p.due() {
+		p.report("Request", client.String(), peer, "address rules")
+	}
 	return fmt.Errorf("forwarded client %s %w", client, ErrDenied)
 }
 
