@@ -388,7 +388,11 @@ func (h *HTTPSink) flushInput() {
 
 // handleStream serves one client's SSE stream
 func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
-	if h.config.MaxConnections > 0 && h.activeClients.Load() >= h.config.MaxConnections {
+	// The slot is taken before the check, so concurrent streams cannot all
+	// pass it before one counts
+	count := h.activeClients.Add(1)
+	if h.config.MaxConnections > 0 && count > h.config.MaxConnections {
+		h.activeClients.Add(-1)
 		h.rejectedClients.Add(1)
 		http.Error(w, "too many clients", http.StatusServiceUnavailable)
 		return
@@ -420,7 +424,6 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	id := h.nextClientID.Add(1)
 
-	count := h.activeClients.Add(1)
 	h.logger.Debug("msg", "HTTP client connected",
 		"component", "http_sink",
 		"remote_addr", remote,

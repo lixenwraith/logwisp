@@ -282,24 +282,37 @@ func (t *TCPSink) shutdown() {
 	})
 }
 
-// acceptLoop accepts client connections until listener close
+// acceptLoop accepts client connections until listener close. After an
+// Accept error it backs off as net/http does: at the descriptor limit the
+// error recurs until a connection closes, and retrying at once spins.
 func (t *TCPSink) acceptLoop() {
 	defer t.wg.Done()
+	var delay time.Duration
 	for {
 		conn, err := t.listener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
+			delay = min(max(2*delay, 5*time.Millisecond), time.Second)
 			t.logger.Warn("msg", "Accept error",
 				"component", "tcp_sink",
-				"error", err)
+				"error", err,
+				"retry_in", delay)
+			select {
+			case <-time.After(delay):
+			case <-t.done:
+				return
+			}
 			continue
 		}
+		delay = 0
 
-		if t.config.MaxConnections > 0 && t.activeConns.Load() >= t.config.MaxConnections {
-			// The count rises only in handleConn, so a burst can over-admit by
-			// the conns accepted before their handleConn runs; acceptable
+		// The slot is taken before the check, so a burst cannot pass it while
+		// no handleConn has run; it bounds concurrent handshakes too
+		count := t.activeConns.Add(1)
+		if t.config.MaxConnections > 0 && count > t.config.MaxConnections {
+			t.activeConns.Add(-1)
 			t.rejectedConns.Add(1)
 			conn.Close()
 			continue
@@ -310,6 +323,7 @@ func (t *TCPSink) acceptLoop() {
 		case <-t.done:
 			// shutdown already swept conns; this one would outlive it
 			t.clientsMu.Unlock()
+			t.activeConns.Add(-1)
 			conn.Close()
 			return
 		default:
@@ -318,18 +332,17 @@ func (t *TCPSink) acceptLoop() {
 		t.clientsMu.Unlock()
 
 		t.wg.Add(1)
-		go t.handleConn(conn)
+		go t.handleConn(conn, count)
 	}
 }
 
-// handleConn registers the client and runs its writer; a companion reader
-// goroutine drains inbound bytes for disconnect detection
-func (t *TCPSink) handleConn(conn net.Conn) {
+// handleConn registers the client, holding the slot acceptLoop took, and runs
+// its writer; a companion reader goroutine drains inbound bytes for
+// disconnect detection
+func (t *TCPSink) handleConn(conn net.Conn, count int64) {
 	defer t.wg.Done()
 	remote := conn.RemoteAddr().String()
 
-	// Counted before the handshake: max_connections bounds concurrent handshakes too
-	count := t.activeConns.Add(1)
 	defer func() {
 		conn.Close()
 		t.clientsMu.Lock()

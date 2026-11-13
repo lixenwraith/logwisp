@@ -516,3 +516,43 @@ func TestLateStreamGetsTheBacklog(t *testing.T) {
 		t.Fatalf("stream got %q", got)
 	}
 }
+
+// A burst of streams is admitted up to max_connections and no further: the
+// slot is taken before the check, not once the stream is set up
+func TestStreamBurstIsAdmittedUpToMaxConnections(t *testing.T) {
+	const limit, burst = 4, 64
+	h, _ := newTestHTTPSink(t, map[string]any{"max_connections": int64(limit)})
+	_, baseURL := serveTestHTTPSink(t, h)
+	client := &http.Client{Transport: &http.Transport{}, Timeout: 3 * time.Second}
+	t.Cleanup(client.CloseIdleConnections)
+	type answer struct {
+		code int
+		body io.Closer
+	}
+	answers, ready := make(chan answer, burst), make(chan struct{})
+	for range burst {
+		go func() {
+			<-ready
+			resp, err := client.Get(baseURL + "/stream")
+			if err != nil {
+				answers <- answer{}
+				return
+			}
+			answers <- answer{resp.StatusCode, resp.Body}
+		}()
+	}
+	close(ready)
+	admitted := 0
+	for range burst {
+		a := <-answers
+		if a.body != nil {
+			defer a.body.Close() // an admitted stream holds its slot to the end
+		}
+		if a.code == http.StatusOK {
+			admitted++
+		}
+	}
+	if admitted != limit {
+		t.Fatalf("admitted %d of a burst of %d streams, max_connections %d", admitted, burst, limit)
+	}
+}
