@@ -236,11 +236,11 @@
 # id = "chain_in"
 # type = "tcp_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
+# host = "127.0.0.1"                    # This machine only; "0.0.0.0" every IPv4 interface, "::" every IPv6 one
 # port = 9440                           # Required (example)
 # buffer_size = 1000
 # max_connections = 0                   # 0 = unlimited
-# read_timeout_ms = 0                   # Idle deadline; 0 = none
+# read_timeout_ms = 300000              # Idle deadline; 0 = none
 # hello_timeout_ms = 10000              # Protocol preamble deadline
 # trust_node = true                     # false: label entries by remote address
 # [pipelines.plugin_sources.config.tls]
@@ -275,7 +275,7 @@
 # id = "hchain_in"
 # type = "http_chain"
 # [pipelines.plugin_sources.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
+# host = "127.0.0.1"                    # This machine only; "0.0.0.0" every IPv4 interface, "::" every IPv6 one
 # port = 9441                           # Required (example)
 # ingest_path = "/ingest"               # Must start with "/"; not "/auth"
 # buffer_size = 1000
@@ -348,19 +348,19 @@
 # flush_interval_ms = 100
 
 ## HTTP sink (server-sent events, a JSON status document and a browser viewer)
-## Without an auth table both endpoints are UNAUTHENTICATED and the stream
-## sends Access-Control-Allow-Origin: *. Bind to a trusted interface.
+## Without an auth table both endpoints are UNAUTHENTICATED: keep the loopback
+## host, or narrow who connects with acl.allow.
 # [[pipelines.plugin_sinks]]
 # id = "http_out"
 # type = "http"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
+# host = "127.0.0.1"                    # This machine only; "0.0.0.0" every IPv4 interface, "::" every IPv6 one
 # port = 8081                           # Required (example)
 # stream_path = "/stream"               # Exact; starts with "/", clean (one trailing "/" allowed), none of { } % ? #; not /auth or under it
 # status_path = "/status"               # Same rules; differs from stream_path
 # buffer_size = 1000                    # Sink input queue
 # client_buffer_size = 256              # Per-client send queue
-# write_timeout_ms = 0                  # Per-event deadline; 0 = none
+# write_timeout_ms = 5000               # Per-event deadline, missed: disconnected; 0 = none
 # max_connections = 0                   # 0 = unlimited
 # replay_lines = 0                      # Last entries a new stream gets first; 0 = none
 # login_page = false                    # GET /auth/login; scram behind auth.trusted_proxies only
@@ -399,7 +399,7 @@
 # id = "tcp_out"
 # type = "tcp"
 # [pipelines.plugin_sinks.config]
-# host = "0.0.0.0"                      # IPv4 only; "::" IPv6 only; 127.0.0.1 or ::1 this machine only
+# host = "127.0.0.1"                    # This machine only; "0.0.0.0" every IPv4 interface, "::" every IPv6 one
 # port = 9090                           # Required (example)
 # buffer_size = 1000
 # client_buffer_size = 256

@@ -191,9 +191,10 @@ func defaults() *Config {
 		StatusReporter: true,
 		Color:          "auto",
 		Logging: &LogConfig{
-			Output: "stderr",
-			Level:  "info",
-			Format: "txt",
+			Output:       "stderr",
+			Level:        "info",
+			Format:       "txt",
+			Sanitization: "json",
 			File: &LogFileConfig{
 				Directory:      "./log",
 				Name:           "logwisp",
