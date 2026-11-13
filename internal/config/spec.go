@@ -175,6 +175,41 @@ func specVariable(flag string) string {
 	return "LOGWISP_" + strings.ToUpper(strings.ReplaceAll(flag, "-", "_"))
 }
 
+// SettingVariable is a setting's environment variable, its path with '.' as
+// '_' uppercased after LOGWISP_, as lixenwraith/config reads it
+func SettingVariable(path string) string {
+	return "LOGWISP_" + strings.ToUpper(strings.ReplaceAll(path, ".", "_"))
+}
+
+// unknownVariables names, sorted, the LOGWISP_ variables set that no setting,
+// pipeline flag or file location reads: misspelled, one would drop what it
+// held, a sink's sending entries to standard output
+func unknownVariables(environ []string) []string {
+	known := map[string]bool{"LOGWISP_CONFIG_FILE": true, "LOGWISP_CONFIG_DIR": true}
+	for _, k := range SettingKeys() {
+		known[SettingVariable(k.Name)] = true
+	}
+	flags := SpecFlags()
+	for _, f := range flags {
+		known[f.Variable] = true
+	}
+	var unknown []string
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, "LOGWISP_") || value == "" || known[name] {
+			continue
+		}
+		i := strings.LastIndexByte(name, '_')
+		if _, err := strconv.ParseUint(name[i+1:], 10, 64); err == nil &&
+			slices.ContainsFunc(flags, func(f SpecFlag) bool { return f.Many && f.Variable == name[:i] }) {
+			continue
+		}
+		unknown = append(unknown, name)
+	}
+	slices.Sort(unknown)
+	return unknown
+}
+
 // cliSpecs looks up the kind of each command-line spec.
 func cliSpecs(in []Spec) ([]pipelineSpec, error) {
 	var specs []pipelineSpec

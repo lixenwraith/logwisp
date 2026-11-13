@@ -4,6 +4,7 @@
 
 E2E_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 BIN=${LOGWISP_BIN:-${E2E_DIR%/*}/bin/lw}
+unset LOGWISP_BIN # lw refuses a LOGWISP_ variable it does not read
 AUTO=0 KEEP=0 FOLLOW=0
 PIDS=() DAEMONS=() AT_EXIT=()
 E2E_PASSED=0 E2E_FAILED=0 E2E_SKIPPED=0

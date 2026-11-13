@@ -110,7 +110,7 @@ func TestSpecValueIsOneListEntry(t *testing.T) {
 }
 
 // One pipeline from LOGWISP_*: numbered variables follow the bare one in
-// numeric order, only repeatable kinds are numbered, and empty means unset.
+// numeric order, and empty means unset.
 func TestEnvironmentPipeline(t *testing.T) {
 	isolateConfig(t)
 	for name, value := range map[string]string{
@@ -120,7 +120,6 @@ func TestEnvironmentPipeline(t *testing.T) {
 		"LOGWISP_SOURCE_2":      "null:id=two",
 		"LOGWISP_SINK_1":        "console",
 		"LOGWISP_FILTER":        "",
-		"LOGWISP_FORMAT_1":      "raw",
 		"LOGWISP_RATE_LIMIT":    "entries_per_second=10",
 		"LOGWISP_LOGGING_LEVEL": "debug",
 	} {
@@ -140,6 +139,23 @@ func TestEnvironmentPipeline(t *testing.T) {
 		p[0].PluginSources[2].ID != "ten" || len(p[0].PluginSinks) != 1 || p[0].Flow.Filters != nil || p[0].Flow.Format != nil ||
 		*p[0].Flow.RateLimit != (RateLimitConfig{EntriesPerSecond: 10, Policy: "drop"}) || cfg.Logging.Level != "debug" {
 		t.Fatalf("environment pipeline: %+v %+v", p, cfg.Logging)
+	}
+}
+
+// A LOGWISP_ variable no setting, pipeline flag or file location reads is
+// refused, as an unknown key is: a misspelled sink would leave entries on
+// standard output. Only repeatable kinds are numbered; empty means unset.
+func TestUnknownVariablesAreRefused(t *testing.T) {
+	isolateConfig(t)
+	for name, value := range map[string]string{
+		"LOGWISP_SINKS_1": "tcp:port=9000", "LOGWISP_FORMAT_1": "raw", "LOGWISP_LOGGING_LEVL": "debug",
+		"LOGWISP_SOURCE_2": "null", "LOGWISP_COLOR": "never", "LOGWISP_CONFIG_DIR": ".", "LOGWISP_UNSET": "",
+	} {
+		t.Setenv(name, value)
+	}
+	_, err := Load(Args{})
+	if err == nil || !strings.HasPrefix(err.Error(), "unknown variable LOGWISP_FORMAT_1, LOGWISP_LOGGING_LEVL, LOGWISP_SINKS_1:") {
+		t.Fatalf("misspelled variables: %v", err)
 	}
 }
 

@@ -931,7 +931,7 @@ func NewSchema() Schema {
 		Forms:   Forms(),
 	}
 	for _, k := range config.SettingKeys() {
-		s.Settings = append(s.Settings, Setting{k, "LOGWISP_" + strings.ToUpper(strings.ReplaceAll(k.Name, ".", "_"))})
+		s.Settings = append(s.Settings, Setting{k, config.SettingVariable(k.Name)})
 	}
 	for _, p := range config.Plugins() {
 		if p.Role == "source" {

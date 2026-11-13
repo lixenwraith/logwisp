@@ -288,7 +288,10 @@ changes when lw restarts; a fleet signs with an issuer instead, and edges set
 Every setting is also a variable: its path with `.` as `_`, uppercased, after
 `LOGWISP_`. An empty variable, a setting's or a pipeline's, counts as unset.
 They rank below flags and above the file
-([precedence](configuration.md#configuration-precedence)).
+([precedence](configuration.md#configuration-precedence)). A `LOGWISP_`
+variable that names no setting, pipeline variable or file location below is
+refused, as an unknown key is: a misspelled `LOGWISP_SINKS_1` would leave the
+entries on standard output.
 
 ```bash
 export LOGWISP_QUIET=true

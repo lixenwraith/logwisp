@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lixenwraith/logwisp/internal/core"
 
@@ -49,6 +50,9 @@ func Load(args Args) (*Manager, error) {
 	specs, err := cliSpecs(args.Specs)
 	if err != nil {
 		return nil, err
+	}
+	if names := unknownVariables(os.Environ()); len(names) > 0 {
+		return nil, fmt.Errorf("unknown variable %s: LOGWISP_ names a setting, a pipeline flag or LOGWISP_CONFIG_FILE/DIR", strings.Join(names, ", "))
 	}
 	if len(specs) == 0 {
 		specs = envPipelineSpecs(os.Environ())
