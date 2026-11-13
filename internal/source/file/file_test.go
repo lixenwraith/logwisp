@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,11 +39,17 @@ func TestFileSourceSkipsItsOwnOutput(t *testing.T) {
 		match:      regexp.MustCompile(globToRegex("*.log")),
 		own:        []os.FileInfo{own},
 		ownSkipped: map[string]bool{},
+		watchers:   map[string]*fileWatcher{},
 		logger:     log.NewLogger(),
 	}
-	files, err := source.scanFile()
-	if err != nil || len(files) != 1 || filepath.Base(files[0]) != "app.log" {
-		t.Fatalf("scanFile = %v, %v; want app.log alone", files, err)
+	source.ctx, source.cancel = context.WithCancel(t.Context())
+	defer source.wg.Wait()
+	defer source.cancel()
+	source.checkTargets()
+	source.mu.RLock()
+	defer source.mu.RUnlock()
+	if _, followed := source.watchers[filepath.Join(dir, "app.log")]; !followed || len(source.watchers) != 1 || source.capped {
+		t.Fatalf("watchers %v, capped %v; want app.log alone", slices.Collect(maps.Keys(source.watchers)), source.capped)
 	}
 }
 
@@ -768,4 +775,34 @@ func repeatsAKey(line string) bool {
 		}
 	}
 	return false
+}
+
+// A scan keeps the watchers of the files it lists, in whatever order the
+// directory gives them, and stops those of a file gone or no longer a file
+func TestAScanStopsOnlyTheWatchersOfFilesItNoLongerLists(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"m.log", "z.log", "a.log", "q.log", "gone.log", "dir.log"} {
+		testutil.WriteFile(t, filepath.Join(dir, name), "")
+	}
+	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*.log"}, match: regexp.MustCompile(globToRegex("*.log")),
+		watchers: map[string]*fileWatcher{}, ownSkipped: map[string]bool{}, logger: log.NewLogger()}
+	source.ctx, source.cancel = context.WithCancel(t.Context())
+	defer source.wg.Wait()
+	defer source.cancel()
+	source.checkTargets()
+	source.mu.RLock()
+	before := maps.Clone(source.watchers)
+	source.mu.RUnlock()
+	if err := errors.Join(os.Remove(filepath.Join(dir, "gone.log")), os.Remove(filepath.Join(dir, "dir.log")), os.Mkdir(filepath.Join(dir, "dir.log"), 0o700)); err != nil {
+		t.Fatal(err)
+	}
+	source.checkTargets()
+	source.mu.RLock()
+	defer source.mu.RUnlock()
+	for name, kept := range map[string]bool{"m.log": true, "z.log": true, "a.log": true, "q.log": true, "gone.log": false, "dir.log": false} {
+		path := filepath.Join(dir, name)
+		if w, ok := source.watchers[path]; ok != kept || kept && w != before[path] {
+			t.Errorf("%s: watcher %p, before %p, want kept %v", name, w, before[path], kept)
+		}
+	}
 }

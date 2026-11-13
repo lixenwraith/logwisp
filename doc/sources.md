@@ -34,9 +34,10 @@ Options, each as type and default:
   `~/`, here as in every file or directory option, is the home directory; a
   relative path starts at lw's working directory.
 - `pattern` (string, `*`): glob over filenames; `*` and `?` only. A source
-  follows 4,096 files at most: past that, one WARN, and the others matching
-  wait for a watcher to end. Narrow the pattern, or split the directory between
-  sources.
+  follows 4,096 files at most, the first by name: past that, one WARN, and the
+  others matching wait for a watcher to end. Narrow the pattern, or split the
+  directory between sources. A file's watcher stops once a scan no longer lists
+  it: removed, renamed away, or replaced by a directory.
 - `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
   An open file is polled every 100 ms whatever this is.
 - `raw` (bool, `false`): never parse a line: the whole line is the message.

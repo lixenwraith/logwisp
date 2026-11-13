@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -261,7 +262,7 @@ func (fs *FileSource) checkTargets() {
 		}
 	}
 
-	fs.cleanupWatchers()
+	fs.cleanupWatchers(files)
 }
 
 // noteScan logs when the directory cannot be read and when it can again, not
@@ -291,12 +292,13 @@ func changed(last *string, err error) bool {
 }
 
 // ensureWatcher creates and starts a new file watcher if one doesn't exist for
-// the given path, and reports whether one follows it: none past maxFollowed.
+// the given path, unless it is lw's own output, and reports false only for a
+// path left waiting past maxFollowed
 func (fs *FileSource) ensureWatcher(path string) bool {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	if _, exists := fs.watchers[path]; exists {
+	if _, exists := fs.watchers[path]; exists || fs.isOwn(path) {
 		return true
 	}
 	if len(fs.watchers) >= maxFollowed {
@@ -383,14 +385,15 @@ func (fs *FileSource) removeWatcher(path string, watcher *fileWatcher) {
 	fs.mu.Unlock()
 }
 
-// cleanupWatchers stops and removes watchers for files that no longer exist.
-func (fs *FileSource) cleanupWatchers() {
+// cleanupWatchers stops and removes the watchers of files the scan no longer
+// lists, sorted: gone, or no longer a file. The listing answers without a stat
+// per file under the lock that every entry published waits on.
+func (fs *FileSource) cleanupWatchers(files []string) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	root := fs.dir.Load()
 	for path, w := range fs.watchers {
-		if _, err := root.Stat(filepath.Base(path)); os.IsNotExist(err) {
+		if _, listed := slices.BinarySearch(files, path); !listed {
 			w.stop()
 			delete(fs.watchers, path)
 			fs.logger.Debug("msg", "Cleaned up watcher for non-existent file",
@@ -419,7 +422,8 @@ func (fs *FileSource) publish(entry core.LogEntry) {
 	}
 }
 
-// scanFile finds all files in the configured path that match the pattern.
+// scanFile finds all files in the configured path that match the pattern,
+// sorted, as the directory may list them in any order
 func (fs *FileSource) scanFile() ([]string, error) {
 	root, err := fs.openDir()
 	if err != nil {
@@ -439,16 +443,12 @@ func (fs *FileSource) scanFile() ([]string, error) {
 	for _, entry := range entries {
 		// a FIFO, socket or device is no file to follow; a link's target is
 		// checked as it opens
-		if t := entry.Type(); t != 0 && t != os.ModeSymlink {
+		if t := entry.Type(); t != 0 && t != os.ModeSymlink || !fs.match.MatchString(entry.Name()) {
 			continue
 		}
-
-		path := filepath.Join(fs.config.Directory, entry.Name())
-		if fs.match.MatchString(entry.Name()) && !fs.isOwn(path) {
-			files = append(files, path)
-		}
+		files = append(files, filepath.Join(fs.config.Directory, entry.Name()))
 	}
-
+	slices.Sort(files)
 	return files, nil
 }
 
@@ -475,7 +475,8 @@ func (fs *FileSource) openDir() (*os.Root, error) {
 	return root, nil
 }
 
-// isOwn reports whether path is lw's own stdout or stderr, warning once per path
+// isOwn reports whether path is lw's own stdout or stderr, warning once per
+// path. Callers hold fs.mu.
 func (fs *FileSource) isOwn(path string) bool {
 	if len(fs.own) == 0 {
 		return false
