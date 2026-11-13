@@ -112,7 +112,7 @@ const (
 // RateLimitConfig defines the configuration for pipeline-level rate limiting
 type RateLimitConfig struct {
 	EntriesPerSecond  float64 `toml:"entries_per_second,omitempty" lw:"min=0,zero=off" help:"entries a second let through; unset, the stage limits nothing, sizes included"`
-	BurstEntries      float64 `toml:"burst_entries,omitempty" lw:"min=0,zero=one second's worth" help:"entries that may pass in a burst before entries_per_second holds them back"`
+	BurstEntries      float64 `toml:"burst_entries,omitempty" lw:"min=0,zero=one second's worth" help:"entries that may pass in a burst before entries_per_second holds them back; at least 1"`
 	Policy            string  `toml:"policy,omitempty" default:"pass" lw:"enum=pass|drop" help:"drop enforces entries_per_second and max_entry_size_bytes; pass lets every entry through"`
 	MaxEntrySizeBytes int64   `toml:"max_entry_size_bytes,omitempty" lw:"min=0,zero=unlimited" help:"drop larger entries; needs entries_per_second and policy drop"`
 }

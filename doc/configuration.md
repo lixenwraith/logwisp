@@ -159,7 +159,8 @@ Options, each as type and default:
 
 - `entries_per_second` (float, `0`): `0` disables the limiter; a negative value
   is refused.
-- `burst_entries` (float, `entries_per_second`): token bucket capacity.
+- `burst_entries` (float, `entries_per_second`): token bucket capacity, at
+  least one entry: below `1/s`, entries pass one at a time.
 - `policy` (string, `pass`): `pass` or `drop`, in lower case like every enum.
   `drop` discards entries over the rate or the size cap; `pass` lets
   everything through.
