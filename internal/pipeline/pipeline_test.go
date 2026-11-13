@@ -421,3 +421,99 @@ func TestDispatchCountsEachSinksDrops(t *testing.T) {
 		t.Fatalf("dropped %v, in all %v", dropped, stats["total_dropped_by_sink"])
 	}
 }
+
+// benchSource publishes n copies of entry as fast as the pipeline takes them
+type benchSource struct {
+	n     int
+	entry core.LogEntry
+	subs  []chan core.LogEntry
+}
+
+func (s *benchSource) Capabilities() []core.Capability { return nil }
+func (s *benchSource) Subscribe() <-chan core.LogEntry {
+	ch := make(chan core.LogEntry, 1000)
+	s.subs = append(s.subs, ch)
+	return ch
+}
+func (s *benchSource) Start() error {
+	go func() {
+		for range s.n {
+			for _, ch := range s.subs {
+				ch <- s.entry
+			}
+		}
+		for _, ch := range s.subs {
+			close(ch)
+		}
+	}()
+	return nil
+}
+func (s *benchSource) Stop()                        {}
+func (s *benchSource) GetStats() source.SourceStats { return source.SourceStats{} }
+
+// countSink takes n events, then closes done
+type countSink struct {
+	in   chan core.TransportEvent
+	n    int
+	done chan struct{}
+}
+
+func (s *countSink) Capabilities() []core.Capability   { return []core.Capability{core.CapBackpressure} }
+func (s *countSink) Input() chan<- core.TransportEvent { return s.in }
+func (s *countSink) Start(context.Context) error {
+	go func() {
+		for range s.n {
+			<-s.in
+		}
+		close(s.done)
+	}()
+	return nil
+}
+func (s *countSink) Stop()                    {}
+func (s *countSink) GetStats() sink.SinkStats { return sink.SinkStats{} }
+
+func init() {
+	plugin.RegisterSource("null", func(_ string, cfg map[string]any, _ *log.Logger, _ *session.Proxy) (source.Source, error) {
+		return &benchSource{n: cfg["n"].(int), entry: cfg["entry"].(core.LogEntry)}, nil
+	})
+}
+
+// BenchmarkPipeline is an entry's way from a source's channel through the
+// flow to every sink's input, per entry
+func BenchmarkPipeline(b *testing.B) {
+	entry := core.LogEntry{Time: time.Now(), Source: "app.log", Level: "INFO",
+		Message: "GET /api/v1/users/42 200 1.2ms user=alice request_id=7f3a9c2e", RawSize: 64}
+	for _, c := range []struct {
+		format string
+		sinks  int
+	}{{"txt", 1}, {"json", 1}, {"json", 3}} {
+		b.Run(fmt.Sprintf("%s-%dsinks", c.format, c.sinks), func(b *testing.B) {
+			b.ReportAllocs()
+			cfg := &config.PipelineConfig{
+				Name:          b.Name(),
+				Flow:          &config.FlowConfig{Format: &config.FormatConfig{Type: c.format}},
+				PluginSources: []config.PluginSourceConfig{{ID: "src", Type: "null", Config: map[string]any{"n": b.N, "entry": entry}}},
+			}
+			var sinks []*countSink
+			for i := range c.sinks {
+				id := fmt.Sprintf("%s/%d", b.Name(), i)
+				s := &countSink{in: make(chan core.TransportEvent, 1000), n: b.N, done: make(chan struct{})}
+				testSinks[id], sinks = s, append(sinks, s)
+				cfg.PluginSinks = append(cfg.PluginSinks, config.PluginSinkConfig{ID: id, Type: "null"})
+			}
+			p, err := NewPipeline(cfg, log.NewLogger())
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			if err := p.Start(); err != nil {
+				b.Fatal(err)
+			}
+			for _, s := range sinks {
+				<-s.done
+			}
+			b.StopTimer()
+			p.Shutdown()
+		})
+	}
+}
