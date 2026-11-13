@@ -912,11 +912,12 @@ func (a *app) details(w *row, width int) []dline {
 	th := a.th
 	var out []dline
 	put := func(key string, keyW int, value string, style ui.Style) {
+		key = ui.PadRight(ui.Truncate(escape(key), keyW), keyW)
 		for i, s := range ui.WrapText(escape(value), max(1, width-keyW-1)) {
-			if i > 0 {
-				key = ""
+			if i == 1 {
+				key = strings.Repeat(" ", keyW)
 			}
-			out = append(out, dline{ui.PadRight(ui.Truncate(escape(key), keyW), keyW), s, style})
+			out = append(out, dline{key, s, style})
 		}
 	}
 	put("time", 8, w.at.Local().Format("2006-01-02 15:04:05.000 MST"), th.Text)
@@ -1035,24 +1036,38 @@ func (f font) put(r ui.Region, x int, s string, w int, style ui.Style) int {
 }
 
 // escape writes each rune a cell cannot show as a \u escape and each invalid
-// byte as a \x one; line breaks stay, for the detail to keep them
+// byte as a \x one; line breaks stay, for the detail to keep them. The detail
+// is built on every frame: s comes back as it is when nothing needs escaping.
 func escape(s string) string {
-	var b strings.Builder
+	var b []byte
+	kept := 0 // s[:kept] is in b
 	for i := 0; i < len(s); {
 		r, n := utf8.DecodeRuneInString(s[i:])
+		if r == '\n' || oneCell(r, n) {
+			i += n
+			continue
+		}
+		esc, v, width, digits := `\u`, uint32(r), 4, "0123456789ABCDEF"
 		switch {
-		case r == '\n' || oneCell(r, n):
-			b.WriteString(s[i : i+n])
 		case r == utf8.RuneError && n == 1:
-			fmt.Fprintf(&b, `\x%02x`, s[i])
+			esc, v, width, digits = `\x`, uint32(s[i]), 2, "0123456789abcdef"
 		case r > 0xffff:
-			fmt.Fprintf(&b, `\U%08X`, r)
-		default:
-			fmt.Fprintf(&b, `\u%04X`, r)
+			esc, width = `\U`, 8
+		}
+		if b == nil {
+			b = make([]byte, 0, len(s)+len(s)/2)
+		}
+		b = append(append(b, s[kept:i]...), esc...)
+		for shift := 4 * (width - 1); shift >= 0; shift -= 4 {
+			b = append(b, digits[v>>shift&0xf])
 		}
 		i += n
+		kept = i
 	}
-	return b.String()
+	if b == nil {
+		return s
+	}
+	return string(append(b, s[kept:]...))
 }
 
 // pattern is a smart-case match: all lower case ignores case. Without

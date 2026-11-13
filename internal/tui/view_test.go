@@ -884,3 +884,26 @@ func BenchmarkTake(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkDetails builds the detail of an entry of 16 KiB, what the tap
+// keeps at most: of ASCII words, of CJK, of bytes no cell shows
+func BenchmarkDetails(b *testing.B) {
+	var bin []byte
+	for i := 0; len(bin) < 16<<10; i++ {
+		bin = append(bin, byte(i))
+	}
+	a := mono(pipeline(b, []string{"null"}, []string{"null"}))
+	for _, e := range []struct{ name, msg string }{
+		{"ascii", strings.Repeat("lorem ipsum ", 16<<10/12)},
+		{"cjk", strings.Repeat("日志", 16<<10/6)},
+		{"binary", string(bin)},
+	} {
+		b.Run(e.name, func(b *testing.B) {
+			a.view.take(tapped("p", "null", "", 0, e.msg))
+			w := &a.view.rows[len(a.view.rows)-1]
+			for b.Loop() {
+				a.details(w, 80)
+			}
+		})
+	}
+}
