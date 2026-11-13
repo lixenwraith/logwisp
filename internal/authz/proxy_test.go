@@ -306,7 +306,8 @@ func TestPaddedForwardedForCostsNoMore(t *testing.T) {
 }
 
 // A full revocation list refuses a logout only while every token in it is
-// live, a token revoked after the list was last scanned included
+// live, a token revoked after the list was last scanned included, and never
+// that of a token it holds
 func TestFullRevocationListForgetsExpiredTokens(t *testing.T) {
 	m := &proxyMode{}
 	now := time.Now()
@@ -325,6 +326,9 @@ func TestFullRevocationListForgetsExpiredTokens(t *testing.T) {
 	}
 	if m.revoke("late-2", now.Add(time.Hour)) {
 		t.Fatal("a list full of live tokens took another")
+	}
+	if !m.revoke("late-1", now.Add(time.Hour)) {
+		t.Fatal("a full list refused a token it holds")
 	}
 	time.Sleep(time.Until(soon) + 10*time.Millisecond)
 	if !m.revoke("late-2", now.Add(time.Hour)) {

@@ -106,6 +106,9 @@ func (m *proxyMode) revoke(token string, until time.Time) bool {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.revoked[key]; ok {
+		return true // a repeated logout: the token needs no room, or a scan
+	}
 	if m.revoked == nil {
 		m.revoked = make(map[[32]byte]time.Time)
 	}
