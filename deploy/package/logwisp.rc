@@ -9,6 +9,8 @@
 #   logwisp_config  configuration file (default %%PREFIX%%/etc/logwisp/logwisp.toml)
 #   logwisp_user    account lw runs as (default "logwisp")
 #   logwisp_chdir   working directory (default /var/db/logwisp)
+#   logwisp_umask   file creation mask (default 027: what lw creates is closed
+#                   to other users, its group may read the logs)
 #   logwisp_args    extra lw options, e.g. --logging.level=debug (default empty);
 #                   rc.subr hands logwisp_flags to daemon(8), not to lw
 
@@ -24,6 +26,7 @@ load_rc_config $name
 : ${logwisp_config:="%%PREFIX%%/etc/logwisp/logwisp.toml"}
 : ${logwisp_user:="logwisp"}
 : ${logwisp_chdir:="/var/db/logwisp"}
+: ${logwisp_umask:="027"}
 : ${logwisp_args:=""}
 
 # daemon(8) records the child's pid, so stop and reload (SIGHUP) signal lw

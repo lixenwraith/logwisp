@@ -84,7 +84,10 @@ retention_hours   = 168.0
 
 `[logging.file]` applies only to the `file` and `all` modes. Its limits, and a
 floor of 10 MB free on the disk that no key changes, delete any `.log` file in
-`directory`, lw's or not: give lw a directory of its own.
+`directory`, lw's or not: give lw a directory of its own. As for a
+[file sink](sinks.md#file), what lw creates of the path is `0750`, and lw does
+not start when every user can write `directory` or `NAME.log` is not a
+regular file.
 `retention_hours = 0` keeps files. The `stdout`, `split` and `all` modes mix
 the log into a console sink's stdout. `[logging.console].target` is validated
 (`stdout`, `stderr`, `split`) but not applied: `logging.output` chooses the

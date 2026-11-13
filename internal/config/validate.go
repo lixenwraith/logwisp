@@ -507,7 +507,7 @@ func backoffMax(lo, hi int64) int64 {
 	return hi
 }
 
-// Check reads a negative min_disk_free_mb as 100; 0, or none set, keeps no space free
+// Check reads a negative min_disk_free_mb as the default, 100; 0 keeps no space free
 func (o *FileSinkOptions) Check() error {
 	if o.MinDiskFreeMB < 0 {
 		o.MinDiskFreeMB = 100

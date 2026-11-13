@@ -130,7 +130,11 @@ func (fs *FileSink) Input() chan<- core.TransportEvent {
 
 // Start begins the processing loop for the sink
 func (fs *FileSink) Start(ctx context.Context) error {
-	if err := fs.writer.ApplyConfig(fs.writerConfig); err != nil {
+	c := fs.writerConfig
+	if err := config.LogDir(c.Directory, c.Name+"."+c.Extension); err != nil {
+		return fmt.Errorf("file sink: %w", err)
+	}
+	if err := fs.writer.ApplyConfig(c); err != nil {
 		return fmt.Errorf("failed to initialize file writer: %w", err)
 	}
 	if err := fs.writer.Start(); err != nil {

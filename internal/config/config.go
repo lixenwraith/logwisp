@@ -237,7 +237,7 @@ type FileSinkOptions struct {
 	Name            string  `toml:"name" lw:"required" help:"base name of the files"`
 	MaxSizeMB       int64   `toml:"max_size_mb" default:"100" lw:"min=1" help:"size at which a file rotates"`
 	MaxTotalSizeMB  int64   `toml:"max_total_size_mb" default:"1000" lw:"min=1" help:"size of all files, beyond which the oldest go"`
-	MinDiskFreeMB   int64   `toml:"min_disk_free_mb" lw:"zero=none" help:"megabytes kept free on the disk, the oldest .log files deleted for it; a negative value means 100"`
+	MinDiskFreeMB   int64   `toml:"min_disk_free_mb" default:"100" lw:"zero=none" help:"megabytes kept free on the disk, the oldest .log files deleted for it, then writing paused; a negative value means 100"`
 	RetentionHours  float64 `toml:"retention_hours" default:"168" lw:"min=0,zero=kept" help:"hours a .log file is kept; 0 keeps them"`
 	BufferSize      int64   `toml:"buffer_size" default:"1000" lw:"min=1" help:"entries queued"`
 	FlushIntervalMs int64   `toml:"flush_interval_ms" default:"100" lw:"min=1" help:"milliseconds between flushes"`

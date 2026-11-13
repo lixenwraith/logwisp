@@ -47,7 +47,7 @@ func TestZeroDefaultsAndNegatives(t *testing.T) {
 		err.Error() != "buffer_size: must be at least 1, got -1" {
 		t.Fatalf("negative buffer_size: %v", err)
 	}
-	for in, want := range map[any]int64{nil: 0, int64(0): 0, int64(-1): 100, int64(7): 7} {
+	for in, want := range map[any]int64{nil: 100, int64(0): 0, int64(-1): 100, int64(7): 7} {
 		m := map[string]any{"directory": "d", "name": "n", "min_disk_free_mb": in}
 		if in == nil {
 			delete(m, "min_disk_free_mb")

@@ -201,6 +201,11 @@ func initializeLogger(cfg *config.Config) error {
 	default:
 		return fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
 	}
+	if logCfg.EnableFile {
+		if err := config.LogDir(logCfg.Directory, logCfg.Name+"."+logCfg.Extension); err != nil {
+			return fmt.Errorf("log file: %w", err)
+		}
+	}
 
 	return logger.ApplyConfig(logCfg)
 }

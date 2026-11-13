@@ -184,6 +184,9 @@ rc.conf variables:
 - `logwisp_user`: the account (default `logwisp`)
 - `logwisp_chdir`: the working directory (default `/var/db/logwisp`, created
   for `logwisp_user` when missing)
+- `logwisp_umask`: the file creation mask (default `027`, as the systemd
+  unit's `UMask`: what lw creates is closed to other users, and its group may
+  read the logs)
 - `logwisp_args`: extra `lw` options, e.g. `--logging.level=debug` (default
   empty); `logwisp_flags` goes to `daemon(8)`, not to `lw`
 

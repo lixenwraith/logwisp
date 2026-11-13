@@ -102,7 +102,7 @@ directory         = "/var/log/logwisp"
 name              = "output"
 max_size_mb       = 100
 max_total_size_mb = 1000
-min_disk_free_mb  = 0
+min_disk_free_mb  = 100
 retention_hours   = 168.0
 buffer_size       = 1000
 flush_interval_ms = 100
@@ -114,13 +114,16 @@ Options, each as type and default:
   `NAME.log` and rotates it to `NAME_YYMMDD_HHMMSS.log`, adding
   `_1`, `_2`, ... when that name is taken. The limits below delete *any*
   `.log` file in the directory, so give each file sink a directory of its own.
+  What it creates of the path is `0750`. It refuses to start in a directory
+  every user can write, where another could plant `NAME.log` as a link, and
+  when `NAME.log` is a link, a FIFO or anything but a regular file.
 - `name` (string, **required**): file name base.
 - `max_size_mb` (int, `100`): rotate when the active file reaches this size.
 - `max_total_size_mb` (int, `1000`): above this total, the oldest `.log` files
   there are deleted.
-- `min_disk_free_mb` (int, `0`): the oldest `.log` files there are deleted to
-  keep this much space free, and nothing is written while that fails. `0`
-  means none and a negative value means `100`.
+- `min_disk_free_mb` (int, `100`): the oldest `.log` files there are deleted
+  to keep this much space free, and nothing is written while that fails. `0`
+  means none, filling the disk, and a negative value means `100`.
 - `retention_hours` (float, `168.0`): `.log` files there older than this are
   deleted; `0` keeps them.
 - `buffer_size` (int, `1000`): sink input queue depth, and the depth of the

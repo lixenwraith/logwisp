@@ -87,3 +87,20 @@ func TestRecordsTheWriterLosesAreCounted(t *testing.T) {
 		t.Fatalf("a full disk took %d bytes", len(got))
 	}
 }
+
+// The sink starts only where config.LogDir finds the directory safe, so a
+// planted link is never opened
+func TestUnsafeLogFileIsRefusedAtStart(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.Symlink(target, filepath.Join(dir, "out.log")); err != nil {
+		t.Fatal(err)
+	}
+	fs := newSink(t, dir, map[string]any{})
+	if err := fs.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("started through a planted link: %v", err)
+	}
+	if _, err := os.Lstat(target); err == nil {
+		t.Fatal("the link's target was created")
+	}
+}

@@ -342,7 +342,7 @@
 # name = "output"                       # Required (example)
 # max_size_mb = 100
 # max_total_size_mb = 1000
-# min_disk_free_mb = 0                  # 0 = no floor; a negative value means 100
+# min_disk_free_mb = 100                # oldest .log files go, then writing pauses; 0 = no floor
 # retention_hours = 168.0               # .log files there older than this are deleted; 0 keeps them
 # buffer_size = 1000
 # flush_interval_ms = 100
