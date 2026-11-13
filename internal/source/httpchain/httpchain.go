@@ -63,7 +63,8 @@ type HTTPChainSource struct {
 	sweepAt    int               // len(sessions) at which expired keys are dropped
 	sessionsMu sync.Mutex
 
-	mu sync.RWMutex
+	mu      sync.RWMutex
+	stopped bool // under mu: set before the subscriber channels close
 
 	startTime        time.Time
 	totalEntries     atomic.Uint64
@@ -207,7 +208,9 @@ func (s *HTTPChainSource) Stop() {
 	if s.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), HTTPChainServerShutdownTimeout)
 		defer cancel()
-		s.server.Shutdown(ctx)
+		if s.server.Shutdown(ctx) != nil {
+			s.server.Close() // a handler still reading a body fails at once
+		}
 	}
 	s.auth.Close()
 
@@ -219,6 +222,7 @@ func (s *HTTPChainSource) Stop() {
 	s.sessionsMu.Unlock()
 
 	s.mu.Lock()
+	s.stopped = true
 	for _, ch := range s.subscribers {
 		close(ch)
 	}
@@ -342,6 +346,14 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A handler can outlive Stop's bound: past it the channels are closed, and
+	// a 503 sends the batch to the sink's next attempt
+	s.mu.RLock()
+	if s.stopped {
+		s.mu.RUnlock()
+		http.Error(w, "source stopping", http.StatusServiceUnavailable)
+		return
+	}
 	accepted := 0
 	for line := range bytes.Lines(body) {
 		line = bytes.TrimSuffix(bytes.TrimSuffix(line, []byte{'\n'}), []byte{'\r'})
@@ -357,6 +369,7 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 		s.publish(entry)
 		accepted++
 	}
+	s.mu.RUnlock()
 	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode, netacl.ContextPeerAddr(r.Context()), r.TLS, ident))
 
 	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(accepted))
@@ -425,11 +438,8 @@ func (s *HTTPChainSource) sessionFor(remoteHost, node, peer string, cs *tls.Conn
 	return sess.ID
 }
 
-// publish sends a log entry to all subscribers
+// publish sends a log entry to all subscribers; s.mu is held for reading
 func (s *HTTPChainSource) publish(entry core.LogEntry) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	s.totalEntries.Add(1)
 	s.lastEntryTime.Store(entry.Time)
 

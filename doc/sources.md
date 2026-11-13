@@ -366,7 +366,8 @@ Options, each as type and default:
   *line* inside an otherwise clean transfer is skipped and counted in
   `parse_errors`.
 - Success is `204 No Content` with `X-Logwisp-Accepted` set to the number of
-  entries ingested.
+  entries ingested. A batch still in flight when the source stops, past its
+  2 s shutdown bound, gets `503`, which the sink retries.
 - Sessions are cached per remote host + node + authenticated identity, and
   recreated after idle expiry. Including the identity in the key means two peers
   sharing a remote address never share a session.

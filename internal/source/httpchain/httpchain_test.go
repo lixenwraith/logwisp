@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -84,5 +85,27 @@ func TestExpiredSessionsLeaveTheCache(t *testing.T) {
 	}
 	if n := len(src.sessions); n > 64 {
 		t.Fatalf("%d keys cached for no live session", n)
+	}
+}
+
+// A batch whose handler outlives Stop is refused with 503, which the sink
+// retries, instead of being sent on a closed subscriber channel
+func TestBatchAfterStopIsRefused(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	created, err := NewHTTPChainSourcePlugin("in", map[string]any{"host": "127.0.0.1", "port": int64(1)},
+		log.NewLogger(), session.NewProxy(manager, "in"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := created.(*HTTPChainSource)
+	entries := src.Subscribe()
+	src.Stop()
+	req := httptest.NewRequest(http.MethodPost, "/ingest", strings.NewReader(`{"msg":"late"}`+"\n"))
+	req.Header.Set(chain.HeaderProtocol, strconv.Itoa(chain.ProtocolVersion))
+	rec := httptest.NewRecorder()
+	src.handleIngest(rec, req)
+	if _, open := <-entries; open || rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d after Stop, want %d with nothing published", rec.Code, http.StatusServiceUnavailable)
 	}
 }
