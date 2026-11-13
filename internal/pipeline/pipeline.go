@@ -416,15 +416,16 @@ func (p *Pipeline) Start() error {
 	for id, src := range p.Sources {
 		ids, subscriptions = append(ids, id), append(subscriptions, src.Subscribe())
 	}
+	// The run loop first: a source failing to start leaves what those started
+	// before it published to the sinks, which Stop drains it to
+	p.Stats.StartTime = time.Now()
+	p.wg.Add(1)
+	go p.run(ids, subscriptions)
 	for id, src := range p.Sources {
 		if err := src.Start(); err != nil {
 			return p.part("source", id, fmt.Errorf("failed to start source %s: %w", id, err))
 		}
 	}
-
-	p.Stats.StartTime = time.Now()
-	p.wg.Add(1)
-	go p.run(ids, subscriptions)
 
 	return nil
 }

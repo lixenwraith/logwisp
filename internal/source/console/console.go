@@ -100,6 +100,7 @@ type ConsoleSource struct {
 	// Runtime
 	done     chan struct{}
 	stopOnce sync.Once
+	begun    atomic.Bool // taken by Start, whose readLoop closes the subscribers, or by a Stop before it
 
 	// Statistics
 	totalEntries  atomic.Uint64
@@ -161,6 +162,9 @@ func (s *ConsoleSource) Subscribe() <-chan core.LogEntry {
 
 // Start begins reading from the standard input.
 func (s *ConsoleSource) Start() error {
+	if !s.begun.CompareAndSwap(false, true) {
+		return nil // stopped first
+	}
 	s.startTime = time.Now()
 	go s.readLoop(lines())
 
@@ -173,9 +177,15 @@ func (s *ConsoleSource) Start() error {
 	return nil
 }
 
-// Stop signals the source to stop reading; readLoop closes the subscribers.
+// Stop signals the source to stop reading; readLoop closes the subscribers,
+// or Stop does when Start never ran, so a pipeline's run loop ends either way
 func (s *ConsoleSource) Stop() {
 	s.stopOnce.Do(func() { close(s.done) })
+	if s.begun.CompareAndSwap(false, true) {
+		for _, ch := range s.subscribers {
+			close(ch)
+		}
+	}
 
 	// Remove session
 	if s.session != nil {

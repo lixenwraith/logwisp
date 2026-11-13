@@ -2,10 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,13 +24,17 @@ import (
 
 // finiteSource publishes n entries as soon as it starts, then those feed
 // sends when there is one, and ends once feed and hold close, when there are
-// those. Entries carry its id as their Source.
+// those. Entries carry its id as their Source. With fail it does not start,
+// as a source whose port is taken; stopped unstarted, it closes its channels,
+// as the plugins do.
 type finiteSource struct {
-	id   string
-	n    int
-	hold chan struct{}
-	feed chan string
-	subs []chan core.LogEntry
+	id    string
+	n     int
+	fail  bool
+	hold  chan struct{}
+	feed  chan string
+	subs  []chan core.LogEntry
+	begun atomic.Bool // taken by Start, or by a Stop before it
 }
 
 func (s *finiteSource) Capabilities() []core.Capability { return nil }
@@ -38,6 +44,12 @@ func (s *finiteSource) Subscribe() <-chan core.LogEntry {
 	return ch
 }
 func (s *finiteSource) Start() error {
+	if s.fail {
+		return errors.New("address already in use")
+	}
+	if !s.begun.CompareAndSwap(false, true) {
+		return nil
+	}
 	go func() {
 		for i := range s.n {
 			for _, ch := range s.subs {
@@ -63,7 +75,13 @@ func (s *finiteSource) Start() error {
 	}()
 	return nil
 }
-func (s *finiteSource) Stop()                        {}
+func (s *finiteSource) Stop() {
+	if s.begun.CompareAndSwap(false, true) {
+		for _, ch := range s.subs {
+			close(ch)
+		}
+	}
+}
 func (s *finiteSource) GetStats() source.SourceStats { return source.SourceStats{} }
 
 // slowSink applies backpressure; a nil out never reads at all
@@ -107,12 +125,47 @@ func init() {
 		n, _ := strconv.Atoi(fmt.Sprint(cfg["n"]))
 		hold, _ := cfg["hold"].(chan struct{})
 		feed, _ := cfg["feed"].(chan string)
-		return &finiteSource{id: id, n: n, hold: hold, feed: feed}, nil
+		fail, _ := cfg["fail"].(bool)
+		return &finiteSource{id: id, n: n, fail: fail, hold: hold, feed: feed}, nil
 	})
 	for _, typ := range []string{"null", "tcp_chain"} {
 		plugin.RegisterSink(typ, func(id string, _ map[string]any, _ *log.Logger, _ *session.Proxy) (sink.Sink, error) {
 			return testSinks[id], nil
 		})
+	}
+}
+
+// What sources published before another failed to start reaches the sinks
+// once the pipeline stops, whichever of them started first
+func TestAFailedStartDeliversWhatStartedSourcesPublished(t *testing.T) {
+	s := &slowSink{in: make(chan core.TransportEvent, 1000)}
+	testSinks[t.Name()] = s
+	for range 20 {
+		p, err := NewPipeline(&config.PipelineConfig{
+			Name: t.Name(),
+			PluginSources: []config.PluginSourceConfig{
+				{ID: "eager", Type: "random", Config: map[string]any{"n": 100}},
+				{ID: "taken", Type: "random", Config: map[string]any{"fail": true}},
+			},
+			PluginSinks: []config.PluginSinkConfig{{ID: t.Name(), Type: "null"}},
+		}, log.NewLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Start() == nil {
+			t.Fatal("a source failing to start went unreported")
+		}
+		want := 0
+		if p.Sources["eager"].(*finiteSource).begun.Load() {
+			want = 100
+		}
+		p.Shutdown()
+		if got := len(s.in); got != want {
+			t.Fatalf("the sinks got %d of the %d entries published", got, want)
+		}
+		for len(s.in) > 0 {
+			<-s.in
+		}
 	}
 }
 
