@@ -176,7 +176,9 @@ source when a tailed line parses as JSON with a `fields` key, from the
 from the heartbeat when `include_stats = true`. In `json` output such an entry
 is `{"time":…,"level":…,"trace":…,"message":…,"fields":{…}}`; without fields
 the message sits in `"fields":[…]`. In `txt` the fields follow the message in
-Go's map syntax, keys sorted: `"disk full" "map[dev:sda pct:99]"`.
+Go's map syntax, keys sorted: `"disk full" "map[dev:sda pct:99]"`. Fields over
+64 KiB are not parsed: they follow the message as their JSON text, one quoted
+string, in both formats.
 
 ## Choosing a Configuration
 

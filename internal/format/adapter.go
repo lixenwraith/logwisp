@@ -80,17 +80,24 @@ func (a *FormatterAdapter) FormatWithFlags(entry core.LogEntry, customFlags int6
 // serialize renders an entry under the given flags as one record ending in
 // one newline, which raw output lacks unless the message carried it. Sources
 // format at once (AppendFormat keeps no state) into pooled scratch, and the
-// record is a copy of its size: sinks keep payloads.
+// record is a copy of its size, as sinks keep payloads; a large one is
+// formatted in place, in a buffer about its size.
 func (a *FormatterAdapter) serialize(entry core.LogEntry, flags int64) []byte {
 	var argv [2]any
 	args, flags := formatArgs(&argv, entry, flags)
-	buf := scratch.Get().(*[]byte)
-	out := a.formatter.AppendFormat((*buf)[:0], flags, entry.Time, mapLevel(entry.Level), entry.Label(), args)
-	record := make([]byte, len(out), len(out)+1)
-	copy(record, out)
-	if cap(out) <= maxScratch {
-		*buf = out
-		scratch.Put(buf)
+	level, label := mapLevel(entry.Level), entry.Label()
+	var record []byte
+	if size := len(entry.Message) + len(entry.Fields) + 256; size > maxScratch {
+		record = a.formatter.AppendFormat(make([]byte, 0, size), flags, entry.Time, level, label, args)
+	} else {
+		buf := scratch.Get().(*[]byte)
+		out := a.formatter.AppendFormat((*buf)[:0], flags, entry.Time, level, label, args)
+		record = make([]byte, len(out), len(out)+1)
+		copy(record, out)
+		if cap(out) <= maxScratch {
+			*buf = out
+			scratch.Put(buf)
+		}
 	}
 	if !bytes.HasSuffix(record, []byte{'\n'}) {
 		record = append(record, '\n')
@@ -122,6 +129,10 @@ func formatArgs(argv *[2]any, entry core.LogEntry, flags int64) ([]any, int64) {
 		return argv[:2], flags
 	}
 
+	if len(entry.Fields) > maxDecodedFields {
+		argv[1] = []byte(entry.Fields)
+		return argv[:2], flags
+	}
 	var fields map[string]any
 	if err := json.Unmarshal(entry.Fields, &fields); err != nil || len(fields) == 0 {
 		return argv[:1], flags
@@ -129,6 +140,11 @@ func formatArgs(argv *[2]any, entry core.LogEntry, flags int64) ([]any, int64) {
 	argv[1] = fields
 	return argv[:2], flags | formatter.FlagStructuredJSON
 }
+
+// maxDecodedFields bounds the fields JSON decoded into a map, which costs some
+// 50 bytes of garbage a byte; longer fields are written as their JSON text,
+// sanitized and quoted like a message
+const maxDecodedFields = 64 << 10
 
 // Name returns formatter type
 func (a *FormatterAdapter) Name() string {

@@ -77,3 +77,23 @@ func TestSourcesFormatAtOnce(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Fields over 64 KiB are written as their JSON text, not decoded: a peer's
+// dense fields cost what a message of their size does
+func TestLargeFieldsAreWrittenAsText(t *testing.T) {
+	fields := []byte(`{"k":[` + strings.Repeat(`{},`, maxDecodedFields/3) + `{}]}`)
+	for _, typ := range []string{"txt", "json"} {
+		f, err := NewFormatter(&config.FormatConfig{Type: typ})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := core.LogEntry{Time: time.Now(), Message: "m", Fields: fields}
+		out, _ := f.Format(e)
+		if !bytes.Contains(out, []byte(`{\"k\":[{},{},`)) {
+			t.Errorf("%s: %.200s", typ, out)
+		}
+		if allocs := testing.AllocsPerRun(5, func() { f.Format(e) }); allocs > 10 {
+			t.Errorf("%s: %v allocations for %d bytes of fields", typ, allocs, len(fields))
+		}
+	}
+}
