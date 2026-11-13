@@ -83,6 +83,9 @@ func (a *FormatterAdapter) FormatWithFlags(entry core.LogEntry, customFlags int6
 // record is a copy of its size, as sinks keep payloads; a large one is
 // formatted in place, in a buffer about its size.
 func (a *FormatterAdapter) serialize(entry core.LogEntry, flags int64) []byte {
+	if flags&formatter.FlagRaw != 0 {
+		return raw(entry)
+	}
 	var argv [2]any
 	args, flags := formatArgs(&argv, entry, flags)
 	level, label := mapLevel(entry.Level), entry.Label()
@@ -105,28 +108,37 @@ func (a *FormatterAdapter) serialize(entry core.LogEntry, flags int64) []byte {
 	return record
 }
 
+// raw is what the formatter's FlagRaw makes of the arguments, which it only
+// joins: the message, then the fields JSON as written, a space between when
+// both are there. Built here it takes one allocation of its size, not the
+// arguments' boxes, the scratch and the copy.
+func raw(entry core.LogEntry) []byte {
+	record := make([]byte, 0, len(entry.Message)+len(entry.Fields)+2)
+	record = append(record, entry.Message...)
+	if len(entry.Fields) > 0 {
+		if entry.Message != "" {
+			record = append(record, ' ')
+		}
+		record = append(record, entry.Fields...)
+	}
+	if !bytes.HasSuffix(record, []byte{'\n'}) {
+		record = append(record, '\n')
+	}
+	return record
+}
+
 // scratch holds records while they are formatted; one longer than maxScratch
 // is not kept, so a rare large entry pins no memory
 var scratch = sync.Pool{New: func() any { return new([]byte) }}
 
 const maxScratch = 64 << 10
 
-// formatArgs puts the entry's arguments in argv and pairs them with its flags.
-// FlagRaw keeps the fields JSON verbatim beside the message rather than
-// silently overriding the caller's choice of passthrough; every other mode
-// renders it as a JSON object.
+// formatArgs puts the entry's arguments in argv and pairs them with its flags:
+// the fields render as a JSON object
 func formatArgs(argv *[2]any, entry core.LogEntry, flags int64) ([]any, int64) {
 	argv[0] = entry.Message
 	if len(entry.Fields) == 0 {
 		return argv[:1], flags
-	}
-	if flags&formatter.FlagRaw != 0 {
-		if entry.Message == "" {
-			argv[0] = []byte(entry.Fields)
-			return argv[:1], flags
-		}
-		argv[1] = []byte(entry.Fields)
-		return argv[:2], flags
 	}
 
 	if len(entry.Fields) > maxDecodedFields {

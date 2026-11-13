@@ -10,6 +10,9 @@ import (
 
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+
+	"github.com/lixenwraith/log/formatter"
+	"github.com/lixenwraith/log/sanitizer"
 )
 
 // Every payload is one record ending in exactly one newline, whatever the
@@ -124,4 +127,30 @@ func TestFieldsNumbersKeepTheirDigits(t *testing.T) {
 			t.Errorf("%s: exact %v, want %v", in, !exact, exact)
 		}
 	}
+}
+
+// raw writes what the formatter's own FlagRaw does with the arguments the
+// adapter gave it, plus the record's newline: a change there shows here.
+func FuzzRawIsTheFormattersRaw(f *testing.F) {
+	f.Add("GET /x 200", []byte(`{"k":1}`))
+	f.Add("", []byte(`{"k":1}`))
+	f.Add("line\n", []byte(nil))
+	f.Add("", []byte(nil))
+	lib := formatter.New(sanitizer.New().Policy(sanitizer.PolicyRaw))
+	f.Fuzz(func(t *testing.T, msg string, fields []byte) {
+		args := []any{msg}
+		switch {
+		case len(fields) > 0 && msg == "":
+			args = []any{fields}
+		case len(fields) > 0:
+			args = append(args, fields)
+		}
+		want := lib.AppendFormat(nil, formatter.FlagRaw, time.Time{}, 0, "", args)
+		if !bytes.HasSuffix(want, []byte{'\n'}) {
+			want = append(want, '\n')
+		}
+		if got := raw(core.LogEntry{Message: msg, Fields: fields}); !bytes.Equal(got, want) {
+			t.Fatalf("raw(%q, %q) = %q, the formatter's %q", msg, fields, got, want)
+		}
+	})
 }
