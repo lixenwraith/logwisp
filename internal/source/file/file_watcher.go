@@ -77,8 +77,10 @@ type fileWatcher struct {
 	logger       *log.Logger
 	failed       string      // the last check's error, "" for none; watch's
 	tail         []byte      // the lines before position (lastLines), set with it under mu
-	seen         os.FileInfo // the file as the last check found it; watch's
-	holds        int         // checks waited for the file to settle; watch's
+	seen         os.FileInfo // the file as the last check found it, held's while there is one; watch's
+	holds        int         // checks waited for the file to settle, or for held to stop growing; watch's
+	held         *os.File    // the file inode is, open from the check that judged it; watch's
+	taken        bool        // another watcher goes on reading inode from where this one got; under mu
 	// how far another watcher of the source read a file (FileSource.othersOf)
 	others func(*os.File, os.FileInfo) (int64, bool)
 }
@@ -108,6 +110,11 @@ func newFileWatcher(dir *atomic.Pointer[os.Root], directory string, raw, fromSta
 func (w *fileWatcher) watch(ctx context.Context) error {
 	ticker := time.NewTicker(core.FileWatcherPollInterval)
 	defer ticker.Stop()
+	defer func() {
+		if w.held != nil {
+			w.held.Close()
+		}
+	}()
 
 	check := w.initPosition
 	for {
@@ -164,18 +171,42 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 // line read last is missing and the file still changes, it is held, up to
 // settleChecks, so that a slow rewrite is judged once written.
 func (w *fileWatcher) checkFile() error {
-	file, err := openFollowed(w.dir.Load(), w.name)
+	info, err := w.dir.Load().Stat(w.name)
+	if w.held != nil && (err != nil || !os.SameFile(info, w.seen)) {
+		// The name left the file being read: a rotation renamed or removed it,
+		// and its writer may append until it reopens. It is read to its end
+		// first, and on while it grows, up to settleChecks checks.
+		if left, serr := w.held.Stat(); serr == nil && w.holds < settleChecks {
+			if grew, rerr := w.read(w.held, left.Size(), true); rerr == nil && grew {
+				w.holds++
+				return nil
+			}
+		}
+		w.held.Close()
+		w.held, w.holds = nil, 0
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return err
+	file := w.held
+	if file == nil {
+		if file, err = openFollowed(w.dir.Load(), w.name); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		defer func() {
+			if file != w.held {
+				file.Close()
+			}
+		}()
+		if info, err = file.Stat(); err != nil { // the file judged is the one opened
+			return err
+		}
 	}
 	size, same := info.Size(), w.seen != nil && os.SameFile(info, w.seen) && info.Size() == w.seen.Size() && info.ModTime().Equal(w.seen.ModTime())
 	w.seen = info
@@ -224,17 +255,44 @@ func (w *fileWatcher) checkFile() error {
 		// its archive name, and only this says how much of it was read.
 		w.prevInode, w.prevPosition, w.prevTail = w.inode, w.position, w.tail
 	}
-	w.inode, w.position, w.tail = inodeOf(info), pos, tail
+	if inode := inodeOf(info); inode != w.inode {
+		w.inode, w.taken = inode, false
+	}
+	w.position, w.tail = pos, tail
 	w.mu.Unlock()
-	w.holds = 0
+	w.held, w.holds = file, 0
 	if rotated {
 		w.rotated()
 	}
+	_, err = w.read(file, size, false)
+	return err
+}
 
-	if _, err := file.Seek(pos, io.SeekStart); err != nil {
-		return err
+// read sends the lines file holds from position to size, readPerCheck at most,
+// and reports whether there were any. position moves on first, so a watcher
+// that goes on reading the file meanwhile starts after them; once the name
+// has left the file (left), and another watcher has, this one reads no more.
+func (w *fileWatcher) read(file *os.File, size int64, left bool) (bool, error) {
+	w.mu.Lock()
+	pos := w.position
+	w.mu.Unlock()
+	end := min(size, pos+readPerCheck)
+	if end <= pos {
+		return false, nil
 	}
-	scanner := bufio.NewScanner(io.LimitReader(file, readPerCheck))
+	tail, err := lastLines(file, end)
+	if err != nil {
+		return false, err
+	}
+	w.mu.Lock()
+	if left && w.taken {
+		w.mu.Unlock()
+		return false, nil
+	}
+	w.position, w.tail = end, tail
+	w.mu.Unlock()
+
+	scanner := bufio.NewScanner(io.NewSectionReader(file, pos, end-pos))
 	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
 	scanner.Split(scanLinesCapped)
 	for scanner.Scan() {
@@ -250,22 +308,7 @@ func (w *fileWatcher) checkFile() error {
 		w.entriesRead.Add(1)
 		w.lastReadTime.Store(time.Now())
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-
-	end, err := file.Seek(0, io.SeekCurrent)
-	if err != nil {
-		w.logger.Warn("msg", "Failed to get file position", "error", err)
-		end = max(pos, size)
-	}
-	if tail, err = lastLines(file, end); err != nil {
-		return err
-	}
-	w.mu.Lock()
-	w.position, w.tail = end, tail
-	w.mu.Unlock()
-	return nil
+	return true, scanner.Err()
 }
 
 // rotated counts a rotation and says so, in lw's log and to the pipeline
@@ -438,16 +481,13 @@ func (w *fileWatcher) initPosition() error {
 		}
 		return err
 	}
-	defer file.Close()
-
 	info, err := file.Stat()
 	if err != nil {
+		file.Close()
 		return err
 	}
 
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	w.size = info.Size()
 	w.modTime = info.ModTime()
 	w.inode = inodeOf(info)
@@ -456,22 +496,40 @@ func (w *fileWatcher) initPosition() error {
 		w.position = w.size
 	}
 	w.tail, err = lastLines(file, w.position)
-	return err
+	w.mu.Unlock()
+	if err != nil {
+		file.Close()
+		return err
+	}
+	w.held = file
+	return nil
+}
+
+// resumeAt reports how far this watcher read file, if file still holds the
+// lines it read last before there. The asker goes on from there, so once the
+// name leaves the file this watcher reads it no more.
+func (w *fileWatcher) resumeAt(file *os.File, info os.FileInfo) (int64, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	inode := inodeOf(info)
+	position, tail, ok := w.readTo(inode)
+	if !ok || !leads(file, position, info.Size(), tail) {
+		return 0, false
+	}
+	w.taken = w.taken || inode == w.inode
+	return position, true
 }
 
 // readTo reports how far this watcher read the given inode, and the lines it
 // read last before there: the file it tails now, as last judged (not one a held
-// check has yet to), or the one a rotation renamed out from under it.
+// check has yet to), or the one a rotation renamed out from under it. Callers
+// hold mu.
 func (w *fileWatcher) readTo(inode uint64) (int64, []byte, bool) {
-	if inode == 0 {
-		return 0, nil, false
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	switch inode {
-	case w.inode:
+	switch {
+	case inode == 0:
+	case inode == w.inode:
 		return w.position, w.tail, true
-	case w.prevInode:
+	case inode == w.prevInode:
 		return w.prevPosition, w.prevTail, true
 	}
 	return 0, nil, false

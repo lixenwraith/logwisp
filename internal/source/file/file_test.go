@@ -538,7 +538,8 @@ func TestShiftedArchiveResumesWhereItWasRead(t *testing.T) {
 			}
 			source.watchers["deleted"] = &fileWatcher{inode: inodeOf(info), position: 3, tail: []byte("ab\n")}
 			source.watchers["deleted too"] = &fileWatcher{prevInode: watchers[0].inode, prevPosition: 3, prevTail: []byte("ab\n")}
-			for range 2 {
+			// the file a name left is read on a check more, while it may grow
+			for range 3 {
 				for _, i := range order {
 					if err := watchers[i].checkFile(); err != nil {
 						t.Fatal(err)
@@ -553,6 +554,46 @@ func TestShiftedArchiveResumesWhereItWasRead(t *testing.T) {
 				t.Errorf("app.log.2 read to %d, %v; want %d, true", position, ok, len(lines(14, 0, 20)))
 			}
 		})
+	}
+}
+
+// A rotation that renames the file loses none of it, whatever the archive is
+// called: the lines written since the last check, and those the writer adds
+// until it reopens the name, are read before the new file's
+func TestRenamedFileIsReadToItsEndFirst(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	testutil.WriteFile(t, path, "before\n")
+	check := tailFrom(t, path)
+	writer, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	write := func(f *os.File, line string) {
+		if _, err := f.WriteString(line + "\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(writer, "unread")
+	if err := os.Rename(path, path+"-20261113"); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, path, "")
+	got := check()
+	write(writer, "late")
+	got = append(got, check()...)
+	reopened, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	write(reopened, "reopened")
+	for range 3 {
+		got = append(got, check()...)
+	}
+	if want := []string{"unread", "late", "Log rotation detected (#1): the file starts anew", "reopened"}; !slices.Equal(got, want) {
+		t.Errorf("read %q, want %q", got, want)
 	}
 }
 

@@ -93,11 +93,17 @@ Options, each as type and default:
     so it is read from its start. A rewrite still being written after 2 s is
     judged as it stands: read from its start if it has not reached those
     lines yet, else what it writes after that is replayed.
+- A watcher keeps its file open, so each followed file holds a descriptor.
+  When a rotation renames or removes the file, whatever the archive is
+  called, lw reads it to its end before it follows the new file under the
+  name, and on while its writer still appends before reopening the name, for
+  2 s at most: nothing written before the rotation is lost.
 - A rotation that renames in place (a size-capped writer, a numbered logrotate
   chain shifting `app.log.1` to `app.log.2`) puts the same inode back under a
   name `pattern` also matches. The watcher there, new or already following
   that name, resumes where the file was read to: it reads only the tail an
-  unfinished read left behind, never the whole archive a second time.
+  unfinished read left behind, never the whole archive a second time, and
+  the watcher it came from reads it no further.
 - A line is parsed as JSON only when it is a non-empty object whose top-level
   keys are all drawn from `time`, `level`, `msg` and `fields` (the four an
   entry can carry), each named once, with any `level` or `msg` a string.

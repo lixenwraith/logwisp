@@ -354,7 +354,7 @@ func (fs *FileSource) readFile(file *os.File, info os.FileInfo, but *fileWatcher
 		if w == but {
 			continue
 		}
-		if position, tail, ok := w.readTo(inodeOf(info)); ok && leads(file, position, info.Size(), tail) {
+		if position, ok := w.resumeAt(file, info); ok {
 			return position, true
 		}
 	}
