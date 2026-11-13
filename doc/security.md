@@ -42,6 +42,8 @@ configure it, and — equally important — what it does not yet do.
     comma is not split into patterns that match nothing;
   - the file must be a regular file and is opened without blocking, so a
     FIFO in its place fails a reload rather than hanging it;
+  - a file found without `-c` or a `LOGWISP_CONFIG_*` variable must belong to
+    the user lw runs as, so no other user's file in a shared directory runs;
   - a permission change on the file is reported once and does not stop
     auto-reload;
   - parse and conversion errors name the key, never the value, so a secret

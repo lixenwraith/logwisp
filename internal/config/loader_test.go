@@ -30,6 +30,27 @@ func TestResolveConfigPath(t *testing.T) {
 	}
 }
 
+// A file found without -c must be the user's own: another user may have put
+// it in a directory both can write. -c reads it whoever owns it.
+func TestFoundFileOfAnotherUserIsRefused(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("giving a file to another user needs root")
+	}
+	isolateConfig(t)
+	testutil.WriteFile(t, "logwisp.toml", "[logging]\nlevel = \"debug\"\n")
+	if err := os.Chown("logwisp.toml", 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(Args{}); err == nil || !strings.Contains(err.Error(), "found without -c") {
+		t.Fatalf("found file of another user: %v", err)
+	}
+	m, err := Load(Args{File: "logwisp.toml"})
+	if err != nil {
+		t.Fatalf("named with -c: %v", err)
+	}
+	m.Close()
+}
+
 func TestLoadPrecedenceAndDetachedSnapshots(t *testing.T) {
 	isolateConfig(t)
 	testutil.WriteFile(t, "selected.toml", "config_file = \"ignored.toml\"\n[logging]\nlevel = \"error\"\n")

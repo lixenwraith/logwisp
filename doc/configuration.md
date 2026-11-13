@@ -31,9 +31,11 @@ The path is resolved before any other configuration is read:
 5. `./logwisp.toml`
 
 A file named by `-c` or a variable must exist (exit code 2); a missing
-discovered one is not an error, and lw runs on built-in defaults. A relative
-path that climbs with `..` is refused; give it absolute. A file may hold at
-most 10 MiB.
+discovered one is not an error, and lw runs on built-in defaults. A
+discovered one must belong to the user lw runs as: another user may have
+put it in a shared directory, or root may run lw in another account's, so
+it is refused there and `-c` names it. A relative path that climbs with `..`
+is refused; give it absolute. A file may hold at most 10 MiB.
 
 ## Global Settings
 
