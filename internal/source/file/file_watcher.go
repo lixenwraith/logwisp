@@ -268,6 +268,10 @@ func (w *fileWatcher) checkFile() error {
 	return err
 }
 
+// scanBufs are what a check's scanner starts with: one that finds lines would
+// otherwise allocate 64 KiB. A longer line grows a buffer of the scanner's own.
+var scanBufs = sync.Pool{New: func() any { return new([64 << 10]byte) }}
+
 // read sends the lines file holds from position to size, readPerCheck at most,
 // and reports whether there were any. position moves on first, so a watcher
 // that goes on reading the file meanwhile starts after them; once the name
@@ -292,8 +296,10 @@ func (w *fileWatcher) read(file *os.File, size int64, left bool) (bool, error) {
 	w.position, w.tail = end, tail
 	w.mu.Unlock()
 
+	buf := scanBufs.Get().(*[64 << 10]byte)
+	defer scanBufs.Put(buf)
 	scanner := bufio.NewScanner(io.NewSectionReader(file, pos, end-pos))
-	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
+	scanner.Buffer(buf[:0], core.MaxLogEntryBytes)
 	scanner.Split(scanLinesCapped)
 	for scanner.Scan() {
 		if len(bytes.TrimLeft(scanner.Bytes(), "\x00")) == 0 {
