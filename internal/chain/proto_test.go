@@ -58,3 +58,22 @@ func TestNodeLabelPastTheBoundOrWithAControlByteIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// Each line decodes alone into the entry a source keeps: nothing of the line
+// before stays, and the entry published before keeps its fields
+func TestEachLineDecodesAlone(t *testing.T) {
+	var entry core.LogEntry
+	if err := DecodeEntry(&entry, []byte(`{"time":"2026-11-05T01:02:03Z","node":"a","source":"s","level":"WARN","message":"m","fields":{"k":"long value"}}`), "edge", true); err != nil {
+		t.Fatal(err)
+	}
+	published := entry
+	if err := DecodeEntry(&entry, []byte(`{"source":"t","message":"n","fields":{"x":1}}`), "edge", true); err != nil {
+		t.Fatal(err)
+	}
+	if string(published.Fields) != `{"k":"long value"}` || entry.Level != "" || entry.Node != "edge" || string(entry.Fields) != `{"x":1}` {
+		t.Fatalf("published %+v, next %+v", published, entry)
+	}
+	if err := DecodeEntry(&entry, []byte(`{"source":"u","message":"o"}`), "edge", true); err != nil || entry.Fields != nil {
+		t.Fatalf("%+v %v", entry, err)
+	}
+}

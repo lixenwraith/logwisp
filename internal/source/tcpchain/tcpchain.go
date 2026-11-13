@@ -386,6 +386,7 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 	// A line past MaxLogEntryBytes ends the link, as the scanner cannot go on
 	// after ErrTooLong. Its buffer grows from 4 KiB only for a longer line.
 	scanner.Buffer(nil, core.MaxLogEntryBytes)
+	var entry core.LogEntry
 	for {
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -400,8 +401,7 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		if len(line) == 0 {
 			continue
 		}
-		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
-		if err != nil {
+		if err := chain.DecodeEntry(&entry, line, connNode, trustEntryNode); err != nil {
 			s.parseErrors.Add(1)
 			s.logger.Debug("msg", "Dropped malformed chain entry",
 				"component", "tcp_chain_source",

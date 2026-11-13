@@ -124,11 +124,14 @@ func DecodeHello(line []byte) (Hello, error) {
 	return h, nil
 }
 
-// DecodeEntry parses a canonical LogEntry line and applies the node trust policy
-func DecodeEntry(line []byte, connNode string, trustNode bool) (core.LogEntry, error) {
-	var entry core.LogEntry
-	if err := json.Unmarshal(line, &entry); err != nil {
-		return core.LogEntry{}, err
+// DecodeEntry parses a canonical LogEntry line into entry, which its caller
+// keeps from line to line so none moves to the heap, and applies the node
+// trust policy. entry is reset first: Unmarshal would append Fields into the
+// array of the entry decoded before, which subscribers hold.
+func DecodeEntry(entry *core.LogEntry, line []byte, connNode string, trustNode bool) error {
+	*entry = core.LogEntry{}
+	if err := json.Unmarshal(line, entry); err != nil {
+		return err
 	}
 	if entry.Time.IsZero() {
 		entry.Time = time.Now()
@@ -137,7 +140,7 @@ func DecodeEntry(line []byte, connNode string, trustNode bool) (core.LogEntry, e
 		entry.Node = connNode
 	}
 	entry.RawSize = int64(len(line))
-	return entry, nil
+	return nil
 }
 
 // EntryFromEvent extracts the structured entry, stamping node identity at

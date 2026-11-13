@@ -352,13 +352,13 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	accepted := 0
+	var entry core.LogEntry
 	for line := range bytes.Lines(body) {
 		line = bytes.TrimSuffix(bytes.TrimSuffix(line, []byte{'\n'}), []byte{'\r'})
 		if len(line) == 0 {
 			continue
 		}
-		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
-		if err != nil {
+		if err := chain.DecodeEntry(&entry, line, connNode, trustEntryNode); err != nil {
 			// Content error within a clean transfer: skip line, keep batch
 			s.parseErrors.Add(1)
 			continue
