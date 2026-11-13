@@ -860,6 +860,21 @@ func TestXExportsThePinsOrTheRowsShown(t *testing.T) {
 	}
 }
 
+// An export holds no rune a terminal would act on, though json leaves C1,
+// DEL and bidi controls raw: each is a \u escape, which a value reads back as
+func TestAnExportHoldsNoRuneATerminalActsOn(t *testing.T) {
+	var v view
+	v.take(tapped("p", "null", "", 0, "{\"msg\":\"pay \u009b2J\u009d52;c;aGk=\u009c ‮evil‬\x7f\",\"k\":\"⁦v\u0085\"}"))
+	out := strings.TrimSuffix(string(jsonLines(v.rows)), "\n")
+	if i := strings.IndexAny(out, "\u009b\u009c\u009d\u0085\x7f‬‮⁦"); i >= 0 {
+		t.Fatalf("raw at %d: %q", i, out)
+	}
+	was, back := v.rows[0].Line, logline.Read(core.LogEntry{Message: out})
+	if back.Message != was.Message || !slices.Equal(back.Fields, was.Fields) {
+		t.Fatalf("%s\nreads back %+v\nwas        %+v", out, back, was)
+	}
+}
+
 // A sink's drops show on its node while it runs
 func TestASinksDropsShowOnItsNode(t *testing.T) {
 	f := &fakeRunner{}

@@ -526,12 +526,21 @@ func (a *app) export() {
 
 // jsonLines is rows as LogWisp json, a line each, which lw reads back as
 // they were read: the time, the tag as source, level, message and the fields
-// in their order, each value a string
+// in their order, each value a string. json leaves DEL, C1 and bidi controls
+// raw, which a terminal showing the file would act on: they are \u escapes.
 func jsonLines(rows []row) []byte {
 	var b bytes.Buffer
 	put := func(v string) {
 		q, _ := json.Marshal(v) // invalid UTF-8 as U+FFFD
-		b.Write(q)
+		for len(q) > 0 {
+			r, n := utf8.DecodeRune(q)
+			if logline.Control(r, n) {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else {
+				b.Write(q[:n])
+			}
+			q = q[n:]
+		}
 	}
 	for i := range rows {
 		r := &rows[i]
