@@ -102,6 +102,7 @@ type HTTPSink struct {
 type sseClient struct {
 	send      chan []byte
 	sessionID string
+	rc        *http.ResponseController // eviction cuts a write a stalled peer blocks
 }
 
 // NewHTTPSinkPlugin creates a http sink through plugin factory
@@ -364,12 +365,17 @@ func (h *HTTPSink) brokerLoop() {
 			}
 			for id, c := range h.clients {
 				if _, exists := h.proxy.GetSession(c.sessionID); !exists {
+					// Without write_timeout_ms a stalled peer's write holds its
+					// handler and slot for good; registered, the handler has
+					// not returned, so its controller is still its own
+					_ = c.rc.SetWriteDeadline(time.Now())
 					stale = append(stale, id)
 					continue
 				}
+				// Only the stream's own writes refresh its session: a peer
+				// that stopped reading must expire
 				select {
 				case c.send <- event.Payload:
-					h.proxy.UpdateActivity(c.sessionID)
 				default:
 					h.droppedWrites.Add(1)
 				}
@@ -425,6 +431,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	c := &sseClient{
 		send:      make(chan []byte, h.config.ClientBufferSize),
 		sessionID: sess.ID,
+		rc:        rc,
 	}
 	id := h.nextClientID.Add(1)
 

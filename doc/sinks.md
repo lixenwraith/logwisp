@@ -278,9 +278,11 @@ Options, each as type and default:
   `rate_limit` releases at once.
 - A client is registered only once its connected frame has flushed, so the
   broker never queues into a buffer whose reader has not started.
-- Clients whose session has been idle-expired by the session manager are
-  evicted by the broker. With the idle comment above, that reaches only a peer
-  that has stopped accepting bytes on a sink configured `write_timeout_ms = 0`.
+- Only a stream's own writes refresh its session. Clients whose session has
+  been idle-expired by the session manager are evicted by the broker at its
+  next entry, a write they block included. With the idle comment above, that
+  reaches only a peer that has stopped accepting bytes on a sink configured
+  `write_timeout_ms = 0`.
 - On shutdown (a reload too), each stream writes its queue and what remains
   of the sink's input, then
   `event: disconnect / data: {"reason":"server_shutdown"}`, on its own and

@@ -606,6 +606,40 @@ func TestSlowAndIdleConnectionsCloseButStreamsDoNot(t *testing.T) {
 	t.Fatal("stream ended before the entry sent past both bounds")
 }
 
+// A peer that stopped reading expires and its eviction ends its stream, the
+// handler blocked in a write included, so its slot is freed without
+// write_timeout_ms
+func TestStalledStreamIsEndedByItsEviction(t *testing.T) {
+	h, manager := newTestHTTPSink(t, map[string]any{"write_timeout_ms": int64(0), "client_buffer_size": int64(64)})
+	_, baseURL := serveTestHTTPSink(t, h)
+	conn, err := net.Dial("tcp", strings.TrimPrefix(baseURL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if _, err := io.WriteString(conn, "GET /stream HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); h.activeClients.Load() == 0 || manager.GetSessionCount() == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("stream never registered")
+		}
+	}
+	padding := strings.Repeat("x", 8192)
+	for range 4000 { // 32 MiB, more than the socket buffers hold: the handler blocks
+		h.Input() <- core.TransportEvent{Payload: []byte(padding + "\n")}
+	}
+	for _, s := range manager.GetActiveSessions() {
+		manager.RemoveSession(s.ID) // as idle expiry does
+	}
+	h.Input() <- core.TransportEvent{Payload: []byte("evicts\n")}
+	for deadline := time.Now().Add(2 * time.Second); h.activeClients.Load() != 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("an evicted stream still holds its slot")
+		}
+	}
+}
+
 // A refused request's path is logged as it was sent, escaped: decoded, a %0a
 // would end lw's log record and start a forged one, and a %1b drive the
 // terminal showing it
