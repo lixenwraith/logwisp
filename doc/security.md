@@ -460,7 +460,9 @@ when it is constructed, so startup and every reload repeat them:
   admits any identity the CA vouches for ([The allow list](#the-allow-list))
 - `auth.trusted_proxies` with an entry beyond loopback and `tls` off: the hop
   from the proxy is plaintext
-  ([Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy))
+  ([Browsers behind a TLS-terminating proxy](#browsers-behind-a-tls-terminating-proxy));
+  with an entry reaching beyond private, loopback and link-local addresses,
+  `tls` on or off: any host there may name any client, as a CDN's ranges do
 - a `key_file`, `issuer_key_file`, `credentials_file` or `password_file` every
   local user can read (once per path per process); terminals, pipes and
   descriptors hold nothing at rest and are not reported

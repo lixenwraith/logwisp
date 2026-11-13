@@ -157,13 +157,19 @@ func (p *Policy) logStartup(host string, widened []string) {
 		}
 	}
 	for _, q := range p.proxyFrom {
-		if !slices.ContainsFunc(local, func(l netip.Prefix) bool { return l.Bits() <= q.Bits() && l.Contains(q.Addr()) }) {
+		if Public(q) {
 			p.rep.Warn("acl.proxy_from reaches public addresses, any of which may name any client", "entry", q.String(), "hint", "list only the proxies' own addresses")
 		}
 	}
 	if len(p.allow) == 0 && len(p.deny) > 0 && everyAddress(host) {
 		p.rep.Warn("Listener on every address admits all that acl.deny does not list", "hint", "set acl.allow to the networks that may connect")
 	}
+}
+
+// Public reports a prefix reaching past private, loopback and link-local
+// addresses, where a host anyone may run can claim to be a proxy
+func Public(q netip.Prefix) bool {
+	return !slices.ContainsFunc(local, func(l netip.Prefix) bool { return l.Bits() <= q.Bits() && l.Contains(q.Addr()) })
 }
 
 // WarnOpen reports a listener on every address that anyone may use: no auth
