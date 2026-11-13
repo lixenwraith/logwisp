@@ -339,7 +339,8 @@ Options, each as type and default:
   clean (no `//`, `.` or `..` segment) and holds none of `{`, `}`, `%`, `?`,
   `#`, and `/auth` is reserved for the login.
 - `buffer_size` (int, `1000`): subscriber channel depth.
-- `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB).
+- `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB), and about
+  what a request holds in memory while its entries are published.
 - `read_timeout_ms` (int, `30000`): full request read deadline.
 - `acl` (table): as on `tcp_chain`, plus `requests_per_second_per_client`.
 

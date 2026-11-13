@@ -2,10 +2,12 @@ package httpchain
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/http"
@@ -306,25 +308,19 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// through the per-entry node field either
 	trustEntryNode := s.auth.TrustsEntryNode(s.config.TrustNode)
 
-	body := http.MaxBytesReader(w, r.Body, s.config.MaxBodyBytes)
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), core.MaxLogEntryBytes)
-
-	entries := make([]core.LogEntry, 0, 128)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	// The batch is held as its body, which max_body_bytes bounds, and decoded
+	// as it is published: held decoded, a body of short lines took 100 times
+	// its size in entries
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.config.MaxBodyBytes))
+	if err == nil {
+		for line := range bytes.Lines(body) {
+			if len(bytes.TrimSuffix(line, []byte{'\n'})) >= core.MaxLogEntryBytes {
+				err = bufio.ErrTooLong
+				break
+			}
 		}
-		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
-		if err != nil {
-			// Content error within a clean transfer: skip line, keep batch
-			s.parseErrors.Add(1)
-			continue
-		}
-		entries = append(entries, entry)
 	}
-	if err := scanner.Err(); err != nil {
+	if err != nil {
 		// Transfer error: reject batch without partial ingestion, sender retries
 		s.rejectedRequests.Add(1)
 		var maxErr *http.MaxBytesError
@@ -340,12 +336,24 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, entry := range entries {
+	accepted := 0
+	for line := range bytes.Lines(body) {
+		line = bytes.TrimSuffix(bytes.TrimSuffix(line, []byte{'\n'}), []byte{'\r'})
+		if len(line) == 0 {
+			continue
+		}
+		entry, err := chain.DecodeEntry(line, connNode, trustEntryNode)
+		if err != nil {
+			// Content error within a clean transfer: skip line, keep batch
+			s.parseErrors.Add(1)
+			continue
+		}
 		s.publish(entry)
+		accepted++
 	}
 	s.proxy.UpdateActivity(s.sessionFor(remoteHost, connNode, netacl.ContextPeerAddr(r.Context()), r.TLS, ident))
 
-	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(len(entries)))
+	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(accepted))
 	w.WriteHeader(http.StatusNoContent)
 }
 
