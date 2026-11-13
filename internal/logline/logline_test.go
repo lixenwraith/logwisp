@@ -231,6 +231,22 @@ func TestMarksNameEachRoleWhereTheLineWritesIt(t *testing.T) {
 	}
 }
 
+// Every stamp stampRE reads opens with a byte of stampOpens, which Marks
+// checks before running it: any month's, a date's, a time's, a bracket's
+func FuzzEveryStampOpensWithAByteMarksLetsThrough(f *testing.F) {
+	for m := time.January; m <= time.December; m++ {
+		f.Add(m.String()[:3] + " 10 12:00:00 host app: x")
+	}
+	for _, s := range []string{"2026-11-05T07:51:43Z", "2026/11/05 07:51:48", "[2026-11-05 07:51:44] x", "07:51:44.5 x"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if stampRE.MatchString(s) && strings.IndexByte(stampOpens, s[0]) < 0 {
+			t.Fatalf("%q opens with a stamp Marks does not look for", s)
+		}
+	})
+}
+
 // Marks of any line, its level any word, are in order, apart and in bounds,
 // and come to an end: a line unescaped may hold control bytes
 func FuzzMarksStayInOrderWithinTheLine(f *testing.F) {
