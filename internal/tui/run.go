@@ -204,7 +204,9 @@ func (a *app) tick() {
 	for _, f := range later {
 		f(a)
 	}
-	a.drain(drainBytes, r.state.Log, r.tap)
+	if !a.done { // no frame follows: the runner prints what lw logged meanwhile
+		a.drain(drainBytes, r.state.Log, r.tap)
+	}
 }
 
 // tap runs the pipelines here, the screen staying, and gives the view the

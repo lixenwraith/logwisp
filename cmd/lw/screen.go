@@ -13,6 +13,7 @@ import (
 	"github.com/lixenwraith/logwisp/internal/compose"
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/logline"
 	"github.com/lixenwraith/logwisp/internal/pipeline"
 	"github.com/lixenwraith/logwisp/internal/service"
 	"github.com/lixenwraith/logwisp/internal/sink/console"
@@ -152,10 +153,25 @@ func (r *screenRunner) State() tui.RunState {
 }
 
 // close ends view mode before lw runs on or exits: nothing runs, lw's log is
-// shut down, and terminals answer passwords again
+// shut down, and terminals answer passwords again. What lw warned of after the
+// last frame, stopping the pipelines (a sink's lost batch), is printed: the
+// screen no longer shows it.
 func (r *screenRunner) close() {
 	r.Stop()
 	authz.SetAsker(nil)
+	r.mu.Lock()
+	tap := r.log
+	r.log = nil
+	r.mu.Unlock()
+	if tap != nil && logger != nil {
+		logger.Flush(core.LoggerShutdownTimeout)
+		logger.SetConsoleWriter(nil)
+		for len(tap.Records()) > 0 {
+			if e := (<-tap.Records()).Event.Entry; e.Level == "WARN" || e.Level == "ERROR" {
+				os.Stderr.Write(logline.EscapeControls([]byte(e.Message + "\n")))
+			}
+		}
+	}
 	shutdownLogger()
 	logger = nil
 }

@@ -526,7 +526,8 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     running and the error chooses the part it names. `q` asks before it
     stops them, `r` and `o`'s choices stop them first, and `SIGINT`,
     `SIGTERM` or `SIGHUP` (an ssh session's end) stops them and closes the
-    screen, as does a hangup no signal reports.
+    screen, as does a hangup no signal reports. The warnings and errors lw
+    logs while they stop (a sink's lost batch) print once the screen closes.
   - The bar counts the shown pipeline's entries in, filtered by the flow,
     dropped by sinks, and missed by the screen: the view never slows a
     pipeline. A sink that dropped entries shows how many on its node.
