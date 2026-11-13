@@ -2,6 +2,7 @@ package config
 
 import (
 	"math"
+	"net/http"
 	"os"
 	"reflect"
 	"slices"
@@ -268,6 +269,35 @@ func TestMillisecondKeysFitADuration(t *testing.T) {
 	for _, stage := range []any{&HeartbeatConfig{IntervalMS: over}} {
 		if err := Settle(stage); err == nil || !strings.Contains(err.Error(), "must be at most") {
 			t.Errorf("%T: %v", stage, err)
+		}
+	}
+}
+
+// An ingest path is one ServeMux registers and a URL carries literally, as the
+// http sink's paths are: a pattern it cannot parse panics the source's Start,
+// past --check and a reload
+func TestIngestPathIsOneServeMuxRegisters(t *testing.T) {
+	registers := func(p string) (ok bool) {
+		defer func() { ok = recover() == nil }()
+		http.NewServeMux().Handle("POST "+p, http.NotFoundHandler())
+		return
+	}
+	for _, c := range []struct {
+		path string
+		ok   bool
+	}{
+		{"/ingest", true}, {"/v1/logs/", true}, {"/", true},
+		{"/v1/{tenant", false}, {"/ingest//x", false}, {"/a/./b", false}, {"/a/..", false},
+		{"/ingest/{}", false}, {"/{x}/{x}", false}, {"/a{b}", false}, {"/ingest/{$}/x", false},
+		{"ingest", false}, {"/a?b", false}, {"/%78", false}, {"/auth", false},
+	} {
+		_, srcErr := Decode[HTTPChainSourceOptions]("source", "http_chain", map[string]any{"port": int64(1), "ingest_path": c.path})
+		_, sinkErr := Decode[HTTPChainSinkOptions]("sink", "http_chain", map[string]any{"host": "h", "port": int64(1), "ingest_path": c.path})
+		if (srcErr == nil) != c.ok || (sinkErr == nil) != c.ok {
+			t.Errorf("ingest_path %q: source %v, sink %v, want accepted %v", c.path, srcErr, sinkErr, c.ok)
+		}
+		if c.ok && !registers(c.path) {
+			t.Errorf("ingest_path %q accepted, but ServeMux refuses it", c.path)
 		}
 	}
 }

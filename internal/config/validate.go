@@ -456,11 +456,10 @@ const pagesBehind = "only for scram behind auth.trusted_proxies, where browsers 
 // log in, behind a proxy
 func (o *HTTPSinkOptions) Check() error {
 	for _, p := range []struct{ key, path string }{{"stream_path", o.StreamPath}, {"status_path", o.StatusPath}} {
-		c := path.Clean(p.path)
-		switch {
-		case !strings.HasPrefix(p.path, "/") || strings.ContainsAny(p.path, "{}%?#") || c != p.path && (c == "/" || c+"/" != p.path):
-			return &KeyError{p.key, fmt.Errorf("%q must start with '/', hold no '//', '.' or '..' segment, and none of '{', '}', '%%', '?', '#'", p.path)}
-		case p.path == chain.AuthPath || strings.HasPrefix(p.path, chain.AuthPath+"/"):
+		if err := checkPath(p.key, p.path); err != nil {
+			return err
+		}
+		if p.path == chain.AuthPath || strings.HasPrefix(p.path, chain.AuthPath+"/") {
 			return &KeyError{p.key, fmt.Errorf("%s and the paths under it are reserved for authentication", chain.AuthPath)}
 		}
 	}
@@ -485,11 +484,17 @@ func (o *HTTPChainSinkOptions) Check() error {
 }
 
 func checkIngestPath(p string) error {
-	switch {
-	case !strings.HasPrefix(p, "/"):
-		return &KeyError{"ingest_path", errors.New("must start with '/'")}
-	case p == chain.AuthPath:
+	if p == chain.AuthPath {
 		return &KeyError{"ingest_path", fmt.Errorf("%s is reserved for authentication", chain.AuthPath)}
+	}
+	return checkPath("ingest_path", p)
+}
+
+// checkPath keeps a path ServeMux registers and a URL carries literally: a
+// pattern ServeMux cannot parse panics at Start, past --check and a reload
+func checkPath(key, p string) error {
+	if c := path.Clean(p); !strings.HasPrefix(p, "/") || strings.ContainsAny(p, "{}%?#") || c != p && (c == "/" || c+"/" != p) {
+		return &KeyError{key, fmt.Errorf("%q must start with '/', hold no '//', '.' or '..' segment, and none of '{', '}', '%%', '?', '#'", p)}
 	}
 	return nil
 }

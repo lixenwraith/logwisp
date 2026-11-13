@@ -492,8 +492,9 @@ Options, each as type and default:
 
 - `host`, `port`, `node`, `buffer_size`, `tls`, `auth`: as on
   [tcp_chain](#tcp_chain).
-- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
-  `/auth` is reserved for the login.
+- `ingest_path` (string, `/ingest`): endpoint path; it starts with `/`, is
+  clean (no `//`, `.` or `..` segment) and holds none of `{`, `}`, `%`, `?`,
+  `#`, and `/auth` is reserved for the login.
 - `max_batch_count` (int, `100`): flush after this many entries.
 - `max_batch_bytes` (int, `1048576`): flush after this many bytes (1 MiB).
 - `flush_interval_ms` (int, `1000`): flush after this long.

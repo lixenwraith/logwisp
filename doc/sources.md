@@ -335,8 +335,9 @@ Options, each as type and default:
 - `host`, `port`, `trust_node`, `tls`: as on [tcp_chain](#tcp_chain).
 - `auth` (table): as on `tcp_chain`, plus `token_lifetime_ms`, the `scram`
   bearer token lifetime: 10 s to 24 h, `0` = 15 minutes.
-- `ingest_path` (string, `/ingest`): endpoint path; must start with `/`, and
-  `/auth` is reserved for the login.
+- `ingest_path` (string, `/ingest`): endpoint path; it starts with `/`, is
+  clean (no `//`, `.` or `..` segment) and holds none of `{`, `}`, `%`, `?`,
+  `#`, and `/auth` is reserved for the login.
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB).
 - `read_timeout_ms` (int, `30000`): full request read deadline.
