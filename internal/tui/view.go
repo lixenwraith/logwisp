@@ -73,6 +73,7 @@ type row struct {
 // those the filters pass, oldest first. The screen's goroutine alone uses it.
 type view struct {
 	rows    []row
+	array   []row // the rows' array whole, evictions leaving room at its front
 	bytes   int
 	next    uint64
 	shown   []uint64 // in the rows, or with P among the held pins too
@@ -254,7 +255,17 @@ func (v *view) mark(text string) { v.add(row{mark: text, level: -1, size: rowByt
 func (v *view) add(r row) {
 	r.seq = v.next
 	v.next++
-	v.rows = append(v.rows, r)
+	full := len(v.rows) == cap(v.rows)
+	if full && cap(v.array)-len(v.rows) > len(v.rows)/4 {
+		// evictions left a quarter's room at the array's front: the rows move
+		// there rather than to a larger array, and leave no copy behind
+		n := copy(v.array, v.rows)
+		clear(v.array[n:])
+		v.rows, full = v.array[:n], false
+	}
+	if v.rows = append(v.rows, r); full {
+		v.array = v.rows[:cap(v.rows)]
+	}
 	v.bytes += r.size
 	if v.passes(&v.rows[len(v.rows)-1]) {
 		v.shown = append(v.shown, r.seq)
@@ -377,7 +388,7 @@ func (v *view) clear() {
 			v.held = append(v.held, v.rows[i])
 		}
 	}
-	v.rows, v.shown, v.bytes, v.cursor, v.scroll, v.paused = nil, nil, 0, 0, 0, false
+	v.rows, v.array, v.shown, v.bytes, v.cursor, v.scroll, v.paused = nil, nil, nil, 0, 0, 0, false
 	v.built = query{} // P shows the held
 }
 

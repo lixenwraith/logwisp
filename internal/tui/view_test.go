@@ -864,3 +864,23 @@ func TestASinksDropsShowOnItsNode(t *testing.T) {
 		t.Fatalf("%s", screen)
 	}
 }
+
+// BenchmarkTake takes an entry into a view whose rows are full: a text line,
+// and a JSON line of five fields
+func BenchmarkTake(b *testing.B) {
+	for _, l := range []struct{ name, line string }{
+		{"text", "2026-11-05T01:02:03Z INFO request served in 12 ms"},
+		{"json", `{"time":"2026-11-05T01:02:03.5Z","level":"warn","logger":"disk","msg":"disk almost full","dev":"sda","free_mb":120,"used":"97%","mount":"/var","inode":12}`},
+	} {
+		b.Run(l.name, func(b *testing.B) {
+			var v view
+			rec := tapped("p", "null", "", 0, l.line)
+			for len(v.rows) == 0 || v.rows[0].seq == 0 {
+				v.take(rec)
+			}
+			for b.Loop() {
+				v.take(rec)
+			}
+		})
+	}
+}
