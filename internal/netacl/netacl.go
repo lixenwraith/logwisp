@@ -182,12 +182,30 @@ func (p *Policy) logStartup(host string, widened []string) {
 				"hint", "list only the proxies' own addresses")
 		}
 	}
-	if addr, err := netip.ParseAddr(host); len(p.allow) == 0 && len(p.deny) > 0 && (host == "" || err == nil && addr.IsUnspecified()) {
+	if len(p.allow) == 0 && len(p.deny) > 0 && everyAddress(host) {
 		p.logger.Warn("msg", "Listener on every address admits all that acl.deny does not list",
 			"component", p.component,
 			"instance_id", p.id,
 			"hint", "set acl.allow to the networks that may connect")
 	}
+}
+
+// WarnOpen reports a listener on every address that anyone may use: no auth
+// and no acl rule. p is the listener's policy, nil without rules.
+func WarnOpen(l *log.Logger, component, id, host string, authed bool, p *Policy) {
+	if authed || !everyAddress(host) || p != nil && len(p.allow)+len(p.deny) > 0 {
+		return
+	}
+	l.Warn("msg", "Listener on every address admits anyone: no auth and no acl.allow",
+		"component", component,
+		"instance_id", id,
+		"host", host,
+		"hint", "set host to 127.0.0.1, acl.allow to the networks that may connect, or auth")
+}
+
+func everyAddress(host string) bool {
+	addr, err := netip.ParseAddr(host)
+	return host == "" || err == nil && addr.IsUnspecified()
 }
 
 // in reports whether addr lies in a rule, matched unmapped and without its

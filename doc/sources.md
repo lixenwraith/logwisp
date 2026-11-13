@@ -245,8 +245,10 @@ node_binding = "force"
 
 Options, each as type and default:
 
-- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the
-  listener keeps to its family ([Networking](networking.md#address-family)).
+- `host` (string, `127.0.0.1`): bind address, IPv4 or IPv6 (`::`); `0.0.0.0`
+  or `::` for every interface, where it warns at start without `auth` or
+  `acl.allow`. The listener keeps to its family
+  ([Networking](networking.md#address-family)).
 - `port` (int, required): listen port, 1–65535.
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_connections` (int, `0`): concurrent connection cap; `0` = unlimited.

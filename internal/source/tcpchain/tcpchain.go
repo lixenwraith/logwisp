@@ -118,6 +118,7 @@ func NewTCPChainSourcePlugin(
 		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_chain_source", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "tcp_chain_source", id, opts.TrustNode)
+	netacl.WarnOpen(logger, "tcp_chain_source", id, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return s, nil
 }
 

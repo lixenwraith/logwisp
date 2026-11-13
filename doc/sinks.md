@@ -196,8 +196,10 @@ allow = ["viewer-01"]
 
 Options, each as type and default:
 
-- `host` (string, `0.0.0.0`): bind address, IPv4 or IPv6 (`::`); the listener
-  keeps to its family ([Networking](networking.md#address-family)).
+- `host` (string, `127.0.0.1`): bind address, IPv4 or IPv6 (`::`); `0.0.0.0`
+  or `::` for every interface, where it warns at start without `auth` or
+  `acl.allow`. The listener keeps to its family
+  ([Networking](networking.md#address-family)).
 - `port` (int, **required**): listen port.
 - `stream_path` (string, `/stream`): SSE endpoint, matched exactly (`/logs/`
   does not answer `/logs/x`); it starts with `/`, is clean (no `//`, `.` or
@@ -306,10 +308,11 @@ buffer sizes, connection limit, write timeout, uptime, endpoint paths, and the
 `max_connections`, `write_timeout_ms`, `endpoints`, `dropped_writes`,
 `rejected_clients`, and the [auth and acl keys](sources.md#source-statistics).
 
-> Without an `auth` block both endpoints are unauthenticated, and the stream
-> response carries `Access-Control-Allow-Origin: *`, so any web origin can read
-> it. With one, the header is omitted. Set an `auth` block, bind to a trusted
-> interface, or put an authenticating reverse proxy in front.
+> Without an `auth` block both endpoints are unauthenticated. No response
+> carries a CORS header, so a page from another origin cannot read the stream:
+> serve a dashboard from the sink's origin. On every interface without `auth`
+> or `acl.allow`, the sink warns at start. Set an `auth` block, keep the default
+> loopback host, or put an authenticating reverse proxy in front.
 
 ---
 

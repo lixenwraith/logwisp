@@ -375,8 +375,8 @@ docker run -d --name logwisp \
 - Privileges: keep the image's non-root user, a read-only root filesystem,
   `--cap-drop ALL` and `no-new-privileges`. Without capabilities, a port of
   1024 or above binds on every runtime; publish it on any host port.
-- Listeners bind `0.0.0.0` inside the container; `127.0.0.1` would be
-  unreachable through `-p`.
+- Listeners inside the container need `host = "0.0.0.0"`: the default
+  `127.0.0.1` is unreachable through `-p`.
 - Writable data: a `file` sink or `logging.file` needs a volume writable by
   65532; nothing else is written.
 - Reload: `docker kill -s HUP logwisp`.

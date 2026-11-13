@@ -134,36 +134,18 @@ func TestHeadOnStreamPathIsRefused(t *testing.T) {
 	}
 }
 
-// A stream gated by an auth policy is not offered to every web origin; an
-// open stream keeps the wildcard so browser dashboards still work.
-func TestWildcardCORSOnlyWithoutAuth(t *testing.T) {
-	pki := testutil.NewPKI(t, "viewer-01")
+// No stream is offered to other web origins: with a CORS wildcard any page a
+// browser on the machine opens could read a loopback or LAN stream
+func TestStreamIsNotOfferedToOtherOrigins(t *testing.T) {
 	open, _ := newTestHTTPSink(t, nil)
-	gated, _ := newTestHTTPSink(t, map[string]any{
-		"tls": map[string]any{"enabled": true, "cert_file": pki.ServerCert, "key_file": pki.ServerKey,
-			"client_auth": true, "client_ca_file": pki.CA},
-		"auth": map[string]any{"type": "mtls", "allow": []any{"viewer-01"}},
-	})
-	for _, tc := range []struct {
-		name string
-		sink *HTTPSink
-		want string
-	}{{"open", open, "*"}, {"gated", gated, ""}} {
-		client, baseURL := serveTestHTTPSink(t, tc.sink)
-		if tc.sink.tlsConfig != nil {
-			baseURL = trustPKI(t, client, baseURL, pki, true)
-		}
-		resp, err := client.Get(baseURL + "/stream")
-		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("%s: GET /stream = %d", tc.name, resp.StatusCode)
-		}
-		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != tc.want {
-			t.Errorf("%s: Access-Control-Allow-Origin = %q, want %q", tc.name, got, tc.want)
-		}
+	client, baseURL := serveTestHTTPSink(t, open)
+	resp, err := client.Get(baseURL + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("GET /stream = %d, Access-Control-Allow-Origin %q", resp.StatusCode, resp.Header.Get("Access-Control-Allow-Origin"))
 	}
 }
 

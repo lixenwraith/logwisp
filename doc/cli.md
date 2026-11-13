@@ -405,8 +405,8 @@ lw < app.log > copy.log
 # errors and warnings only
 tail -F app.log | lw --filter include:patterns=ERROR,patterns=WARN
 
-# stdin as a live SSE stream; the http and tcp sinks bind 0.0.0.0 by default
-journalctl -f | lw --sink http:host=127.0.0.1,port=8080
+# stdin as a live SSE stream; listeners bind 127.0.0.1 unless told
+journalctl -f | lw --sink http:port=8080
 
 # a directory's files to one file, through stdout
 lw --source file:directory=/var/log/app,pattern='*.log' > all.log

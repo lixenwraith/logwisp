@@ -173,8 +173,8 @@ one without `--sink` writes stdout:
 tail -F app.log | ./bin/lw --filter include:patterns=ERROR,patterns=WARN
 
 # stdin as a live SSE stream, with a browser viewer at http://127.0.0.1:8080/;
-# the http sink binds 0.0.0.0 unless told
-journalctl -f | ./bin/lw --sink http:host=127.0.0.1,port=8080
+# listeners bind 127.0.0.1 unless told
+journalctl -f | ./bin/lw --sink http:port=8080
 
 # tail a directory instead of stdin
 ./bin/lw --source 'file:directory=/var/log/myapp,pattern=*.log' \

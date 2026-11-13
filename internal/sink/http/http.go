@@ -176,6 +176,7 @@ func NewHTTPSinkPlugin(
 		"viewer_page", web[chain.AuthPath+"/view"] != nil)
 	tlsx.LogWarnings(logger, "http_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_sink", id, false)
+	netacl.WarnOpen(logger, "http_sink", id, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return h, nil
 }
 
@@ -457,10 +458,6 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	if !h.auth.Enabled() {
-		// An authenticated stream is not offered to every web origin
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-	}
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 

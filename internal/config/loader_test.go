@@ -185,7 +185,7 @@ allow = ["10.0.0.1", "10.0.0.2"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Host != "0.0.0.0" || opts.BufferSize != 1000 || !opts.KeepAlive || opts.Port != 9000 || opts.MaxConnections != 9007199254740993 ||
+	if opts.Host != "127.0.0.1" || opts.BufferSize != 1000 || !opts.KeepAlive || opts.Port != 9000 || opts.MaxConnections != 9007199254740993 ||
 		opts.TLS == nil || opts.TLS.ServerName != "relay.example" || opts.ACL == nil || !reflect.DeepEqual(opts.ACL.Allow, []string{"10.0.0.1", "10.0.0.2"}) {
 		t.Fatalf("plugin defaults, nested tables or integer precision lost: %+v", opts)
 	}

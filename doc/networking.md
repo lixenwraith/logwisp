@@ -8,8 +8,10 @@ see [Chaining](chaining.md).
 
 Every listener and dialer keeps strictly to the family of its `host`:
 
-- IPv4 literal (`127.0.0.1`, the default `0.0.0.0`): IPv4 only (`tcp4`). A
+- IPv4 literal (the default `127.0.0.1`, `0.0.0.0`): IPv4 only (`tcp4`). A
   listener's empty `host` is the IPv4 wildcard, as `0.0.0.0`.
+  - A listener on every address with neither `auth` nor `acl.allow` warns at
+    start: anyone who reaches it reads the stream, or writes entries into it.
 - IPv6 literal (`::1`, `::`, `fe80::1%eth0`): IPv6 only (`tcp6`).
   - `::` takes no IPv4 connections, on Linux and FreeBSD alike, whatever the
     system's `bindv6only` default.

@@ -184,7 +184,7 @@ type ConsoleSourceOptions struct {
 // NDJSON entries from upstream logwisp tcp_chain sinks
 type TCPChainSourceOptions struct {
 	TLS            *TLSOptions  `toml:"tls" help:"TLS for the connections it accepts"`
-	Host           string       `toml:"host" default:"0.0.0.0" lw:"hint=host" help:"address to listen on, one family per listener: 0.0.0.0 every IPv4 interface, :: every IPv6 interface, 127.0.0.1 or ::1 this machine only"`
+	Host           string       `toml:"host" default:"127.0.0.1" lw:"hint=host" help:"address to listen on, one family per listener: 127.0.0.1 or ::1 this machine only, 0.0.0.0 every IPv4 interface, :: every IPv6 interface"`
 	Port           int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
 	BufferSize     int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
 	MaxConnections int64        `toml:"max_connections" lw:"min=0,zero=unlimited" help:"connections at once"`
@@ -199,7 +199,7 @@ type TCPChainSourceOptions struct {
 // NDJSON batches from upstream logwisp http_chain sinks
 type HTTPChainSourceOptions struct {
 	TLS           *TLSOptions  `toml:"tls" help:"TLS for the connections it accepts"`
-	Host          string       `toml:"host" default:"0.0.0.0" lw:"hint=host" help:"address to listen on, one family per listener: 0.0.0.0 every IPv4 interface, :: every IPv6 interface, 127.0.0.1 or ::1 this machine only"`
+	Host          string       `toml:"host" default:"127.0.0.1" lw:"hint=host" help:"address to listen on, one family per listener: 127.0.0.1 or ::1 this machine only, 0.0.0.0 every IPv4 interface, :: every IPv6 interface"`
 	Port          int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
 	IngestPath    string       `toml:"ingest_path" default:"/ingest" lw:"hint=path" help:"path batches are posted to"`
 	BufferSize    int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued"`
@@ -246,7 +246,7 @@ type FileSinkOptions struct {
 // TCPSinkOptions defines settings for a TCP server sink
 type TCPSinkOptions struct {
 	TLS               *TLSOptions  `toml:"tls" help:"TLS for the connections it accepts"`
-	Host              string       `toml:"host" default:"0.0.0.0" lw:"hint=host" help:"address to listen on, one family per listener: 0.0.0.0 every IPv4 interface, :: every IPv6 interface, 127.0.0.1 or ::1 this machine only"`
+	Host              string       `toml:"host" default:"127.0.0.1" lw:"hint=host" help:"address to listen on, one family per listener: 127.0.0.1 or ::1 this machine only, 0.0.0.0 every IPv4 interface, :: every IPv6 interface"`
 	Port              int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
 	BufferSize        int64        `toml:"buffer_size" default:"1000" lw:"min=1,max=1048576" help:"entries queued for all clients"`
 	ClientBufferSize  int64        `toml:"client_buffer_size" default:"256" lw:"min=1,max=1048576" help:"entries queued per client"`
@@ -261,7 +261,7 @@ type TCPSinkOptions struct {
 // HTTPSinkOptions defines settings for an HTTP SSE server sink
 type HTTPSinkOptions struct {
 	TLS              *TLSOptions  `toml:"tls" help:"TLS for the connections it accepts"`
-	Host             string       `toml:"host" default:"0.0.0.0" lw:"hint=host" help:"address to listen on, one family per listener: 0.0.0.0 every IPv4 interface, :: every IPv6 interface, 127.0.0.1 or ::1 this machine only"`
+	Host             string       `toml:"host" default:"127.0.0.1" lw:"hint=host" help:"address to listen on, one family per listener: 127.0.0.1 or ::1 this machine only, 0.0.0.0 every IPv4 interface, :: every IPv6 interface"`
 	Port             int64        `toml:"port" lw:"required,min=1,max=65535" help:"port to listen on"`
 	StreamPath       string       `toml:"stream_path" default:"/stream" lw:"hint=path" help:"path of the event stream"`
 	StatusPath       string       `toml:"status_path" default:"/status" lw:"hint=path" help:"path of the status document"`

@@ -41,7 +41,7 @@ func TestEveryRowDecodesFromItsRequiredKeys(t *testing.T) {
 // a backoff maximum below the minimum the default maximum
 func TestZeroDefaultsAndNegatives(t *testing.T) {
 	tcp, err := Decode[TCPSinkOptions]("sink", "tcp", map[string]any{"port": int64(1), "buffer_size": int64(0), "keep_alive": false})
-	if err != nil || tcp.BufferSize != 1000 || tcp.KeepAlive || tcp.Host != "0.0.0.0" {
+	if err != nil || tcp.BufferSize != 1000 || tcp.KeepAlive || tcp.Host != "127.0.0.1" {
 		t.Fatalf("tcp sink: %+v %v", tcp, err)
 	}
 	if _, err := Decode[TCPSinkOptions]("sink", "tcp", map[string]any{"port": int64(1), "buffer_size": int64(-1)}); err == nil ||

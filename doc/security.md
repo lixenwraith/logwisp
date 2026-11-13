@@ -1041,15 +1041,15 @@ and the next CRL publication.
 
 ## Surfaces Without Access Control
 
-An `auth` block (`mtls` or `scram`) closes each of these. Without one, bind them
-to a trusted interface, front them with an authenticating proxy, or narrow them
-to known networks with `acl.allow`.
+An `auth` block (`mtls` or `scram`) closes each of these. Without one, keep the
+default loopback `host`, front them with an authenticating proxy, or narrow
+them to known networks with `acl.allow`. A listener on every address with
+neither `auth` nor `acl.allow` warns at start.
 
 What each exposes when `auth.type = "none"`:
 
-- `http` sink `stream_path`: the full log stream, with
-  `Access-Control-Allow-Origin: *`, so any browser origin can read it (the
-  header is omitted once an auth policy is set).
+- `http` sink `stream_path`: the full log stream. It sends no CORS header, so a
+  page from another origin cannot read it from a browser.
 - `http` sink `status_path`: version and instance id, host, port, TLS flag,
   the auth and acl policy summary, buffer sizes and limits, endpoints,
   uptime, client counts, throughput and rejection counters.
@@ -1093,7 +1093,8 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 - Never enable `insecure_skip_verify` outside a lab; it disables server
   verification entirely and makes the connection trivially interceptable. It is
   reported at startup.
-- Bind listeners to specific interfaces rather than `0.0.0.0` where you can.
+- Listeners bind `127.0.0.1` unless `host` says otherwise; name a specific
+  interface rather than `0.0.0.0` where you can.
 - On any ingest port reachable from a network you do not fully control, set an
   `auth` block: `mtls` with an explicit `allow` list, or `scram`.
   `trust_node = false` is the fallback when neither is an option; it is

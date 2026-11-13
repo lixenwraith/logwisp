@@ -159,6 +159,7 @@ func NewTCPSinkPlugin(
 		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "tcp_sink", id, false)
+	netacl.WarnOpen(logger, "tcp_sink", id, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return t, nil
 }
 
