@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -399,7 +400,8 @@ func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 // Refunded attempts cost nothing and released ones keep their cost; slots are
 // capped from the moment they are taken, so concurrent attempts cannot all
 // pass; a full table refuses new clients, and the sweep frees clients whose
-// holds expired or whose bucket is full again.
+// holds expired or whose bucket is full again, keeping the rest's budgets as
+// it shrinks the map.
 func TestTableBounds(t *testing.T) {
 	tb := NewTable(10, 1, 4)
 	for i := range 20 {
@@ -434,12 +436,13 @@ func TestTableBounds(t *testing.T) {
 			seen: time.Now(), held: map[string]time.Time{"abandoned": time.Now().Add(time.Second)},
 		}
 	}
+	tb.peak = maxClients // as Take counts the clients it adds
 	if tb.Take("192.0.2.1") {
 		t.Fatal("a full table admitted a new client")
 	}
 	tb.sweep(time.Now().Add(2 * tb.idle))
-	if len(tb.clients) != 1 { // 10.0.0.2 still holds its slots
-		t.Fatalf("%d clients left after their holds expired, want 1", len(tb.clients))
+	if len(tb.clients) != 1 || tb.Take("10.0.0.2") {
+		t.Fatalf("%d clients left after their holds expired, want 10.0.0.2 still holding its slots", len(tb.clients))
 	}
 	rate := NewTable(1, 1, 0)
 	rate.Take("10.0.0.4")
@@ -541,6 +544,37 @@ func BenchmarkTable(b *testing.B) {
 			}
 		})
 	}
+}
+
+// BenchmarkTableFlood is a flood of new clients filling a rate table, swept
+// once their buckets are whole; retained-B is the heap the emptied table keeps
+func BenchmarkTableFlood(b *testing.B) {
+	keys := make([]string, maxClients)
+	for i := range keys {
+		keys[i] = Key(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 4: byte(i >> 8), 5: byte(i), 15: 1}))
+	}
+	flood := func() *Table {
+		t := NewTable(1, 1, 0)
+		for _, k := range keys {
+			t.Take(k)
+		}
+		t.sweep(time.Now().Add(2 * time.Second))
+		return t
+	}
+	heap := func() int64 {
+		var m runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m)
+		return int64(m.HeapAlloc)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		flood()
+	}
+	t := flood()
+	with := heap()
+	runtime.KeepAlive(t)
+	b.ReportMetric(float64(with-heap()), "retained-B")
 }
 
 func parseHeader(s string) (client netip.AddrPort, found bool, rest string, err error) {

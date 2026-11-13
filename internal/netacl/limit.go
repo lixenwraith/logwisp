@@ -1,6 +1,7 @@
 package netacl
 
 import (
+	"maps"
 	"net/netip"
 	"sync"
 	"time"
@@ -39,6 +40,7 @@ type Table struct {
 
 	mu        sync.Mutex
 	clients   map[string]*client
+	peak      int // most clients since the map was made
 	lastSweep time.Time
 }
 
@@ -78,6 +80,7 @@ func (t *Table) Take(key string) bool {
 			c.bucket = tokenbucket.New(t.burst, t.rate)
 		}
 		t.clients[key] = c
+		t.peak = max(t.peak, len(t.clients))
 	}
 	c.seen = now
 	c.expire(now)
@@ -154,5 +157,11 @@ func (t *Table) sweep(now time.Time) {
 		if c.idle(now, t.idle) {
 			delete(t.clients, key)
 		}
+	}
+	// A map keeps the room of its peak: once a flood has gone, a copy frees it
+	if len(t.clients) < t.peak/4 {
+		m := make(map[string]*client, len(t.clients))
+		maps.Copy(m, t.clients)
+		t.clients, t.peak = m, len(m)
 	}
 }
