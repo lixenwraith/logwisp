@@ -170,6 +170,9 @@ func LevelWord[T string | []byte](text T, want string) (level string, start, end
 		}
 		for end = i; end < len(text) && wordByte(text[end]); end++ {
 		}
+		if n := end - i; n == 0 || n >= 64 || nameLens&(1<<n) == 0 || !nameFirst[text[i]] {
+			continue
+		}
 		for _, l := range Levels {
 			for _, name := range l.Names {
 				if end-i == len(name) && (want == "" || want == l.Level) && strings.EqualFold(string(text[i:end]), name) {
@@ -180,6 +183,19 @@ func LevelWord[T string | []byte](text T, want string) (level string, start, end
 	}
 	return "", 0, 0
 }
+
+// nameLens has bit n set when a level name is n bytes long, and nameFirst
+// holds the bytes, in either case, a name begins with: a word failing either
+// names no level, so LevelWord skips it without walking Levels
+var nameLens, nameFirst = func() (lens uint64, first [256]bool) {
+	for _, l := range Levels {
+		for _, n := range l.Names {
+			lens |= 1 << len(n)
+			first[n[0]|0x20], first[n[0]&^0x20] = true, true
+		}
+	}
+	return lens, first
+}()
 
 func wordByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'

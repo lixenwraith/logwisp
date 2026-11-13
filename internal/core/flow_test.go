@@ -29,6 +29,35 @@ func TestLevelIsTheFirstWordNamingOne(t *testing.T) {
 	}
 }
 
+// LevelWord skips a word only when walking Levels finds no name for it
+func FuzzLevelWordSkipsOnlyWordsNamingNoLevel(f *testing.F) {
+	for _, s := range []string{"warning disk full", "[Info] x", "terror x_ERR", "INFO then ERR", "Dbg_ e E w"} {
+		f.Add(s, "")
+		f.Add(s, "ERROR")
+	}
+	f.Fuzz(func(t *testing.T, text, want string) {
+		var wl string
+		var ws, we int
+		for i, end := 0, 0; i < len(text) && wl == ""; i = end {
+			for i < len(text) && !wordByte(text[i]) {
+				i++
+			}
+			for end = i; end < len(text) && wordByte(text[end]); end++ {
+			}
+			for _, l := range Levels {
+				for _, name := range l.Names {
+					if wl == "" && end-i == len(name) && (want == "" || want == l.Level) && strings.EqualFold(text[i:end], name) {
+						wl, ws, we = l.Level, i, end
+					}
+				}
+			}
+		}
+		if l, s, e := LevelWord(text, want); l != wl || s != ws || e != we {
+			t.Fatalf("%q want %q: got %q [%d:%d], the walk %q [%d:%d]", text, want, l, s, e, wl, ws, we)
+		}
+	})
+}
+
 // A tapped record keeps at most TapEntryBytes of an entry's message, fields
 // and payload and TapNameBytes of its level, source and node, copied, so a
 // viewer's scrollback holds none of the source's line
