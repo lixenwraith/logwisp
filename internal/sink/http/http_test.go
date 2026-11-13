@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/netacl"
 	"github.com/lixenwraith/logwisp/internal/sink"
 	"github.com/lixenwraith/logwisp/internal/testutil"
 
@@ -637,6 +638,7 @@ func TestRefusedRequestPathIsLoggedEscaped(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { h.logger.Shutdown() })
+	h.refusals = netacl.NewReporter(h.logger, "http_sink", "stream")
 	client, baseURL := serveTestHTTPSink(t, h)
 	resp, err := client.Get(baseURL + "/x%0a2026-11-13T10:00:00Z%20INFO%20forged%1b]0;t%07") // no X-Forwarded-Proto
 	if err != nil {

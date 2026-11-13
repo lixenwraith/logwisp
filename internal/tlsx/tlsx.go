@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	stdlog "log"
 	"os"
 	"strings"
 	"sync"
@@ -256,23 +255,6 @@ func SecretFileWarning(key, path string) string {
 		return ""
 	}
 	return fmt.Sprintf("%s %s is readable by all users (mode %04o)", key, path, fi.Mode().Perm())
-}
-
-// HTTPErrorLog adapts the structured logger for http.Server.ErrorLog so TLS
-// handshake failures don't bypass log routing straight to stderr (which would
-// violate the console sanitization policy).
-func HTTPErrorLog(l *log.Logger, component string) *stdlog.Logger {
-	return stdlog.New(errLogWriter{l: l, component: component}, "", 0)
-}
-
-type errLogWriter struct {
-	l         *log.Logger
-	component string
-}
-
-func (w errLogWriter) Write(p []byte) (int, error) {
-	w.l.Warn("msg", strings.TrimSpace(string(p)), "component", w.component)
-	return len(p), nil
 }
 
 func loadPool(file string) (*x509.CertPool, error) {

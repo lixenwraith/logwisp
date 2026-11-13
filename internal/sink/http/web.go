@@ -117,13 +117,10 @@ func (h *HTTPSink) proxyGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		addr, err := h.auth.ClientAddr(r)
 		if err != nil {
-			if !errors.Is(err, netacl.ErrDenied) { // reported by netacl, once a minute
-				h.logger.Warn("msg", "Request refused: not through a trusted proxy over https",
-					"component", "http_sink",
-					"instance_id", h.id,
-					"remote_addr", r.RemoteAddr,
-					"path", r.URL.EscapedPath(),
-					"error", err)
+			if !errors.Is(err, netacl.ErrDenied) { // netacl reported it
+				h.refusals.Refused("Request refused: not through a trusted proxy over https", func() []any {
+					return []any{"remote_addr", r.RemoteAddr, "path", r.URL.EscapedPath(), "error", err}
+				})
 			}
 			authz.Refuse(w, http.StatusForbidden)
 			return

@@ -50,6 +50,7 @@ type HTTPChainSource struct {
 	subscribers []chan core.LogEntry
 	server      *http.Server
 	logger      *log.Logger
+	refusals    *netacl.Reporter
 
 	// TLS
 	tlsConfig *tls.Config
@@ -94,7 +95,8 @@ func NewHTTPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.HTTP, logger, "http_chain_source", id)
+	refusals := netacl.NewReporter(logger, "http_chain_source", id)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.HTTP, refusals)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +113,7 @@ func NewHTTPChainSourcePlugin(
 		subscribers: make([]chan core.LogEntry, 0),
 		sessions:    make(map[string]string),
 		logger:      logger,
+		refusals:    refusals,
 		tlsConfig:   tlsCfg,
 		auth:        authPolicy,
 		acl:         aclPolicy,
@@ -128,7 +131,7 @@ func NewHTTPChainSourcePlugin(
 		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "http_chain_source", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_chain_source", id, opts.TrustNode)
-	netacl.WarnOpen(logger, "http_chain_source", id, opts.Host, authPolicy.Enabled(), aclPolicy)
+	netacl.WarnOpen(refusals, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return s, nil
 }
 
@@ -178,7 +181,7 @@ func (s *HTTPChainSource) Start() error {
 		ReadHeaderTimeout: HTTPChainReadHeaderTimeout,
 		ConnContext:       netacl.ConnContext,
 		// TLS handshake bounded by min(ReadTimeout, ReadHeaderTimeout)
-		ErrorLog: tlsx.HTTPErrorLog(s.logger, "http_chain_source"),
+		ErrorLog: s.refusals.ErrorLog(),
 	}
 	s.startTime = time.Now()
 
@@ -278,11 +281,7 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	ident, status, err := s.auth.AuthorizeRequest(r)
 	if err != nil {
 		s.rejectedRequests.Add(1)
-		s.logger.Warn("msg", "Request rejected by auth policy",
-			"component", "http_chain_source",
-			"instance_id", s.id,
-			"remote_addr", r.RemoteAddr,
-			"error", err)
+		s.refusals.Refused("Request rejected by auth policy", func() []any { return []any{"remote_addr", r.RemoteAddr, "error", err} })
 		authz.Refuse(w, status)
 		return
 	}
@@ -306,12 +305,9 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	connNode, err := s.auth.ResolveNode(declaredNode, remoteHost, s.config.TrustNode, ident)
 	if err != nil {
 		s.rejectedRequests.Add(1)
-		s.logger.Warn("msg", "Request rejected by node binding",
-			"component", "http_chain_source",
-			"instance_id", s.id,
-			"remote_addr", r.RemoteAddr,
-			"declared_node", declaredNode,
-			"error", err)
+		s.refusals.Refused("Request rejected by node binding", func() []any {
+			return []any{"remote_addr", r.RemoteAddr, "declared_node", declaredNode, "error", err}
+		})
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -382,11 +378,7 @@ func (s *HTTPChainSource) handleAuth(w http.ResponseWriter, r *http.Request) {
 	ident, err := s.auth.ServeAuth(w, r)
 	switch {
 	case err != nil:
-		s.logger.Warn("msg", "Login rejected",
-			"component", "http_chain_source",
-			"instance_id", s.id,
-			"remote_addr", r.RemoteAddr,
-			"error", err)
+		s.refusals.Refused("Login rejected", func() []any { return []any{"remote_addr", r.RemoteAddr, "error", err} })
 	case ident.Name != "":
 		s.logger.Info("msg", "Login accepted",
 			"component", "http_chain_source",

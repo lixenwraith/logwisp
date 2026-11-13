@@ -362,7 +362,8 @@ accepted, so "access review" means reviewing what your CA has issued. Add an
 file, and the review becomes those files: the identities or users listed there
 are the ones that can connect, and removing one plus a `SIGHUP` is the
 revocation path. Authorized identities are recorded in session metadata as
-`auth_identity`; rejections are counted in `auth_rejected` and logged at WARN.
+`auth_identity`; rejections are counted in `auth_rejected` and logged
+([WARN once a minute](security.md#refusals)).
 See [Security](security.md#the-auth-block).
 
 **Secret leakage**

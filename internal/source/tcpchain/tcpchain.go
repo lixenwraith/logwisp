@@ -43,6 +43,7 @@ type TCPChainSource struct {
 	listener    net.Listener
 	conns       map[net.Conn]struct{}
 	logger      *log.Logger
+	refusals    *netacl.Reporter
 
 	// TLS
 	tlsConfig          *tls.Config
@@ -85,7 +86,8 @@ func NewTCPChainSourcePlugin(
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, logger, "tcp_chain_source", id)
+	refusals := netacl.NewReporter(logger, "tcp_chain_source", id)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, refusals)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +104,7 @@ func NewTCPChainSourcePlugin(
 		subscribers: make([]chan core.LogEntry, 0),
 		conns:       make(map[net.Conn]struct{}),
 		logger:      logger,
+		refusals:    refusals,
 		tlsConfig:   tlsCfg,
 		auth:        authPolicy,
 		acl:         aclPolicy,
@@ -118,7 +121,7 @@ func NewTCPChainSourcePlugin(
 		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_chain_source", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "tcp_chain_source", id, opts.TrustNode)
-	netacl.WarnOpen(logger, "tcp_chain_source", id, opts.Host, authPolicy.Enabled(), aclPolicy)
+	netacl.WarnOpen(refusals, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return s, nil
 }
 
@@ -303,10 +306,7 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 		cancel()
 		if err != nil {
 			s.tlsHandshakeErrors.Add(1)
-			s.logger.Warn("msg", "TLS handshake failed",
-				"component", "tcp_chain_source",
-				"remote_addr", remote,
-				"error", err)
+			s.refusals.Refused("TLS handshake failed", func() []any { return []any{"remote_addr", remote, "error", err} })
 			return // deferred cleanup closes conn
 		}
 		cs := tc.ConnectionState()
@@ -317,19 +317,12 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 	// carries the exchange. Nothing is acknowledged until node binding agrees.
 	adm, err := s.auth.Admit(conn, tlsState, true, time.Duration(s.config.HelloTimeoutMS)*time.Millisecond)
 	if err != nil {
+		msg := "Rejected chain connection"
 		if errors.Is(err, authz.ErrRefused) {
 			s.rejectedConns.Add(1)
-			s.logger.Warn("msg", "Connection rejected by auth policy",
-				"component", "tcp_chain_source",
-				"instance_id", s.id,
-				"remote_addr", remote,
-				"error", err)
-		} else {
-			s.logger.Warn("msg", "Rejected chain connection",
-				"component", "tcp_chain_source",
-				"remote_addr", remote,
-				"error", err)
+			msg = "Connection rejected by auth policy"
 		}
+		s.refusals.Refused(msg, func() []any { return []any{"remote_addr", remote, "error", err} })
 		return
 	}
 	ident := adm.Identity
@@ -342,12 +335,9 @@ func (s *TCPChainSource) handleConn(conn net.Conn) {
 	if err != nil {
 		s.rejectedConns.Add(1)
 		adm.Reject("node label rejected")
-		s.logger.Warn("msg", "Connection rejected by node binding",
-			"component", "tcp_chain_source",
-			"instance_id", s.id,
-			"remote_addr", remote,
-			"declared_node", adm.Hello.Node,
-			"error", err)
+		s.refusals.Refused("Connection rejected by node binding", func() []any {
+			return []any{"remote_addr", remote, "declared_node", adm.Hello.Node, "error", err}
+		})
 		return
 	}
 	if err := adm.Accept(); err != nil {

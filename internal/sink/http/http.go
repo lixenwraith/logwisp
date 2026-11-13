@@ -59,8 +59,9 @@ type HTTPSink struct {
 	server *http.Server
 
 	// Application
-	input  chan core.TransportEvent
-	logger *log.Logger
+	input    chan core.TransportEvent
+	logger   *log.Logger
+	refusals *netacl.Reporter
 
 	// Client registry, and the last replay_lines entries, under clientsMu
 	clients      map[uint64]*sseClient
@@ -128,7 +129,8 @@ func NewHTTPSinkPlugin(
 	if opts.Auth != nil && len(opts.Auth.TrustedProxies) > 0 {
 		kind = netacl.HTTPProxied
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, kind, logger, "http_sink", id)
+	refusals := netacl.NewReporter(logger, "http_sink", id)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, kind, refusals)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +154,7 @@ func NewHTTPSinkPlugin(
 		flush:        make(chan struct{}),
 		flushed:      make(chan struct{}),
 		logger:       logger,
+		refusals:     refusals,
 		clients:      make(map[uint64]*sseClient),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
 		keepalive:    core.StreamKeepaliveInterval,
@@ -176,7 +179,7 @@ func NewHTTPSinkPlugin(
 		"viewer_page", web[chain.AuthPath+"/view"] != nil)
 	tlsx.LogWarnings(logger, "http_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "http_sink", id, false)
-	netacl.WarnOpen(logger, "http_sink", id, opts.Host, authPolicy.Enabled(), aclPolicy)
+	netacl.WarnOpen(refusals, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return h, nil
 }
 
@@ -252,7 +255,7 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 		ReadTimeout: readTimeout,
 		IdleTimeout: idleTimeout,
 		ConnContext: netacl.ConnContext,
-		ErrorLog:    tlsx.HTTPErrorLog(h.logger, "http_sink"),
+		ErrorLog:    h.refusals.ErrorLog(),
 	}
 	h.startTime = time.Now()
 
@@ -645,12 +648,9 @@ func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ident, status, err := h.auth.AuthorizeRequest(r)
 		if err != nil {
-			h.logger.Warn("msg", "Request rejected by auth policy",
-				"component", "http_sink",
-				"instance_id", h.id,
-				"remote_addr", clientAddr(r),
-				"path", r.URL.EscapedPath(),
-				"error", err)
+			h.refusals.Refused("Request rejected by auth policy", func() []any {
+				return []any{"remote_addr", clientAddr(r), "path", r.URL.EscapedPath(), "error", err}
+			})
 			authz.Refuse(w, status)
 			return
 		}
@@ -663,11 +663,7 @@ func (h *HTTPSink) handleAuth(w http.ResponseWriter, r *http.Request) {
 	ident, err := h.auth.ServeAuth(w, r)
 	switch {
 	case err != nil:
-		h.logger.Warn("msg", "Login rejected",
-			"component", "http_sink",
-			"instance_id", h.id,
-			"remote_addr", clientAddr(r),
-			"error", err)
+		h.refusals.Refused("Login rejected", func() []any { return []any{"remote_addr", clientAddr(r), "error", err} })
 	case ident.Name != "":
 		h.logger.Info("msg", "Login accepted",
 			"component", "http_sink",

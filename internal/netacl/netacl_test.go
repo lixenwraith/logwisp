@@ -26,11 +26,38 @@ import (
 
 func mustNew(t *testing.T, host string, o config.ACLOptions) *Policy {
 	t.Helper()
-	p, err := New(&o, host, HTTP, log.NewLogger(), "test", "acl")
+	p, err := New(&o, host, HTTP, NewReporter(log.NewLogger(), "test", "acl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// Of a listener's refusals the first in a minute is a WARN with the number
+// since the last WARN, the rest DEBUG: no peer floods lw's log
+func TestRefusalsWarnOnceAMinuteTheRestAtDebug(t *testing.T) {
+	var out bytes.Buffer
+	logger := log.NewLogger()
+	logger.SetConsoleWriter(&out)
+	if err := logger.ApplyConfigString("level=debug", "format=txt"); err != nil || logger.Start() != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logger.Shutdown() })
+	r := NewReporter(logger, "test", "acl")
+	refuse := func() { r.Refused("Connection refused by acl", func() []any { return []any{"reason", "test"} }) }
+	refuse()
+	refuse()
+	refuse()
+	r.next.Store(0) // a minute later
+	refuse()
+	if err := logger.Flush(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Count(got, " WARN msg") != 2 || strings.Count(got, " DEBUG msg") != 2 ||
+		!strings.Contains(got, "refused_since_last_warn 0") || !strings.Contains(got, "refused_since_last_warn 2") {
+		t.Fatalf("logged:\n%s", got)
+	}
 }
 
 // Deny wins over allow, a set allow list admits only its entries, an empty
@@ -84,11 +111,11 @@ func TestEntriesFollowTheListenerFamily(t *testing.T) {
 		if c.from != "" {
 			o.ProxyProtocol, o.ProxyFrom = "required", []string{c.from}
 		}
-		if _, err := New(o, c.host, HTTP, log.NewLogger(), "test", "acl"); (err == nil) != c.ok {
+		if _, err := New(o, c.host, HTTP, NewReporter(log.NewLogger(), "test", "acl")); (err == nil) != c.ok {
 			t.Errorf("%s behind %q on %q: %v", c.entry, c.from, c.host, err)
 		}
 	}
-	if _, err := New(&config.ACLOptions{Deny: []string{"2001:db8::/32"}}, "127.0.0.1", HTTPProxied, log.NewLogger(), "test", "acl"); err != nil {
+	if _, err := New(&config.ACLOptions{Deny: []string{"2001:db8::/32"}}, "127.0.0.1", HTTPProxied, NewReporter(log.NewLogger(), "test", "acl")); err != nil {
 		t.Errorf("IPv6 entry behind trusted_proxies: %v", err)
 	}
 }
@@ -133,7 +160,7 @@ func TestProxyProtocolAndProxyFromComeTogether(t *testing.T) {
 		{"always", nil, false},
 		{"optional", []string{"127.0.0.1"}, true},
 	} {
-		_, err := New(&config.ACLOptions{ProxyProtocol: c.mode, ProxyFrom: c.from}, "127.0.0.1", HTTP, log.NewLogger(), "test", "acl")
+		_, err := New(&config.ACLOptions{ProxyProtocol: c.mode, ProxyFrom: c.from}, "127.0.0.1", HTTP, NewReporter(log.NewLogger(), "test", "acl"))
 		if (err == nil) != c.ok {
 			t.Errorf("proxy_protocol %q with proxy_from %v: %v", c.mode, c.from, err)
 		}
@@ -507,8 +534,8 @@ func BenchmarkParseHost(b *testing.B) {
 // a minute are: a direct peer, a client a PROXY header names, and a client a
 // trusted proxy forwards
 func BenchmarkRefuse(b *testing.B) {
-	p := &Policy{deny: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}, epoch: time.Now()}
-	p.nextWarn.Store(math.MaxInt64)
+	p := &Policy{deny: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}, rep: NewReporter(log.NewLogger(), "test", "acl")}
+	p.rep.next.Store(math.MaxInt64)
 	server, client := net.Pipe()
 	client.Close()
 	var direct net.Conn = remoteConn{server, net.TCPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.1:40000"))}

@@ -210,8 +210,8 @@ preamble, headers, and entry encoding.
 
 **Closed as soon as it connects, before TLS**
 - The listener's `acl` refused it: `acl_denied` or `acl_limited` rises, and
-  its log has `Connection refused by acl` at WARN with a `reason`, once a
-  minute at most. The dialer sees `EOF` or `connection reset by peer` (curl:
+  its log has `Connection refused by acl` with a `reason`
+  ([WARN once a minute](security.md#refusals)). The dialer sees `EOF` or `connection reset by peer` (curl:
   exit 52 or 56; over TLS, 35).
   - `address rules` — `allow` or `deny` excludes the client: the one a PROXY
     header names (`remote_addr`, the proxy as `peer_addr`), else the socket
@@ -232,7 +232,7 @@ preamble, headers, and entry encoding.
 
 **HTTP `429 Too Many Requests` with `Retry-After`**
 - `requests_per_second_per_client`: `acl_limited` rises and the log has
-  `Request refused by acl`, once a minute at most. A browser's page load
+  `Request refused by acl` ([WARN once a minute](security.md#refusals)). A browser's page load
   takes several requests; raise the rate rather than retry faster. From
   `/auth` with `too many attempts`, it is SCRAM throttling (below).
 
@@ -249,9 +249,9 @@ preamble, headers, and entry encoding.
   pin from its startup warning, or move it to an issuer and `ca_file`.
 - `protocol version not supported` — one side is pinned to `min_version = "1.3"`
   and the other cannot negotiate it.
-- Listeners log handshake failures at WARN with the remote address (the `tcp`
-  sink at DEBUG); the `tcp` sink and `tcp_chain` source count them in
-  `tls_handshake_errors`.
+- Listeners log `TLS handshake failed` with the remote address
+  ([WARN once a minute](security.md#refusals)); the `tcp` sink and `tcp_chain`
+  source count them in `tls_handshake_errors`.
 
 **Rejected after a successful handshake**
 - `auth: refused: identity "<id>" is not allowed` — the certificate is valid
@@ -267,15 +267,17 @@ preamble, headers, and entry encoding.
 - On a `tcp_chain` sink the same message inside `Chain connect refused` means
   the *server* was refused: its certificate identity is not in the sink's
   `auth.allow`.
-- Allow-list and login rejections log WARN and count `auth_rejected`; a
+- Allow-list and login rejections log ([WARN once a minute](security.md#refusals))
+  and count `auth_rejected`; a
   node-binding refusal logs `Connection rejected by node binding`
   (`tcp_chain`, `rejected_conns`) or `Request rejected by node binding`
   (`http_chain`, `rejected_requests`).
 
 **SCRAM login fails**
 - `authentication failed` — the dialer is not told why, by design. The
-  listener's WARN line (`Connection rejected by auth policy` on TCP,
-  `Login rejected` on HTTP) is: `invalid credentials` for a wrong password, an
+  listener's line (`Connection rejected by auth policy` on TCP, `Login
+  rejected` on HTTP; [DEBUG](security.md#refusals) after the minute's first)
+  is: `invalid credentials` for a wrong password, an
   unknown user, or one removed or rotated on the listener (compare the
   `password_file` with the last `add-user`, and check the listener got
   `SIGHUP`); `certificate cn "…" does not match user "…"` for the `identity`
@@ -293,7 +295,7 @@ preamble, headers, and entry encoding.
 - `403` from an `http` sink in proxy mode, with `not a trusted proxy` or
   `X-Forwarded-Proto` in its WARN line — the request did not come from a listed
   proxy, or the proxy did not forward `X-Forwarded-Proto: https` and
-  `X-Forwarded-For`. With `Request refused by acl` (once a minute at most) or
+  `X-Forwarded-For`. With `Request refused by acl` (WARN once a minute) or
   none, the `acl` rules refuse the forwarded client (`acl_denied`).
 - `too many attempts` — the address failed or abandoned logins faster than one
   per second beyond a burst of 10, or has 4 unfinished; it clears within seconds

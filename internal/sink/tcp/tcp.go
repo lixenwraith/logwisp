@@ -49,8 +49,9 @@ type TCPSink struct {
 	listener net.Listener
 
 	// Application
-	input  chan core.TransportEvent
-	logger *log.Logger
+	input    chan core.TransportEvent
+	logger   *log.Logger
+	refusals *netacl.Reporter
 
 	// Client registry. conns holds every accepted connection, so shutdown also
 	// reaches peers still in the handshake, before they become clients.
@@ -120,7 +121,8 @@ func NewTCPSinkPlugin(
 	if err != nil {
 		return nil, err
 	}
-	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, logger, "tcp_sink", id)
+	refusals := netacl.NewReporter(logger, "tcp_sink", id)
+	aclPolicy, err := netacl.New(opts.ACL, opts.Host, netacl.TCP, refusals)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +142,7 @@ func NewTCPSinkPlugin(
 		flush:        make(chan struct{}),
 		flushed:      make(chan struct{}),
 		logger:       logger,
+		refusals:     refusals,
 		clients:      make(map[uint64]*tcpClient),
 		conns:        make(map[net.Conn]struct{}),
 		writeTimeout: time.Duration(opts.WriteTimeoutMS) * time.Millisecond,
@@ -159,7 +162,7 @@ func NewTCPSinkPlugin(
 		"acl", aclPolicy.Describe())
 	tlsx.LogWarnings(logger, "tcp_sink", id, opts.TLS, true)
 	authPolicy.LogStartup(logger, "tcp_sink", id, false)
-	netacl.WarnOpen(logger, "tcp_sink", id, opts.Host, authPolicy.Enabled(), aclPolicy)
+	netacl.WarnOpen(refusals, opts.Host, authPolicy.Enabled(), aclPolicy)
 	return t, nil
 }
 
@@ -370,10 +373,7 @@ func (t *TCPSink) handleConn(conn net.Conn, count int64) {
 		cancel()
 		if err != nil {
 			t.tlsHandshakeErrors.Add(1)
-			t.logger.Debug("msg", "TLS handshake failed",
-				"component", "tcp_sink",
-				"remote_addr", remote,
-				"error", err)
+			t.refusals.Refused("TLS handshake failed", func() []any { return []any{"remote_addr", remote, "error", err} })
 			return
 		}
 		cs := tc.ConnectionState()
@@ -393,11 +393,7 @@ func (t *TCPSink) handleConn(conn net.Conn, count int64) {
 	}
 	if err != nil {
 		t.rejectedConns.Add(1)
-		t.logger.Warn("msg", "Connection rejected by auth policy",
-			"component", "tcp_sink",
-			"instance_id", t.id,
-			"remote_addr", remote,
-			"error", err)
+		t.refusals.Refused("Connection rejected by auth policy", func() []any { return []any{"remote_addr", remote, "error", err} })
 		return
 	}
 	ident := adm.Identity

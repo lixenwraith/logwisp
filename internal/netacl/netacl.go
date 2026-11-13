@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	stdlog "log"
 	"math"
 	"net"
 	"net/http"
@@ -31,7 +32,7 @@ import (
 )
 
 const (
-	// warnEvery spaces the WARNs reporting refusals; acl_denied and acl_limited count all
+	// warnEvery spaces a listener's WARNs reporting refusals; its counters keep all
 	warnEvery = time.Minute
 	v1Max     = 107  // the longest PROXY v1 line, CRLF included
 	v2Max     = 2048 // the longest PROXY v2 address block, TLVs included
@@ -72,19 +73,16 @@ type Policy struct {
 	mode                   string        // proxy_protocol, when proxy_from is set
 	headerWait             time.Duration // for a proxy's header: tlsx.HandshakeTimeout
 	conns, requests        *Table        // max_connections_per_client, requests_per_second_per_client
-	logger                 *log.Logger
-	component, id          string
+	rep                    *Reporter
 
 	denied, limited, headers atomic.Uint64
-	epoch                    time.Time    // a monotonic base: a stepped clock neither mutes nor floods the WARN
-	nextWarn                 atomic.Int64 // nanoseconds since epoch
 }
 
 // New compiles the rules of a kind of listener on host, and warns of what they
 // leave open. Entries are of the family core.Network gives host, as one the
 // sockets never carry is a mistake; behind a proxy, allow and deny take both,
 // as it names clients of either.
-func New(o *config.ACLOptions, host string, kind Kind, l *log.Logger, component, id string) (*Policy, error) {
+func New(o *config.ACLOptions, host string, kind Kind, r *Reporter) (*Policy, error) {
 	if o == nil {
 		return nil, nil
 	}
@@ -115,7 +113,7 @@ func New(o *config.ACLOptions, host string, kind Kind, l *log.Logger, component,
 		}
 		return rules, nil
 	}
-	p := &Policy{mode: o.ProxyProtocol, headerWait: tlsx.HandshakeTimeout, logger: l, component: component, id: id, epoch: time.Now()}
+	p := &Policy{mode: o.ProxyProtocol, headerWait: tlsx.HandshakeTimeout, rep: r}
 	if p.proxyFrom, err = compile("proxy_from", network, o.ProxyFrom); err != nil {
 		return nil, err
 	}
@@ -152,55 +150,91 @@ func ParseHost(s string) (netip.Addr, bool) {
 
 func (p *Policy) logStartup(host string, widened []string) {
 	for i := 0; i < len(widened); i += 2 {
-		p.logger.Warn("msg", "acl entry has host bits set and matches its whole network",
-			"component", p.component,
-			"instance_id", p.id,
-			"entry", widened[i],
-			"network", widened[i+1])
+		p.rep.Warn("acl entry has host bits set and matches its whole network", "entry", widened[i], "network", widened[i+1])
 	}
 	for _, q := range p.allow {
 		if q.Bits() == 0 {
-			p.logger.Warn("msg", "acl.allow admits every address of its family",
-				"component", p.component,
-				"instance_id", p.id,
-				"entry", q.String(),
-				"hint", "list only the networks that may connect")
+			p.rep.Warn("acl.allow admits every address of its family", "entry", q.String(), "hint", "list only the networks that may connect")
 		}
 	}
 	if p.mode == "optional" {
-		p.logger.Warn("msg", "acl.proxy_protocol optional: a client a proxy_from peer forwards without a header passes as the proxy",
-			"component", p.component,
-			"instance_id", p.id,
+		p.rep.Warn("acl.proxy_protocol optional: a client a proxy_from peer forwards without a header passes as the proxy",
 			"hint", "set required once every route from proxy_from sends the header")
 	}
 	for _, q := range p.proxyFrom {
 		if !slices.ContainsFunc(local, func(l netip.Prefix) bool { return l.Bits() <= q.Bits() && l.Contains(q.Addr()) }) {
-			p.logger.Warn("msg", "acl.proxy_from reaches public addresses, any of which may name any client",
-				"component", p.component,
-				"instance_id", p.id,
-				"entry", q.String(),
-				"hint", "list only the proxies' own addresses")
+			p.rep.Warn("acl.proxy_from reaches public addresses, any of which may name any client", "entry", q.String(), "hint", "list only the proxies' own addresses")
 		}
 	}
 	if len(p.allow) == 0 && len(p.deny) > 0 && everyAddress(host) {
-		p.logger.Warn("msg", "Listener on every address admits all that acl.deny does not list",
-			"component", p.component,
-			"instance_id", p.id,
-			"hint", "set acl.allow to the networks that may connect")
+		p.rep.Warn("Listener on every address admits all that acl.deny does not list", "hint", "set acl.allow to the networks that may connect")
 	}
 }
 
 // WarnOpen reports a listener on every address that anyone may use: no auth
 // and no acl rule. p is the listener's policy, nil without rules.
-func WarnOpen(l *log.Logger, component, id, host string, authed bool, p *Policy) {
+func WarnOpen(r *Reporter, host string, authed bool, p *Policy) {
 	if authed || !everyAddress(host) || p != nil && len(p.allow)+len(p.deny) > 0 {
 		return
 	}
-	l.Warn("msg", "Listener on every address admits anyone: no auth and no acl.allow",
-		"component", component,
-		"instance_id", id,
-		"host", host,
-		"hint", "set host to 127.0.0.1, acl.allow to the networks that may connect, or auth")
+	r.Warn("Listener on every address admits anyone: no auth and no acl.allow",
+		"host", host, "hint", "set host to 127.0.0.1, acl.allow to the networks that may connect, or auth")
+}
+
+// Reporter logs what a listener's peers cause. Of its refusals, by acl, auth
+// or TLS alike, the first in a minute is a WARN with how many came since the
+// last one, the rest DEBUG when kept: no peer floods lw's log, and so none
+// pushes journald's rate limit over the refusals it wants hidden.
+type Reporter struct {
+	logger        *log.Logger
+	component, id string
+	epoch         time.Time     // a monotonic base: a stepped clock neither mutes nor floods the WARN
+	next          atomic.Int64  // nanoseconds since epoch
+	quiet         atomic.Uint64 // refusals since the last WARN
+}
+
+// NewReporter makes the Reporter of one listener
+func NewReporter(l *log.Logger, component, id string) *Reporter {
+	return &Reporter{logger: l, component: component, id: id, epoch: time.Now()}
+}
+
+// Warn writes a WARN naming the listener
+func (r *Reporter) Warn(msg string, fields ...any) {
+	r.logger.Warn(append([]any{"msg", msg, "component", r.component, "instance_id", r.id}, fields...)...)
+}
+
+// Refused logs a refusal. fields, the detail after msg, runs only for a
+// record that is written, so a muted refusal costs no allocation.
+func (r *Reporter) Refused(msg string, fields func() []any) {
+	now, next := int64(time.Since(r.epoch)), r.next.Load()
+	if now >= next && r.next.CompareAndSwap(next, now+int64(warnEvery)) {
+		r.Warn(msg+"; more within a minute are DEBUG", append(fields(), "refused_since_last_warn", r.quiet.Swap(0))...)
+		return
+	}
+	r.quiet.Add(1)
+	if r.logger.Enabled(log.LevelDebug) {
+		r.logger.Debug(append([]any{"msg", msg, "component", r.component, "instance_id", r.id}, fields()...)...)
+	}
+}
+
+// ErrorLog is the listener's http.Server ErrorLog, through lw's log and its
+// escaping. A failed TLS handshake, which any peer causes by connecting and
+// closing, is a refusal; the rest are WARNs.
+func (r *Reporter) ErrorLog() *stdlog.Logger {
+	return stdlog.New(errorLog{r}, "", 0)
+}
+
+type errorLog struct{ r *Reporter }
+
+func (w errorLog) Write(p []byte) (int, error) {
+	msg := strings.TrimSpace(string(p))
+	if rest, ok := strings.CutPrefix(msg, "http: TLS handshake error from "); ok {
+		addr, reason, _ := strings.Cut(rest, ": ")
+		w.r.Refused("TLS handshake failed", func() []any { return []any{"remote_addr", addr, "error", reason} })
+	} else {
+		w.r.Warn(msg)
+	}
+	return len(p), nil
 }
 
 func everyAddress(host string) bool {
@@ -365,30 +399,15 @@ func (l *listener) deliver(c net.Conn, err error) bool {
 func (p *Policy) refuse(c net.Conn, count *atomic.Uint64, reason string) {
 	count.Add(1)
 	c.Close()
-	if p.due() {
-		p.report("Connection", fmt.Sprint(c.RemoteAddr()), PeerAddr(c), reason)
-	}
+	p.rep.Refused("Connection refused by acl", func() []any { return p.fields(fmt.Sprint(c.RemoteAddr()), PeerAddr(c), reason) })
 }
 
-// due reports whether a refusal's WARN is due, at most once per warnEvery; the
-// counts keep the rest, so callers build its fields only when it is
-func (p *Policy) due() bool {
-	now, next := int64(time.Since(p.epoch)), p.nextWarn.Load()
-	return now >= next && p.nextWarn.CompareAndSwap(next, now+int64(warnEvery))
-}
-
-func (p *Policy) report(what, client, peer, reason string) {
-	fields := []any{"msg", what + " refused by acl; more within a minute are only counted",
-		"component", p.component,
-		"instance_id", p.id,
-		"remote_addr", client,
-		"reason", reason,
-		"acl_denied", p.denied.Load(),
-		"acl_limited", p.limited.Load()}
+func (p *Policy) fields(client, peer, reason string) []any {
+	fields := []any{"remote_addr", client, "reason", reason, "acl_denied", p.denied.Load(), "acl_limited", p.limited.Load()}
 	if peer != "" {
 		fields = append(fields, "peer_addr", peer)
 	}
-	p.logger.Warn(fields...)
+	return fields
 }
 
 // Requests answers 429 to a client past requests_per_second_per_client.
@@ -406,9 +425,9 @@ func (p *Policy) Requests(next http.Handler, client func(*http.Request) string) 
 		addr, _ := ParseHost(client(r))
 		if !p.requests.Take(Key(addr)) {
 			p.limited.Add(1)
-			if p.due() {
-				p.report("Request", client(r), ContextPeerAddr(r.Context()), "requests_per_second_per_client")
-			}
+			p.rep.Refused("Request refused by acl", func() []any {
+				return p.fields(client(r), ContextPeerAddr(r.Context()), "requests_per_second_per_client")
+			})
 			w.Header().Set("Retry-After", retry)
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
 			return
@@ -424,9 +443,7 @@ func (p *Policy) Forwarded(client netip.Addr, peer string) error {
 		return nil
 	}
 	p.denied.Add(1)
-	if p.due() {
-		p.report("Request", client.String(), peer, "address rules")
-	}
+	p.rep.Refused("Request refused by acl", func() []any { return p.fields(client.String(), peer, "address rules") })
 	return fmt.Errorf("forwarded client %s %w", client, ErrDenied)
 }
 

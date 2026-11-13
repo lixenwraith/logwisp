@@ -283,9 +283,10 @@ and a `credentials_file`, or one `username` with its `password_file`, and
   connection, the whole exchange within `hello_timeout_ms`, and the final is
   sent only once node binding agrees. A source without `scram` answers a hello
   offering credentials with `authentication not enabled`.
-- An auth or node-binding refusal is logged at WARN and counted in
-  `rejected_conns`. A missing, malformed or wrong-version hello is logged at
-  WARN (`Rejected chain connection`) and not counted in `rejected_conns`;
+- An auth or node-binding refusal is logged ([WARN once a
+  minute](security.md#refusals)) and counted in `rejected_conns`. A missing,
+  malformed or wrong-version hello is logged the same way (`Rejected chain
+  connection`) and not counted in `rejected_conns`;
   under `scram` a malformed or wrong-version one counts in `auth_rejected`. A
   connection over `max_connections` is closed and counted without a log.
 - The node label is then resolved by `trust_node` and `auth.node_binding` (see

@@ -370,8 +370,8 @@ requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
   matches without its zone.
 - A refused connection is closed at once and counted in `acl_denied`, or
   `acl_limited` past a [limit](#per-client-limits) (plugin stats, the `http`
-  sink's status). A WARN names the client, the reason and the counts, at most
-  once a minute per listener; the refusals in between are only counted.
+  sink's status). A WARN names the client, the reason and the counts,
+  [once a minute](#refusals); the refusals in between are DEBUG.
 - The rules see the client: the socket peer, or the client a PROXY header
   names. Behind the `http` sink's `trusted_proxies` they judge the L7 proxy
   as the peer, then each request's forwarded client (`403` when refused,
@@ -460,9 +460,22 @@ when it is constructed, so startup and every reload repeat them:
   descriptors hold nothing at rest and are not reported
 - an `acl` entry with host bits set (`10.0.0.1/8`), naming the network it
   matches; an `acl.allow` entry of a whole family (`0.0.0.0/0`, `::/0`); a
-  wildcard listener whose `acl` has `deny` but no `allow`; an `acl.proxy_from`
+  wildcard listener whose `acl` has `deny` but no `allow`, or neither and no
+  `auth`; an `acl.proxy_from`
   entry reaching beyond private, loopback and link-local addresses;
   `acl.proxy_protocol = "optional"`
+
+## Refusals
+
+Each listener logs the peers it refuses through one throttle:
+- By `acl`, `auth`, node binding, a failed TLS handshake or a bad chain hello,
+  and the `http` sink's proxy gate.
+- The first in a minute is a WARN with the client, the reason and
+  `refused_since_last_warn`; the rest are DEBUG (`--logging.level=debug`
+  shows each). No peer floods lw's log, or pushes journald's rate limit over
+  the refusals it means to hide.
+- The counters keep every one: `acl_denied`, `acl_limited`, `auth_rejected`,
+  `rejected_conns`, `tls_handshake_errors`.
 
 ## Certificates made at startup
 

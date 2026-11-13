@@ -264,7 +264,8 @@ Options, each as type and default:
   search keeps the lines containing a text, in any case unless its `Aa` toggle
   matches case, and its level list the entries at or above a level, read as
   the sources read it.
-- Refusals are logged at WARN and counted in `auth_rejected`. The authorized
+- Refusals are logged ([WARN once a minute](security.md#refusals)) and counted
+  in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
   `auth_identity`.
 - Stream responses carry `Content-Type: text/event-stream`,
@@ -378,8 +379,8 @@ Options, each as type and default:
   `max_connections` check, so concurrent handshakes are bounded too.
 - With an `auth` block, authorization runs after that handshake and *before*
   registration, so an unauthorized client never enters the client map and never
-  receives a broadcast. Its connection is closed, the rejection logged at WARN,
-  and `rejected_conns` incremented.
+  receives a broadcast. Its connection is closed, the rejection logged
+  ([WARN once a minute](security.md#refusals)) and `rejected_conns` incremented.
 
 **Statistics**: `host`, `port`, `tls`, `buffer_size`, `write_errors`,
 `dropped_writes`, `rejected_conns`, `tls_handshake_errors`, and the
