@@ -73,7 +73,8 @@ func (f *Filter) apply(entry core.LogEntry, text string) bool {
 
 	// The report matches every pattern on its own and builds its arguments
 	// before Debug could drop them, so it runs only at DEBUG; otherwise
-	// matches alone runs the patterns, stopping where the logic allows
+	// matches alone runs the patterns, stopping where the logic allows. It
+	// names no entry text: exclude filters are how secrets are kept out.
 	debug := f.logger.Enabled(log.LevelDebug)
 	if debug {
 		f.logger.Debug("msg", "Filter checking entry",
@@ -82,8 +83,6 @@ func (f *Filter) apply(entry core.LogEntry, text string) bool {
 			"logic", f.config.Logic,
 			"entry_level", entry.Level,
 			"entry_source", entry.Source,
-			"entry_message", entry.Message[:min(100, len(entry.Message))],
-			"text_to_match", text[:min(150, len(text))],
 			"patterns", f.config.Patterns)
 
 		for i, pattern := range f.config.Patterns {

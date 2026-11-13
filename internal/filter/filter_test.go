@@ -73,6 +73,27 @@ func TestApplyBelowDebugSkipsTheReport(t *testing.T) {
 	}
 }
 
+// The debug report names no entry text: an exclude filter is how a secret is
+// kept out of the output, and lw's own log must not carry it either
+func TestDebugReportNamesNoEntryText(t *testing.T) {
+	var out lockedBuffer
+	logger := startedLogger(t, "debug", &out)
+	f, err := NewFilter(config.FilterConfig{Type: "exclude", Logic: "or", Patterns: []string{"password"}}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := core.LogEntry{Source: "auth.log", Level: "INFO", Message: "login user=alice password=hunter2"}
+	if f.apply(secret, matchText(secret)) {
+		t.Fatal("an excluded entry passed")
+	}
+	if err := logger.Flush(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "Filter decision") || strings.Contains(got, "hunter2") {
+		t.Fatalf("debug report:\n%s", got)
+	}
+}
+
 // At DEBUG the report still names every pattern's result, and the decision
 func TestApplyAtDebugReportsEachPattern(t *testing.T) {
 	var out lockedBuffer
