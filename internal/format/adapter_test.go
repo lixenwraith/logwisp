@@ -32,3 +32,19 @@ func TestEveryRecordEndsInOneNewline(t *testing.T) {
 		}
 	}
 }
+
+// An entry's level is written as the level its word names in core.Levels, in
+// any case; no level, or another word, is written as INFO
+func TestLevelIsWrittenAsTheLevelItsWordNames(t *testing.T) {
+	f, err := NewFormatter(&config.FormatConfig{Type: "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for level, want := range map[string]string{"TRACE": "TRACE", "debug": "DEBUG", "": "INFO", "warning": "WARN",
+		"fatal": "ERROR", "crit": "ERROR", "chatty": "INFO"} {
+		out, _ := f.Format(core.LogEntry{Time: time.Now(), Level: level, Message: "m"})
+		if !bytes.Contains(out, []byte(`"level":"`+want+`"`)) {
+			t.Errorf("level %q: %s", level, out)
+		}
+	}
+}

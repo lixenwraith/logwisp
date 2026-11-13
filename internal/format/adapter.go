@@ -3,6 +3,7 @@ package format
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/lixenwraith/logwisp/internal/config"
@@ -120,18 +121,26 @@ func (a *FormatterAdapter) Name() string {
 	return a.format
 }
 
-// mapLevel maps string level to int64
+// mapLevel is the log library's number for the level an entry's word names
+// in core.Levels, TRACE -8 to ERROR 8 by rank; no level, or another word, is
+// INFO's 0
 func mapLevel(level string) int64 {
-	switch level {
-	case "DEBUG", "debug":
-		return -4
-	case "INFO", "info":
-		return 0
-	case "WARN", "warn", "WARNING", "warning":
-		return 4
-	case "ERROR", "error":
-		return 8
-	default:
+	if level == "" {
 		return 0
 	}
+	for i, l := range core.Levels {
+		if level == l.Level {
+			return int64(i-2) * 4
+		}
+	}
+	for i, l := range core.Levels {
+		for _, names := range [2][]string{l.Names, l.Keyed} {
+			for _, name := range names {
+				if strings.EqualFold(level, name) {
+					return int64(i-2) * 4
+				}
+			}
+		}
+	}
+	return 0
 }
