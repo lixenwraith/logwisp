@@ -523,6 +523,34 @@ func TestHTTPTokenFlow(t *testing.T) {
 	}
 }
 
+// Each login gets a token of its own, those of one user within one second
+// too: revoking one at logout leaves the others
+func TestEachLoginGetsATokenOfItsOwn(t *testing.T) {
+	f := newFixture(t)
+	l := f.listener(t, config.AuthOptions{}, f.serverTLS, config.Listener, HTTP)
+	srv, _ := f.httpListener(t, l, f.serverTLS)
+	for range 5 {
+		second := time.Now().Unix()
+		var tokens [2]string
+		for i := range tokens {
+			d := f.dialer(t, "edge-01", "edge-01-secret")
+			token, err := d.Token(t.Context(), f.httpClient(d), srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokens[i] = token
+		}
+		if time.Now().Unix() != second {
+			continue // the logins straddled a second: try again
+		}
+		if tokens[0] == tokens[1] {
+			t.Fatal("two logins in one second got the same token")
+		}
+		return
+	}
+	t.Skip("no two logins fit in one second")
+}
+
 // A server that cannot sign the final message with the user's verifier gets
 // no token stored, whatever token it offers.
 func TestForgedFinalYieldsNoToken(t *testing.T) {

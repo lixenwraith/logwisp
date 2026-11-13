@@ -682,7 +682,9 @@ func (p *Policy) ServeAuth(w http.ResponseWriter, r *http.Request) (Identity, er
 			writeJSON(w, status, authStep{Error: "authentication failed"})
 			return Identity{}, err
 		}
-		token, err := l.tokens.GenerateToken(final.Username, nil)
+		// sid tells apart the logins of one user within a second, whose claims
+		// are otherwise alike: one logout must not end another's session
+		token, err := l.tokens.GenerateToken(final.Username, map[string]any{"sid": rand.Text()})
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, authStep{Error: "token unavailable"})
 			return Identity{}, err
