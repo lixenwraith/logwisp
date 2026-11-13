@@ -402,12 +402,12 @@ func (o *ACLOptions) Check(host string, http, proxied bool) error {
 	if err := checkTags(reflect.ValueOf(o).Elem(), "acl."); err != nil {
 		return err
 	}
-	header := o.ProxyProtocol == "optional" || o.ProxyProtocol == "required"
+	header := o.ProxyProtocol == "required"
 	switch {
 	case header && len(o.ProxyFrom) == 0:
 		return fmt.Errorf("acl: proxy_protocol %s needs proxy_from, the proxies that may send the header", o.ProxyProtocol)
 	case !header && len(o.ProxyFrom) > 0:
-		return errors.New("acl: proxy_from needs proxy_protocol optional or required")
+		return errors.New("acl: proxy_from needs proxy_protocol required")
 	case !http && httpKey(o) != "":
 		return fmt.Errorf("acl: %s applies only to HTTP listeners", httpKey(o))
 	case o.MaxConnectionsPerClient > 0 && proxied:

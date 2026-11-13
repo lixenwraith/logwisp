@@ -353,7 +353,7 @@ peer costs no handshake and never reaches `auth`.
 [pipelines.plugin_sources.config.acl]
 allow = ["192.0.2.0/24", "198.51.100.7"] # addresses or CIDRs; empty: all
 deny  = ["192.0.2.66"]                   # refused, listed in allow or not
-proxy_protocol = "required"              # off (default), optional, required
+proxy_protocol = "required"              # off (default) or required
 proxy_from = ["10.0.0.5"]                # L4 proxies sending PROXY headers
 max_connections_per_client = 4           # at once; 0 (default): no cap
 requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
@@ -421,11 +421,9 @@ client certificates are unchanged.
   - sends its header within `tlsx.HandshakeTimeout` (10 s); a malformed,
     oversized (v1 over 107 bytes, a v2 block over 2048) or late one is
     refused;
-  - under `required` is refused without a header; under `optional` it keeps
-    its socket address, after up to 10 s if it sends nothing at first. A
-    client the proxy forwards without a header then passes as the proxy, so
-    `optional` (which warns at startup) suits only a rollout; set `required`
-    once every route from `proxy_from` sends the header;
+  - is refused without a header: a client the proxy forwarded without one
+    would pass as the proxy. To roll headers out, move the proxy's routes to
+    a second listener that reads them;
   - keeps its socket address for `LOCAL` (v2) and `UNKNOWN` (v1), the proxies'
     health checks, and for v2 families other than TCP over IPv4 and IPv6. TLVs
     are skipped.
@@ -464,9 +462,8 @@ when it is constructed, so startup and every reload repeat them:
 - an `acl` entry with host bits set (`10.0.0.1/8`), naming the network it
   matches; an `acl.allow` entry of a whole family (`0.0.0.0/0`, `::/0`); a
   wildcard listener whose `acl` has `deny` but no `allow`, or neither and no
-  `auth`; an `acl.proxy_from`
-  entry reaching beyond private, loopback and link-local addresses;
-  `acl.proxy_protocol = "optional"`
+  `auth`; an `acl.proxy_from` entry reaching beyond private, loopback and
+  link-local addresses
 
 ## Refusals
 

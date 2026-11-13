@@ -340,7 +340,7 @@ type AuthOptions struct {
 type ACLOptions struct {
 	Allow                      []string `toml:"allow" lw:"hint=cidr" help:"addresses or CIDRs that may connect; unset, any that deny does not refuse"`
 	Deny                       []string `toml:"deny" lw:"hint=cidr" help:"addresses or CIDRs refused, even when allow lists them"`
-	ProxyProtocol              string   `toml:"proxy_protocol" default:"off" lw:"enum=off|optional|required" help:"read a PROXY header from proxy_from"`
+	ProxyProtocol              string   `toml:"proxy_protocol" default:"off" lw:"enum=off|required" help:"read a PROXY header from proxy_from"`
 	ProxyFrom                  []string `toml:"proxy_from" lw:"hint=cidr" help:"proxies that may send a PROXY header"`
 	MaxConnectionsPerClient    int64    `toml:"max_connections_per_client" lw:"min=0,zero=unlimited" help:"connections a client may hold"`
 	RequestsPerSecondPerClient float64  `toml:"requests_per_second_per_client" lw:"http,min=0,zero=unlimited" help:"HTTP: requests a client may make each second"`

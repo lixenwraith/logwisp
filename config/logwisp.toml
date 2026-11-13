@@ -173,10 +173,8 @@
 ### allow                  addresses or CIDRs of the listener's family (either
 ###                        behind proxy_from or trusted_proxies); empty = all
 ### deny                   refused, listed in allow or not
-### proxy_protocol         off | optional | required: PROXY v1/v2 headers, read
-###                        before TLS; the rules then see the client. optional
-###                        lets a headerless stream pass as the proxy: use it
-###                        only while rolling headers out
+### proxy_protocol         off | required: PROXY v1/v2 headers, read before
+###                        TLS; the rules then see the client
 ### proxy_from             the proxies that may send one; a header from any
 ###                        other peer is refused
 ### max_connections_per_client

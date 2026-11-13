@@ -147,7 +147,7 @@ func TestRefusedPeerNeverReachesAccept(t *testing.T) {
 }
 
 // proxy_protocol and proxy_from come together: either alone is a mistake, as
-// is a mode that is none of off, optional and required
+// is a mode that is neither off nor required
 func TestProxyProtocolAndProxyFromComeTogether(t *testing.T) {
 	for _, c := range []struct {
 		mode string
@@ -158,7 +158,8 @@ func TestProxyProtocolAndProxyFromComeTogether(t *testing.T) {
 		{"", []string{"127.0.0.1"}, false},
 		{"off", []string{"127.0.0.1"}, false},
 		{"always", nil, false},
-		{"optional", []string{"127.0.0.1"}, true},
+		{"optional", []string{"127.0.0.1"}, false},
+		{"required", []string{"127.0.0.1"}, true},
 	} {
 		_, err := New(&config.ACLOptions{ProxyProtocol: c.mode, ProxyFrom: c.from}, "127.0.0.1", HTTP, NewReporter(log.NewLogger(), "test", "acl"))
 		if (err == nil) != c.ok {
@@ -236,7 +237,7 @@ func TestMalformedHeaderIsRefused(t *testing.T) {
 // A peer outside proxy_from that sends a header is refused at its first
 // read, as the header is spoofable; its other bytes pass untouched
 func TestHeaderFromUnlistedPeerIsRefused(t *testing.T) {
-	p := mustNew(t, "127.0.0.1", config.ACLOptions{ProxyProtocol: "optional", ProxyFrom: []string{"10.0.0.1"}})
+	p := mustNew(t, "127.0.0.1", config.ACLOptions{ProxyProtocol: "required", ProxyFrom: []string{"10.0.0.1"}})
 	ln, dial := listening(t, p)
 	for _, c := range []struct {
 		send    string
@@ -258,24 +259,14 @@ func TestHeaderFromUnlistedPeerIsRefused(t *testing.T) {
 	}
 }
 
-// Under required a peer in proxy_from must send a header; under optional
-// one that sends none keeps its socket address and its bytes
-func TestRequiredRefusesAListedPeerWithoutHeader(t *testing.T) {
-	for mode, refused := range map[string]bool{"required": true, "optional": false} {
-		p := mustNew(t, "127.0.0.1", config.ACLOptions{ProxyProtocol: mode, ProxyFrom: []string{"127.0.0.1"}})
-		ln, dial := listening(t, p)
-		peer := dial("127.0.0.1")
-		peer.Write([]byte("GET /"))
-		if refused {
-			closed(t, peer)
-			continue
-		}
-		conn := accept(t, ln)
-		b := make([]byte, 5)
-		if _, err := io.ReadFull(conn, b); err != nil || string(b) != "GET /" || conn.RemoteAddr().String() != "127.0.0.1:40000" {
-			t.Errorf("optional: %s read %q: %v", conn.RemoteAddr(), b, err)
-		}
-	}
+// A peer in proxy_from must send a header: a client it forwarded without one
+// would pass as the proxy
+func TestListedPeerWithoutHeaderIsRefused(t *testing.T) {
+	p := mustNew(t, "127.0.0.1", config.ACLOptions{ProxyProtocol: "required", ProxyFrom: []string{"127.0.0.1"}})
+	_, dial := listening(t, p)
+	peer := dial("127.0.0.1")
+	peer.Write([]byte("GET /"))
+	closed(t, peer)
 }
 
 // The client a header names is what the rules, RemoteAddr and the stats see;
@@ -335,7 +326,7 @@ func TestCloseReleasesHeadersInFlight(t *testing.T) {
 // address it ends with: behind proxy_from, the one its header names. Closing
 // a connection returns its slot; refusals count in acl_limited.
 func TestConnectionsPerClientAreCapped(t *testing.T) {
-	p := mustNew(t, "127.0.0.1", config.ACLOptions{MaxConnectionsPerClient: 2, ProxyProtocol: "optional", ProxyFrom: []string{"127.0.0.1"}})
+	p := mustNew(t, "127.0.0.1", config.ACLOptions{MaxConnectionsPerClient: 2, ProxyProtocol: "required", ProxyFrom: []string{"127.0.0.1"}})
 	ln, dial := listening(t, p)
 	dial("192.0.2.1")
 	first := accept(t, ln)

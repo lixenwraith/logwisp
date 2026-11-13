@@ -70,7 +70,6 @@ const (
 // Policy is the compiled form of config.ACLOptions for one listener
 type Policy struct {
 	allow, deny, proxyFrom []netip.Prefix
-	mode                   string        // proxy_protocol, when proxy_from is set
 	headerWait             time.Duration // for a proxy's header: tlsx.HandshakeTimeout
 	conns, requests        *Table        // max_connections_per_client, requests_per_second_per_client
 	rep                    *Reporter
@@ -89,7 +88,7 @@ func New(o *config.ACLOptions, host string, kind Kind, r *Reporter) (*Policy, er
 	if err := o.Check(host, kind != TCP, kind == HTTPProxied); err != nil {
 		return nil, err
 	}
-	proxied := o.ProxyProtocol == "optional" || o.ProxyProtocol == "required"
+	proxied := o.ProxyProtocol == "required"
 	rps := o.RequestsPerSecondPerClient
 	if len(o.Allow)+len(o.Deny)+len(o.ProxyFrom) == 0 && o.MaxConnectionsPerClient == 0 && rps == 0 {
 		return nil, nil
@@ -113,7 +112,7 @@ func New(o *config.ACLOptions, host string, kind Kind, r *Reporter) (*Policy, er
 		}
 		return rules, nil
 	}
-	p := &Policy{mode: o.ProxyProtocol, headerWait: tlsx.HandshakeTimeout, rep: r}
+	p := &Policy{headerWait: tlsx.HandshakeTimeout, rep: r}
 	if p.proxyFrom, err = compile("proxy_from", network, o.ProxyFrom); err != nil {
 		return nil, err
 	}
@@ -156,10 +155,6 @@ func (p *Policy) logStartup(host string, widened []string) {
 		if q.Bits() == 0 {
 			p.rep.Warn("acl.allow admits every address of its family", "entry", q.String(), "hint", "list only the networks that may connect")
 		}
-	}
-	if p.mode == "optional" {
-		p.rep.Warn("acl.proxy_protocol optional: a client a proxy_from peer forwards without a header passes as the proxy",
-			"hint", "set required once every route from proxy_from sends the header")
 	}
 	for _, q := range p.proxyFrom {
 		if !slices.ContainsFunc(local, func(l netip.Prefix) bool { return l.Bits() <= q.Bits() && l.Contains(q.Addr()) }) {
@@ -346,7 +341,7 @@ func (l *listener) proxied(c net.Conn) {
 	case err != nil:
 		l.p.refuse(c, &l.p.denied, "PROXY header: "+err.Error())
 		return
-	case !found && l.p.mode == "required":
+	case !found:
 		l.p.refuse(c, &l.p.denied, "no PROXY header")
 		return
 	case found:
@@ -641,7 +636,7 @@ func (p *Policy) Describe() string {
 	}
 	s := fmt.Sprintf("allow=%s deny=%d", allow, len(p.deny))
 	if len(p.proxyFrom) > 0 {
-		s += fmt.Sprintf(" proxy_protocol=%s proxy_from=%d", p.mode, len(p.proxyFrom))
+		s += fmt.Sprintf(" proxy_protocol=required proxy_from=%d", len(p.proxyFrom))
 	}
 	if p.conns != nil {
 		s += fmt.Sprintf(" max_connections_per_client=%d", p.conns.slots)
