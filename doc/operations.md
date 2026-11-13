@@ -318,7 +318,8 @@ stall, give it a `file` sink instead. A closed stdout pipe ends lw with
 **High memory use**
 
 Buffers are bounded, so unbounded growth almost always means many buffers:
-count each source's and sink's `buffer_size` (a fixed 1000 on the `file`,
+a queue holds at most 1048576 entries; count each source's and sink's
+`buffer_size` (a fixed 1000 on the `file`,
 `random` and `null` sources and the `null` sink), clients ×
 `client_buffer_size`, and each `http` sink's `replay_lines`. A `tcp_chain` sink
 blocked on an unreachable downstream also holds its full input queue.

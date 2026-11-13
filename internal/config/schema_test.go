@@ -45,7 +45,7 @@ func TestZeroDefaultsAndNegatives(t *testing.T) {
 		t.Fatalf("tcp sink: %+v %v", tcp, err)
 	}
 	if _, err := Decode[TCPSinkOptions]("sink", "tcp", map[string]any{"port": int64(1), "buffer_size": int64(-1)}); err == nil ||
-		err.Error() != "buffer_size: must be at least 1, got -1" {
+		err.Error() != "buffer_size: must be from 1 to 1048576, got -1" {
 		t.Fatalf("negative buffer_size: %v", err)
 	}
 	for in, want := range map[any]int64{nil: 100, int64(0): 0, int64(-1): 100, int64(7): 7} {
@@ -172,7 +172,7 @@ func TestLoadReportsEveryProblemALine(t *testing.T) {
 		"pipelines[0].plugin_sources[file].config.directory: must be set",
 		`pipelines[0].plugin_sources[file].config.from: must be one of start, end, got "middle"`,
 		"pipelines[0].plugin_sinks[tcp].config.port: must be from 1 to 65535, got 70000",
-		"pipelines[0].plugin_sinks[tcp].config.buffer_size: must be at least 1, got -1",
+		"pipelines[0].plugin_sinks[tcp].config.buffer_size: must be from 1 to 1048576, got -1",
 		`pipelines[0].plugin_sinks[tcp].config.acl.allow[0]: "x": not an IP address or CIDR; host names and IPv6 zones are not accepted`,
 		"pipelines[0].plugin_sinks[tcp].config.tls: listeners need cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file",
 		`pipelines[1].name: duplicate name "a"`,
@@ -298,6 +298,22 @@ func TestIngestPathIsOneServeMuxRegisters(t *testing.T) {
 		}
 		if c.ok && !registers(c.path) {
 			t.Errorf("ingest_path %q accepted, but ServeMux refuses it", c.path)
+		}
+	}
+}
+
+// Every queue's size is bounded, as the file sink's writer bounds its own: a
+// size past what the runtime allocates panicked the constructor, in --check
+// and at a reload, and one that fits could take the host's memory
+func TestEveryQueueSizeIsBounded(t *testing.T) {
+	for _, p := range plugins {
+		for _, o := range options(p.options) {
+			if !strings.HasSuffix(o.Name, "buffer_size") {
+				continue
+			}
+			if o.Max == nil || *o.Max != 1<<20 {
+				t.Errorf("%s %s: %s has no bound of 1048576", p.Type, p.Role, o.Name)
+			}
 		}
 	}
 }
