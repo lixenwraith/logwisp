@@ -28,8 +28,9 @@ func init() {
 }
 
 // One reader serves the process: after a reload the new source continues
-// where the old one stopped, and no line is read twice. The channel is
-// unbuffered, so a busy pipeline stops the reading of stdin, not its lines.
+// where the old one stopped, and no line is read twice. The channel holds 16
+// lines, so the reader need not wait for a hand-off per line, and a busy
+// pipeline still stops the reading of stdin, not its lines.
 var (
 	stdinOnce  sync.Once
 	stdinLines chan string
@@ -38,7 +39,7 @@ var (
 
 func lines() <-chan string {
 	stdinOnce.Do(func() {
-		stdinLines = make(chan string)
+		stdinLines = make(chan string, 16)
 		go func() {
 			stdinErr = readLines(os.Stdin, stdinLines)
 			close(stdinLines)

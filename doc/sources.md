@@ -151,7 +151,7 @@ Lines:
 
 Delivery and lifetime:
 - The source drops nothing while its pipeline runs: it waits, so a slow
-  pipeline slows the reading of stdin.
+  pipeline slows the reading of stdin, which runs at most 16 lines ahead.
 - One reader serves the process. A reload's new source continues where the old
   one stopped, and no line is read twice, but lines the old pipeline still
   holds at the reload can be lost. Hence at most **one** console source in the
