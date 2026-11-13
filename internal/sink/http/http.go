@@ -65,8 +65,9 @@ type HTTPSink struct {
 
 	// Client registry, and the last replay_lines entries, under clientsMu
 	clients      map[uint64]*sseClient
-	clientsPeak  int // the most clients held since the map was built
-	replay       [][]byte
+	clientsPeak  int      // the most clients held since the map was built
+	replay       [][]byte // a ring once full, its oldest at replayNext
+	replayNext   int
 	clientsMu    sync.Mutex
 	nextClientID atomic.Uint64
 	writeTimeout time.Duration
@@ -367,8 +368,11 @@ func (h *HTTPSink) brokerLoop() {
 
 			var stale []uint64
 			h.clientsMu.Lock()
-			if n := int(h.config.ReplayLines); n > 0 {
-				h.replay = append(h.replay[max(len(h.replay)+1-n, 0):], event.Payload)
+			if n := int(h.config.ReplayLines); len(h.replay) < n {
+				h.replay = append(h.replay, event.Payload)
+			} else if n > 0 {
+				h.replay[h.replayNext] = event.Payload
+				h.replayNext = (h.replayNext + 1) % n
 			}
 			for id, c := range h.clients {
 				select {
@@ -506,7 +510,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	h.clientsMu.Lock()
 	h.clients[id] = c
 	h.clientsPeak = max(h.clientsPeak, len(h.clients))
-	backlog := sink.Queue(h.replay)
+	backlog := sink.Queue(h.replay[h.replayNext:], h.replay[:h.replayNext])
 	h.clientsMu.Unlock()
 	if len(backlog) > 0 && !send(<-backlog, backlog, true) {
 		return

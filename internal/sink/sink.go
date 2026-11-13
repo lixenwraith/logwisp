@@ -86,12 +86,18 @@ func Batch[T any](dst []byte, first T, queue <-chan T, add func([]byte, T) []byt
 // Bytes appends a payload as it is: Batch's add for a queue of payloads
 func Bytes(dst, payload []byte) []byte { return append(dst, payload...) }
 
-// Queue holds payloads for Batch: the tail each client writes after its own
-// queue at Stop
-func Queue(payloads [][]byte) <-chan []byte {
-	q := make(chan []byte, len(payloads))
-	for _, p := range payloads {
-		q <- p
+// Queue holds payloads for Batch, the parts' in order: the tail each client
+// writes after its own queue at Stop, or a replay ring from its oldest
+func Queue(parts ...[][]byte) <-chan []byte {
+	n := 0
+	for _, part := range parts {
+		n += len(part)
+	}
+	q := make(chan []byte, n)
+	for _, part := range parts {
+		for _, p := range part {
+			q <- p
+		}
 	}
 	close(q)
 	return q
