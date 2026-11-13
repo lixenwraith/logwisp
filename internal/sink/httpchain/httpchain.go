@@ -61,8 +61,9 @@ type HTTPChainSink struct {
 	logger *log.Logger
 
 	// Batch state owned exclusively by run loop goroutine
-	batch      bytes.Buffer
+	batch      []byte
 	batchCount int64
+	enc        *chain.Encoder
 
 	reqTimeout time.Duration
 	done       chan struct{}
@@ -157,6 +158,7 @@ func NewHTTPChainSinkPlugin(
 		done:       make(chan struct{}),
 		logger:     logger,
 		reqTimeout: time.Duration(opts.RequestTimeoutMS) * time.Millisecond,
+		enc:        chain.NewEncoder(),
 	}
 
 	t.session = proxy.CreateSession(
@@ -301,7 +303,7 @@ func (t *HTTPChainSink) append(event core.TransportEvent) bool {
 	if synthesized {
 		t.synthesized.Add(1)
 	}
-	line, err := chain.EncodeEntry(entry)
+	batch, err := t.enc.Append(t.batch, entry)
 	if errors.Is(err, chain.ErrEntryTooLong) {
 		t.oversized.Add(1)
 		return false
@@ -313,17 +315,17 @@ func (t *HTTPChainSink) append(event core.TransportEvent) bool {
 			"error", err)
 		return false
 	}
-	t.batch.Write(line)
+	t.batch = batch
 	t.batchCount++
-	return t.batchCount >= t.config.MaxBatchCount || int64(t.batch.Len()) >= t.config.MaxBatchBytes
+	return t.batchCount >= t.config.MaxBatchCount || int64(len(t.batch)) >= t.config.MaxBatchBytes
 }
 
 // flush delivers the pending batch, retrying transient failures with backoff
 // until shutdown drops it
 func (t *HTTPChainSink) flush(ctx context.Context) {
-	body := bytes.Clone(t.batch.Bytes())
+	body := bytes.Clone(t.batch)
 	count := t.batchCount
-	t.batch.Reset()
+	t.batch = t.batch[:0]
 	t.batchCount = 0
 
 	failures := 0

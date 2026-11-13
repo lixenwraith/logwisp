@@ -5,7 +5,6 @@
 package chain
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,20 +52,45 @@ func EncodeHello(h Hello) ([]byte, error) {
 // ErrEntryTooLong refuses an entry line a chain source would refuse
 var ErrEntryTooLong = fmt.Errorf("entry line over %d bytes", core.MaxLogEntryBytes)
 
-// EncodeEntry serializes one newline-terminated entry line. Escapes can take
-// an entry under the 1 MiB line cap past it, and a source refusing the line
-// costs the link (tcp) or the whole batch (http), so it is refused here.
-func EncodeEntry(entry core.LogEntry) ([]byte, error) {
-	var line bytes.Buffer
-	enc := json.NewEncoder(&line)
-	enc.SetEscapeHTML(false) // decoded at the source, never put in a page
-	if err := enc.Encode(entry); err != nil {
-		return nil, err
+// Encoder appends entry lines to a caller's buffer, for one goroutine: a
+// sink's run loop
+type Encoder struct {
+	out   appender
+	enc   *json.Encoder
+	entry core.LogEntry // encoded by pointer: by value json copies it twice
+}
+
+// appender is the Encoder's writer: the caller's buffer, during one Append
+type appender struct{ b []byte }
+
+func (a *appender) Write(p []byte) (int, error) {
+	a.b = append(a.b, p...)
+	return len(p), nil
+}
+
+// NewEncoder returns an Encoder
+func NewEncoder() *Encoder {
+	e := new(Encoder)
+	e.enc = json.NewEncoder(&e.out)
+	e.enc.SetEscapeHTML(false) // decoded at the source, never put in a page
+	return e
+}
+
+// Append appends entry's newline-terminated line to dst. Escapes can take an
+// entry under the 1 MiB line cap past it, and a source refusing the line costs
+// the link (tcp) or the whole batch (http), so such a line is not appended.
+func (e *Encoder) Append(dst []byte, entry core.LogEntry) ([]byte, error) {
+	e.entry, e.out.b = entry, dst
+	err := e.enc.Encode(&e.entry)
+	line := e.out.b
+	e.out.b = nil
+	switch {
+	case err != nil:
+		return dst, err
+	case len(line)-len(dst) > core.MaxLogEntryBytes: // the newline counts, as at the source
+		return dst, ErrEntryTooLong
 	}
-	if line.Len() > core.MaxLogEntryBytes { // the newline counts, as at the source
-		return nil, ErrEntryTooLong
-	}
-	return line.Bytes(), nil
+	return line, nil
 }
 
 // MaxNodeBytes bounds a node label, well past a host name's 255 bytes

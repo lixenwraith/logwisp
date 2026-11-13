@@ -14,9 +14,10 @@ whose input queue is full drops the event for itself only, counted as its
 `dropped_entries` in the pipeline's statistics and summed as the pipeline's
 `total_dropped_by_sink`.
 
-The `console`, `file`, `http` and `tcp` sinks write what is queued at once:
-whole entries, up to 4 KiB a write (a longer entry goes alone), so a burst
-costs one write and not one per entry, and a Linux pipe takes each whole.
+The `console`, `file`, `http`, `tcp` and `tcp_chain` sinks write what is
+queued at once: whole entries, up to 4 KiB a write (a longer entry goes alone),
+so a burst costs one write and not one per entry, and a Linux pipe takes each
+whole.
 
 ---
 

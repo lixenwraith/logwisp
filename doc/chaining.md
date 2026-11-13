@@ -175,7 +175,9 @@ in at ingest. A line that does not decode is skipped and counted in
 
 - `tcp_chain`: per line, held across reconnects until the socket accepts it,
   with exponential backoff plus ±20 % jitter. There is no acknowledgement:
-  lines in flight when a link breaks are lost (at most once).
+  lines in flight when a link breaks are lost (at most once). Queued lines go
+  out together, up to 4 KiB a write; after a failed write the next link
+  starts at the first line the socket did not take whole.
 - `http_chain`: at least once per batch. It retries transport errors, `408`,
   `429`, `5xx` and, under `scram`, failed logins and `401`. It drops the batch
   on any other non-2xx, counted in `dropped_batches`. A batch can arrive twice

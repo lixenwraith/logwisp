@@ -2,7 +2,10 @@ package tcpchain
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -137,3 +140,58 @@ func TestStopDeliversTheQueueWithinTheBound(t *testing.T) {
 		t.Fatalf("Stop took %v past a 2 s flush bound", d)
 	}
 }
+
+// A write that fails partway resends from the first line the socket did not
+// take whole: a line it took is not sent twice, nor one sent in part
+func TestFailedWriteResendsFromTheFirstLineNotTakenWhole(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	received := make(chan []byte, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		r.ReadString('\n') // the hello
+		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		rest, _ := io.ReadAll(r)
+		received <- rest
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	p, _ := strconv.ParseInt(port, 10, 64)
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	created, err := NewTCPChainSinkPlugin("fwd", map[string]any{"host": "127.0.0.1", "port": p, "backoff_min_ms": int64(1)},
+		log.NewLogger(), session.NewProxy(manager, "fwd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := created.(*TCPChainSink)
+	batch := []byte("one\ntwo\nthree\n")
+	sink.conn = &failingConn{take: len("one\ntw")}
+	if !sink.deliver(t.Context(), batch) {
+		t.Fatal("not delivered")
+	}
+	sink.closeConn()
+	if got := <-received; !bytes.Equal(got, []byte("two\nthree\n")) {
+		t.Fatalf("the next link received %q", got)
+	}
+}
+
+// failingConn takes the first take bytes written, then fails
+type failingConn struct {
+	net.Conn
+	take int
+}
+
+func (c *failingConn) Write(p []byte) (int, error) {
+	return min(c.take, len(p)), errors.New("connection reset")
+}
+
+func (c *failingConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *failingConn) Close() error                     { return nil }

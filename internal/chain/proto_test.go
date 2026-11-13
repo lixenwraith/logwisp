@@ -15,7 +15,8 @@ import (
 // refused past it, escapes counted: a short message of control bytes is refused
 func TestEntryLineIsRefusedWhereASourceWouldRefuseIt(t *testing.T) {
 	at := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
-	encode := func(msg string) ([]byte, error) { return EncodeEntry(core.LogEntry{Time: at, Message: msg}) }
+	enc := NewEncoder()
+	encode := func(msg string) ([]byte, error) { return enc.Append(nil, core.LogEntry{Time: at, Message: msg}) }
 	one, err := encode("x")
 	if err != nil {
 		t.Fatal(err)
