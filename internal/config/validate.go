@@ -220,10 +220,20 @@ func (p Plugin) checkNetwork(n networked) error {
 // Check holds the rules between tls keys on a listener or a dialer; a table
 // not enabled is ignored whole
 func (o *TLSOptions) Check(listener bool) error {
-	if o == nil || !o.Enabled {
+	if o == nil {
 		return nil
 	}
 	v := reflect.ValueOf(o).Elem()
+	if !o.Enabled {
+		// min_version, with its default, is tuning; any other key means TLS
+		// was meant and enabled forgotten
+		for _, opt := range options(v.Type()) {
+			if f := v.Field(opt.index); opt.Default == "" && !f.IsZero() && (f.Kind() != reflect.Slice || f.Len() > 0) {
+				return fmt.Errorf("tls: %s is set but enabled is not", opt.Name)
+			}
+		}
+		return nil
+	}
 	if err := checkTags(v, "tls."); err != nil {
 		return err
 	}
@@ -251,6 +261,8 @@ func (o *TLSOptions) Check(listener bool) error {
 		return fmt.Errorf("tls: listeners need cert_file and key_file, self_signed, or issuer_cert_file and issuer_key_file")
 	case o.ClientAuth && o.ClientCAFile == "":
 		return fmt.Errorf("tls: client_auth requires client_ca_file")
+	case o.ClientCAFile != "" && !o.ClientAuth:
+		return fmt.Errorf("tls: client_ca_file is set but client_auth is not, so no client certificate is asked for")
 	}
 	if (o.CertFile == "") != (o.KeyFile == "") {
 		return fmt.Errorf("tls: cert_file and key_file must be set together")

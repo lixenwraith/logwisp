@@ -97,7 +97,8 @@ min_version          = "1.3"
 Options by role, each with its default:
 
 - Both roles
-  - `enabled` (`false`): master switch; when false the whole block is ignored.
+  - `enabled` (`false`): master switch; without it the block may hold only
+    `min_version`, and another key is refused, as TLS was meant.
   - `cert_file`: local certificate; a listener needs it, `self_signed` or the
     issuer files, a dialer may present it as its client identity.
   - `key_file`: private key for `cert_file`; set the two together.
@@ -111,8 +112,8 @@ Options by role, each with its default:
   - `hosts` (`[]`): names and addresses a made certificate carries, beyond the
     listener's `host`, `os.Hostname()`, `localhost`, `127.0.0.1` and `::1`.
   - `client_auth` (`false`): require and verify a client certificate (mTLS).
-  - `client_ca_file`: CA bundle that verifies client certificates; **required**
-    when `client_auth` is true.
+  - `client_ca_file`: CA bundle that verifies client certificates; set with
+    `client_auth`, and only with it.
 - Dialers
   - `ca_file` (system store): CA bundle that verifies the server certificate.
   - `server_name` (the configured `host`): SNI and certificate name to verify
@@ -132,6 +133,9 @@ Misconfiguration is refused when the configuration loads
 rules only when `enabled`; certificate and key files fail when the plugin is
 built:
 
+- a key other than `min_version` in a block without `enabled = true`: a
+  certificate, CA or pin there means TLS was meant
+
 - a listener with `enabled = true` and none of `cert_file`/`key_file`,
   `self_signed`, `issuer_cert_file`/`issuer_key_file`, or more than one
 - `hosts` on a listener without `self_signed` or the issuer files
@@ -141,7 +145,8 @@ built:
   `issuer_key_file`, `hosts`, `client_auth` or `client_ca_file` on a dialer;
   `ca_file`, `server_name`, `insecure_skip_verify` or `pin_sha256` on a
   listener
-- `client_auth = true` with no `client_ca_file`
+- `client_auth = true` with no `client_ca_file`, or `client_ca_file` without
+  `client_auth`, which asks for no client certificate
 - only one of `cert_file` / `key_file`, or of `issuer_cert_file` /
   `issuer_key_file`
 - a `min_version` that is neither `"1.2"` nor `"1.3"`

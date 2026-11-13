@@ -102,8 +102,8 @@
 ### client_auth + client_ca_file make it mTLS. Dialers (tcp_chain/http_chain
 ### sinks) verify the server by ca_file + server_name, or by pin_sha256, and
 ### present cert_file + key_file for mTLS. `lw tls ca` / `lw tls cert` make a
-### CA and certificates. A table not enabled has no effect; only its keys
-### and kinds are checked.
+### CA and certificates. A table not enabled takes min_version alone: any
+### other key there means TLS was meant, and is refused.
 ###
 ### enabled                master switch
 ### cert_file, key_file    the certificate presented and its key, set together

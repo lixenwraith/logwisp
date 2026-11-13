@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"math"
 	"net/http"
 	"os"
@@ -224,6 +225,24 @@ func TestTableKeysFollowThePlugin(t *testing.T) {
 		f := strings.Fields(path)
 		if has(f[0], f[1], f[2]) != want {
 			t.Errorf("%s: listed %v, want %v", path, !want, want)
+		}
+	}
+}
+
+// A tls table without enabled holds min_version alone: a certificate, CA or
+// pin there means TLS was meant, so it is refused rather than ignored
+func TestATLSKeyNeedsEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		tls  map[string]any
+		want string
+	}{
+		{map[string]any{"enabled": false, "min_version": "1.2", "self_signed": false, "hosts": []any{}}, ""},
+		{map[string]any{"cert_file": "c", "key_file": "k"}, "tls: cert_file is set but enabled is not"},
+		{map[string]any{"enabled": false, "pin_sha256": "sha256//x"}, "tls: pin_sha256 is set but enabled is not"},
+	} {
+		_, err := Decode[TCPSinkOptions]("sink", "tcp", map[string]any{"port": int64(9000), "tls": tc.tls})
+		if got := fmt.Sprint(err); tc.want == "" && err != nil || tc.want != "" && got != tc.want {
+			t.Errorf("%v: %v, want %q", tc.tls, err, tc.want)
 		}
 	}
 }

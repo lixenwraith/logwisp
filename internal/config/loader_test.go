@@ -167,8 +167,8 @@ type = "tcp"
 port = 9000
 max_connections = 9007199254740993
 [pipelines.plugin_sinks.config.tls]
-enabled = false
-server_name = "relay.example"
+enabled = true
+self_signed = true
 [pipelines.plugin_sinks.config.acl]
 allow = ["10.0.0.1", "10.0.0.2"]
 `)
@@ -186,7 +186,7 @@ allow = ["10.0.0.1", "10.0.0.2"]
 		t.Fatal(err)
 	}
 	if opts.Host != "127.0.0.1" || opts.BufferSize != 1000 || !opts.KeepAlive || opts.Port != 9000 || opts.MaxConnections != 9007199254740993 ||
-		opts.TLS == nil || opts.TLS.ServerName != "relay.example" || opts.ACL == nil || !reflect.DeepEqual(opts.ACL.Allow, []string{"10.0.0.1", "10.0.0.2"}) {
+		opts.TLS == nil || !opts.TLS.SelfSigned || opts.TLS.MinVersion != "1.3" || opts.ACL == nil || !reflect.DeepEqual(opts.ACL.Allow, []string{"10.0.0.1", "10.0.0.2"}) {
 		t.Fatalf("plugin defaults, nested tables or integer precision lost: %+v", opts)
 	}
 }

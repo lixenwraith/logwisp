@@ -177,7 +177,7 @@ func TestIssuedListenerCertificateChainsToTheIssuer(t *testing.T) {
 }
 
 // Each role takes one source of trust and one certificate source; keys of the
-// other role fail instead of doing nothing.
+// other role, or without the key they serve, fail instead of doing nothing.
 func TestTLSOptionConflicts(t *testing.T) {
 	pin := "sha256//" + strings.Repeat("A", 43) + "="
 	for _, c := range []struct {
@@ -192,6 +192,7 @@ func TestTLSOptionConflicts(t *testing.T) {
 		{config.TLSOptions{Hosts: []string{"a"}, CertFile: "c", KeyFile: "k"}, true, "hosts applies to"},
 		{config.TLSOptions{SelfSigned: true, PinSHA256: pin}, true, "apply to dialers"},
 		{config.TLSOptions{SelfSigned: true, CAFile: "ca"}, true, "apply to dialers"},
+		{config.TLSOptions{SelfSigned: true, ClientCAFile: "ca"}, true, "client_auth is not"},
 		{config.TLSOptions{}, true, "listeners need"},
 		{config.TLSOptions{SelfSigned: true}, false, "apply to listeners"},
 		{config.TLSOptions{ClientAuth: true, ClientCAFile: "ca"}, false, "apply to listeners"},

@@ -222,7 +222,8 @@ pipelines[0].plugin_sinks[http].config: unknown key "tls.enabeld"
   source in the whole configuration.
 - Plugin options are decoded in full: unknown keys at any depth, kinds,
   required keys, enums, ranges, paths, and the `tls`, `auth` and `acl` rules
-  of the plugin's side; a `tls` table's rules only when it is `enabled`.
+  of the plugin's side; a `tls` table's rules only when it is `enabled`, and
+  without it no key but `min_version`.
 - Enums are case-sensitive: `policy = "Drop"` and `target = "STDERR"` are
   refused.
 - In plugin options and flow stages, `0`, or `""` for a string, takes the
