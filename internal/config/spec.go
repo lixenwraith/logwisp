@@ -384,6 +384,9 @@ func text(v any) string {
 // escape is unescape's inverse: ',' and '=' escaped, and '\' where an escape
 // would otherwise start, so a regex's \d stays as typed
 func escape(s string) string {
+	if !strings.ContainsAny(s, `,=\`) {
+		return s
+	}
 	var b strings.Builder
 	followed := s + "," // as a value is, unless it ends the spec
 	for i := range len(s) {

@@ -83,13 +83,14 @@ func FromCommandLine(line string, isDir config.IsDir) (*Composition, error) {
 		words = words[1:]
 	}
 	var specs []config.Spec
+	flags := config.SpecFlags()
 	for i := 0; i < len(words); i++ {
 		name, value, inline := strings.Cut(words[i], "=")
 		if name == "-p" {
 			name = "--preset"
 		}
 		flag, long := strings.CutPrefix(name, "--")
-		if flags := config.SpecFlags(); !long || !slices.ContainsFunc(flags, func(f config.SpecFlag) bool { return f.Flag == flag }) {
+		if !long || !slices.ContainsFunc(flags, func(f config.SpecFlag) bool { return f.Flag == flag }) {
 			var names []string
 			for _, f := range flags {
 				names = append(names, "--"+f.Flag)
@@ -328,12 +329,13 @@ func (c *Composition) Retype(pi int, n Node, typ string) (Node, error) {
 	default:
 		return Node{}, n.missing()
 	}
-	from, _ := config.LookupPlugin(n.Role, *old)
 	kept := map[string]any{}
-	for _, k := range from.Keys() {
-		same := func(t config.Key) bool { return t.Name == k.Name && t.Kind == k.Kind }
-		if v, set := (*opts)[k.Name]; set && from.Side == to.Side && slices.ContainsFunc(to.Keys(), same) {
-			kept[k.Name] = v
+	if from, known := config.LookupPlugin(n.Role, *old); known && from.Side == to.Side {
+		for _, k := range from.Keys() {
+			same := func(t config.Key) bool { return t.Name == k.Name && t.Kind == k.Kind }
+			if v, set := (*opts)[k.Name]; set && slices.ContainsFunc(to.Keys(), same) {
+				kept[k.Name] = v
+			}
 		}
 	}
 	suffix, auto := strings.CutPrefix(*id, *old)

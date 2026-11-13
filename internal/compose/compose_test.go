@@ -308,6 +308,22 @@ func TestRetypeKeepsThePlace(t *testing.T) {
 	}
 }
 
+// A part of a type the catalogue lacks, which a paste may hold, retypes
+// carrying no options over
+func TestRetypeFromAnUnknownTypeCarriesNothing(t *testing.T) {
+	c, err := FromJSON([]byte(`[{"name":"p","plugin_sources":[{"id":"s","type":"null"}],
+		"plugin_sinks":[{"id":"x","type":"bogus","config":{"port":9000}}]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Retype(0, Node{Role: "sink", ID: "x"}, "tcp"); err != nil {
+		t.Fatal(err)
+	}
+	if s := c.Pipelines[0].PluginSinks[0]; s.Type != "tcp" || len(s.Config) != 0 {
+		t.Fatalf("%+v", s)
+	}
+}
+
 // A pipeline takes a name no other has, renamed as when added
 func TestPipelineNamesAreUnique(t *testing.T) {
 	c := &Composition{}

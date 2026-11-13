@@ -555,19 +555,15 @@ func checkKeys(m map[string]any, t reflect.Type, prefix string) error {
 	if t.Kind() != reflect.Struct {
 		return nil
 	}
-	fields := make(map[string]reflect.Type, t.NumField())
-	for f := range t.Fields() {
-		if name, _, _ := strings.Cut(f.Tag.Get("toml"), ","); name != "" && name != "-" {
-			fields[name] = f.Type
-		}
-	}
+	opts := options(t)
 	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(m)) {
-		ft, ok := fields[key]
-		if !ok {
+		i := slices.IndexFunc(opts, func(o option) bool { return o.Name == key })
+		if i < 0 {
 			errs = append(errs, fmt.Errorf("unknown key %q", prefix+key))
 			continue
 		}
+		ft := t.Field(opts[i].index).Type
 		var tables []map[string]any
 		switch v := m[key].(type) {
 		case map[string]any:
