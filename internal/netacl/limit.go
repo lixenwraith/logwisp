@@ -11,38 +11,61 @@ import (
 
 const (
 	maxClients = 65536       // per table; past it new clients are refused
+	netShare   = 16          // a /48 holds at most 1/netShare of a table
 	slotIdle   = time.Minute // without a rate: Release drops a client, the sweep only expired holds
 )
 
-// Key is what per-client limits count: the address, or for IPv6 its /64,
+// nat64 is the well-known NAT64 prefix, whose addresses carry IPv4 clients
+var nat64 = netip.MustParsePrefix("64:ff9b::/96")
+
+// Client is what per-client limits count: the address, or for IPv6 its /64,
 // which one host usually holds whole. Link-local too, per zone: a peer picks
-// any fe80::/64 address, so per address it would escape its budget.
-func Key(addr netip.Addr) string {
+// any fe80::/64 address, so per address it would escape its budget. A /48,
+// 65,536 /64s that tunnel brokers hand out free, holds a share of a table.
+type Client struct {
+	key string
+	net netip.Prefix // a global IPv6 client's /48; invalid for the rest
+}
+
+func (c Client) String() string { return c.key }
+
+// Key is the Client addr counts as; a NAT64 address is the IPv4 one it carries
+func Key(addr netip.Addr) Client {
 	addr = addr.Unmap()
+	if addr.Is6() && nat64.Contains(addr.WithZone("")) {
+		b := addr.As16()
+		addr = netip.AddrFrom4([4]byte(b[12:]))
+	}
 	if !addr.Is6() {
-		return addr.String()
+		return Client{key: addr.String()}
 	}
 	key := netip.PrefixFrom(addr, 64).Masked().String()
+	if !addr.IsLinkLocalUnicast() {
+		return Client{key: key, net: netip.PrefixFrom(addr, 48).Masked()}
+	}
 	// Only a link-local peer's zone names a link here, an interface name under
 	// IFNAMSIZ (16) bytes; another comes in a forwarded hop's text, sized at will
-	if zone := addr.Zone(); zone != "" && addr.IsLinkLocalUnicast() && len(zone) < 16 {
+	if zone := addr.Zone(); zone != "" && len(zone) < 16 {
 		key += "%" + zone
 	}
-	return key
+	return Client{key: key}
 }
 
 // Table limits each client key: an attempt spends a token from its bucket, if
 // the table has a rate, and takes a slot, if it caps slots; a slot is
 // released, or held by an id until done or expired. A full table refuses new
-// keys, failing closed, and a sweep drops the idle ones.
+// keys, failing closed, and a sweep drops the idle ones. A /48 holds at most
+// 1/netShare of the keys, and of the pool its slots stand for.
 type Table struct {
 	burst, rate float64
 	slots       int
+	netSlots    int           // slots a /48 may hold; 0: no cap
 	idle        time.Duration // a bucket's refill: a client idle that long loses nothing when dropped
 
 	mu        sync.Mutex
 	clients   map[string]*client
-	peak      int // most clients since the map was made
+	nets      map[netip.Prefix]*share // the /48s clients belong to
+	peak      int                     // most clients since the maps were made
 	lastSweep time.Time
 }
 
@@ -51,12 +74,21 @@ type client struct {
 	held   map[string]time.Time     // slots held by id, until their expiry; nil until a Hold, which only SCRAM makes
 	taken  int                      // slots taken and not yet held or released
 	seen   time.Time
+	net    *share // its /48's, nil for none
+}
+
+// share is what one /48 holds of a table: its clients and their slots
+type share struct {
+	prefix         netip.Prefix
+	clients, slots int
 }
 
 // NewTable allows each client burst attempts refilled at rate per second (0:
-// no rate) and slots at once (0: no cap)
-func NewTable(burst, rate float64, slots int) *Table {
-	t := &Table{burst: burst, rate: rate, slots: slots, idle: slotIdle, clients: make(map[string]*client)}
+// no rate) and slots at once (0: no cap); pool is what those slots stand for
+// in all, such as a server's handshakes (0: none)
+func NewTable(burst, rate float64, slots, pool int) *Table {
+	t := &Table{burst: burst, rate: rate, slots: slots, netSlots: pool / netShare, idle: slotIdle,
+		clients: make(map[string]*client), nets: make(map[netip.Prefix]*share)}
 	if rate > 0 {
 		// Capped at 1e9 s (~31 years): past a Duration's range the conversion
 		// is the platform's, and amd64's negative idle sweeps every client away
@@ -65,86 +97,130 @@ func NewTable(burst, rate float64, slots int) *Table {
 	return t
 }
 
-// Take admits an attempt by key, false when its tokens or slots are spent or
-// the table is full
-func (t *Table) Take(key string) bool {
+// Take admits an attempt by k, false when its tokens or slots, or its /48's
+// share, are spent, or the table is full
+func (t *Table) Take(k Client) bool {
 	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if now.Sub(t.lastSweep) > t.idle/6 {
 		t.sweep(now)
 	}
-	c := t.clients[key]
+	c := t.clients[k.key]
 	if c == nil {
-		if len(t.clients) >= maxClients {
+		if c = t.add(k); c == nil {
 			return false
 		}
-		c = &client{}
 		if t.rate > 0 {
 			c.bucket = tokenbucket.New(t.burst, t.rate)
 		}
-		t.clients[key] = c
-		t.peak = max(t.peak, len(t.clients))
 	}
 	c.seen = now
-	c.expire(now)
+	t.expire(c, now)
 	// Taken under this lock: concurrent attempts cannot all pass the check
-	if t.slots > 0 && len(c.held)+c.taken >= t.slots || c.bucket != nil && !c.bucket.Allow() {
+	if t.slots > 0 && (len(c.held)+c.taken >= t.slots || c.net != nil && t.netSlots > 0 && c.net.slots >= t.netSlots) ||
+		c.bucket != nil && !c.bucket.Allow() {
 		return false
 	}
 	if t.slots > 0 {
 		c.taken++
+		t.used(c, 1)
 	}
 	return true
 }
 
+// add makes k's entry, nil when the table or k's /48 holds its share of keys
+func (t *Table) add(k Client) *client {
+	if len(t.clients) >= maxClients {
+		return nil
+	}
+	c := &client{}
+	if k.net.IsValid() {
+		if c.net = t.nets[k.net]; c.net == nil {
+			c.net = &share{prefix: k.net}
+			t.nets[k.net] = c.net
+		} else if c.net.clients >= maxClients/netShare {
+			return nil
+		}
+		c.net.clients++
+	}
+	t.clients[k.key] = c
+	t.peak = max(t.peak, len(t.clients))
+	return c
+}
+
+// used counts n slots more, or fewer, against c's /48
+func (t *Table) used(c *client, n int) {
+	if c.net != nil {
+		c.net.slots += n
+	}
+}
+
+// drop removes an idle client, and its /48's entry with its last
+func (t *Table) drop(key string, c *client) {
+	delete(t.clients, key)
+	if s := c.net; s != nil {
+		if s.clients--; s.clients == 0 {
+			delete(t.nets, s.prefix)
+		}
+	}
+}
+
 // Hold moves a slot Take took to id, until done or expired
-func (t *Table) Hold(key, id string, until time.Time) {
+func (t *Table) Hold(k Client, id string, until time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if c := t.clients[key]; c != nil {
+	if c := t.clients[k.key]; c != nil {
 		c.taken--
 		if c.held == nil {
 			c.held = make(map[string]time.Time)
+		}
+		if _, again := c.held[id]; again {
+			t.used(c, -1)
 		}
 		c.held[id] = until
 	}
 }
 
 // Release frees a slot Take took that no id holds
-func (t *Table) Release(key string) {
+func (t *Table) Release(k Client) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if c := t.clients[key]; c != nil {
+	if c := t.clients[k.key]; c != nil {
 		c.taken--
+		t.used(c, -1)
 		if c.idle(time.Now(), t.idle) {
-			delete(t.clients, key)
+			t.drop(k.key, c)
 		}
 	}
 }
 
 // Done frees the slot id holds
-func (t *Table) Done(key, id string) {
+func (t *Table) Done(k Client, id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if c := t.clients[key]; c != nil {
-		delete(c.held, id)
+	if c := t.clients[k.key]; c != nil {
+		if _, ok := c.held[id]; ok {
+			delete(c.held, id)
+			t.used(c, -1)
+		}
 	}
 }
 
 // Refund returns the token of an attempt that turned out not to count
-func (t *Table) Refund(key string) {
+func (t *Table) Refund(k Client) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if c := t.clients[key]; c != nil && c.bucket != nil {
+	if c := t.clients[k.key]; c != nil && c.bucket != nil {
 		c.bucket.Refund(1)
 	}
 }
 
-func (c *client) expire(now time.Time) {
+func (t *Table) expire(c *client, now time.Time) {
 	for id, expiry := range c.held {
 		if now.After(expiry) {
 			delete(c.held, id)
+			t.used(c, -1)
 		}
 	}
 }
@@ -157,15 +233,18 @@ func (c *client) idle(now time.Time, after time.Duration) bool {
 func (t *Table) sweep(now time.Time) {
 	t.lastSweep = now
 	for key, c := range t.clients {
-		c.expire(now) // an abandoned hold has no Done
+		t.expire(c, now) // an abandoned hold has no Done
 		if c.idle(now, t.idle) {
-			delete(t.clients, key)
+			t.drop(key, c)
 		}
 	}
 	// A map keeps the room of its peak: once a flood has gone, a copy frees it
+	// (maps.Clone would keep it)
 	if len(t.clients) < t.peak/4 {
-		m := make(map[string]*client, len(t.clients))
-		maps.Copy(m, t.clients)
-		t.clients, t.peak = m, len(m)
+		clients := make(map[string]*client, len(t.clients))
+		maps.Copy(clients, t.clients)
+		nets := make(map[netip.Prefix]*share, len(t.nets))
+		maps.Copy(nets, t.nets)
+		t.clients, t.nets, t.peak = clients, nets, len(clients)
 	}
 }

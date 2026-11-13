@@ -404,8 +404,9 @@ func TestRequestsPerClientAreRateLimited(t *testing.T) {
 }
 
 // Limits count an IPv6 client by its /64, which one host holds whole, and a
-// link-local one per link; an IPv4-mapped client counts as IPv4. A zone no
-// interface here could have, which only a forwarded hop carries, is no link.
+// link-local one per link; an IPv4-mapped client counts as IPv4, a NAT64 one
+// as the IPv4 client it carries. A zone no interface here could have, which
+// only a forwarded hop carries, is no link.
 func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
@@ -419,11 +420,44 @@ func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 		{"fe80::1%" + strings.Repeat("a", 16), "fe80::1%" + strings.Repeat("b", 16), true},
 		{"::ffff:192.0.2.1", "192.0.2.1", true},
 		{"192.0.2.1", "192.0.2.2", false},
+		{"64:ff9b::192.0.2.1", "192.0.2.1", true},
+		{"64:ff9b::192.0.2.1", "64:ff9b::192.0.2.2", false},
 	} {
 		a, b := Key(netip.MustParseAddr(c.a)), Key(netip.MustParseAddr(c.b))
 		if (a == b) != c.same {
 			t.Errorf("%s keys %q, %s keys %q", c.a, a, c.b, b)
 		}
+	}
+}
+
+// A /48, 65,536 /64s that tunnel brokers hand out free, holds at most a
+// sixteenth of a table's clients, and of the pool its slots stand for; a
+// client of another /48, or of IPv4, still gets in
+func TestA48HoldsASixteenthOfATable(t *testing.T) {
+	in48 := func(net, host int) Client {
+		return Key(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 4: byte(net), 6: byte(host >> 8), 7: byte(host), 15: 1}))
+	}
+	keys := NewTable(1, 1, 0, 0)
+	for i := range maxClients / netShare {
+		if !keys.Take(in48(0, i)) {
+			t.Fatalf("/64 %d of a /48 refused", i)
+		}
+	}
+	if keys.Take(in48(0, maxClients/netShare)) || !keys.Take(in48(1, 0)) || !keys.Take(Key(netip.MustParseAddr("192.0.2.1"))) {
+		t.Fatal("a /48 took more than its share of clients, or another was refused")
+	}
+	logins := NewTable(10, 1, 4, 4096)
+	for i := range 4096 / netShare {
+		if !logins.Take(in48(0, i/4)) {
+			t.Fatalf("slot %d of a /48 refused", i)
+		}
+	}
+	if logins.Take(in48(0, 4096)) || !logins.Take(in48(1, 0)) {
+		t.Fatal("a /48 took more than its share of slots, or another was refused")
+	}
+	logins.Release(in48(0, 0))
+	if !logins.Take(in48(0, 4096)) {
+		t.Fatal("a released slot still counts against its /48")
 	}
 }
 
@@ -433,32 +467,33 @@ func TestKeyGroupsOneHostsAddresses(t *testing.T) {
 // bucket is full again, however slow its refill, and keeps the rest's budgets
 // as it shrinks the map.
 func TestTableBounds(t *testing.T) {
-	tb := NewTable(10, 1, 4)
+	ip := func(s string) Client { return Key(netip.MustParseAddr(s)) }
+	tb := NewTable(10, 1, 4, 0)
 	for i := range 20 {
-		if !tb.Take("10.0.0.1") {
+		if !tb.Take(ip("10.0.0.1")) {
 			t.Fatalf("refunded attempt %d refused", i)
 		}
-		tb.Hold("10.0.0.1", strconv.Itoa(i), time.Now().Add(time.Minute))
-		tb.Done("10.0.0.1", strconv.Itoa(i))
-		tb.Refund("10.0.0.1")
+		tb.Hold(ip("10.0.0.1"), strconv.Itoa(i), time.Now().Add(time.Minute))
+		tb.Done(ip("10.0.0.1"), strconv.Itoa(i))
+		tb.Refund(ip("10.0.0.1"))
 	}
 	for i := range 4 {
-		if !tb.Take("10.0.0.2") {
+		if !tb.Take(ip("10.0.0.2")) {
 			t.Fatalf("slot %d refused", i)
 		}
 	}
-	if tb.Take("10.0.0.2") {
+	if tb.Take(ip("10.0.0.2")) {
 		t.Fatal("an attempt beyond the slots was admitted before any hold")
 	}
-	tb.Release("10.0.0.2")
-	if !tb.Take("10.0.0.2") {
+	tb.Release(ip("10.0.0.2"))
+	if !tb.Take(ip("10.0.0.2")) {
 		t.Fatal("a released slot still counts")
 	}
 	for range 10 {
-		tb.Take("10.0.0.3")
-		tb.Release("10.0.0.3")
+		tb.Take(ip("10.0.0.3"))
+		tb.Release(ip("10.0.0.3"))
 	}
-	if tb.Take("10.0.0.3") {
+	if tb.Take(ip("10.0.0.3")) {
 		t.Fatal("releasing its slots refilled a client's bucket")
 	}
 	for i := len(tb.clients); i < maxClients; i++ {
@@ -467,20 +502,20 @@ func TestTableBounds(t *testing.T) {
 		}
 	}
 	tb.peak = maxClients // as Take counts the clients it adds
-	if tb.Take("192.0.2.1") {
+	if tb.Take(ip("192.0.2.1")) {
 		t.Fatal("a full table admitted a new client")
 	}
 	tb.sweep(time.Now().Add(2 * tb.idle))
-	if len(tb.clients) != 1 || tb.Take("10.0.0.2") {
+	if len(tb.clients) != 1 || tb.Take(ip("10.0.0.2")) {
 		t.Fatalf("%d clients left after their holds expired, want 10.0.0.2 still holding its slots", len(tb.clients))
 	}
-	rate := NewTable(1, 1, 0)
-	rate.Take("10.0.0.4")
+	rate := NewTable(1, 1, 0, 0)
+	rate.Take(ip("10.0.0.4"))
 	if rate.sweep(time.Now().Add(1100 * time.Millisecond)); len(rate.clients) != 0 {
 		t.Fatal("a client outlived the refill of its bucket")
 	}
-	slow := NewTable(1, 1e-11, 0) // a refill past a Duration's range
-	if !slow.Take("10.0.0.5") || slow.Take("10.0.0.5") {
+	slow := NewTable(1, 1e-11, 0, 0) // a refill past a Duration's range
+	if !slow.Take(ip("10.0.0.5")) || slow.Take(ip("10.0.0.5")) {
 		t.Fatal("a client whose refill outlasts a Duration was admitted again at once")
 	}
 }
@@ -563,13 +598,14 @@ func BenchmarkRefuse(b *testing.B) {
 // connection's slot, taken at accept and released at close, and a rate
 // client's first request, made again whenever it idles past its refill
 func BenchmarkTable(b *testing.B) {
-	conns, rate := NewTable(0, 0, 4), NewTable(1, 1, 0)
+	conns, rate := NewTable(0, 0, 4, 0), NewTable(1, 1, 0, 0)
+	client := Key(netip.MustParseAddr("192.0.2.1"))
 	for _, c := range []struct {
 		name string
 		take func()
 	}{
-		{"connection", func() { conns.Take("192.0.2.1"); conns.Release("192.0.2.1") }},
-		{"rate-client", func() { rate.Take("192.0.2.1"); delete(rate.clients, "192.0.2.1") }},
+		{"connection", func() { conns.Take(client); conns.Release(client) }},
+		{"rate-client", func() { rate.Take(client); delete(rate.clients, client.key) }},
 	} {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -583,12 +619,12 @@ func BenchmarkTable(b *testing.B) {
 // BenchmarkTableFlood is a flood of new clients filling a rate table, swept
 // once their buckets are whole; retained-B is the heap the emptied table keeps
 func BenchmarkTableFlood(b *testing.B) {
-	keys := make([]string, maxClients)
+	keys := make([]Client, maxClients)
 	for i := range keys {
 		keys[i] = Key(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 4: byte(i >> 8), 5: byte(i), 15: 1}))
 	}
 	flood := func() *Table {
-		t := NewTable(1, 1, 0)
+		t := NewTable(1, 1, 0, 0)
 		for _, k := range keys {
 			t.Take(k)
 		}

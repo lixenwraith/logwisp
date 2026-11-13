@@ -398,10 +398,13 @@ requests_per_second_per_client = 10      # HTTP listeners; 0 (default): none
 - A client is the address the rules see, an IPv6 one by its /64 and a
   link-local one per link, so the hosts of one /64 (a SLAAC LAN) share a
   budget; behind `trusted_proxies` the request rate counts the forwarded
-  client.
+  client. An address of NAT64's `64:ff9b::/96` is the IPv4 client it carries.
 - Each limit tracks up to 65,536 clients, a client until its budget is whole
   again, and refuses new ones when full, failing closed. SCRAM throttling
   keeps its budgets the same way.
+  - A /48, 65,536 /64s that tunnel brokers hand out free, holds at most a
+    sixteenth: 4,096 clients. A site using more of its /64s at once has the
+    others refused until some go idle.
 
 ### PROXY protocol
 
@@ -716,9 +719,10 @@ unfinished: an HTTP challenge never answered holds its slot for up to 30 s, a
 TCP connection that ends mid-exchange frees it at once. A refused start answers
 `too many attempts` (HTTP `429`) and counts `auth_throttled`; the table holds
 65,536 addresses and refuses new ones when full. Separately, at most 4,096
-exchanges may be in flight per listener; beyond that, or while the plugin
-stops, a login gets `busy` (HTTP `503`) and counts `auth_busy`; neither
-counts in `auth_rejected`. Peers behind one NAT, or one passthrough proxy that
+exchanges may be in flight per listener, 256 of them from one /48 (past
+those, `too many attempts`); beyond 4,096, or while the plugin stops, a login
+gets `busy` (HTTP `503`) and counts `auth_busy`; neither counts in
+`auth_rejected`. Peers behind one NAT, or one passthrough proxy that
 sends no PROXY header, share a bucket: there, one client can exhaust every
 other client's logins.
 

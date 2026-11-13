@@ -127,10 +127,10 @@ func New(o *config.ACLOptions, host string, kind Kind, r *Reporter) (*Policy, er
 		return nil, err
 	}
 	if o.MaxConnectionsPerClient > 0 {
-		p.conns = NewTable(0, 0, int(o.MaxConnectionsPerClient))
+		p.conns = NewTable(0, 0, int(o.MaxConnectionsPerClient), 0)
 	}
 	if rps > 0 {
-		p.requests = NewTable(max(rps, 1), rps, 0) // a second's worth, at least one
+		p.requests = NewTable(max(rps, 1), rps, 0, 0) // a second's worth, at least one
 	}
 	p.logStartup(host, widened)
 	return p, nil

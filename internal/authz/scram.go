@@ -42,7 +42,7 @@ const (
 
 	limitBurst   = 10 // failed or abandoned exchanges per address before throttling
 	limitRate    = 1  // per second
-	limitPending = 4  // unfinished exchanges per address
+	limitPending = 4  // unfinished exchanges per address; a /48's, 1/16 of the server's
 )
 
 // The dialer's floor on the Argon2 cost a server may ask for. A hostile server
@@ -413,7 +413,7 @@ func (p *Policy) compileSCRAM(o *config.AuthOptions, tlsCfg *tls.Config) error {
 	if o.Identity != "" {
 		p.identity = o.Identity // binds the certificate to the user
 	}
-	l := &scramListener{limit: netacl.NewTable(limitBurst, limitRate, limitPending)}
+	l := &scramListener{limit: netacl.NewTable(limitBurst, limitRate, limitPending, auth.ScramMaxHandshakes)}
 	var err error
 	if len(o.TrustedProxies) > 0 {
 		if l.proxy, err = parseProxies(o.TrustedProxies); err != nil {
@@ -487,7 +487,7 @@ func (p *Policy) Close() {
 
 // begin opens an exchange for a peer: throttling, then the challenge. On
 // failure, status is the HTTP answer and public the only detail sent.
-func (p *Policy) begin(ip string, first json.RawMessage) (challenge auth.ServerFirstMessage, status int, public string, err error) {
+func (p *Policy) begin(ip netacl.Client, first json.RawMessage) (challenge auth.ServerFirstMessage, status int, public string, err error) {
 	l := p.listener
 	var req auth.ClientFirstRequest
 	if err := json.Unmarshal(first, &req); err != nil {
@@ -522,7 +522,7 @@ func (p *Policy) begin(ip string, first json.RawMessage) (challenge auth.ServerF
 
 // finish verifies a proof, binding it to this listener's certificate, then
 // the client certificate to the user when configured.
-func (p *Policy) finish(ip, nonce string, step authStep, cs *tls.ConnectionState) (auth.ServerFinalMessage, error) {
+func (p *Policy) finish(ip netacl.Client, nonce string, step authStep, cs *tls.ConnectionState) (auth.ServerFinalMessage, error) {
 	l := p.listener
 	l.limit.Done(ip, nonce)
 	s := l.server.Load()
