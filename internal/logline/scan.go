@@ -43,7 +43,7 @@ func scanString(s string, i int) (int, bool) {
 			return i + 1, true
 		}
 	}
-	return i, false
+	return min(i, len(s)), false // a final backslash escapes nothing
 }
 
 // scanValue returns the end index and kind of the value starting at i.

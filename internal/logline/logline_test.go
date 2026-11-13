@@ -236,6 +236,8 @@ func FuzzMarksStayInOrderWithinTheLine(f *testing.F) {
 	f.Add(`Nov  5 07:51:45 edge-01 sshd[2211]: error: auth failed`, "ERROR")
 	f.Add(`{"level":30,"ts":1.5,"n":[1,{"k":"x"}],"logger":"db"} tail {"a":`, "INFO")
 	f.Add(`[warning] k="unterminated \"`, "warning")
+	f.Add(`level="x\`, "INFO")
+	f.Add(`ts="x\`, "INFO")
 	f.Fuzz(func(t *testing.T, s, level string) {
 		at := 0
 		Marks(s, core.LogEntry{Level: level, Source: "app"}, func(m Mark) {
