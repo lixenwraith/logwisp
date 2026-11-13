@@ -180,10 +180,11 @@ shutdown (`dropped_batches`).
    a backpressure sink with room still takes each entry in flight, and one
    that is full drops it (`total_dropped_by_sink`) instead of waiting.
 2. Wait for the run loop, which ends when every subscription channel closes.
-3. Stop all sinks concurrently: console and file sinks write their queue;
-   network sinks deliver theirs within `sink.FlushBound`, their write or
-   request timeout when set below 2 s, else 2 s. Then cancel the pipeline
-   context.
+3. Stop all sinks concurrently: the file sink writes its queue; the console
+   sink writes its own within 2 s, as nothing interrupts a write to a
+   stalled stdout; network sinks deliver theirs within `sink.FlushBound`,
+   their write or request timeout when set below 2 s, else 2 s. Then cancel
+   the pipeline context.
 
 A finite source ends on its own: the console source at the end of stdin. The
 run loop then returns and the pipeline's `Finished` channel closes; once every

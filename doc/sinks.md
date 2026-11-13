@@ -88,7 +88,9 @@ Payloads are written as the formatter made them, one record per line.
   `SIGPIPE`, as it ends `cat`. Entries a failed write loses (a hung-up
   terminal, a full disk) count in `write_errors`; each new error is logged
   once.
-- On stop it writes what is queued.
+- On stop it writes what is queued, giving its output 2 s: past that the
+  write in progress ends when the output takes it, and the rest of the queue
+  is dropped with a WARN naming how many entries it held.
 
 **Statistics**: `target`, `buffer_size`, `escape`, `color`, `write_errors`.
 

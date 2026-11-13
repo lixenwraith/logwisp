@@ -14,8 +14,8 @@ lw -c /etc/logwisp/logwisp.toml
 ```
 
 lw exits on its own only at the end of input ([CLI](cli.md#built-in-defaults)).
-A reload stops the old sinks as shutdown does, so a stalled client or
-downstream delays it by up to 2 s.
+A reload stops the old sinks as shutdown does, so a stalled client,
+downstream or console output delays it by up to 2 s.
 
 There is no built-in daemon mode. Run LogWisp in the foreground under a
 supervisor — systemd, rc.d, or a container runtime — which is where restart,
@@ -298,8 +298,9 @@ A console sink never drops while its pipeline runs: when its output is slow
 (a paused terminal, a full pipe, a stalled log collector) its pipeline waits,
 and the pipeline's other sinks with it. Stdin is read slower; other sources
 queue, then drop and count `dropped_entries`. Where a service's stdout may
-stall, give it a `file` sink instead. A closed stdout pipe ends lw with
-`SIGPIPE`.
+stall, give it a `file` sink instead. A stop or reload waits on the output
+2 s, then drops the sink's queue with a WARN. A closed stdout pipe ends lw
+with `SIGPIPE`.
 
 **File source reads nothing**
 

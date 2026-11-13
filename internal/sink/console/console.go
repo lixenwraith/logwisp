@@ -52,6 +52,7 @@ type ConsoleSink struct {
 	done      chan struct{}
 	exited    chan struct{}
 	started   atomic.Bool
+	abandoned atomic.Bool // Stop gave up on a stalled output: nothing more is written
 	stopOnce  sync.Once
 	startTime time.Time
 
@@ -172,7 +173,9 @@ func (cs *ConsoleSink) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop writes what is queued, then returns
+// Stop writes what is queued, then returns: within core.SinkFlushTimeout, as
+// network sinks flush, since nothing interrupts a write to a stalled stdout.
+// The write in progress then ends when it can, and the queue is left.
 func (cs *ConsoleSink) Stop() {
 	cs.logger.Info("msg", "Stopping console sink", "target", cs.config.Target)
 
@@ -183,7 +186,16 @@ func (cs *ConsoleSink) Stop() {
 
 	cs.stopOnce.Do(func() { close(cs.done) })
 	if cs.started.Load() {
-		<-cs.exited
+		select {
+		case <-cs.exited:
+		case <-time.After(core.SinkFlushTimeout):
+			cs.abandoned.Store(true)
+			cs.logger.Warn("msg", "Console output stalled: stopped without the queued entries",
+				"component", "console_sink",
+				"instance_id", cs.id,
+				"target", cs.config.Target,
+				"queued", len(cs.input))
+		}
 	}
 
 	cs.logger.Info("msg", "Console sink stopped",
@@ -230,7 +242,7 @@ func (cs *ConsoleSink) processLoop(ctx context.Context) {
 }
 
 func (cs *ConsoleSink) drain() {
-	for {
+	for !cs.abandoned.Load() {
 		select {
 		case event := <-cs.input:
 			cs.write(event)
@@ -243,7 +255,7 @@ func (cs *ConsoleSink) drain() {
 // write writes the event with the lines queued behind it, a batch a write; a
 // batch a write fails is lost, as its lines would be one by one
 func (cs *ConsoleSink) write(event core.TransportEvent) {
-	for more := true; more; {
+	for more := true; more && !cs.abandoned.Load(); {
 		var n int
 		cs.batch, n, event, more = sink.Batch(cs.batch, event, cs.input, cs.line)
 		if _, err := cs.output.Write(cs.batch); err != nil {

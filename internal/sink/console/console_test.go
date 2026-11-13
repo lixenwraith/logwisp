@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -68,6 +69,55 @@ func TestWriteFailuresAreCountedAndLoggedOncePerError(t *testing.T) {
 	if n, logs := cs.GetStats().Details["write_errors"], strings.Count(logged.String(), "Failed to write to console"); n != uint64(3) || logs != 1 {
 		t.Fatalf("%v write errors counted, %d logged; want 3 and 1", n, logs)
 	}
+}
+
+// Stop waits on a stalled output at most core.SinkFlushTimeout, then leaves
+// the queue: the write in progress ends when it can, and nothing follows it
+func TestStopLeavesAStalledOutputAfterTheFlushBound(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	created, err := NewConsoleSinkPlugin("out", map[string]any{"target": "stdout"}, log.NewLogger(), session.NewProxy(manager, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := created.(*ConsoleSink)
+	out := &stalledWriter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	cs.output = out
+	if err := cs.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	cs.Input() <- core.TransportEvent{Payload: []byte("a\n")}
+	<-out.entered
+	cs.Input() <- core.TransportEvent{Payload: []byte("b\n")}
+
+	// A Stop that waits for the output fails here rather than hanging
+	release := time.AfterFunc(core.SinkFlushTimeout+2*time.Second, func() { close(out.release) })
+	start := time.Now()
+	cs.Stop()
+	took := time.Since(start)
+	if release.Stop() {
+		close(out.release)
+	}
+	<-cs.exited
+	if took < core.SinkFlushTimeout || took > core.SinkFlushTimeout+time.Second || out.writes.Load() != 1 {
+		t.Fatalf("Stop took %v and the output saw %d writes; want %v and 1", took, out.writes.Load(), core.SinkFlushTimeout)
+	}
+}
+
+// stalledWriter holds every write until release closes
+type stalledWriter struct {
+	entered, release chan struct{}
+	writes           atomic.Int32
+}
+
+func (w *stalledWriter) Write(p []byte) (int, error) {
+	w.writes.Add(1)
+	select {
+	case w.entered <- struct{}{}:
+	default:
+	}
+	<-w.release
+	return len(p), nil
 }
 
 type failingWriter struct{}

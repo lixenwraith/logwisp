@@ -397,9 +397,10 @@ values from the file, the environment or flags win.
 finishes when all its sources have ended, and once every pipeline has
 finished lw shuts down gracefully and exits 0. Only a console source ends on
 its own: file and network sources run until a signal, and so does a pipeline
-holding one. Every sink writes what is queued before the exit; a network
-sink gives its clients or its downstream its `write_timeout_ms`
-(`request_timeout_ms` for `http_chain`), at most 2 s, to take it.
+holding one. Every sink writes what is queued before the exit; a console
+sink gives its output 2 s to take it, a network sink gives its clients or
+its downstream its `write_timeout_ms` (`request_timeout_ms` for
+`http_chain`), at most 2 s.
 
 ## Usage Patterns
 
