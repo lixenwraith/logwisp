@@ -582,6 +582,7 @@ func (a *app) drain(budget int, taps ...*core.Tap) {
 			}
 			select {
 			case rec := <-t.Records():
+				t.Took(rec)
 				budget -= a.view.take(rec)
 				took = true
 			default:

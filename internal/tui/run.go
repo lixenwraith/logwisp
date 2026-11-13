@@ -250,7 +250,9 @@ func (a *app) started(specs []config.Spec, tap *core.Tap, err error) {
 		switch {
 		case old == tap: // fed on: what it holds came through the earlier flows
 			for range len(old.Records()) {
-				a.view.take(<-old.Records())
+				rec := <-old.Records()
+				old.Took(rec)
+				a.view.take(rec)
 			}
 			mark = "flows swapped "
 		case tap == nil:

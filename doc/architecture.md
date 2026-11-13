@@ -147,7 +147,9 @@ loses nothing. Each stage drops and counts instead of waiting:
   view counts as "screen missed". It copies the first 16 KiB of a longer
   message, fields or payload and 256 bytes of a level, source or node, so a
   viewer's rows pin no source's line, and takes dropped entries only while
-  the view shows them.
+  the view shows them. The screen's tap is full at 1024 records or 4 MiB of
+  their text, four ticks of what the view reads, so long lines queue no more
+  than it shows.
 
 The `tcp_chain` sink is the one deliberate exception. It holds a line across
 reconnects until it is written or the sink stops (shutdown or reload, after

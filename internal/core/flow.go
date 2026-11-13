@@ -74,9 +74,16 @@ type Tap struct {
 	ch    chan Tapped
 	All   atomic.Bool
 	drops atomic.Uint64
+	held  atomic.Int64 // the bytes of the records queued, which Took hands back
+	limit int64        // what held may reach; 0 bounds only the count
 }
 
-func NewTap(size int) *Tap { return &Tap{ch: make(chan Tapped, size)} }
+// NewTap holds up to records records and, when bytes is set, up to bytes of
+// their text: a viewer reads a tick's bytes, so a count alone would queue
+// long lines far past what it shows
+func NewTap(records, bytes int) *Tap {
+	return &Tap{ch: make(chan Tapped, records), limit: int64(bytes)}
+}
 
 // Offer clips only what it can keep, so a full tap costs the pipeline nothing;
 // a reader racing it costs a drop, never a wait
@@ -88,6 +95,12 @@ func (t *Tap) Offer(r Tapped) {
 		t.drops.Add(1)
 		return
 	}
+	n := r.size()
+	if held := t.held.Add(n); t.limit > 0 && held > t.limit {
+		t.held.Add(-n)
+		t.drops.Add(1)
+		return
+	}
 	e := &r.Event.Entry
 	r.Event.Payload = clip(r.Event.Payload, TapEntryBytes)
 	e.Message, e.Fields = clip(e.Message, TapEntryBytes), clip(e.Fields, TapEntryBytes)
@@ -95,11 +108,25 @@ func (t *Tap) Offer(r Tapped) {
 	select {
 	case t.ch <- r:
 	default:
+		t.held.Add(-n)
 		t.drops.Add(1)
 	}
 }
 
+// Records are the records queued; a reader hands each one's bytes back with
+// Took
 func (t *Tap) Records() <-chan Tapped { return t.ch }
+
+// Took hands back the bytes of a record read from Records
+func (t *Tap) Took(r Tapped) { t.held.Add(-r.size()) }
+
+// size is the text r holds once Offer clips it
+func (r *Tapped) size() int64 {
+	e := &r.Event.Entry
+	return int64(min(len(r.Event.Payload), TapEntryBytes) + min(len(e.Message), TapEntryBytes) +
+		min(len(e.Fields), TapEntryBytes) + min(len(e.Level), TapNameBytes) +
+		min(len(e.Source), TapNameBytes) + min(len(e.Node), TapNameBytes))
+}
 
 // Dropped counts the records a full tap could not take
 func (t *Tap) Dropped() uint64 { return t.drops.Load() }

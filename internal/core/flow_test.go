@@ -35,7 +35,7 @@ func TestLevelIsTheFirstWordNamingOne(t *testing.T) {
 func TestTapClipsLongEntriesByCopying(t *testing.T) {
 	line := strings.Repeat("x", MaxLogEntryBytes)
 	payload, fields := []byte(line), json.RawMessage(line)
-	tap := NewTap(1)
+	tap := NewTap(1, 0)
 	tap.Offer(Tapped{Event: TransportEvent{Payload: payload, Entry: LogEntry{Message: line, Fields: fields, Level: line, Source: line, Node: line}}})
 	r := <-tap.Records()
 	e := r.Event.Entry
@@ -59,11 +59,30 @@ func TestTapClipsLongEntriesByCopying(t *testing.T) {
 // reads costs a pipeline nothing
 func TestAFullTapCostsNothing(t *testing.T) {
 	line := strings.Repeat("x", MaxLogEntryBytes)
-	tap := NewTap(1)
+	tap := NewTap(1, 0)
 	rec := Tapped{Event: TransportEvent{Payload: []byte(line), Entry: LogEntry{Message: line, Fields: json.RawMessage(line), Level: line}}}
 	tap.Offer(rec)
 	if allocs := testing.AllocsPerRun(100, func() { tap.Offer(rec) }); allocs != 0 || tap.Dropped() != 101 {
 		t.Fatalf("%v allocations an offer, %d dropped", allocs, tap.Dropped())
+	}
+}
+
+// A tap with a byte bound queues at most that much clipped text, dropping and
+// counting a record past it; a record read and handed back with Took makes
+// room again
+func TestATapsByteBoundDropsPastItUntilTookMakesRoom(t *testing.T) {
+	text := strings.Repeat("x", TapEntryBytes)
+	rec := Tapped{Event: TransportEvent{Payload: []byte(text), Entry: LogEntry{Message: text + "cut", Source: "s"}}}
+	tap := NewTap(10, 3*(2*TapEntryBytes+1))
+	for range 4 {
+		tap.Offer(rec)
+	}
+	queued, dropped := len(tap.Records()), tap.Dropped()
+	tap.Took(<-tap.Records())
+	tap.Offer(rec)
+	if queued != 3 || dropped != 1 || len(tap.Records()) != 3 || tap.Dropped() != 1 {
+		t.Fatalf("queued %d and dropped %d, then %d and %d once one was taken; want 3 and 1 both times",
+			queued, dropped, len(tap.Records()), tap.Dropped())
 	}
 }
 

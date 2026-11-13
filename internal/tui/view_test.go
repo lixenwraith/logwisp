@@ -267,7 +267,7 @@ func TestThePointAndModePickTheRows(t *testing.T) {
 // mode show some
 func TestTheTapTakesDropsOnlyWhileShown(t *testing.T) {
 	a := watching(pipeline(t, []string{"null"}, []string{"null"}), looks[terminal.ColorModeNone])
-	a.live.tap = core.NewTap(1)
+	a.live.tap = core.NewTap(1, 0)
 	for _, c := range []struct {
 		at   compose.Node
 		mode int
@@ -492,7 +492,7 @@ func TestTheViewsCursorRowIsOneBar(t *testing.T) {
 // A tick reads the taps up to drainBytes, the rest waiting for the next
 func TestADrainKeepsToItsBudget(t *testing.T) {
 	a := mono(pipeline(t, []string{"null"}, []string{"null"}))
-	a.live.tap = core.NewTap(100)
+	a.live.tap = core.NewTap(100, 0)
 	for range 100 {
 		a.live.tap.Offer(tapped("p", "null", "", 0, strings.Repeat("x", 64<<10)))
 	}
@@ -508,7 +508,7 @@ func TestADrainKeepsToItsBudget(t *testing.T) {
 func TestATapHoldingRecordsWakesTheScreen(t *testing.T) {
 	posts := make(chan struct{}, 8)
 	r := newRun(&fakeRunner{}, func() { posts <- struct{}{} })
-	tap := core.NewTap(1)
+	tap := core.NewTap(1, 0)
 	r.fed.Store(tap)
 	go r.watch(time.Hour)
 	defer r.endAsks()
@@ -530,9 +530,9 @@ func TestATapHoldingRecordsWakesTheScreen(t *testing.T) {
 func TestARerunMarksTheRows(t *testing.T) {
 	f := &fakeRunner{}
 	a := running(t, pipeline(t, []string{"null"}, []string{"null"}), f)
-	a.live.tap = core.NewTap(4)
+	a.live.tap = core.NewTap(4, 0)
 	a.live.tap.Offer(tapped("p", "null", "", 0, "before"))
-	next := core.NewTap(4)
+	next := core.NewTap(4, 0)
 	next.Offer(tapped("p", "null", "", 0, "after"))
 	f.start = func(Ask) (*core.Tap, error) { return next, nil }
 	a.edit(a.comp.Set(0, compose.Node{Role: "format"}, "type", "txt"))
@@ -673,7 +673,7 @@ func TestTheChooserPicksThePoint(t *testing.T) {
 	if n, _ := a.node(); n.Role != "format" || a.point().name != "format" || !a.viewing {
 		t.Fatalf("on %+v, at %s, viewing %v", n, a.point().name, a.viewing)
 	}
-	a.live.state.Log = core.NewTap(1)
+	a.live.state.Log = core.NewTap(1, 0)
 	for _, leave := range [][]any{{"s", "format", terminal.KeyEnter}, {"t", "j"}} {
 		if press(a, "s", "own log", terminal.KeyEnter); !a.point().own {
 			t.Fatalf("at %s", a.point().name)
@@ -690,7 +690,7 @@ func TestTheChooserPicksThePoint(t *testing.T) {
 func TestASwapAndAWholeRerunMarkTheRows(t *testing.T) {
 	f := &fakeRunner{}
 	a := running(t, pipeline(t, []string{"null"}, []string{"null"}), f)
-	tap := core.NewTap(4)
+	tap := core.NewTap(4, 0)
 	a.live.tap = tap
 	tap.Offer(tapped("p", "null", "", 0, "before"))
 	f.start = func(Ask) (*core.Tap, error) { return tap, nil }
@@ -699,7 +699,7 @@ func TestASwapAndAWholeRerunMarkTheRows(t *testing.T) {
 	await(t, a)
 	tap.Offer(tapped("p", "null", "", 0, "after"))
 	press(a, terminal.KeyNone)
-	next := core.NewTap(4)
+	next := core.NewTap(4, 0)
 	f.start = func(Ask) (*core.Tap, error) { return next, nil }
 	press(a, "T")
 	await(t, a)

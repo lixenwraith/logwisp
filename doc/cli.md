@@ -570,8 +570,9 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     and the payload as the sinks receive it, with escapes for what a cell
     cannot show.
   - It keeps 32 MiB of rows, each entry's message, fields and payload cut to
-    16 KiB, and redraws at most every 100 ms while entries flow, at once on
-    a key, never when idle. A closed standard output or error fails the
+    16 KiB, and up to 4 MiB of entries waiting for the next redraw; past
+    that they count as screen missed. It redraws at most every 100 ms while
+    entries flow, at once on a key, never when idle. A closed standard output or error fails the
     write (logged) rather than end lw with the terminal raw.
 - The screen draws on the controlling terminal: `lw -T > pipelines.toml` and
   `cmd | lw -T` keep standard input and output as data. lw never writes the

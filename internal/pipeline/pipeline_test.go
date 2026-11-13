@@ -202,7 +202,7 @@ func TestTapSeesEachVerdict(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		tap := core.NewTap(4 * n)
+		tap := core.NewTap(4*n, 0)
 		tap.All.Store(all)
 		p.SetTap(tap)
 		if err := p.Start(); err != nil {
@@ -267,7 +267,7 @@ func TestFullTapNeverStallsAPipeline(t *testing.T) {
 	const n = 2000
 	s := &slowSink{in: make(chan core.TransportEvent, 1), out: make(chan string, n)}
 	p := newTestPipeline(t, n, s)
-	tap := core.NewTap(1)
+	tap := core.NewTap(1, 0)
 	p.SetTap(tap)
 	if err := p.Start(); err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestSetFlowSwapsTheFlowInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tap := core.NewTap(64)
+	tap := core.NewTap(64, 0)
 	tap.All.Store(true)
 	p.SetTap(tap)
 	if err := p.Start(); err != nil {
