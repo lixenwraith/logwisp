@@ -287,7 +287,7 @@ func (a *app) fault(err error, format string) {
 		if pi != a.pi {
 			a.pi, a.row = pi, [3]int{}
 		}
-		a.bar, a.inspect = false, false
+		a.bar, a.inspect, a.insp.field = false, false, nil // a field left open would take the next Enter elsewhere
 		a.choose(n)
 		text = why
 		if where := a.where(pi, n, key); where != "" {
@@ -332,8 +332,14 @@ func (a *app) runMark() (string, ui.Style) {
 	if c.SinksDropped > 0 {
 		mark += fmt.Sprintf(" · %d sinks dropped", c.SinksDropped)
 	}
-	if r.tap != nil && r.tap.Dropped() > 0 {
-		mark += fmt.Sprintf(" · screen missed %d", r.tap.Dropped())
+	var missed uint64 // the entries' tap's drops and lw's own log's
+	for _, t := range []*core.Tap{r.tap, r.state.Log} {
+		if t != nil {
+			missed += t.Dropped()
+		}
+	}
+	if missed > 0 {
+		mark += fmt.Sprintf(" · screen missed %d", missed)
 	}
 	return mark, style
 }

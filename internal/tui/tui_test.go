@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -609,6 +610,19 @@ func TestPasteReplacesThePipelines(t *testing.T) {
 	press(a, "k", "d", "y", []byte("lw --pipeline z --source null --sink null"))
 	if a.dialog != nil || len(a.comp.Pipelines) != 1 || a.pipeline().Name != "z" {
 		t.Fatalf("a paste after the last pipeline was deleted: %T %+v", a.dialog, a.comp.Pipelines)
+	}
+}
+
+// With no pipeline left the preset menu comes back once what covered it
+// closes, the notice of a start that was underway included: no key reaches a
+// pipeline's bar while none exists
+func TestThePresetMenuOutlivesWhatCoversIt(t *testing.T) {
+	a := mono(pipeline(t, []string{"null"}, []string{"null"}))
+	press(a, "k", "d", "y")
+	a.fault(errors.New("address already in use"), "%s")
+	press(a, terminal.KeyEscape)
+	if _, menu := a.dialog.(*chooser); !menu || len(a.comp.Pipelines) != 0 {
+		t.Fatalf("%d pipelines under %T", len(a.comp.Pipelines), a.dialog)
 	}
 }
 

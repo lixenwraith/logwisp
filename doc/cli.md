@@ -529,8 +529,9 @@ WebAssembly; `t` runs them under the screen and shows what flows.
     screen, as does a hangup no signal reports. The warnings and errors lw
     logs while they stop (a sink's lost batch) print once the screen closes.
   - The bar counts the shown pipeline's entries in, filtered by the flow,
-    dropped by sinks, and missed by the screen: the view never slows a
-    pipeline. A sink that dropped entries shows how many on its node.
+    dropped by sinks, and missed by the screen, lw's own log records
+    included: the view never slows a pipeline. A sink that dropped entries
+    shows how many on its node.
 - Live view: from 40 rows it sits under the diagram, unless the inspector is
   open below the canvas; otherwise it takes the screen while it has the keys.
   `t` or Esc gives them back to the diagram (Esc first closes an open detail).

@@ -242,6 +242,9 @@ func (a *app) handle(ev terminal.Event) {
 	case !a.inspectKey(ev):
 		a.globalKey(ev)
 	}
+	if a.dialog == nil && len(a.comp.Pipelines) == 0 {
+		a.bar, a.dialog = false, a.presetMenu() // a start's notice or ask may have covered it
+	}
 }
 
 // is reports whether ev is a key or one of the runes
@@ -339,9 +342,6 @@ func (a *app) barKey(ev terminal.Event) {
 		remove := func(a *app) {
 			a.edit(a.comp.RemovePipeline(a.pi))
 			a.pi, a.row, a.insp.open = max(0, a.pi-1), [3]int{}, map[string]bool{} // folds are keyed by index
-			if len(a.comp.Pipelines) == 0 {
-				a.bar, a.dialog = false, a.presetMenu()
-			}
 		}
 		if len(p.PluginSources)+len(p.PluginSinks) == 0 {
 			remove(a)
