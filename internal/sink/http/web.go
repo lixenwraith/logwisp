@@ -122,7 +122,7 @@ func (h *HTTPSink) proxyGate(next http.Handler) http.Handler {
 					"component", "http_sink",
 					"instance_id", h.id,
 					"remote_addr", r.RemoteAddr,
-					"path", r.URL.Path,
+					"path", r.URL.EscapedPath(),
 					"error", err)
 			}
 			authz.Refuse(w, http.StatusForbidden)

@@ -641,7 +641,7 @@ func (h *HTTPSink) authMiddleware(next http.Handler) http.Handler {
 				"component", "http_sink",
 				"instance_id", h.id,
 				"remote_addr", clientAddr(r),
-				"path", r.URL.Path,
+				"path", r.URL.EscapedPath(),
 				"error", err)
 			authz.Refuse(w, status)
 			return

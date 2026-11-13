@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -555,4 +556,51 @@ func TestStreamBurstIsAdmittedUpToMaxConnections(t *testing.T) {
 	if admitted != limit {
 		t.Fatalf("admitted %d of a burst of %d streams, max_connections %d", admitted, burst, limit)
 	}
+}
+
+// A refused request's path is logged as it was sent, escaped: decoded, a %0a
+// would end lw's log record and start a forged one, and a %1b drive the
+// terminal showing it
+func TestRefusedRequestPathIsLoggedEscaped(t *testing.T) {
+	h := proxySink(t, []any{"127.0.0.1"}, nil)
+	var out lockedBuffer
+	h.logger = log.NewLogger()
+	h.logger.SetConsoleWriter(&out)
+	if err := h.logger.ApplyConfigString("level=info"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.logger.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.logger.Shutdown() })
+	client, baseURL := serveTestHTTPSink(t, h)
+	resp, err := client.Get(baseURL + "/x%0a2026-11-13T10:00:00Z%20INFO%20forged%1b]0;t%07") // no X-Forwarded-Proto
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if err := h.logger.Flush(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "%0a2026") || strings.Contains(got, "\n2026") || strings.Contains(got, "\x1b") {
+		t.Fatalf("logged:\n%q", got)
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
