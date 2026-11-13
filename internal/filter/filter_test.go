@@ -65,10 +65,10 @@ func TestApplyBelowDebugSkipsTheReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !f.Apply(entry) {
+	if !f.apply(entry, matchText(entry)) {
 		t.Fatal("an entry matching the first pattern was dropped")
 	}
-	if allocs := testing.AllocsPerRun(100, func() { f.Apply(entry) }); allocs >= float64(len(f.patterns)) {
+	if allocs := testing.AllocsPerRun(100, func() { f.apply(entry, matchText(entry)) }); allocs >= float64(len(f.patterns)) {
 		t.Fatalf("%v allocations per entry for %d patterns", allocs, len(f.patterns))
 	}
 }
@@ -81,7 +81,7 @@ func TestApplyAtDebugReportsEachPattern(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !f.Apply(entry) {
+	if !f.apply(entry, matchText(entry)) {
 		t.Fatal("an entry matching the first pattern was dropped")
 	}
 	if err := logger.Flush(time.Second); err != nil {
