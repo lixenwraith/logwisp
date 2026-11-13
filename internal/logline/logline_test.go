@@ -161,12 +161,31 @@ func TestEscapeControlsKeepsOnlyLayout(t *testing.T) {
 		"line\u2028sep\n":                  "line<e280a8>sep\n",
 		"zwj \U0001f468\u200d\U0001f469\n": "zwj \U0001f468\u200d\U0001f469\n",
 		"bad \xff utf8":                    "bad <ff> utf8",
+		"élan \x1b[2J\n":                   "élan <1b>[2J\n",
+		"del\x7f alone\n":                  "del<7f> alone\n",
 		"ünïcødé and \ufffd kept\n":        "ünïcødé and \ufffd kept\n",
 	} {
 		if got := string(EscapeControls([]byte(in))); got != want {
 			t.Errorf("%q: got %q, want %q", in, got, want)
 		}
 	}
+}
+
+// readStamp reads what either of its layouts parses, and refuses the rest
+func FuzzReadStampReadsWhatParseReads(f *testing.F) {
+	for _, s := range []string{"2026-10-10T12:00:00Z", "2026-10-10T1:00:00", "2026-10-10T12:00:00.5+02:00",
+		"+026-10-10T12:00:00Z", "connection", "1728561600000", "2026-10-10"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		want, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			want, err = time.Parse("2006-01-02T15:04:05.999999999", s)
+		}
+		if got, ok := readStamp(s); ok != (err == nil) || !got.Equal(want) {
+			t.Fatalf("%q: read %v %v, Parse %v %v", s, got, ok, want, err)
+		}
+	})
 }
 
 // marked writes each mark as its kind's letter (T time, L:level, G tag, K key,

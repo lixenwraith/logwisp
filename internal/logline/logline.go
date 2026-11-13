@@ -361,8 +361,13 @@ func level(key, v string) string {
 	return v
 }
 
-// readStamp reads an RFC3339 stamp, one without a zone as UTC
+// readStamp reads an RFC3339 stamp, one without a zone as UTC. Most words it
+// is given are none, refused before Parse builds an error for each layout:
+// both need 18 bytes and a '-' after the year.
 func readStamp(s string) (time.Time, bool) {
+	if len(s) < len("2006-01-02T1:04:05") || s[4] != '-' {
+		return time.Time{}, false
+	}
 	at, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		at, err = time.Parse("2006-01-02T15:04:05.999999999", s)
@@ -407,11 +412,15 @@ func readTime(s string) (time.Time, bool) {
 // Other invisible characters stay: emoji and Indic scripts need ZWJ.
 func EscapeControls(p []byte) []byte {
 	body, newline := bytes.CutSuffix(p, []byte{'\n'})
-	if printableASCII(body) {
+	i := printablePrefix(body)
+	if i == len(body) {
 		return p
 	}
-	out := make([]byte, 0, len(p)+16)
-	for len(body) > 0 {
+	if i = nextControl(body, i); i < 0 { // µs, accents, another script: read, not copied
+		return p
+	}
+	out := append(make([]byte, 0, len(p)+16), body[:i]...)
+	for body = body[i:]; len(body) > 0; {
 		r, n := utf8.DecodeRune(body)
 		if !Control(r, n) {
 			out = append(out, body[:n]...)
@@ -444,11 +453,29 @@ func Control(r rune, size int) bool {
 	return false
 }
 
-func printableASCII(b []byte) bool {
-	for _, c := range b {
+// printablePrefix is how many of b's first bytes are printable ASCII or tabs
+func printablePrefix(b []byte) int {
+	for i, c := range b {
 		if (c < 0x20 || c > 0x7e) && c != '\t' {
-			return false
+			return i
 		}
 	}
-	return true
+	return len(b)
+}
+
+// nextControl is where the first rune Control holds starts in b from i, -1
+// for none
+func nextControl(b []byte, i int) int {
+	for i < len(b) {
+		if c := b[i]; c >= 0x20 && c < 0x7f || c == '\t' {
+			i++
+			continue
+		}
+		r, n := utf8.DecodeRune(b[i:])
+		if Control(r, n) {
+			return i
+		}
+		i += n
+	}
+	return -1
 }
