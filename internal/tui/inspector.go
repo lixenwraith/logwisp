@@ -258,13 +258,12 @@ func (a *app) drawLine(r ui.Region, l line, labelW int, focused bool) {
 		return
 	}
 	v, _ := r.Field(0, labelW-2*l.depth, ui.Field{Label: label(l), Required: k.Required && l.item < 0}, focused, th)
-	items := a.items(l.node, k.Name)
 	cur := a.value(l.node, k.Name)
 	switch {
 	case typing:
 		v.TextInput(a.insp.field, placeholder(k), true, th)
 	case l.item >= 0:
-		v.TextStyled(0, 0, ui.Truncate(items[l.item], v.W), th.Text)
+		v.TextStyled(0, 0, ui.Truncate(a.items(l.node, k.Name)[l.item], v.W), th.Text)
 	case len(k.Enum) > 0:
 		v.Radio(0, 0, k.Enum, choice(k, cur), th)
 	case k.Kind == "bool":
