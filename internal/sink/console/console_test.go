@@ -25,7 +25,7 @@ func TestPaintStylesEachMarkAndKeepsTheText(t *testing.T) {
 		{"{\"level\":\"PROC\"}\n", core.LogEntry{Level: "PROC"},
 			grey + "{" + end + cyan + "\"level\"" + end + grey + ":" + end + "\"PROC\"" + grey + "}" + end + "\n"},
 	} {
-		if got := string(newPalette(p).paint([]byte(c.in), c.entry)); got != c.want {
+		if got := string(newPalette(p).paint(nil, []byte(c.in), c.entry)); got != c.want {
 			t.Errorf("%q:\n got %q\nwant %q", c.in, got, c.want)
 		}
 	}

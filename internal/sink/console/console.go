@@ -46,6 +46,7 @@ type ConsoleSink struct {
 	input  chan core.TransportEvent
 	output io.Writer
 	logger *log.Logger // application logger
+	batch  []byte      // the lines of one write, reused
 
 	// Runtime
 	done      chan struct{}
@@ -236,23 +237,36 @@ func (cs *ConsoleSink) drain() {
 	}
 }
 
+// write writes the event with the lines queued behind it, a batch a write; a
+// batch a write fails is lost, as its lines would be one by one
 func (cs *ConsoleSink) write(event core.TransportEvent) {
+	for more := true; more; {
+		var n int
+		cs.batch, n, event, more = sink.Batch(cs.batch, event, cs.input, cs.line)
+		if _, err := cs.output.Write(cs.batch); err != nil {
+			cs.logger.Error("msg", "Failed to write to console",
+				"component", "console_sink",
+				"target", cs.config.Target,
+				"error", err)
+			continue
+		}
+		cs.totalProcessed.Add(uint64(n))
+		cs.lastProcessed.Store(time.Now())
+	}
+	cs.batch = sink.Kept(cs.batch)
+}
+
+// line appends the event's line as the console shows it: escaped on a
+// terminal, painted when color is on
+func (cs *ConsoleSink) line(dst []byte, event core.TransportEvent) []byte {
 	payload := event.Payload
 	if cs.escape {
 		payload = logline.EscapeControls(payload)
 	}
 	if cs.palette != nil {
-		payload = cs.palette.paint(payload, event.Entry)
+		return cs.palette.paint(dst, payload, event.Entry)
 	}
-	if _, err := cs.output.Write(payload); err != nil {
-		cs.logger.Error("msg", "Failed to write to console",
-			"component", "console_sink",
-			"target", cs.config.Target,
-			"error", err)
-		return
-	}
-	cs.totalProcessed.Add(1)
-	cs.lastProcessed.Store(time.Now())
+	return append(dst, payload...)
 }
 
 // palette holds each style's opening and closing codes, rendered once
@@ -276,11 +290,10 @@ func newPalette(p *inline.Printer) *palette {
 	return pal
 }
 
-// paint colors the parts of the line logline marks, after escaping: the
-// escape sequences are the sink's own
-func (pal *palette) paint(payload []byte, e core.LogEntry) []byte {
+// paint appends the line to out, coloring the parts logline marks, after
+// escaping: the escape sequences are the sink's own
+func (pal *palette) paint(out, payload []byte, e core.LogEntry) []byte {
 	s := string(payload)
-	out := make([]byte, 0, len(s)+len(s)/2)
 	at := 0
 	logline.Marks(s, e, func(m logline.Mark) {
 		c, ok := pal.marks[m.Kind], m.Kind != logline.MarkLevel

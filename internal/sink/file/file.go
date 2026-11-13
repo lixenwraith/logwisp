@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync/atomic"
@@ -37,6 +38,7 @@ type FileSink struct {
 	writer       *log.Logger // internal logger for file writing
 	writerConfig *log.Config
 	logger       *log.Logger // application logger
+	batch        []byte      // the payloads of one record, reused
 
 	// Runtime
 	done      chan struct{}
@@ -229,9 +231,23 @@ func (fs *FileSink) drain() {
 	}
 }
 
-// write hands the formatted payload to the writer, which rotates files
+// write hands the writer the payload with those queued behind it, a batch a
+// record, so a burst takes one write and one slot of the writer's queue. The
+// writer keeps what it is handed until it writes it, so it is handed a copy
+// of the batch, no larger than what it holds.
 func (fs *FileSink) write(event core.TransportEvent) {
-	fs.writer.Write(string(event.Payload))
-	fs.totalProcessed.Add(1)
-	fs.lastProcessed.Store(time.Now())
+	for more := true; more; {
+		batch, n := event.Payload, 1
+		more = false
+		if len(fs.input) > 0 && len(batch) < core.SinkWriteBatchBytes {
+			fs.batch, n, event, more = sink.Batch(fs.batch, event, fs.input, payload)
+			batch = bytes.Clone(fs.batch)
+		}
+		fs.writer.Write(batch)
+		fs.totalProcessed.Add(uint64(n))
+		fs.lastProcessed.Store(time.Now())
+	}
+	fs.batch = sink.Kept(fs.batch)
 }
+
+func payload(dst []byte, event core.TransportEvent) []byte { return append(dst, event.Payload...) }

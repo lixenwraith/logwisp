@@ -458,27 +458,45 @@ func (t *TCPSink) handleConn(conn net.Conn) {
 		t.proxy.UpdateActivity(sess.ID)
 		return true
 	}
+	// send writes data and all q holds behind it, a batch a write, each under
+	// the deadline by, or writeTimeout from its start; a payload with nothing
+	// queued behind it, or one that fills a batch alone, is written as it is
+	var buf []byte
+	send := func(data []byte, q <-chan []byte, by time.Time) bool {
+		for more := true; more; {
+			batch := data
+			more = false
+			if len(q) > 0 && len(batch) < core.SinkWriteBatchBytes {
+				buf, _, data, more = sink.Batch(buf, data, q, sink.Bytes)
+				batch = buf
+			}
+			deadline := by
+			if deadline.IsZero() && t.writeTimeout > 0 {
+				deadline = time.Now().Add(t.writeTimeout)
+			}
+			if !write(batch, deadline) {
+				return false
+			}
+			if !more && len(q) > 0 {
+				data, more = <-q, true
+			}
+		}
+		buf = sink.Kept(buf)
+		return true
+	}
 	for {
 		select {
 		case data := <-c.send:
-			var deadline time.Time
-			if t.writeTimeout > 0 {
-				deadline = time.Now().Add(t.writeTimeout)
-			}
-			if !write(data, deadline) {
+			if !send(data, c.send, time.Time{}) {
 				return
 			}
 		case <-t.flushed:
 			// Nothing more will be queued: write the queue, then the tail
-			for len(c.send) > 0 {
-				if !write(<-c.send, t.flushBy) {
-					return
-				}
+			if len(c.send) > 0 && !send(<-c.send, c.send, t.flushBy) {
+				return
 			}
-			for _, data := range t.tail {
-				if !write(data, t.flushBy) {
-					return
-				}
+			if tail := sink.Queue(t.tail); len(tail) > 0 {
+				send(<-tail, tail, t.flushBy)
 			}
 			return
 		case <-c.closed:

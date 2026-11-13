@@ -50,6 +50,10 @@ const (
 	// Bounds the flush of a network sink's queues at Stop
 	SinkFlushTimeout = 2 * time.Second
 
+	// A sink writes what is queued at once, up to this much a write: one
+	// syscall a burst, and a burst a Linux pipe takes whole (PIPE_BUF)
+	SinkWriteBatchBytes = 4 * 1024
+
 	ConfigReloadTimeout = 30 * time.Second
 
 	LoggerShutdownTimeout = 2 * time.Second

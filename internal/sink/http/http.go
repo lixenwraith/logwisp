@@ -10,7 +10,6 @@ import (
 	"maps"
 	"net"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -465,11 +464,24 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	send := func(payload []byte) bool {
-		if writeSSE(w, payload) != nil || rc.Flush() != nil {
-			return false
+	// send frames payload and all q holds behind it, a batch a flush, each
+	// under its own write deadline unless armed is false (the flush's one)
+	var buf []byte
+	send := func(payload []byte, q <-chan []byte, armed bool) bool {
+		for more := true; more; {
+			buf, _, payload, more = sink.Batch(buf, payload, q, appendSSE)
+			if armed {
+				h.armWrite(rc)
+			}
+			if _, err := w.Write(buf); err != nil || rc.Flush() != nil {
+				return false
+			}
+			h.proxy.UpdateActivity(sess.ID)
+			if !more && len(q) > 0 {
+				payload, more = <-q, true
+			}
 		}
-		h.proxy.UpdateActivity(sess.ID)
+		buf = sink.Kept(buf)
 		return true
 	}
 
@@ -478,13 +490,10 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 	// backlog is taken under the same lock, so it ends where the queue begins.
 	h.clientsMu.Lock()
 	h.clients[id] = c
-	backlog := slices.Clone(h.replay)
+	backlog := sink.Queue(h.replay)
 	h.clientsMu.Unlock()
-	for _, payload := range backlog {
-		h.armWrite(rc)
-		if !send(payload) {
-			return
-		}
+	if len(backlog) > 0 && !send(<-backlog, backlog, true) {
+		return
 	}
 
 	// A stream with nothing to carry still has to prove the peer is there. The
@@ -500,8 +509,7 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // broker evicted (stale session)
 			}
-			h.armWrite(rc)
-			if !send(payload) {
+			if !send(payload, c.send, true) {
 				return
 			}
 		case <-idle.C:
@@ -519,15 +527,13 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 			// Nothing more will be queued: write the queue and the tail, then
 			// say why the stream ends
 			_ = rc.SetWriteDeadline(h.flushBy)
-			for len(c.send) > 0 {
-				if payload, ok := <-c.send; !ok || !send(payload) {
+			if len(c.send) > 0 {
+				if payload, ok := <-c.send; !ok || !send(payload, c.send, false) {
 					return
 				}
 			}
-			for _, payload := range h.tail {
-				if !send(payload) {
-					return
-				}
+			if tail := sink.Queue(h.tail); len(tail) > 0 && !send(<-tail, tail, false) {
+				return
 			}
 			fmt.Fprintf(w, "event: disconnect\ndata: {\"reason\":\"server_shutdown\"}\n\n")
 			rc.Flush()
@@ -674,39 +680,29 @@ func streamHeadNotAllowed(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
-// writeSSE frames a payload per the W3C SSE spec, one data: line per line
-func writeSSE(w http.ResponseWriter, payload []byte) error {
-	for _, line := range splitLines(payload) {
-		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
-			return err
+// appendSSE frames a payload per the W3C SSE spec, one data: line per line:
+// every break SSE recognises (CRLF, LF and a lone CR) starts another, so no
+// payload byte can end a data: line and start an event: or retry: field. One
+// trailing break is dropped.
+func appendSSE(dst, data []byte) []byte {
+	if len(data) > 0 {
+		if bytes.HasSuffix(data, []byte("\r\n")) {
+			data = data[:len(data)-2]
+		} else if data[len(data)-1] == '\n' || data[len(data)-1] == '\r' {
+			data = data[:len(data)-1]
+		}
+		for {
+			i := bytes.IndexAny(data, "\r\n")
+			if i < 0 {
+				dst = append(append(append(dst, "data: "...), data...), '\n')
+				break
+			}
+			dst = append(append(append(dst, "data: "...), data[:i]...), '\n')
+			if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+				i++
+			}
+			data = data[i+1:]
 		}
 	}
-	_, err := fmt.Fprint(w, "\n")
-	return err
-}
-
-// splitLines splits on every break SSE recognises (CRLF, LF and a lone CR),
-// so no payload byte can end a data: line and start an event: or retry:
-// field. One trailing break is dropped.
-func splitLines(data []byte) [][]byte {
-	if len(data) == 0 {
-		return nil
-	}
-	if bytes.HasSuffix(data, []byte("\r\n")) {
-		data = data[:len(data)-2]
-	} else if data[len(data)-1] == '\n' || data[len(data)-1] == '\r' {
-		data = data[:len(data)-1]
-	}
-	var lines [][]byte
-	for {
-		i := bytes.IndexAny(data, "\r\n")
-		if i < 0 {
-			return append(lines, data)
-		}
-		lines = append(lines, data[:i])
-		if data[i] == '\r' && i+1 < len(data) && data[i+1] == '\n' {
-			i++
-		}
-		data = data[i+1:]
-	}
+	return append(dst, '\n')
 }

@@ -398,12 +398,9 @@ func TestUnservableOptionsAreRefused(t *testing.T) {
 // Every line break SSE recognises, a lone CR included, starts another data:
 // line: an entry cannot inject an event:, retry: or id: field.
 func TestSSEFramesEveryLineAsData(t *testing.T) {
-	rec := httptest.NewRecorder()
-	if err := writeSSE(rec, []byte("a\revent: disconnect\r\nretry: 99999999\nid: x\r")); err != nil {
-		t.Fatal(err)
-	}
+	got := appendSSE(nil, []byte("a\revent: disconnect\r\nretry: 99999999\nid: x\r"))
 	want := "data: a\ndata: event: disconnect\ndata: retry: 99999999\ndata: id: x\n\n"
-	if got := rec.Body.String(); got != want {
+	if string(got) != want {
 		t.Fatalf("framed %q, want %q", got, want)
 	}
 }

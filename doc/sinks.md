@@ -14,6 +14,10 @@ whose input queue is full drops the event for itself only, counted as its
 `dropped_entries` in the pipeline's statistics and summed as the pipeline's
 `total_dropped_by_sink`.
 
+The `console`, `file`, `http` and `tcp` sinks write what is queued at once:
+whole entries, up to 4 KiB a write (a longer entry goes alone), so a burst
+costs one write and not one per entry, and a Linux pipe takes each whole.
+
 ---
 
 ## console
@@ -120,8 +124,9 @@ Options, each as type and default:
 - `retention_hours` (float, `168.0`): `.log` files there older than this are
   deleted; `0` keeps them.
 - `buffer_size` (int, `1000`): sink input queue depth, and the depth of the
-  internal writer's queue, which drops when full. That drop is reported
-  nowhere, and `total_processed` still counts the entry. At most `1048576`.
+  internal writer's queue, which drops when full. A record there holds the
+  entries queued together, up to 4 KiB of them. That drop is reported
+  nowhere, and `total_processed` still counts the entries. At most `1048576`.
 - `flush_interval_ms` (int, `100`): forced flush interval.
 
 The sink drives an internal writer configured for raw output with timestamps and
@@ -189,7 +194,7 @@ Options, each as type and default:
   differs from `stream_path`.
 - `buffer_size` (int, `1000`): sink input queue depth.
 - `client_buffer_size` (int, `256`): per-client send queue depth.
-- `write_timeout_ms` (int, `0`): per-event write deadline; `0` = none.
+- `write_timeout_ms` (int, `0`): per-write deadline; `0` = none.
 - `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited. A
   stream past it gets `503` and counts in `rejected_clients`.
 - `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
@@ -257,7 +262,7 @@ Options, each as type and default:
   no entry can inject an `event:`, `id:` or `retry:` field.
 - The server sets no `WriteTimeout` (that would kill long-lived streams);
   per-write deadlines come from `write_timeout_ms` via `http.ResponseController`
-  and cover the connected frame, every payload, and the idle comment.
+  and cover the connected frame, every write of entries, and the idle comment.
 - Every stream gets an SSE comment every 15 s. It refreshes the client's
   session and is how a peer that stopped reading is noticed.
 - A client whose send queue is full has that event dropped

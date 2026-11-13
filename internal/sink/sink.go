@@ -64,6 +64,47 @@ func FlushContext(ctx context.Context, done <-chan struct{}, timeout time.Durati
 	return ctx, cancel
 }
 
+// Batch is what a sink writes at once: first, then what queue holds behind it
+// while the whole stays within core.SinkWriteBatchBytes, n items appended to
+// dst by add. more reports next, the queued item that would have crossed the
+// bound and starts the following batch; it is returned by value, as a pointer
+// would put every item taken on the heap. Only queue's one reader calls it.
+func Batch[T any](dst []byte, first T, queue <-chan T, add func([]byte, T) []byte) (batch []byte, n int, next T, more bool) {
+	batch, n = add(dst[:0], first), 1
+	for len(batch) < core.SinkWriteBatchBytes && len(queue) > 0 {
+		item := <-queue
+		mark := len(batch)
+		if batch = add(batch, item); len(batch) > core.SinkWriteBatchBytes {
+			return batch[:mark], n, item, true
+		}
+		n++
+	}
+	return batch, n, next, false
+}
+
+// Bytes appends a payload as it is: Batch's add for a queue of payloads
+func Bytes(dst, payload []byte) []byte { return append(dst, payload...) }
+
+// Queue holds payloads for Batch: the tail each client writes after its own
+// queue at Stop
+func Queue(payloads [][]byte) <-chan []byte {
+	q := make(chan []byte, len(payloads))
+	for _, p := range payloads {
+		q <- p
+	}
+	close(q)
+	return q
+}
+
+// Kept is a batch buffer to reuse, or nil past four batches' size: a long
+// entry's buffer is not held for the next
+func Kept(buf []byte) []byte {
+	if cap(buf) > 4*core.SinkWriteBatchBytes {
+		return nil
+	}
+	return buf[:0]
+}
+
 // Drain takes the payloads queued in input without waiting: a network sink's
 // last events, which each client then writes on its own.
 func Drain(input <-chan core.TransportEvent) [][]byte {
