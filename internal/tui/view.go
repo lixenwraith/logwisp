@@ -839,7 +839,8 @@ func (a *app) drawRow(r ui.Region, w *row, tw, lw, gw int, cursor bool) {
 	}
 	x := 1
 	if tw > 0 {
-		r.TextStyled(x, 0, w.at.Local().Format("15:04:05.000")[:tw], on(th.Muted))
+		var stamp [len("15:04:05.000")]byte
+		r.TextStyled(x, 0, string(w.at.Local().AppendFormat(stamp[:0], "15:04:05.000")[:tw]), on(th.Muted))
 		x += tw + 1
 	}
 	if lw > 0 {
@@ -847,17 +848,15 @@ func (a *app) drawRow(r ui.Region, w *row, tw, lw, gw int, cursor bool) {
 		if !ok {
 			style = th.Text
 		}
-		r.TextStyled(x, 0, f.flat(w.Level, lw), on(style))
+		f.put(r, x, w.Level, lw, on(style))
 		x += lw + 1
 	}
 	if gw > 0 {
-		r.TextStyled(x, 0, f.flat(w.Tag, gw), on(a.look.Source))
+		f.put(r, x, w.Tag, gw, on(a.look.Source))
 		x += gw + 1
 	}
-	msg := f.flat(w.Message, r.W-x)
-	r.TextStyled(x, 0, msg, on(th.Text))
-	if x += ui.RuneLen(msg) + 2; x < r.W {
-		r.TextStyled(x, 0, f.flat(w.fields, r.W-x), on(th.Muted))
+	if x += f.put(r, x, w.Message, r.W-x, on(th.Text)) + 2; x < r.W {
+		f.put(r, x, w.fields, r.W-x, on(th.Muted))
 	}
 }
 
@@ -989,19 +988,16 @@ func oneCell(r rune, size int) bool {
 	return r >= ' ' && r < 0x7f || (r != utf8.RuneError || size > 1) && terminal.OneColumn(r)
 }
 
-// flat is s on one row of at most w cells: a line break as the font's mark,
-// a tab as a space, what a cell cannot show as the font's placeholder, and
-// '…' where it is cut
-func (f font) flat(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	out := make([]rune, 0, min(w, len(s)))
-	i := 0
-	for i < len(s) && len(out) < w {
+// fit lays s on one row of at most w cells, passing each its rune: a line
+// break as the font's mark, a tab as a space, what a cell cannot show as the
+// font's placeholder, and '…' where it is cut; it returns the cells taken
+func (f font) fit(s string, w int, cell func(x int, r rune)) int {
+	x := 0
+	for i := 0; i < len(s) && x < w; x++ {
 		r, n := utf8.DecodeRuneInString(s[i:])
-		i += n
-		switch {
+		switch i += n; {
+		case i < len(s) && x == w-1 && w > 1:
+			r = '…'
 		case r == '\n':
 			r = f.newline
 		case r == '\t':
@@ -1009,12 +1005,22 @@ func (f font) flat(s string, w int) string {
 		case !oneCell(r, n):
 			r = f.odd
 		}
-		out = append(out, r)
+		cell(x, r)
 	}
-	if i < len(s) && w > 1 {
-		out[w-1] = '…'
-	}
+	return x
+}
+
+// flat is s as fit lays it out
+func (f font) flat(s string, w int) string {
+	out := make([]rune, 0, max(0, min(w, len(s))))
+	f.fit(s, w, func(_ int, r rune) { out = append(out, r) })
 	return string(out)
+}
+
+// put draws s from x on r's first row as fit lays it out, making no string
+// as flat does: the view draws every row it shows on every frame
+func (f font) put(r ui.Region, x int, s string, w int, style ui.Style) int {
+	return f.fit(s, w, func(i int, c rune) { r.Cell(x+i, 0, c, style.Fg, style.Bg, style.Attr) })
 }
 
 // escape writes each rune a cell cannot show as a \u escape and each invalid
