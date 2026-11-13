@@ -438,10 +438,11 @@ func (t *TCPSink) handleConn(conn net.Conn, count int64) {
 	}()
 
 	// Reader: sink is write-only; drain and discard inbound bytes to detect
-	// disconnect and refresh session activity on client traffic
+	// disconnect and refresh session activity on client traffic. Only EOF
+	// matters: a client that sends anyway pays the extra reads.
 	go func() {
 		defer close(c.closed)
-		buf := make([]byte, 4096)
+		buf := make([]byte, 512)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
