@@ -153,7 +153,7 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 // line read last is missing and the file still changes, it is held, up to
 // settleChecks, so that a slow rewrite is judged once written.
 func (w *fileWatcher) checkFile() error {
-	file, err := os.Open(w.directory)
+	file, err := openFollowed(w.directory)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -390,10 +390,29 @@ func scanLinesCapped(data []byte, atEOF bool) (int, []byte, error) {
 	return advance, token, err
 }
 
+// openFollowed opens a followed file without waiting on it: a FIFO put in
+// its place would block the open until a writer came, holding the watcher, or
+// the source's lock, and with them Stop and a reload. Only a regular file is
+// kept, as lixenwraith/log's openLogPath keeps one.
+func openFollowed(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		if err == nil {
+			err = fmt.Errorf("%s is not a regular file", path)
+		}
+		return nil, err
+	}
+	return file, nil
+}
+
 // initPosition records the file's metadata and its marks and, unless the
 // watcher was created to read from the start, sets the read position to the end.
 func (w *fileWatcher) initPosition() error {
-	file, err := os.Open(w.directory)
+	file, err := openFollowed(w.directory)
 	if err != nil {
 		if os.IsNotExist(err) {
 			w.mu.Lock()

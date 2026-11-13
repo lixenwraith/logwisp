@@ -37,6 +37,7 @@ type FileSource struct {
 
 	// Configuration
 	config *config.FileSourceOptions
+	match  *regexp.Regexp // the pattern, compiled once
 
 	// lw's stdout and stderr when they are files: a console sink writes there,
 	// so following them would feed lw its own output. ownSkipped is per path
@@ -79,6 +80,7 @@ func NewFileSourcePlugin(
 		id:          id,
 		proxy:       proxy,
 		config:      opts,
+		match:       regexp.MustCompile(globToRegex(opts.Pattern)),
 		subscribers: make([]chan core.LogEntry, 0),
 		watchers:    make(map[string]*fileWatcher),
 		ownSkipped:  make(map[string]bool),
@@ -303,7 +305,7 @@ func (fs *FileSource) ensureWatcher(path string) {
 // readPosition reports how far a running watcher has read the file now at path.
 // Callers hold fs.mu.
 func (fs *FileSource) readPosition(path string) (int64, bool) {
-	file, err := os.Open(path)
+	file, err := openFollowed(path)
 	if err != nil {
 		return 0, false
 	}
@@ -394,21 +396,16 @@ func (fs *FileSource) scanFile() ([]string, error) {
 		return nil, err
 	}
 
-	// Convert glob pattern to regex
-	regexPattern := globToRegex(fs.config.Pattern)
-	re, err := regexp.Compile(regexPattern)
-	if err != nil {
-		return nil, fmt.Errorf("invalid pattern regex: %w", err)
-	}
-
 	var files []string
 	for _, entry := range entries {
-		if entry.IsDir() {
+		// a FIFO, socket or device is no file to follow; a link's target is
+		// checked as it opens
+		if t := entry.Type(); t != 0 && t != os.ModeSymlink {
 			continue
 		}
 
 		path := filepath.Join(fs.config.Directory, entry.Name())
-		if re.MatchString(entry.Name()) && !fs.isOwn(path) {
+		if fs.match.MatchString(entry.Name()) && !fs.isOwn(path) {
 			files = append(files, path)
 		}
 	}

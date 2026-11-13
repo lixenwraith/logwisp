@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -32,6 +33,7 @@ func TestFileSourceSkipsItsOwnOutput(t *testing.T) {
 	}
 	source := &FileSource{
 		config:     &config.FileSourceOptions{Directory: dir, Pattern: "*.log"},
+		match:      regexp.MustCompile(globToRegex("*.log")),
 		own:        []os.FileInfo{own},
 		ownSkipped: map[string]bool{},
 		logger:     log.NewLogger(),
@@ -48,7 +50,8 @@ func TestFileSourceSkipsItsOwnOutput(t *testing.T) {
 func TestUnreadableDirectoryIsLoggedOncePerChange(t *testing.T) {
 	logger, out := txtLogger(t)
 	dir := filepath.Join(t.TempDir(), "logs")
-	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*"}, watchers: map[string]*fileWatcher{}, logger: logger}
+	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*"}, match: regexp.MustCompile(globToRegex("*")),
+		watchers: map[string]*fileWatcher{}, logger: logger}
 	checksAfter := func(err error) {
 		if err != nil {
 			t.Fatal(err)
@@ -107,6 +110,38 @@ func TestUnreadableFileIsLoggedOnceAndWaitedFor(t *testing.T) {
 	}
 	if strings.Count(out.String(), "\n") != 2 || strings.Count(out.String(), " WARN ") != 2 || strings.Count(out.String(), "Cannot read file") != 2 {
 		t.Fatalf("logged:\n%swant Cannot read file twice", out.String())
+	}
+}
+
+// A FIFO under the pattern is not followed, and one put where a followed file
+// was is refused, not waited on: its open would block until a writer came,
+// holding the watcher or the source's lock, and with them Stop and a reload
+func TestFIFOUnderThePatternIsNotWaitedOn(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(dir, "app.log"), "")
+	fifo := filepath.Join(dir, "evil.log")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := &FileSource{config: &config.FileSourceOptions{Directory: dir, Pattern: "*.log"}, match: regexp.MustCompile(globToRegex("*.log")),
+		watchers: map[string]*fileWatcher{}, logger: log.NewLogger()}
+	files, err := source.scanFile()
+	if err != nil || len(files) != 1 || filepath.Base(files[0]) != "app.log" {
+		t.Fatalf("scanFile = %v, %v; want app.log alone", files, err)
+	}
+	done := make(chan error)
+	go func() {
+		source.readPosition(fifo)
+		w := newFileWatcher(fifo, true, false, func(core.LogEntry) {}, log.NewLogger())
+		done <- w.initPosition()
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("a FIFO opened as a followed file: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("opening a FIFO waited for a writer")
 	}
 }
 
