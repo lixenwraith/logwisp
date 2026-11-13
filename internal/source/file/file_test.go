@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -80,10 +81,10 @@ func TestUnreadableDirectoryIsLoggedOncePerChange(t *testing.T) {
 // on
 func TestUnreadableFileIsLoggedOnceAndWaitedFor(t *testing.T) {
 	logger, out := txtLogger(t)
-	dir := filepath.Join(t.TempDir(), "logs")
-	block := func() error { return errors.Join(os.RemoveAll(dir), os.WriteFile(dir, nil, 0o600)) } // logs/a.log cannot open
+	path := filepath.Join(t.TempDir(), "a.log")
+	block := func() error { return errors.Join(os.RemoveAll(path), os.Mkdir(path, 0o700)) } // no file to follow
 	read := make(chan string, 10)
-	w := newFileWatcher(filepath.Join(dir, "a.log"), true, true, func(e core.LogEntry) { read <- e.Message }, logger)
+	w := newFileWatcher(dirOf(t, path), path, true, true, func(e core.LogEntry) { read <- e.Message }, logger)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)
 	if err := block(); err != nil {
@@ -91,7 +92,7 @@ func TestUnreadableFileIsLoggedOnceAndWaitedFor(t *testing.T) {
 	}
 	go func() { done <- w.watch(ctx) }()
 	time.Sleep(4 * core.FileWatcherPollInterval)
-	if err := errors.Join(os.Remove(dir), os.Mkdir(dir, 0o700), os.WriteFile(filepath.Join(dir, "a.log"), []byte("first\n"), 0o600)); err != nil {
+	if err := errors.Join(os.Remove(path), os.WriteFile(path, []byte("first\n"), 0o600)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -132,7 +133,7 @@ func TestFIFOUnderThePatternIsNotWaitedOn(t *testing.T) {
 	done := make(chan error)
 	go func() {
 		source.readPosition(fifo)
-		w := newFileWatcher(fifo, true, false, func(core.LogEntry) {}, log.NewLogger())
+		w := newFileWatcher(&source.dir, fifo, true, false, func(core.LogEntry) {}, log.NewLogger())
 		done <- w.initPosition()
 	}()
 	select {
@@ -160,10 +161,51 @@ func txtLogger(t *testing.T) (*log.Logger, *bytes.Buffer) {
 	return logger, out
 }
 
+// dirOf holds the directory of path open, as a source does for its watchers
+func dirOf(t *testing.T, path string) *atomic.Pointer[os.Root] {
+	t.Helper()
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { root.Close() })
+	dir := new(atomic.Pointer[os.Root])
+	dir.Store(root)
+	return dir
+}
+
+// A link in the followed directory leads only to a file within it: one
+// leaving it, or an absolute one, is not followed
+func TestLinkIsFollowedOnlyWithinTheDirectory(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "logs")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	testutil.WriteFile(t, filepath.Join(dir, "app.log"), "")
+	testutil.WriteFile(t, filepath.Join(base, "secret"), "")
+	links := map[string]string{"inside.log": "app.log", "outside.log": "../secret", "absolute.log": filepath.Join(dir, "app.log")}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := dirOf(t, filepath.Join(dir, "app.log")).Load()
+	for name := range links {
+		file, err := openFollowed(root, name)
+		if (err == nil) != (name == "inside.log") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if file != nil {
+			file.Close()
+		}
+	}
+}
+
 func TestStoppedWatcherReturnsNormally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	testutil.WriteFile(t, path, "")
-	watcher := newFileWatcher(path, true, true, func(_ core.LogEntry) {}, nil)
+	watcher := newFileWatcher(dirOf(t, path), path, true, true, func(_ core.LogEntry) {}, nil)
 	watcher.stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -200,7 +242,7 @@ func TestLongLineContinuesInTheNextEntry(t *testing.T) {
 	long := strings.Repeat("x", core.MaxLogEntryBytes+10)
 	testutil.WriteFile(t, path, "first\n"+long+"\nafter\n")
 	var got []string
-	w := newFileWatcher(path, true, true, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	w := newFileWatcher(dirOf(t, path), path, true, true, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
 	for range 2 {
 		if err := w.checkFile(); err != nil {
 			t.Fatal(err)
@@ -230,11 +272,13 @@ func TestRotatedFileResumesInsteadOfReplaying(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	root := dirOf(t, archive).Load()
 	for name, watcher := range map[string]*fileWatcher{
 		"still tailing the renamed inode": {inode: inode, position: 8},
 		"already moved on from it":        {inode: 99, prevInode: inode, prevPosition: 8},
 	} {
 		source := &FileSource{watchers: map[string]*fileWatcher{active: watcher}}
+		source.dir.Store(root)
 		position, ok := source.readPosition(archive)
 		if !ok || position != 8 {
 			t.Errorf("%s: position = %d, ok = %v, want 8, true", name, position, ok)
@@ -242,6 +286,7 @@ func TestRotatedFileResumesInsteadOfReplaying(t *testing.T) {
 	}
 
 	unrelated := &FileSource{watchers: map[string]*fileWatcher{active: {inode: 99}}}
+	unrelated.dir.Store(root)
 	if _, ok := unrelated.readPosition(archive); ok {
 		t.Error("a file no watcher has read was treated as rotated")
 	}
@@ -277,7 +322,7 @@ func appendFile(t *testing.T, path, text string) {
 func tailFrom(t *testing.T, path string) func() []string {
 	t.Helper()
 	var got []string
-	w := newFileWatcher(path, true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	w := newFileWatcher(dirOf(t, path), path, true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
 	if err := w.initPosition(); err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +463,7 @@ func TestReadToAnswersOnlyForFilesRead(t *testing.T) {
 	}
 	text := lines(14, 0, 20)
 	testutil.WriteFile(t, path, text)
-	w := newFileWatcher(path, true, false, func(core.LogEntry) {}, log.NewLogger())
+	w := newFileWatcher(dirOf(t, path), path, true, false, func(core.LogEntry) {}, log.NewLogger())
 	if err := w.initPosition(); err != nil {
 		t.Fatal(err)
 	}
@@ -468,9 +513,10 @@ func TestShiftedArchiveResumesWhereItWasRead(t *testing.T) {
 			testutil.WriteFile(t, paths[1], lines(14, 0, 20))
 			var got []string
 			source := &FileSource{watchers: map[string]*fileWatcher{}}
+			source.dir.Store(dirOf(t, paths[0]).Load())
 			watchers := make([]*fileWatcher, 2)
 			for i := range watchers {
-				w := newFileWatcher(paths[i], true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+				w := newFileWatcher(&source.dir, paths[i], true, false, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
 				w.others = source.othersOf(w)
 				if err := w.initPosition(); err != nil {
 					t.Fatal(err)
@@ -516,7 +562,7 @@ func TestHoleIsWalkedABoundedPartACheck(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.log")
 	testutil.WriteFile(t, path, "first\n")
 	var got []string
-	w := newFileWatcher(path, true, true, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
+	w := newFileWatcher(dirOf(t, path), path, true, true, func(e core.LogEntry) { got = append(got, e.Message) }, log.NewLogger())
 	if err := w.checkFile(); err != nil {
 		t.Fatal(err)
 	}

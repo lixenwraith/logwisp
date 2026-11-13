@@ -33,7 +33,10 @@ Options, each as type and default:
 - `directory` (string, required): directory to scan; not recursive. A leading
   `~/`, here as in every file or directory option, is the home directory; a
   relative path starts at lw's working directory.
-- `pattern` (string, `*`): glob over filenames; `*` and `?` only.
+- `pattern` (string, `*`): glob over filenames; `*` and `?` only. A source
+  follows 4,096 files at most: past that, one WARN, and the others matching
+  wait for a watcher to end. Narrow the pattern, or split the directory between
+  sources.
 - `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
   An open file is polled every 100 ms whatever this is.
 - `raw` (bool, `false`): never parse a line: the whole line is the message.
@@ -51,6 +54,10 @@ Options, each as type and default:
   `Cannot read file` when the failure starts or changes, not at each retry.
 - The file lw's stdout or stderr is redirected to is never followed, with a
   warning: `lw > out.log` in the directory would read its own output back.
+- A symbolic link is followed only to a file inside the directory: one leading
+  out of it, or an absolute one, is `Cannot read file` with
+  `path escapes from parent`. A directory is followed where it is: replaced
+  (a release's link swapped), it is opened anew at the next scan.
 - A line longer than 1 MiB continues in the next entry, as on the console
   source; so does the rest of a line a poll reads while it is still being
   written, or past the 64 MiB a poll reads at most.

@@ -55,7 +55,9 @@ const readPerCheck = 64 << 20
 
 // fileWatcher tails a single file, handles rotations, and sends new lines to a callback
 type fileWatcher struct {
-	directory    string
+	directory    string                   // the file's path, for logs and stats
+	dir          *atomic.Pointer[os.Root] // the source's directory, which the file opens in
+	name         string                   // the file's name in it
 	callback     func(core.LogEntry)
 	raw          bool
 	position     int64
@@ -79,15 +81,17 @@ type fileWatcher struct {
 	others func(*os.File, os.FileInfo) (int64, bool)
 }
 
-// newFileWatcher creates a new watcher for a specific file path.
+// newFileWatcher creates a new watcher for the file at path in dir.
 // A start position of 0 reads an existing file whole; -1 seeks to its end.
-func newFileWatcher(directory string, raw, fromStart bool, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
+func newFileWatcher(dir *atomic.Pointer[os.Root], directory string, raw, fromStart bool, callback func(core.LogEntry), logger *log.Logger) *fileWatcher {
 	position := int64(-1)
 	if fromStart {
 		position = 0
 	}
 	w := &fileWatcher{
 		directory: directory,
+		dir:       dir,
+		name:      filepath.Base(directory),
 		callback:  callback,
 		raw:       raw,
 		position:  position,
@@ -158,7 +162,7 @@ func (w *fileWatcher) getInfo() WatcherInfo {
 // line read last is missing and the file still changes, it is held, up to
 // settleChecks, so that a slow rewrite is judged once written.
 func (w *fileWatcher) checkFile() error {
-	file, err := openFollowed(w.directory)
+	file, err := openFollowed(w.dir.Load(), w.name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -396,19 +400,20 @@ func scanLinesCapped(data []byte, atEOF bool) (int, []byte, error) {
 	return advance, token, err
 }
 
-// openFollowed opens a followed file without waiting on it: a FIFO put in
-// its place would block the open until a writer came, holding the watcher, or
-// the source's lock, and with them Stop and a reload. Only a regular file is
-// kept, as lixenwraith/log's openLogPath keeps one.
-func openFollowed(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+// openFollowed opens a followed file in dir without waiting on it: a FIFO put
+// in its place would block the open until a writer came, holding the watcher,
+// or the source's lock, and with them Stop and a reload. Only a regular file
+// is kept, as lixenwraith/log's openLogPath keeps one; a link leaving dir, or
+// absolute, fails as "path escapes from parent".
+func openFollowed(dir *os.Root, name string) (*os.File, error) {
+	file, err := dir.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
 		file.Close()
 		if err == nil {
-			err = fmt.Errorf("%s is not a regular file", path)
+			err = fmt.Errorf("%s is not a regular file", file.Name())
 		}
 		return nil, err
 	}
@@ -418,7 +423,7 @@ func openFollowed(path string) (*os.File, error) {
 // initPosition records the file's metadata and its marks and, unless the
 // watcher was created to read from the start, sets the read position to the end.
 func (w *fileWatcher) initPosition() error {
-	file, err := openFollowed(w.directory)
+	file, err := openFollowed(w.dir.Load(), w.name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			w.mu.Lock()
