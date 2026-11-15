@@ -344,3 +344,25 @@ func TestAFlowEditSwapsInPlaceUnlessWhole(t *testing.T) {
 		t.Fatalf("whole: a new tap %v, %v", fresh != tap, err)
 	}
 }
+
+// A run the screen stops gives its listening sockets up: kept bound, as a
+// reload keeps them for the next service, a peer would connect and hang
+func TestAStoppedRunReleasesItsListeners(t *testing.T) {
+	testLogger(t)
+	r, specs := screenRunnerFor(t, "--quiet")
+	free, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := free.Addr().String()
+	free.Close()
+	sink := fmt.Sprintf("tcp:host=127.0.0.1,port=%d", free.Addr().(*net.TCPAddr).Port)
+	if _, err := r.Start(specs("--source", "null", "--sink", sink), false, nil); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	r.Stop()
+	if c, err := net.DialTimeout("tcp4", addr, time.Second); err == nil {
+		c.Close()
+		t.Fatal("the stopped run's port still takes connections")
+	}
+}
