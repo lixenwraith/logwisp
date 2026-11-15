@@ -39,7 +39,9 @@ Options, each as type and default:
   directory between sources. A file's watcher stops once a scan no longer lists
   it: removed, renamed away, or replaced by a directory.
 - `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
-  An open file is polled every 100 ms whatever this is.
+  An open file is polled every 100 ms whatever this is. A scan reads the whole
+  directory, so one that is slow, in a directory of very many files, is
+  followed by nine times its length without one.
 - `raw` (bool, `false`): never parse a line: the whole line is the message.
 - `from` (string, `end`): where a new watcher starts, `end` or `start` of the
   file.
