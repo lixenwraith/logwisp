@@ -393,6 +393,8 @@ Options, each as type and default:
   after idle expiry: two peers sharing an address never share one.
   - The node label is the sender's to choose, so it is not in the key: a
     session shows the label of its first batch, each entry keeps its own.
+  - The cache holds 65,536 sessions; a sender past them is ingested without
+    one until some expire.
 
 **Statistics**: `host`, `port`, `ingest_path`, `tls`, `total_requests`,
 `rejected_requests`, `parse_errors`, `cached_sessions`, `trust_node`, and the

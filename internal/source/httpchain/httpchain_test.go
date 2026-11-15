@@ -88,6 +88,30 @@ func TestExpiredSessionsLeaveTheCache(t *testing.T) {
 	}
 }
 
+// The cache holds maxSessions sessions: a sender past them is served without
+// one, however many addresses it comes from, until some expire
+func TestTheSessionCacheIsBounded(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	proxy := session.NewProxy(manager, "in")
+	src := &HTTPChainSource{proxy: proxy, sessions: map[string]string{}}
+	addr := func(i int) string {
+		return "10." + strconv.Itoa(i>>16) + "." + strconv.Itoa(i>>8&255) + "." + strconv.Itoa(i&255)
+	}
+	for i := range maxSessions + 100 {
+		src.sessionFor(addr(i), "edge", "", nil, authz.Identity{})
+	}
+	first := src.sessionFor(addr(0), "edge", "", nil, authz.Identity{})
+	if n := manager.GetSessionCount(); n != maxSessions || len(src.sessions) != maxSessions || first == "" {
+		t.Fatalf("%d sessions, %d keys, the first sender's %q; want %d of each and a session", n, len(src.sessions), first, maxSessions)
+	}
+	proxy.RemoveSession(first) // as idle expiry does
+	src.swept = time.Now().Add(-2 * time.Minute)
+	if src.sessionFor("192.0.2.1", "edge", "", nil, authz.Identity{}) == "" {
+		t.Fatal("no session for a new sender once one expired")
+	}
+}
+
 // A session is one address and identity: the node labels a sender declares
 // share it, another identity at the address gets its own
 func TestSessionIsOneAddressAndIdentity(t *testing.T) {
