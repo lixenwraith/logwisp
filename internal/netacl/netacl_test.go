@@ -34,7 +34,8 @@ func mustNew(t *testing.T, host string, o config.ACLOptions) *Policy {
 }
 
 // Of a listener's refusals the first in a minute is a WARN with the number
-// since the last WARN, the rest DEBUG: no peer floods lw's log
+// since the last WARN, the rest DEBUG: no peer floods lw's log. What its HTTP
+// server reports of a peer is a refusal too, a handler's panic always a WARN.
 func TestRefusalsWarnOnceAMinuteTheRestAtDebug(t *testing.T) {
 	var out bytes.Buffer
 	logger := log.NewLogger()
@@ -50,12 +51,17 @@ func TestRefusalsWarnOnceAMinuteTheRestAtDebug(t *testing.T) {
 	refuse()
 	r.next.Store(0) // a minute later
 	refuse()
+	server := r.ErrorLog()
+	server.Print("http: TLS handshake error from 192.0.2.1:1: EOF")
+	server.Print("http2: server connection error from 192.0.2.1:2: PROTOCOL_ERROR")
+	server.Print("http: panic serving 192.0.2.1:3: boom")
 	if err := logger.Flush(time.Second); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
-	if strings.Count(got, " WARN msg") != 2 || strings.Count(got, " DEBUG msg") != 2 ||
-		!strings.Contains(got, "refused_since_last_warn 0") || !strings.Contains(got, "refused_since_last_warn 2") {
+	if strings.Count(got, " WARN msg") != 3 || strings.Count(got, " DEBUG msg") != 4 ||
+		!strings.Contains(got, "refused_since_last_warn 0") || !strings.Contains(got, "refused_since_last_warn 2") ||
+		!strings.Contains(got, `WARN msg "http: panic serving`) {
 		t.Fatalf("logged:\n%s", got)
 	}
 }

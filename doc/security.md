@@ -478,8 +478,8 @@ when it is constructed, so startup and every reload repeat them:
 ## Refusals
 
 Each listener logs the peers it refuses through one throttle:
-- By `acl`, `auth`, node binding, a failed TLS handshake or a bad chain hello,
-  and the `http` sink's proxy gate.
+- By `acl`, `auth`, node binding, a failed TLS handshake, a bad chain hello or
+  HTTP/2 protocol error, and the `http` sink's proxy gate.
 - The first in a minute is a WARN with the client, the reason and
   `refused_since_last_warn`; the rest are DEBUG (`--logging.level=debug`
   shows each). No peer floods lw's log, or pushes journald's rate limit over
