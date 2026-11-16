@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
+	"time"
 
 	_ "github.com/lixenwraith/logwisp/internal/source/console"
 	_ "github.com/lixenwraith/logwisp/internal/source/file"
@@ -166,9 +168,22 @@ func initializeLogger(cfg *config.Config) error {
 		if err := config.LogDir(logCfg.Directory, logCfg.Name+"."+logCfg.Extension); err != nil {
 			return fmt.Errorf("log file: %w", err)
 		}
+		logger.SetErrorHandler(reportLogFailure)
 	}
 	return logger.ApplyConfig(logCfg)
 }
+
+// reportLogFailure prints what the writer of lw's own log file fails at, a
+// rotation or a full disk, which that log cannot say: on standard error, the
+// first a minute, as a failing write repeats for every record
+func reportLogFailure(msg string) {
+	now := time.Now().UnixNano()
+	if next := logFailureAt.Load(); now >= next && logFailureAt.CompareAndSwap(next, now+int64(time.Minute)) {
+		fmt.Fprintf(os.Stderr, "lw: its own log: %s\n", msg)
+	}
+}
+
+var logFailureAt atomic.Int64
 
 // logConfig is the settings of lw's own log as its writer takes them, checked
 // without making a directory or a file, so that --check reports them too

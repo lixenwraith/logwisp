@@ -88,6 +88,8 @@ retention_hours   = 168.0
 
 `logging.file` takes the file sink's rules: `max_total_size_mb` is at least
 `max_size_mb`, and `lw --check` reports a name or a size its writer refuses.
+What that writer fails at while lw runs, a rotation or a full disk, goes to
+standard error, the first in a minute.
 
 `sanitization = "json"`, the default, escapes in either format the control
 characters a peer puts in an address, a name or an error; `raw` writes them as
