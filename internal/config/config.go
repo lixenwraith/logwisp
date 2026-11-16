@@ -269,7 +269,7 @@ type HTTPSinkOptions struct {
 	ClientBufferSize int64        `toml:"client_buffer_size" default:"256" lw:"min=1,max=1048576" help:"entries queued per client"`
 	WriteTimeoutMS   int64        `toml:"write_timeout_ms" default:"5000" lw:"min=0,zero=none" help:"milliseconds an event write may take"`
 	MaxConnections   int64        `toml:"max_connections" lw:"min=0,zero=unlimited" help:"clients at once"`
-	ReplayLines      int64        `toml:"replay_lines" lw:"min=0,zero=none" help:"recent entries a new stream gets first"`
+	ReplayLines      int64        `toml:"replay_lines" lw:"min=0,max=1048576,zero=none" help:"recent entries a new stream gets first"`
 	LoginPage        bool         `toml:"login_page" help:"scram behind auth.trusted_proxies only: a login page at /auth/login"`
 	ViewerPage       bool         `toml:"viewer_page" help:"scram behind auth.trusted_proxies only: the viewer after a login; without scram it is always at /"`
 	Auth             *AuthOptions `toml:"auth" help:"how peers authenticate: mtls by client certificate, scram by user and password"`

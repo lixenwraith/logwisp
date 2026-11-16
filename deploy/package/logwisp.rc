@@ -33,30 +33,53 @@ load_rc_config $name
 # under the tag logwisp, and records two pids: its own, which stop signals and
 # which forwards SIGTERM to lw, and lw's, which status checks and reload
 # signals (SIGHUP), as daemon(8) passes no SIGHUP on.
-pidfile="/var/run/${name}/daemon.pid"
-lw_pidfile="/var/run/${name}/${name}.pid"
+pidfile="/var/run/${name}_daemon.pid"
+lw_pidfile="/var/run/${name}.pid"
 lw_program="%%BINDIR%%/lw"
+
+# rc.subr evals a word of each pidfile as root, so they are root's own, in
+# /var/run: daemon(8) starts as root and runs lw as the account (-u), and
+# rc.subr, given no logwisp_user, does not su to it. The account's login class
+# sets lw's umask then, so sh sets logwisp_umask before it becomes lw.
+lw_user="${logwisp_user}"
+logwisp_user=""
 command="/usr/sbin/daemon"
-command_args="-f -S -T ${name} -R 5 -P ${pidfile} -p ${lw_pidfile} ${lw_program} -c ${logwisp_config} ${logwisp_args}"
+command_args="-f -S -T ${name} -R 5 -u ${lw_user} -P ${pidfile} -p ${lw_pidfile} /bin/sh -c 'umask ${logwisp_umask}; exec \"\$@\"' ${name} ${lw_program} -c ${logwisp_config} ${logwisp_args}"
 required_files="${logwisp_config}"
 extra_commands="reload"
 start_precmd="${name}_prestart"
 status_cmd="${name}_status"
 reload_cmd="${name}_reload"
 
-# An lw this script started before daemon(8) supervised it left no daemon.pid:
-# stop finds it by its own pid, and its daemon(8) exits with it
-if [ ! -e "${pidfile}" ] && [ -e "${lw_pidfile}" ]; then
-	pidfile="${lw_pidfile}"
-	procname="${lw_program}"
-fi
-
-# rc.subr starts daemon(8) as logwisp_user, which must own the pidfile directory.
-# An existing logwisp_chdir keeps its owner: it may be a shared directory.
+# An existing logwisp_chdir keeps its owner: it may be a shared directory
 logwisp_prestart()
 {
-	install -d -o "${logwisp_user}" -m 0755 "/var/run/${name}"
-	[ -d "${logwisp_chdir}" ] || install -d -o "${logwisp_user}" -m 0750 "${logwisp_chdir}"
+	logwisp_stop_earlier
+	[ -d "${logwisp_chdir}" ] || install -d -o "${lw_user}" -m 0750 "${logwisp_chdir}"
+}
+
+# An lw this script started before kept its pidfiles in /var/run/${name}, the
+# account's own directory, under a daemon(8) of the account. It is stopped as
+# the account, by pids read as digits alone: the account writes what it likes
+# there.
+logwisp_stop_earlier()
+{
+	local f pid junk tries
+	for f in "/var/run/${name}/daemon.pid" "/var/run/${name}/${name}.pid"; do
+		[ -f "${f}" ] && read pid junk < "${f}" || continue
+		case "${pid}" in
+		''|*[!0-9]*) ;;
+		*)
+			su -m "${lw_user}" -c "kill ${pid}" 2>/dev/null
+			tries=10
+			while [ ${tries} -gt 0 ] && su -m "${lw_user}" -c "kill -0 ${pid}" 2>/dev/null; do
+				sleep 1
+				tries=$((tries - 1))
+			done
+			;;
+		esac
+	done
+	rm -rf "/var/run/${name}"
 }
 
 # A crashing lw leaves daemon(8) running: status reports lw itself

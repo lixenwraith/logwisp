@@ -69,6 +69,7 @@ func (r *screenRunner) Start(specs []config.Spec, whole bool, ask tui.Ask) (*cor
 		}
 		if err := svc.Start(); err != nil {
 			svc.Shutdown()
+			core.ReleaseIdle()
 			return nil, placed(cfg, err)
 		}
 		r.set(svc, tap)
@@ -106,6 +107,9 @@ func (r *screenRunner) set(svc *service.Service, tap *core.Tap) {
 	r.svc, r.tap = svc, tap
 }
 
+// Stop ends the run and gives up its listening sockets, which core.Listen
+// keeps bound for a reload's next service: no service follows a stop, and a
+// peer would connect to a kept one and hang
 func (r *screenRunner) Stop() {
 	r.mu.Lock()
 	svc := r.svc
@@ -113,6 +117,7 @@ func (r *screenRunner) Stop() {
 	r.mu.Unlock()
 	if svc != nil {
 		svc.Shutdown()
+		core.ReleaseIdle()
 	}
 }
 

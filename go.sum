@@ -10,8 +10,8 @@ github.com/lixenwraith/config v0.2.2 h1:X+l3Tf8Rbk49cipYBJU7/pfdw5wDwD4hRxtFH7rZ
 github.com/lixenwraith/config v0.2.2/go.mod h1:yfJQwKS+/6Dg70GIoHeYc0eYztOPETpqe6nUIbakcyg=
 github.com/lixenwraith/log v0.1.15 h1:7sgqHuU6AJ4zXOzcFKhCAjw/+ihIxqhFp+2MFL0Kaog=
 github.com/lixenwraith/log v0.1.15/go.mod h1:EE8i5nSAW2yZBTytKuhdgehmgzrby6kW1k5DyH1SvBg=
-github.com/lixenwraith/log v0.1.16 h1:19GQiOuWaSKc34LEwHgtruyOzB2ALoBDC4qLnJTG6m4=
-github.com/lixenwraith/log v0.1.16/go.mod h1:EE8i5nSAW2yZBTytKuhdgehmgzrby6kW1k5DyH1SvBg=
+github.com/lixenwraith/log v0.1.19 h1:nAmfuhAC6z3fb5lC4Ub3pTqwWJEvTwCf2DYfX9a3iZw=
+github.com/lixenwraith/log v0.1.19/go.mod h1:EE8i5nSAW2yZBTytKuhdgehmgzrby6kW1k5DyH1SvBg=
 github.com/lixenwraith/terminal v0.6.7 h1:c4VEzpgzE6lS2Fl4kRaFIT4v8uJ/HVFHhlPRK05YHJk=
 github.com/lixenwraith/terminal v0.6.7/go.mod h1:E51pXeR6FgFu28C3bX0DEWx33epGnHaqLCnV4dop/P0=
 github.com/lixenwraith/toml v0.9.1 h1:hA9RgxJOEgHJFbPKdkd8P/T+hz1fGz/1XvnfflEVVe0=

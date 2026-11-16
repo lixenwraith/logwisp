@@ -111,7 +111,9 @@ jobs:
           test ! -e /etc/logwisp/logwisp.toml
   # BSD make on FreeBSD: build, run lw --tui on a pseudo-terminal, install
   # twice keeping an edited configuration, run the rc.d service once the
-  # configuration has a pipeline, uninstall
+  # configuration has a pipeline, uninstall. The service's pidfiles are root's
+  # and lw the account's, under logwisp_umask; what an earlier layout left in
+  # the account's own /var/run/logwisp is never run as a command.
   freebsd:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -135,10 +137,22 @@ jobs:
             pw groupadd logwisp
             pw useradd logwisp -g logwisp -d /nonexistent -s /usr/sbin/nologin
             printf '[[pipelines]]\nname = "ci"\n[[pipelines.plugin_sources]]\nid = "in"\ntype = "null"\n[[pipelines.plugin_sinks]]\nid = "out"\ntype = "null"\n' >> /usr/local/etc/logwisp/logwisp.toml
+            sysrc logwisp_args="--logging.output=file --logging.file.directory=/var/db/logwisp/log"
+            install -d -o logwisp /var/run/logwisp
+            printf '1;touch${IFS}/tmp/evaled;:\n' > /var/run/logwisp/daemon.pid
             service logwisp onestart
             sleep 3
             service logwisp onestatus
+            test ! -e /tmp/evaled
+            test ! -e /var/run/logwisp
+            test "$(stat -f %Su /var/run/logwisp.pid /var/run/logwisp_daemon.pid | sort -u)" = root
+            test "$(ps -o user= -p "$(cat /var/run/logwisp.pid)" | tr -d ' ')" = logwisp
+            test "$(stat -f %Lp /var/db/logwisp/log/logwisp.log)" = 640
+            service logwisp onereload
+            sleep 1
+            service logwisp onestatus
             service logwisp onestop
+            test ! -e /var/run/logwisp.pid
             make uninstall
             test ! -e /usr/local/bin/lw
   image:

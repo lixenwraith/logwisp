@@ -2,6 +2,7 @@ package httpchain
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +74,73 @@ func TestBatchIsPublishedWholeOrNotAtAll(t *testing.T) {
 	}
 }
 
+// The bodies being read are bounded together, 64 of max_body_bytes: a batch
+// past the bound gets 503 while the others are held, and those arrive whole
+func TestBodiesInFlightAreBoundedTogether(t *testing.T) {
+	probe, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	probe.Close()
+	_, port, _ := net.SplitHostPort(addr)
+	p, _ := strconv.ParseInt(port, 10, 64)
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	created, err := NewHTTPChainSourcePlugin("in", map[string]any{"host": "127.0.0.1", "port": p, "max_body_bytes": int64(1000)},
+		log.NewLogger(), session.NewProxy(manager, "in"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := created.(*HTTPChainSource)
+	src.Subscribe()
+	if err := src.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(src.Stop)
+	line := append(bytes.Repeat([]byte("x"), 997), '\n') // not JSON: the count of bytes is what matters
+	post := func(body io.Reader) int {
+		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/ingest", body)
+		req.Header.Set(chain.HeaderProtocol, strconv.Itoa(chain.ProtocolVersion))
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil {
+			return 0
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	finish, held := make(chan struct{}), make(chan int, bodiesInFlight)
+	for range bodiesInFlight {
+		go func() {
+			body, w := io.Pipe()
+			go func() {
+				w.Write(line[:len(line)-1]) // held one byte short of its end
+				<-finish
+				w.Write(line[len(line)-1:])
+				w.Close()
+			}()
+			held <- post(body)
+		}()
+	}
+	for deadline := time.Now().Add(5 * time.Second); src.inFlight.Load() < bodiesInFlight*int64(len(line)-1); {
+		if time.Sleep(time.Millisecond); time.Now().After(deadline) {
+			t.Fatalf("%d bytes in flight, want the %d held", src.inFlight.Load(), bodiesInFlight*(len(line)-1))
+		}
+	}
+	if status := post(bytes.NewReader(line)); status != http.StatusServiceUnavailable {
+		t.Fatalf("a batch past the bound got %d, want 503", status)
+	}
+	close(finish)
+	for range bodiesInFlight {
+		if status := <-held; status != http.StatusNoContent {
+			t.Fatalf("a batch within the bound got %d, want 204", status)
+		}
+	}
+	if n := src.inFlight.Load(); n != 0 {
+		t.Fatalf("%d bytes still counted in flight", n)
+	}
+}
+
 // The session cache drops the keys of sessions the manager has expired, not
 // keeping one per address a sender ever came from
 func TestExpiredSessionsLeaveTheCache(t *testing.T) {
@@ -85,6 +153,30 @@ func TestExpiredSessionsLeaveTheCache(t *testing.T) {
 	}
 	if n := len(src.sessions); n > 64 {
 		t.Fatalf("%d keys cached for no live session", n)
+	}
+}
+
+// The cache holds maxSessions sessions: a sender past them is served without
+// one, however many addresses it comes from, until some expire
+func TestTheSessionCacheIsBounded(t *testing.T) {
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	proxy := session.NewProxy(manager, "in")
+	src := &HTTPChainSource{proxy: proxy, sessions: map[string]string{}}
+	addr := func(i int) string {
+		return "10." + strconv.Itoa(i>>16) + "." + strconv.Itoa(i>>8&255) + "." + strconv.Itoa(i&255)
+	}
+	for i := range maxSessions + 100 {
+		src.sessionFor(addr(i), "edge", "", nil, authz.Identity{})
+	}
+	first := src.sessionFor(addr(0), "edge", "", nil, authz.Identity{})
+	if n := manager.GetSessionCount(); n != maxSessions || len(src.sessions) != maxSessions || first == "" {
+		t.Fatalf("%d sessions, %d keys, the first sender's %q; want %d of each and a session", n, len(src.sessions), first, maxSessions)
+	}
+	proxy.RemoveSession(first) // as idle expiry does
+	src.swept = time.Now().Add(-2 * time.Minute)
+	if src.sessionFor("192.0.2.1", "edge", "", nil, authz.Identity{}) == "" {
+		t.Fatal("no session for a new sender once one expired")
 	}
 }
 

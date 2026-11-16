@@ -340,15 +340,16 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
 - Every buffer is bounded; the drop-not-block policy keeps memory flat under
   load.
 - `max_connections` caps connections on the `tcp` sink and the `tcp_chain`
-  source, and streams on the `http` sink. Admission is a load-then-check, so a
-  burst can over-admit by the connections that arrive before the count rises.
+  source, and streams on the `http` sink. Each takes its slot before the
+  check, so a burst cannot over-admit.
 - A listener's `acl` block caps each client: `max_connections_per_client`,
   and on the `http` sink and `http_chain` source
   `requests_per_second_per_client` ([Security](security.md#per-client-limits)).
 - Chain listeners bound a single line at `core.MaxLogEntryBytes` (1 MiB); an
   oversized line terminates a `tcp_chain` link and fails an `http_chain`
   batch with `400`.
-- The `http_chain` source caps each request body at `max_body_bytes`.
+- The `http_chain` source caps each request body at `max_body_bytes`, and the
+  bodies it reads at once at 64 times that.
 - File sinks rotate on size, cap total rotated size, honour a retention
   window, and with `min_disk_free_mb` delete the oldest files to keep that
   much disk free.

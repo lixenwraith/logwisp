@@ -130,7 +130,7 @@ Options, each as type and default:
   load: both would rotate the same files.
 - `max_size_mb` (int, `100`): rotate when the active file reaches this size.
 - `max_total_size_mb` (int, `1000`): above this total, the sink's oldest files
-  are deleted.
+  are deleted; at least `max_size_mb`, as the file being written never is.
 - `min_disk_free_mb` (int, `100`): the sink's oldest files are deleted to
   keep this much space free, and nothing is written while that fails. `0`
   means none, filling the disk, and a negative value means `100`.
@@ -148,6 +148,11 @@ Options, each as type and default:
 The sink drives an internal writer configured for raw output with timestamps and
 levels disabled, so what lands on disk is exactly the formatted payload. On stop
 it hands the writer what is queued before closing the file.
+
+What the writer fails at, a rotation or a disk short of `min_disk_free_mb`, is a
+WARN `File sink's writer failed` in lw's log, the first in a minute. A rotation
+that fails is tried again: until one succeeds the sink writes on in the file it
+could not rename, or drops (`dropped_records`) while none can be made.
 
 **Statistics**: `directory`, `name`, `dropped_records`.
 
@@ -221,7 +226,8 @@ Options, each as type and default:
   stream past it gets `503` and counts in `rejected_clients`.
 - `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
   a new stream gets after its `connected` event, before the live ones, so a
-  browser opened late sees a backlog; `0` = none.
+  browser opened late sees a backlog; `0` = none, at most `1048576`. The sink
+  holds them, so their size counts toward lw's memory.
 - `login_page` (bool, `false`): only for `scram` behind
   `auth.trusted_proxies`, where browsers log in (an error elsewhere): the
   login page at `/auth/login`.

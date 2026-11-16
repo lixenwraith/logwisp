@@ -219,8 +219,9 @@ func (r *Reporter) Refused(msg string, fields func() []any) {
 }
 
 // ErrorLog is the listener's http.Server ErrorLog, through lw's log and its
-// escaping. A failed TLS handshake, which any peer causes by connecting and
-// closing, is a refusal; the rest are WARNs.
+// escaping. What the server reports a peer causes at will, a failed TLS
+// handshake or an HTTP/2 protocol error a connection, so each is a refusal;
+// only a handler's panic, lw's own fault, is always a WARN.
 func (r *Reporter) ErrorLog() *stdlog.Logger {
 	return stdlog.New(errorLog{r}, "", 0)
 }
@@ -229,11 +230,14 @@ type errorLog struct{ r *Reporter }
 
 func (w errorLog) Write(p []byte) (int, error) {
 	msg := strings.TrimSpace(string(p))
-	if rest, ok := strings.CutPrefix(msg, "http: TLS handshake error from "); ok {
+	switch rest, handshake := strings.CutPrefix(msg, "http: TLS handshake error from "); {
+	case handshake:
 		addr, reason, _ := strings.Cut(rest, ": ")
 		w.r.Refused("TLS handshake failed", func() []any { return []any{"remote_addr", addr, "error", reason} })
-	} else {
+	case strings.Contains(msg, "panic serving"):
 		w.r.Warn(msg)
+	default:
+		w.r.Refused("HTTP connection error", func() []any { return []any{"error", msg} })
 	}
 	return len(p), nil
 }

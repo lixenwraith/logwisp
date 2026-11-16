@@ -88,20 +88,79 @@ func TestRecordsTheWriterLosesAreCounted(t *testing.T) {
 	}
 }
 
-// The sink starts only where config.LogDir finds the directory safe, so a
-// planted link is never opened
-func TestUnsafeLogFileIsRefusedAtStart(t *testing.T) {
+// The sink is built, and starts, only where config.LogDir finds the directory
+// safe: a planted link is never opened, whether it was there when lw --check
+// or a reload built the sink or came before the start
+func TestUnsafeLogFileIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
+	fs := newSink(t, dir, map[string]any{})
 	if err := os.Symlink(target, filepath.Join(dir, "out.log")); err != nil {
 		t.Fatal(err)
 	}
-	fs := newSink(t, dir, map[string]any{})
 	if err := fs.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("started through a planted link: %v", err)
 	}
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	_, err := NewFileSinkPlugin("out", map[string]any{"directory": dir, "name": "out"}, log.NewLogger(), session.NewProxy(manager, "out"))
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("built over a planted link: %v", err)
+	}
 	if _, err := os.Lstat(target); err == nil {
 		t.Fatal("the link's target was created")
+	}
+}
+
+// A rotation that fails ends nothing: its entry is counted as dropped and lw's
+// log says why, and the sink writes on once the file can be made
+func TestAFailedRotationIsLoggedAndTheSinkWritesOn(t *testing.T) {
+	var lw bytes.Buffer
+	logger := log.NewLogger()
+	logger.SetConsoleWriter(&lw)
+	if err := logger.ApplyConfigString("level=warn", "format=txt"); err != nil || logger.Start() != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logger.Shutdown() })
+	dir := filepath.Join(t.TempDir(), "d")
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	created, err := NewFileSinkPlugin("out", map[string]any{"directory": dir, "name": "out", "max_size_mb": int64(1), "max_total_size_mb": int64(1)},
+		logger, session.NewProxy(manager, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := created.(*FileSink)
+	if err := fs.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(fs.Stop)
+	large := bytes.Repeat([]byte("x"), 600_000)
+	write := func(payload []byte) { // and wait until the writer has taken it
+		n := fs.totalProcessed.Load()
+		fs.Input() <- core.TransportEvent{Payload: append(payload, '\n')}
+		for fs.totalProcessed.Load() == n {
+			time.Sleep(time.Millisecond)
+		}
+		fs.writer.Flush(time.Second) // fails while there is no file
+	}
+	write(large)
+	if err := os.Rename(dir, dir+".away"); err != nil {
+		t.Fatal(err)
+	}
+	write(large) // over max_size_mb, and no directory to rotate in
+	if err := os.Rename(dir+".away", dir); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond) // past the writer's next try
+	write([]byte("after"))
+	data, err := os.ReadFile(filepath.Join(dir, "out.log"))
+	if err != nil || !bytes.Contains(data, []byte("after")) {
+		t.Fatalf("the entry after the failed rotation is not in the file: %v", err)
+	}
+	logger.Flush(time.Second)
+	if n := fs.writer.Dropped(); n != 1 || strings.Count(lw.String(), "File sink's writer failed") != 1 {
+		t.Fatalf("%d dropped, want 1; lw's log:\n%s", n, lw.String())
 	}
 }
 
@@ -118,7 +177,7 @@ func TestTheLimitsDeleteOnlyTheSinksOwnFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fs := newSink(t, dir, map[string]any{"max_total_size_mb": int64(1)})
+	fs := newSink(t, dir, map[string]any{"max_size_mb": int64(1), "max_total_size_mb": int64(1)})
 	if err := fs.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}

@@ -68,7 +68,7 @@ func (m *proxyMode) client(peer string, h http.Header) (netip.Addr, error) {
 			if e = strings.TrimSpace(e); e == "" {
 				continue
 			} else if !strings.EqualFold(e, "https") {
-				return netip.Addr{}, fmt.Errorf("proxy forwarded X-Forwarded-Proto %q; sessions need https", e)
+				return netip.Addr{}, fmt.Errorf("proxy forwarded X-Forwarded-Proto %.64q; sessions need https", e)
 			}
 			https = true
 		}
@@ -86,9 +86,11 @@ func (m *proxyMode) client(peer string, h http.Header) (netip.Addr, error) {
 			if hop == "" {
 				continue
 			}
+			// A zone names a link of the host that wrote the hop, none here,
+			// and its text, any length, would reach sessions and the log
 			addr, ok := netacl.ParseHost(hop)
-			if !ok {
-				return netip.Addr{}, fmt.Errorf("malformed X-Forwarded-For hop %q", hop)
+			if !ok || addr.Zone() != "" {
+				return netip.Addr{}, fmt.Errorf("malformed X-Forwarded-For hop %.64q", hop)
 			}
 			if client = addr; !m.trusts(addr) {
 				return addr, nil

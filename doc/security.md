@@ -157,7 +157,8 @@ built:
   misspelled option must not silently leave a protection switched off
 - when the plugin is built: a certificate or key that will not load, a CA
   file containing no certificates, or an issuer that is no CA (`lw tls ca`
-  makes one)
+  makes one); each is read as a regular file of at most 10 MiB, opened
+  without blocking, so a FIFO or a device there is refused
 
 ## The Auth Block
 
@@ -343,7 +344,9 @@ files (`credentials_file`, `password_file`) when the plugin is built:
   is not one of the three values, whatever `type` is, `none` included
 - under `mtls` or `scram`, a `node_binding` other than `none` on a plugin
   other than a chain source
-- an `allow_patterns` entry that does not compile
+- an `allow_patterns` entry that does not compile or is empty, or a blank
+  `allow` entry, as an unset variable leaves: either would admit every
+  identity the CA issued
 - `/auth`, which is reserved for logins: `ingest_path` may not equal it;
   `stream_path` and `status_path` may not be it or lie under it
 
@@ -478,8 +481,8 @@ when it is constructed, so startup and every reload repeat them:
 ## Refusals
 
 Each listener logs the peers it refuses through one throttle:
-- By `acl`, `auth`, node binding, a failed TLS handshake or a bad chain hello,
-  and the `http` sink's proxy gate.
+- By `acl`, `auth`, node binding, a failed TLS handshake, a bad chain hello or
+  HTTP/2 protocol error, and the `http` sink's proxy gate.
 - The first in a minute is a WARN with the client, the reason and
   `refused_since_last_warn`; the rest are DEBUG (`--logging.level=debug`
   shows each). No peer floods lw's log, or pushes journald's rate limit over
@@ -672,7 +675,7 @@ final message only when it is signed with this user's `ServerKey`, and it
 refuses a challenge asking for less Argon2 work than those defaults, so a rogue
 server cannot request a cheaply crackable proof, or for more than twice them (6
 passes, 128 MiB), so it cannot spend the dialer's memory; `lw auth add-user`
-writes the defaults. An unknown user gets a stable
+writes the defaults, and the browser client holds both bounds too. An unknown user gets a stable
 decoy challenge and fails exactly like a wrong password: `authentication
 failed`.
 
@@ -1112,7 +1115,9 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 - Keep key, credentials and password files unreadable by others: `0600`
   owned by the account lw runs as, or `0640` `root:GROUP` for a group it is
   in; startup warns about world-readable ones. `lw auth` and `lw tls` create
-  them `0600`, and `lw auth` keeps the mode of an existing file.
+  them `0600`; `lw auth` keeps the mode of an existing file, and writes none
+  into a directory every user can write, where another user's file or link
+  may wait.
 - Rotation requires a reload (`SIGHUP`), because certificates and credentials
   are loaded once at plugin construction; there is no on-disk watch for them.
 - Startup and every reload warn 30 days before a certificate lapses. Still
@@ -1134,8 +1139,10 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
   `trust_node = false` is the fallback when neither is an option; it is
   unforgeable but labels entries by remote address, which is useless behind NAT
   or a load balancer.
-- Run LogWisp as an unprivileged user with write access only to its own log and
-  configuration directories.
+- Run LogWisp as an unprivileged user that writes only its own log and state
+  directories and reads, never writes, its configuration and credentials, as
+  the packaged service does: a service that can rewrite its configuration
+  can give itself any pipeline.
 
 **Log content**
 

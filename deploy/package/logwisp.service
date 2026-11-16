@@ -37,10 +37,12 @@ ProtectHostname=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
+# /proc/sys stays, read-only: Go takes a listener's backlog from
+# net.core.somaxconn, 128 without it. AF_NETLINK is how it reads the
+# interfaces, which an IPv6 zone by name (fe80::1%eth0) needs.
 ProtectProc=invisible
-ProcSubset=pid
 ProtectSystem=strict
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

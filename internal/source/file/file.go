@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +26,11 @@ import (
 // maxFollowed bounds the files one source follows: each is a goroutine, and an
 // open and a stat every poll. Past it the other files matching wait.
 const maxFollowed = 4096
+
+// scanShare spaces scans by this many times what the last took: a scan reads
+// the whole directory, which whoever writes there can fill, so scanning takes
+// one part in ten of the source's time at most
+const scanShare = 9
 
 // init registers the component in plugin factory
 func init() {
@@ -221,11 +227,20 @@ func (fs *FileSource) GetStats() source.SourceStats {
 	}
 }
 
-// monitorLoop periodically scans path for new or changed files.
+// monitorLoop scans the directory for files to follow each check interval, or
+// as scanShare spaces a slow scan
 func (fs *FileSource) monitorLoop() {
 	defer fs.wg.Done()
 
-	fs.checkTargets()
+	var end time.Time // the last scan's, which took took
+	var took time.Duration
+	scan := func() {
+		start := time.Now()
+		fs.checkTargets()
+		end = time.Now()
+		took = end.Sub(start)
+	}
+	scan()
 
 	ticker := time.NewTicker(time.Duration(fs.config.CheckIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
@@ -235,7 +250,9 @@ func (fs *FileSource) monitorLoop() {
 		case <-fs.ctx.Done():
 			return
 		case <-ticker.C:
-			fs.checkTargets()
+			if time.Since(end) >= scanShare*took {
+				scan()
+			}
 		}
 	}
 }
@@ -433,20 +450,26 @@ func (fs *FileSource) scanFile() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, err := d.ReadDir(-1)
-	d.Close()
-	if err != nil {
-		return nil, err
-	}
+	defer d.Close()
 
+	// Read a part at a time: only the names that match are kept, so a scan
+	// holds those, not an entry for every file of the directory
 	var files []string
-	for _, entry := range entries {
-		// a FIFO, socket or device is no file to follow; a link's target is
-		// checked as it opens
-		if t := entry.Type(); t != 0 && t != os.ModeSymlink || !fs.match.MatchString(entry.Name()) {
-			continue
+	for {
+		entries, err := d.ReadDir(1024)
+		for _, entry := range entries {
+			// a FIFO, socket or device is no file to follow; a link's target
+			// is checked as it opens
+			if t := entry.Type(); t != 0 && t != os.ModeSymlink || !fs.match.MatchString(entry.Name()) {
+				continue
+			}
+			files = append(files, filepath.Join(fs.config.Directory, entry.Name()))
 		}
-		files = append(files, filepath.Join(fs.config.Directory, entry.Name()))
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, err
+		}
 	}
 	slices.Sort(files)
 	return files, nil

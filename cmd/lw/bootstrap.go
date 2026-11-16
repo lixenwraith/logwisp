@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
+	"time"
 
 	_ "github.com/lixenwraith/logwisp/internal/source/console"
 	_ "github.com/lixenwraith/logwisp/internal/source/file"
@@ -125,6 +127,10 @@ func bootstrapService(ctx context.Context, cfg *config.Config, tap *core.Tap) (*
 // credentials and options are loaded and their warnings print, then exits
 // before anything binds or reads: plugins start goroutines only in Start.
 func checkConfig(cfg *config.Config) int {
+	if _, err := logConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "configuration invalid: logging: %v\n", err)
+		return 1
+	}
 	cfg.Logging.Output, cfg.Logging.Level = "stderr", "warn"
 	if err := initializeLogger(cfg); err == nil && logger.Start() == nil {
 		defer shutdownLogger()
@@ -154,18 +160,46 @@ func dumpConfig(cfg *config.Config, w io.Writer) int {
 
 func initializeLogger(cfg *config.Config) error {
 	logger = log.NewLogger()
+	logCfg, err := logConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if logCfg.EnableFile {
+		if err := config.LogDir(logCfg.Directory, logCfg.Name+"."+logCfg.Extension); err != nil {
+			return fmt.Errorf("log file: %w", err)
+		}
+		logger.SetErrorHandler(reportLogFailure)
+	}
+	return logger.ApplyConfig(logCfg)
+}
+
+// reportLogFailure prints what the writer of lw's own log file fails at, a
+// rotation or a full disk, which that log cannot say: on standard error, the
+// first a minute, as a failing write repeats for every record
+func reportLogFailure(msg string) {
+	now := time.Now().UnixNano()
+	if next := logFailureAt.Load(); now >= next && logFailureAt.CompareAndSwap(next, now+int64(time.Minute)) {
+		fmt.Fprintf(os.Stderr, "lw: its own log: %s\n", msg)
+	}
+}
+
+var logFailureAt atomic.Int64
+
+// logConfig is the settings of lw's own log as its writer takes them, checked
+// without making a directory or a file, so that --check reports them too
+func logConfig(cfg *config.Config) (*log.Config, error) {
 	logCfg := log.DefaultConfig()
 
 	if cfg.Quiet || cfg.Logging.Output == "none" {
 		logCfg.Level = 255 // A level that disables all output, so no record is built
 		logCfg.EnableFile = false
 		logCfg.EnableConsole = false
-		return logger.ApplyConfig(logCfg)
+		return logCfg, nil
 	}
 
 	levelValue, err := log.Level(cfg.Logging.Level)
 	if err != nil {
-		return fmt.Errorf("invalid log level: %w", err)
+		return nil, fmt.Errorf("invalid log level: %w", err)
 	}
 	logCfg.Level = levelValue
 
@@ -202,15 +236,15 @@ func initializeLogger(cfg *config.Config) error {
 		logCfg.ConsoleTarget = "split"
 		configureFileLogging(logCfg, cfg)
 	default:
-		return fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
+		return nil, fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
 	}
-	if logCfg.EnableFile {
-		if err := config.LogDir(logCfg.Directory, logCfg.Name+"."+logCfg.Extension); err != nil {
-			return fmt.Errorf("log file: %w", err)
-		}
+	if err := logCfg.Validate(); err != nil || !logCfg.EnableFile {
+		return logCfg, err
 	}
-
-	return logger.ApplyConfig(logCfg)
+	if err := config.CheckLogDir(logCfg.Directory, logCfg.Name+"."+logCfg.Extension); err != nil {
+		return nil, fmt.Errorf("log file: %w", err)
+	}
+	return logCfg, nil
 }
 
 func configureFileLogging(logCfg *log.Config, cfg *config.Config) {

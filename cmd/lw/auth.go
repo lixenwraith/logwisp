@@ -54,7 +54,7 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 	return func(stdout, stderr io.Writer) error {
 		creds, prev, err := authz.ReadCredentials(*path)
 		// An empty file is one created beforehand to choose its owner
-		if fi, serr := os.Stat(*path); errors.Is(err, os.ErrNotExist) || serr == nil && fi.Size() == 0 {
+		if fi, serr := os.Stat(*path); errors.Is(err, os.ErrNotExist) || serr == nil && fi.Mode().IsRegular() && fi.Size() == 0 {
 			creds, err = &authz.Credentials{DecoyKey: make([]byte, 32)}, nil
 			rand.Read(creds.DecoyKey)
 		}
@@ -119,6 +119,9 @@ func defineAddUser(fs *flag.FlagSet) func(stdout, stderr io.Writer) error {
 			return err
 		}
 		warnReadable(stderr, "--credentials", *path)
+		if !generated {
+			fmt.Fprintf(stderr, "read the password from %s\n", *passwordFile)
+		}
 		if generated && *passwordFile == "" {
 			fmt.Fprintf(stderr, "generated password for %q, shown once:\n", *user)
 			fmt.Fprintln(stdout, password)
@@ -319,8 +322,22 @@ func encodeCredentials(creds *authz.Credentials, prev []byte) ([]byte, error) {
 // for a new one). A change that would lose the owner fails: the daemon could
 // no longer read the file and would keep the old users.
 func writeAtomic(path string, data []byte) error {
+	// Where every user can write, another may have made the file, and owns
+	// the secret written into it, or a link, and has a file of ours replaced:
+	// neither the path's directory nor the one a link leads to may be such
+	shared := func(path string) error {
+		if fi, err := os.Stat(filepath.Dir(path)); err == nil && fi.Mode().Perm()&0o002 != 0 {
+			return fmt.Errorf("%s is writable by every user: refusing to write %s there", filepath.Dir(path), filepath.Base(path))
+		}
+		return nil
+	}
+	if err := shared(path); err != nil {
+		return err
+	}
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
+		if path = resolved; shared(path) != nil {
+			return shared(path)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	} else if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {

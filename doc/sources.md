@@ -39,7 +39,9 @@ Options, each as type and default:
   directory between sources. A file's watcher stops once a scan no longer lists
   it: removed, renamed away, or replaced by a directory.
 - `check_interval_ms` (int, `100`): directory rescan interval; minimum `10`.
-  An open file is polled every 100 ms whatever this is.
+  An open file is polled every 100 ms whatever this is. A scan reads the whole
+  directory, so one that is slow, in a directory of very many files, is
+  followed by nine times its length without one.
 - `raw` (bool, `false`): never parse a line: the whole line is the message.
 - `from` (string, `end`): where a new watcher starts, `end` or `start` of the
   file.
@@ -60,8 +62,10 @@ Options, each as type and default:
   `path escapes from parent`. A directory is followed where it is: replaced
   (a release's link swapped), it is opened anew at the next scan.
 - A line longer than 1 MiB continues in the next entry, as on the console
-  source; so does the rest of a line a poll reads while it is still being
-  written, or past the 64 MiB a poll reads at most.
+  source. A last line still being written waits for its newline and arrives
+  whole, however its writer buffers; left unterminated, it is sent as it is
+  once the file has not grown for 2 s, and what is appended to it later is
+  another entry.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
   restart or a reload resumes from the current end of each file, and content
   written meanwhile is not read. A file created while lw runs gets its watcher
@@ -363,6 +367,8 @@ Options, each as type and default:
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB), and about
   what a request holds in memory while its entries are published.
+  The bodies being read at once are bounded together at 64 times this, in
+  bytes received: a batch past the bound gets `503`, which the sink retries.
 - `read_timeout_ms` (int, `30000`): full request read deadline.
 - `acl` (table): as on `tcp_chain`, plus `requests_per_second_per_client`.
 
@@ -393,6 +399,8 @@ Options, each as type and default:
   after idle expiry: two peers sharing an address never share one.
   - The node label is the sender's to choose, so it is not in the key: a
     session shows the label of its first batch, each entry keeps its own.
+  - The cache holds 65,536 sessions; a sender past them is ingested without
+    one until some expire.
 
 **Statistics**: `host`, `port`, `ingest_path`, `tls`, `total_requests`,
 `rejected_requests`, `parse_errors`, `cached_sessions`, `trust_node`, and the

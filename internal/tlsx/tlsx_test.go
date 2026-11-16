@@ -178,6 +178,34 @@ func TestIssuedListenerCertificateChainsToTheIssuer(t *testing.T) {
 
 // Each role takes one source of trust and one certificate source; keys of the
 // other role, or without the key they serve, fail instead of doing nothing.
+// A certificate, key or CA file that is no regular file is refused, not read:
+// a FIFO there would hold the build of a plugin, and so a reload, until
+// something wrote to it
+func TestATLSFileIsARegularFile(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip(err)
+	}
+	for name, build := range map[string]func() error{
+		"cert_file": func() error {
+			_, err := Server(&config.TLSOptions{Enabled: true, CertFile: fifo, KeyFile: fifo}, "")
+			return err
+		},
+		"issuer_cert_file": func() error {
+			_, err := Server(&config.TLSOptions{Enabled: true, IssuerCertFile: fifo, IssuerKeyFile: fifo}, "")
+			return err
+		},
+		"ca_file": func() error {
+			_, err := Client(&config.TLSOptions{Enabled: true, CAFile: fifo}, "host")
+			return err
+		},
+	} {
+		if err := build(); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestTLSOptionConflicts(t *testing.T) {
 	pin := "sha256//" + strings.Repeat("A", 43) + "="
 	for _, c := range []struct {
