@@ -1139,8 +1139,10 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
   `trust_node = false` is the fallback when neither is an option; it is
   unforgeable but labels entries by remote address, which is useless behind NAT
   or a load balancer.
-- Run LogWisp as an unprivileged user with write access only to its own log and
-  configuration directories.
+- Run LogWisp as an unprivileged user that writes only its own log and state
+  directories and reads, never writes, its configuration and credentials, as
+  the packaged service does: a service that can rewrite its configuration
+  can give itself any pipeline.
 
 **Log content**
 
