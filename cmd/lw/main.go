@@ -118,8 +118,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "lw: reading standard input; Ctrl-D ends it (lw --help for usage)")
 	}
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1)
+	// Apart, so that a reload signal waiting out a reload cannot fill the one
+	// slot a termination needs: os/signal drops what a full channel cannot take
+	sigChan, termChan := make(chan os.Signal, 1), make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGHUP, syscall.SIGUSR1)
+	signal.Notify(termChan, syscall.SIGINT, syscall.SIGTERM)
 
 	var configChanges <-chan string
 	if cfg.ConfigAutoReload {
@@ -145,6 +148,7 @@ func main() {
 	// Closed when every pipeline's input ended (stdin); nil while none runs
 	done := svc.Done()
 
+	builtIn := manager.BuiltIn()
 	reload := func(fromDisk bool) {
 		var next *config.Config
 		var err error
@@ -152,6 +156,11 @@ func main() {
 			next, err = manager.Reload()
 		} else {
 			next, err = manager.Snapshot()
+		}
+		// A file emptied, or cut short while it is written, holds no pipeline:
+		// lw's built-in pipe would take theirs, stdin, at its end under a service
+		if err == nil && manager.BuiltIn() && !builtIn {
+			err = errors.New("the configuration holds no pipelines")
 		}
 		if err != nil {
 			logger.Error("msg", "Failed to read reload configuration", "error", oneLine(err), "action", "keeping current service")
@@ -188,14 +197,16 @@ func main() {
 	logger.Info("msg", "Application started, waiting for signals or config changes")
 	for {
 		select {
+		case sig := <-termChan:
+			logger.Info("msg", "Shutdown signal received", "signal", sig)
+			cancel()
+
 		case sig := <-sigChan:
-			if sig == syscall.SIGHUP || sig == syscall.SIGUSR1 {
-				logger.Info("msg", "Reload signal received, triggering manual reload", "signal", sig)
-				reload(true)
-			} else {
-				logger.Info("msg", "Shutdown signal received", "signal", sig)
-				cancel()
+			if len(termChan) > 0 {
+				continue // a termination waited out the last reload: it comes first
 			}
+			logger.Info("msg", "Reload signal received, triggering manual reload", "signal", sig)
+			reload(true)
 
 		case event, ok := <-configChanges:
 			if !ok {

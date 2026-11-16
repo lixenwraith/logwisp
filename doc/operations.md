@@ -69,7 +69,9 @@ keeping current service`. A rebuild validates a detached snapshot and builds
 a new service **before** tearing the old one down, so a bad configuration
 leaves the running service intact. An invalid one logs `Failed to read reload
 configuration` with the validator's `validate configuration: <key path>: ...`
-error. One whose files fail when its plugins are built (a missing
+error; so does a file left without pipelines, emptied or cut short while it
+was written, where lw's built-in pipe would take their place. One whose files
+fail when its plugins are built (a missing
 certificate, an unreadable credentials file) logs `Failed to bootstrap new
 service, keeping old service running`.
 
