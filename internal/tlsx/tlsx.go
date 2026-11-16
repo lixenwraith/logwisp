@@ -41,7 +41,7 @@ func Server(o *config.TLSOptions, host string) (*tls.Config, error) {
 	var cert tls.Certificate
 	var err error
 	if o.CertFile != "" {
-		cert, err = tls.LoadX509KeyPair(o.CertFile, o.KeyFile)
+		cert, err = keyPair(o.CertFile, o.KeyFile)
 	} else {
 		cert, err = generated(o.IssuerCertFile, o.IssuerKeyFile, host, o.Hosts)
 	}
@@ -107,7 +107,7 @@ func Client(o *config.TLSOptions, host string) (*tls.Config, error) {
 		cfg.RootCAs = pool
 	}
 	if o.CertFile != "" {
-		cert, err := tls.LoadX509KeyPair(o.CertFile, o.KeyFile)
+		cert, err := keyPair(o.CertFile, o.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("tls: load keypair: %w", err)
 		}
@@ -220,7 +220,7 @@ func readCerts(path string) []*x509.Certificate {
 	if path == "" {
 		return nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := config.ReadRegular(path, config.MaxFileBytes)
 	if err != nil {
 		return nil
 	}
@@ -257,8 +257,22 @@ func SecretFileWarning(key, path string) string {
 	return fmt.Sprintf("%s %s is readable by all users (mode %04o)", key, path, fi.Mode().Perm())
 }
 
+// keyPair is tls.LoadX509KeyPair on files read as config.ReadRegular reads:
+// a FIFO named there would hold a reload, and its signals; a device, memory
+func keyPair(certFile, keyFile string) (tls.Certificate, error) {
+	cert, err := config.ReadRegular(certFile, config.MaxFileBytes)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	key, err := config.ReadRegular(keyFile, config.MaxFileBytes)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.X509KeyPair(cert, key)
+}
+
 func loadPool(file string) (*x509.CertPool, error) {
-	pemBytes, err := os.ReadFile(file)
+	pemBytes, err := config.ReadRegular(file, config.MaxFileBytes)
 	if err != nil {
 		return nil, fmt.Errorf("tls: read CA file: %w", err)
 	}

@@ -125,7 +125,7 @@ func sign(t, parent *x509.Certificate, pub crypto.PublicKey, key crypto.Signer) 
 
 // LoadIssuer reads a CA certificate and its key, as lw tls ca writes them
 func LoadIssuer(certFile, keyFile string) (*x509.Certificate, crypto.Signer, error) {
-	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	pair, err := keyPair(certFile, keyFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tls: load issuer: %w", err)
 	}

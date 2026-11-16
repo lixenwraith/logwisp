@@ -157,7 +157,8 @@ built:
   misspelled option must not silently leave a protection switched off
 - when the plugin is built: a certificate or key that will not load, a CA
   file containing no certificates, or an issuer that is no CA (`lw tls ca`
-  makes one)
+  makes one); each is read as a regular file of at most 10 MiB, opened
+  without blocking, so a FIFO or a device there is refused
 
 ## The Auth Block
 
