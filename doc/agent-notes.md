@@ -8,6 +8,12 @@ What earlier agents learned that neither `AGENTS.md` nor the docs state.
   `dirhash.HashZip` gives the `h1:` line and `dirhash.Hash1` of its `go.mod`
   the other. Run the program on a published version first and compare with
   the `go.sum` here; a merge that changes the tree changes the hash.
+- A version named in `go.mod` before its tag exists is asked of
+  proxy.golang.org by every CI run, and the proxy remembers "not found" for up
+  to 30 minutes after the tag is pushed. Go then fetches the module with git,
+  which the Package workflow's `freebsd` VM and the image's builder lack:
+  those two jobs fail at the download while the others pass, and pass on a
+  rerun once `https://proxy.golang.org/<module>/@v/<version>.info` answers.
 - The rc.d script runs nowhere but the Package workflow's `freebsd` job, in a
   FreeBSD VM: a change to `deploy/package/logwisp.rc` is verified by what
   that job asserts. Its shell runs with `nounset`, under which `/etc/rc.subr`
