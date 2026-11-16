@@ -1112,7 +1112,9 @@ where TLS ends at the trusted proxy; `mtls` also requires `client_auth`.
 - Keep key, credentials and password files unreadable by others: `0600`
   owned by the account lw runs as, or `0640` `root:GROUP` for a group it is
   in; startup warns about world-readable ones. `lw auth` and `lw tls` create
-  them `0600`, and `lw auth` keeps the mode of an existing file.
+  them `0600`; `lw auth` keeps the mode of an existing file, and writes none
+  into a directory every user can write, where another user's file or link
+  may wait.
 - Rotation requires a reload (`SIGHUP`), because certificates and credentials
   are loaded once at plugin construction; there is no on-disk watch for them.
 - Startup and every reload warn 30 days before a certificate lapses. Still

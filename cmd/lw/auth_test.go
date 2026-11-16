@@ -153,6 +153,27 @@ func TestAddUserRefusesADanglingLink(t *testing.T) {
 	}
 }
 
+// Nothing is written where every user can write: a file another user made
+// there would be theirs, the generated password in it, and a link theirs to aim
+func TestAddUserRefusesADirectoryEveryUserCanWrite(t *testing.T) {
+	dir, shared := t.TempDir(), filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(shared, 0o777|os.ModeSticky); err != nil || os.Chmod(shared, 0o777|os.ModeSticky) != nil {
+		t.Fatal(err)
+	}
+	creds, pass := filepath.Join(dir, "users.toml"), filepath.Join(shared, "edge-01.pass")
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("kept"), 0o600); err != nil || os.Symlink(victim, pass) != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := runAuthTest(t, "add-user", "-credentials", creds, "-user", "edge-01", "-generate", "-password-file", pass)
+	if got, _ := os.ReadFile(victim); code != 1 || string(got) != "kept" || !strings.Contains(stderr, "writable by every user") {
+		t.Fatalf("exit %d, the link's target holds %q; stderr: %s", code, got, stderr)
+	}
+	if _, err := os.Stat(creds); err == nil {
+		t.Fatal("the verifier of a password never written was kept")
+	}
+}
+
 // An empty file is how an operator picks the owner before the first user
 func TestAddUserFillsAnEmptyFile(t *testing.T) {
 	creds := filepath.Join(t.TempDir(), "users.toml")

@@ -634,7 +634,9 @@ cannot replace a working password; `--generate` always generates, overwriting
 Both file commands rewrite atomically (a temporary file in the same directory
 as the file, or a symlink's target, then a rename), create files `0600`, keep an
 existing file's mode and owner, and refuse to write anything the daemon would
-not load, warning when a file it wrote is readable by all users. Comments
+not load, warning when a file it wrote is readable by all users. They write
+nothing into a directory every user can write (`/tmp`): a file another user
+made there would be theirs, the password in it. Comments
 above a user's `[[users]]` header stay with that user, and
 those outside the users' tables stay where they are; a comment inside a user's
 table is dropped, and a new user goes last. A change that cannot keep the
