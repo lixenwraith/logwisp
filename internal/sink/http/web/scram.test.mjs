@@ -43,6 +43,21 @@ test("proof and server signature match lixenwraith/auth", async () => {
   });
 });
 
+// The Go dialer's bounds: under the floor a server gets a cheaply guessed
+// proof, over twice it the page's memory and time
+test("a challenge outside the floor and twice it is refused", async () => {
+  const challenge = (t, m) => ({
+    full_nonce: "client-nonceserver-nonce", salt: Buffer.alloc(16, 7).toString("base64"),
+    argon_time: t, argon_memory: m, argon_threads: 1,
+  });
+  const prove = (t, m) => _proofForTest("alice", "password123", "client-nonce", challenge(t, m), 2, 16);
+  await assert.rejects(prove(1, 16), /weaker Argon2 cost/);
+  await assert.rejects(prove(2, 15), /weaker Argon2 cost/);
+  await assert.rejects(prove(5, 16), /greater Argon2 cost/);
+  await assert.rejects(prove(2, 33), /greater Argon2 cost/);
+  await prove(4, 32);
+});
+
 const STREAM = "https://site.test/logs/stream";
 
 // A fetch answering with an event stream sent in the given chunks

@@ -207,6 +207,10 @@ async function prove(username, pw, clientNonce, challenge, minTime, minMemory, o
   if (t < minTime || m < minMemory) {
     throw new Error("server asked for a weaker Argon2 cost than allowed");
   }
+  // As the Go dialer: past twice the floor a server spends the page's memory
+  if (t > 2 * minTime || m > 2 * minMemory) {
+    throw new Error("server asked for a greater Argon2 cost than allowed");
+  }
   const salted = await argon2id(pw, saltBytes, t, m, p, 32, { onProgress });
   const clientKey = await hmac(salted, "Client Key");
   const serverKey = await hmac(salted, "Server Key");

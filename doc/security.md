@@ -672,7 +672,7 @@ final message only when it is signed with this user's `ServerKey`, and it
 refuses a challenge asking for less Argon2 work than those defaults, so a rogue
 server cannot request a cheaply crackable proof, or for more than twice them (6
 passes, 128 MiB), so it cannot spend the dialer's memory; `lw auth add-user`
-writes the defaults. An unknown user gets a stable
+writes the defaults, and the browser client holds both bounds too. An unknown user gets a stable
 decoy challenge and fails exactly like a wrong password: `authentication
 failed`.
 
