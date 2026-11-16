@@ -49,6 +49,7 @@ type FileSink struct {
 	// Statistics
 	totalProcessed atomic.Uint64
 	lastProcessed  core.AtomicTime
+	diagnosedAt    atomic.Int64 // when the writer's next report is logged, in Unix nanoseconds
 }
 
 // NewFileSinkPlugin creates a file sink through plugin factory
@@ -97,6 +98,7 @@ func NewFileSinkPlugin(
 		exited:       make(chan struct{}),
 		logger:       logger,
 	}
+	fs.writer.SetErrorHandler(fs.diagnose)
 
 	fs.session = proxy.CreateSession(
 		fmt.Sprintf("file:///%s/%s", opts.Directory, opts.Name),
@@ -192,6 +194,19 @@ func (fs *FileSink) Stop() {
 		"instance_id", fs.id,
 		"total_processed", fs.totalProcessed.Load(),
 		"dropped_records", fs.writer.Dropped())
+}
+
+// diagnose logs what the writer reports of itself, a rotation that failed or
+// a full disk, which only dropped_records would otherwise show. A failing
+// write repeats for every record, so the first report a minute is logged.
+func (fs *FileSink) diagnose(msg string) {
+	now := time.Now().UnixNano()
+	if next := fs.diagnosedAt.Load(); now >= next && fs.diagnosedAt.CompareAndSwap(next, now+int64(time.Minute)) {
+		fs.logger.Warn("msg", "File sink's writer failed; more within a minute are not logged",
+			"component", "file_sink",
+			"instance_id", fs.id,
+			"error", msg)
+	}
 }
 
 // GetStats returns the sink's statistics

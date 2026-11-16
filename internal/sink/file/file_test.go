@@ -105,6 +105,58 @@ func TestUnsafeLogFileIsRefusedAtStart(t *testing.T) {
 	}
 }
 
+// A rotation that fails ends nothing: its entry is counted as dropped and lw's
+// log says why, and the sink writes on once the file can be made
+func TestAFailedRotationIsLoggedAndTheSinkWritesOn(t *testing.T) {
+	var lw bytes.Buffer
+	logger := log.NewLogger()
+	logger.SetConsoleWriter(&lw)
+	if err := logger.ApplyConfigString("level=warn", "format=txt"); err != nil || logger.Start() != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logger.Shutdown() })
+	dir := filepath.Join(t.TempDir(), "d")
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	created, err := NewFileSinkPlugin("out", map[string]any{"directory": dir, "name": "out", "max_size_mb": int64(1), "max_total_size_mb": int64(1)},
+		logger, session.NewProxy(manager, "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := created.(*FileSink)
+	if err := fs.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(fs.Stop)
+	large := bytes.Repeat([]byte("x"), 600_000)
+	write := func(payload []byte) { // and wait until the writer has taken it
+		n := fs.totalProcessed.Load()
+		fs.Input() <- core.TransportEvent{Payload: append(payload, '\n')}
+		for fs.totalProcessed.Load() == n {
+			time.Sleep(time.Millisecond)
+		}
+		fs.writer.Flush(time.Second) // fails while there is no file
+	}
+	write(large)
+	if err := os.Rename(dir, dir+".away"); err != nil {
+		t.Fatal(err)
+	}
+	write(large) // over max_size_mb, and no directory to rotate in
+	if err := os.Rename(dir+".away", dir); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond) // past the writer's next try
+	write([]byte("after"))
+	data, err := os.ReadFile(filepath.Join(dir, "out.log"))
+	if err != nil || !bytes.Contains(data, []byte("after")) {
+		t.Fatalf("the entry after the failed rotation is not in the file: %v", err)
+	}
+	logger.Flush(time.Second)
+	if n := fs.writer.Dropped(); n != 1 || strings.Count(lw.String(), "File sink's writer failed") != 1 {
+		t.Fatalf("%d dropped, want 1; lw's log:\n%s", n, lw.String())
+	}
+}
+
 // The limits count and delete the sink's own files alone: another program's
 // .log file in the directory, older and over max_total_size_mb, stays
 func TestTheLimitsDeleteOnlyTheSinksOwnFiles(t *testing.T) {
