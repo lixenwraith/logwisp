@@ -133,6 +133,8 @@ func TestNewValidation(t *testing.T) {
 		{"no client_auth", &config.AuthOptions{Type: MethodMTLS}, &tls.Config{}, config.Listener, TCP, "requires tls.client_auth"},
 		{"unknown identity", &config.AuthOptions{Type: MethodMTLS, Identity: "serial"}, mtlsListenerTLS(), config.Listener, TCP, `got "serial"`},
 		{"bad pattern", &config.AuthOptions{Type: MethodMTLS, AllowPatterns: []string{"^edge-("}}, mtlsListenerTLS(), config.Listener, TCP, "allow_patterns[0]"},
+		{"blank allow entry", &config.AuthOptions{Type: MethodMTLS, Allow: []string{" "}}, mtlsListenerTLS(), config.Listener, TCP, "allow[0]: is blank"},
+		{"empty pattern", &config.AuthOptions{Type: MethodMTLS, AllowPatterns: []string{""}}, mtlsListenerTLS(), config.Listener, TCP, "allow_patterns[0]: is empty"},
 		{"unknown binding", &config.AuthOptions{Type: MethodMTLS, NodeBinding: "maybe"}, mtlsListenerTLS(), config.ChainListener, TCP, `got "maybe"`},
 		{"binding on plain listener", &config.AuthOptions{Type: MethodMTLS, NodeBinding: BindingForce}, mtlsListenerTLS(), config.Listener, TCP, "only to chain sources"},
 		{"binding on dialer", &config.AuthOptions{Type: MethodMTLS, NodeBinding: BindingForce}, &tls.Config{}, config.Dialer, TCP, "only to chain sources"},

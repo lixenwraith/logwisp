@@ -343,7 +343,9 @@ files (`credentials_file`, `password_file`) when the plugin is built:
   is not one of the three values, whatever `type` is, `none` included
 - under `mtls` or `scram`, a `node_binding` other than `none` on a plugin
   other than a chain source
-- an `allow_patterns` entry that does not compile
+- an `allow_patterns` entry that does not compile or is empty, or a blank
+  `allow` entry, as an unset variable leaves: either would admit every
+  identity the CA issued
 - `/auth`, which is reserved for logins: `ingest_path` may not equal it;
   `stream_path` and `status_path` may not be it or lie under it
 

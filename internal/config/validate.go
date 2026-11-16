@@ -341,9 +341,18 @@ func (o *AuthOptions) Check(side Side, http bool, t TLSState) error {
 	case o.Type == "mtls" && side != Dialer && !t.ClientAuth:
 		return fmt.Errorf("auth: type %q requires tls.client_auth", "mtls")
 	case o.Type == "mtls":
+		// A list left blank, by an unset variable, would admit as an empty one
+		// does, any identity the CA issued, and an empty pattern matches all
+		for i, name := range o.Allow {
+			if strings.TrimSpace(name) == "" {
+				return &KeyError{fmt.Sprintf("auth.allow[%d]", i), errors.New("is blank")}
+			}
+		}
 		for i, pattern := range o.AllowPatterns {
 			if _, err := regexp.Compile(pattern); err != nil {
 				return &KeyError{fmt.Sprintf("auth.allow_patterns[%d]", i), fmt.Errorf("%q: %w", pattern, err)}
+			} else if pattern == "" {
+				return &KeyError{fmt.Sprintf("auth.allow_patterns[%d]", i), errors.New("is empty")}
 			}
 		}
 		return nil
