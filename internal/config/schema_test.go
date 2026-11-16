@@ -148,6 +148,11 @@ func TestValidateConfigNamesThePath(t *testing.T) {
 		"pipelines[0].flow.heartbeat.interval_ms: must be at least 100, got 10": func(c *Config) {
 			c.Pipelines[0].Flow.Heartbeat = &HeartbeatConfig{IntervalMS: 10}
 		},
+		// the writer never deletes the file it writes: past the total alone, it would stop
+		"pipelines[0].plugin_sinks[out].config.max_total_size_mb: must be at least max_size_mb, 100, got 50": func(c *Config) {
+			c.Pipelines[0].PluginSinks[0] = PluginSinkConfig{ID: "out", Type: "file",
+				Config: map[string]any{"directory": "d", "name": "n", "max_total_size_mb": int64(50)}}
+		},
 	} {
 		c := valid()
 		change(c)
@@ -278,13 +283,18 @@ func TestTildeIsHomeInPathKeys(t *testing.T) {
 	}
 }
 
-// Every key in milliseconds takes at most what a time.Duration holds, so no
-// setting wraps to a negative interval
+// Every key in milliseconds takes at most what a time.Duration holds, and
+// every key in megabytes what an int64 holds of bytes, so no setting wraps to
+// a negative interval or another size
 func TestMillisecondKeysFitADuration(t *testing.T) {
 	over := int64(maxMS) + 1
 	for _, p := range plugins {
 		for _, o := range options(p.options) {
-			if !strings.HasSuffix(o.Name, "_ms") {
+			over := over
+			switch {
+			case strings.HasSuffix(o.Name, "_mb"):
+				over = int64(maxMB) + 1
+			case !strings.HasSuffix(o.Name, "_ms"):
 				continue
 			}
 			m := map[string]any{o.Name: over}

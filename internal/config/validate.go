@@ -39,8 +39,14 @@ func ValidateConfig(cfg *Config) error {
 		if l.Console != nil {
 			errs = append(errs, checkTags(reflect.ValueOf(l.Console).Elem(), "logging.console."))
 		}
+		if l.File != nil {
+			errs = append(errs, checkTags(reflect.ValueOf(l.File).Elem(), "logging.file."))
+		}
 		if (l.Output == "file" || l.Output == "all") && l.File != nil {
 			writers[writes(l.File.Directory, l.File.Name)] = "logging.file"
+			if err := checkSizes(l.File.MaxSizeMB, l.File.MaxTotalSizeMB); err != nil {
+				errs = append(errs, &KeyError{"logging.file.max_total_size_mb", err})
+			}
 		}
 	}
 	return errors.Join(append(errs, validatePipelines(cfg.Pipelines, writers))...)
@@ -562,6 +568,19 @@ func backoffMax(lo, hi int64) int64 {
 func (o *FileSinkOptions) Check() error {
 	if o.MinDiskFreeMB < 0 {
 		o.MinDiskFreeMB = 100
+	}
+	if err := checkSizes(o.MaxSizeMB, o.MaxTotalSizeMB); err != nil {
+		return &KeyError{"max_total_size_mb", err}
+	}
+	return nil
+}
+
+// checkSizes refuses a total below one file's size: the writer meets the
+// total by deleting the files it rotated out, never the one it writes, so
+// once that one passed the total alone every entry would be dropped
+func checkSizes(maxSizeMB, maxTotalMB int64) error {
+	if maxTotalMB > 0 && maxSizeMB > maxTotalMB {
+		return fmt.Errorf("must be at least max_size_mb, %d, got %d", maxSizeMB, maxTotalMB)
 	}
 	return nil
 }

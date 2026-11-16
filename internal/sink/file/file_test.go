@@ -118,7 +118,7 @@ func TestTheLimitsDeleteOnlyTheSinksOwnFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fs := newSink(t, dir, map[string]any{"max_total_size_mb": int64(1)})
+	fs := newSink(t, dir, map[string]any{"max_size_mb": int64(1), "max_total_size_mb": int64(1)})
 	if err := fs.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
