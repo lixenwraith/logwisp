@@ -126,9 +126,6 @@ jobs:
           prepare: pkg install -y go127
           run: |
             set -e
-            printf '1;touch${IFS}/tmp/evaled;:\n' > /tmp/probe.pid
-            (set +eu; . /etc/rc.subr; check_pidfile /tmp/probe.pid /usr/sbin/daemon) || true
-            if [ -e /tmp/evaled ]; then echo "PROBE: rc.subr ran the pidfile's word"; rm /tmp/evaled; else echo "PROBE: rc.subr did not run it"; fi
             make release
             go127 test -run '^TestOnATerminal' ./cmd/lw
             go127 test ./internal/tui
