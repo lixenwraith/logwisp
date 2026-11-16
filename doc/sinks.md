@@ -221,7 +221,8 @@ Options, each as type and default:
   stream past it gets `503` and counts in `rejected_clients`.
 - `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
   a new stream gets after its `connected` event, before the live ones, so a
-  browser opened late sees a backlog; `0` = none.
+  browser opened late sees a backlog; `0` = none, at most `1048576`. The sink
+  holds them, so their size counts toward lw's memory.
 - `login_page` (bool, `false`): only for `scram` behind
   `auth.trusted_proxies`, where browsers log in (an error elsewhere): the
   login page at `/auth/login`.
