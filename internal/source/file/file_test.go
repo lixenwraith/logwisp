@@ -344,6 +344,33 @@ func tailFrom(t *testing.T, path string) func() []string {
 	}
 }
 
+// A line still being written is sent with its newline, whole; one left
+// unterminated is sent as it is once the file has not grown for settleChecks
+// checks
+func TestALineBeingWrittenWaitsForItsNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messages")
+	testutil.WriteFile(t, path, lines(14, 0, 3))
+	check := tailFrom(t, path)
+	appendFile(t, path, "whole\nhalf")
+	if got := check(); !slices.Equal(got, []string{"whole"}) {
+		t.Fatalf("read %q, want the whole line alone", got)
+	}
+	appendFile(t, path, " done\nlast")
+	if got := check(); !slices.Equal(got, []string{"half done"}) {
+		t.Fatalf("read %q, want the line once it is whole", got)
+	}
+	var got []string
+	for range settleChecks - 1 {
+		got = append(got, check()...)
+	}
+	if len(got) != 0 {
+		t.Fatalf("read %q before the file had settled", got)
+	}
+	if got := check(); !slices.Equal(got, []string{"last"}) {
+		t.Fatalf("read %q, want the unterminated line once the file stopped growing", got)
+	}
+}
+
 // An edited file is still the file being read, however it is saved and
 // wherever lines are deleted or inserted: reading resumes after the newest
 // line read that it still holds, and replays nothing

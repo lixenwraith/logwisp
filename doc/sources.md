@@ -62,8 +62,10 @@ Options, each as type and default:
   `path escapes from parent`. A directory is followed where it is: replaced
   (a release's link swapped), it is opened anew at the next scan.
 - A line longer than 1 MiB continues in the next entry, as on the console
-  source; so does the rest of a line a poll reads while it is still being
-  written, or past the 64 MiB a poll reads at most.
+  source. A last line still being written waits for its newline and arrives
+  whole, however its writer buffers; left unterminated, it is sent as it is
+  once the file has not grown for 2 s, and what is appended to it later is
+  another entry.
 - A new watcher seeks to end-of-file. Positions live in memory only, so a
   restart or a reload resumes from the current end of each file, and content
   written meanwhile is not read. A file created while lw runs gets its watcher

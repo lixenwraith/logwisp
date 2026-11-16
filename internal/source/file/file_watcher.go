@@ -80,6 +80,8 @@ type fileWatcher struct {
 	seen         os.FileInfo // the file as the last check found it, held's while there is one; watch's
 	holds        int         // checks waited for the file to settle, or for held to stop growing; watch's
 	held         *os.File    // the file inode is, open from the check that judged it; watch's
+	tailSize     int64       // the file's size when its last line, unterminated, was last seen to grow; watch's
+	tailWaits    int         // checks since, up to settleChecks; watch's
 	taken        bool        // another watcher goes on reading inode from where this one got; under mu
 	// how far another watcher of the source read a file (FileSource.othersOf)
 	others func(*os.File, os.FileInfo) (int64, bool)
@@ -176,11 +178,14 @@ func (w *fileWatcher) checkFile() error {
 		// The name left the file being read: a rotation renamed or removed it,
 		// and its writer may append until it reopens. It is read to its end
 		// first, and on while it grows, up to settleChecks checks.
-		if left, serr := w.held.Stat(); serr == nil && w.holds < settleChecks {
-			if grew, rerr := w.read(w.held, left.Size(), true); rerr == nil && grew {
-				w.holds++
-				return nil
+		if left, serr := w.held.Stat(); serr == nil {
+			if w.holds < settleChecks {
+				if more, rerr := w.read(w.held, left.Size(), true, false); rerr == nil && more {
+					w.holds++
+					return nil
+				}
 			}
+			w.read(w.held, left.Size(), true, true) // its last line as it is: nothing more comes
 		}
 		w.held.Close()
 		w.held, w.holds = nil, 0
@@ -264,7 +269,7 @@ func (w *fileWatcher) checkFile() error {
 	if rotated {
 		w.rotated()
 	}
-	_, err = w.read(file, size, false)
+	_, err = w.read(file, size, false, false)
 	return err
 }
 
@@ -273,22 +278,44 @@ func (w *fileWatcher) checkFile() error {
 var scanBufs = sync.Pool{New: func() any { return new([64 << 10]byte) }}
 
 // read sends the lines file holds from position to size, readPerCheck at most,
-// and reports whether there were any. position moves on first, so a watcher
-// that goes on reading the file meanwhile starts after them; once the name
-// has left the file (left), and another watcher has, this one reads no more.
-func (w *fileWatcher) read(file *os.File, size int64, left bool) (bool, error) {
+// and reports whether it sent any or waits on one: a last line still being
+// written is left for its newline, settleChecks checks without the file
+// growing at most, unless flush. position moves on first, so a watcher that
+// goes on reading the file meanwhile starts after the lines sent.
+func (w *fileWatcher) read(file *os.File, size int64, left, flush bool) (bool, error) {
 	w.mu.Lock()
 	pos := w.position
 	w.mu.Unlock()
-	end := min(size, pos+readPerCheck)
-	if end <= pos {
+	limit := min(size, pos+readPerCheck)
+	if limit <= pos {
 		return false, nil
+	}
+	buf := scanBufs.Get().(*[64 << 10]byte)
+	defer scanBufs.Put(buf)
+	end := limit
+	if !flush {
+		var err error
+		if end, err = lineEnd(file, pos, limit, buf[:4<<10]); err != nil {
+			return false, err
+		}
+		if end < limit && limit == size {
+			if size != w.tailSize {
+				w.tailSize, w.tailWaits = size, 0
+			} else if w.tailWaits++; w.tailWaits >= settleChecks {
+				end = limit // waited out: sent as it is
+			}
+		}
+		if end == pos {
+			return true, nil
+		}
 	}
 	tail, err := lastLines(file, end)
 	if err != nil {
 		return false, err
 	}
 	w.mu.Lock()
+	// Once the name has left the file, and another watcher has taken it on,
+	// this one reads it no more
 	if left && w.taken {
 		w.mu.Unlock()
 		return false, nil
@@ -296,8 +323,6 @@ func (w *fileWatcher) read(file *os.File, size int64, left bool) (bool, error) {
 	w.position, w.tail = end, tail
 	w.mu.Unlock()
 
-	buf := scanBufs.Get().(*[64 << 10]byte)
-	defer scanBufs.Put(buf)
 	scanner := bufio.NewScanner(io.NewSectionReader(file, pos, end-pos))
 	scanner.Buffer(buf[:0], core.MaxLogEntryBytes)
 	scanner.Split(scanLinesCapped)
@@ -400,6 +425,29 @@ func pastHole(file *os.File, pos, size int64) int64 {
 		}
 	}
 	return at
+}
+
+// lineEnd is where the last whole line of [pos, end) ends, pos when it holds
+// none. Bytes after it that are a line's worth, core.MaxLogEntryBytes, wait
+// for no newline: they continue in the next entry, so end is returned. buf is
+// scratch.
+func lineEnd(file *os.File, pos, end int64, buf []byte) (int64, error) {
+	for at := end; at > pos; {
+		n := min(int64(len(buf)), at-pos)
+		at -= n
+		if got, err := file.ReadAt(buf[:n], at); err != nil && err != io.EOF {
+			return 0, err
+		} else if int64(got) < n {
+			return pos, nil // cut short under the read: the next check judges the file again
+		}
+		if i := bytes.LastIndexByte(buf[:n], '\n'); i >= 0 {
+			return at + int64(i) + 1, nil
+		}
+		if end-at >= core.MaxLogEntryBytes {
+			return end, nil
+		}
+	}
+	return pos, nil
 }
 
 // lastLines are the lines that end at end, tailLines and tailBytes at most,
