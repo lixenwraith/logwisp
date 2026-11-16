@@ -159,7 +159,8 @@ func main() {
 		}
 		// A file emptied, or cut short while it is written, holds no pipeline:
 		// lw's built-in pipe would take theirs, stdin, at its end under a service
-		if err == nil && manager.BuiltIn() && !builtIn {
+		nextBuiltIn := manager.BuiltIn()
+		if err == nil && nextBuiltIn && !builtIn {
 			err = errors.New("the configuration holds no pipelines")
 		}
 		if err != nil {
@@ -187,7 +188,7 @@ func main() {
 		newSvc, newCfg, newStatusCancel, err := handleReload(ctx, next, svc, statusReporterCancel, nil)
 		switch {
 		case err == nil:
-			svc, cfg, statusReporterCancel = newSvc, newCfg, newStatusCancel
+			svc, cfg, statusReporterCancel, builtIn = newSvc, newCfg, newStatusCancel, nextBuiltIn
 			done = svc.Done()
 		case errors.Is(err, errServiceStopped):
 			done = nil // the stopped service's pipelines did not reach the end of input
@@ -214,7 +215,7 @@ func main() {
 				configChanges = nil
 				continue
 			}
-			if collectConfigChanges(event, configChanges) {
+			if collectConfigChanges(event, configChanges) && len(termChan) == 0 {
 				reload(false)
 			}
 
