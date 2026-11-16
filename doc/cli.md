@@ -209,7 +209,8 @@ takes one. `lw preset NAME [--key value ...]` prints the pipeline a preset
 expands to, ready for a configuration file; its flags are the keys, spelled as
 in the SPEC (`--password_file`). `lw preset NAME -h` lists its keys and
 defaults, `lw preset -h` the presets. An unknown key fails and lists the valid
-ones.
+ones; so does a key given no value in a SPEC (`users=`), as an unset shell
+variable leaves it, which would otherwise open what the line meant to close.
 
 - `path`: a file, a directory (its files) or a glob, and this host decides
   which: an existing directory, or a path ending in `/`, is followed whole,

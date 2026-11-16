@@ -49,6 +49,7 @@ func TestPresetKeysAreChecked(t *testing.T) {
 		"tail":                             "path: must be set",
 		"tail:path=x,format.type=json":     "preset keys do not nest",
 		"tail:path=x,path=y":               "path: takes one value",
+		"serve:users=":                     "users: is empty; leave the key out for its default", // an unset variable's
 		"serve:listen=8080":                `listen: must be HOST:PORT, an IPv6 address in brackets as in [::1]:9000, got "8080"`,
 		"serve:tls=self,cert=c":            "cert: does not apply to tls=self",
 		"serve:tls=files,cert=c":           "key: must be set for tls=files",

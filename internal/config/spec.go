@@ -36,6 +36,11 @@ var specKinds = []specKind{
 			default:
 				return fmt.Errorf("preset keys do not nest: %q", k)
 			}
+			// A key given no value, as an unset variable leaves it, is not a
+			// key left out: users= or allow= would open what the line closes
+			if slices.Contains(values[k], "") {
+				return &KeyError{k, errors.New("is empty; leave the key out for its default")}
+			}
 		}
 		return applyPreset(p, typ, values, isDir)
 	}, nil},
