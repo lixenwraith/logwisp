@@ -340,8 +340,8 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
 - Every buffer is bounded; the drop-not-block policy keeps memory flat under
   load.
 - `max_connections` caps connections on the `tcp` sink and the `tcp_chain`
-  source, and streams on the `http` sink. Admission is a load-then-check, so a
-  burst can over-admit by the connections that arrive before the count rises.
+  source, and streams on the `http` sink. Each takes its slot before the
+  check, so a burst cannot over-admit.
 - A listener's `acl` block caps each client: `max_connections_per_client`,
   and on the `http` sink and `http_chain` source
   `requests_per_second_per_client` ([Security](security.md#per-client-limits)).
