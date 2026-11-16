@@ -17,6 +17,7 @@ import (
 
 	shipped "github.com/lixenwraith/logwisp/config"
 	"github.com/lixenwraith/logwisp/internal/config"
+	"github.com/lixenwraith/logwisp/internal/logline"
 
 	"github.com/lixenwraith/toml"
 )
@@ -113,7 +114,11 @@ func (c *command) run(args []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		return 0
 	}
-	fmt.Fprintf(stderr, "%s: %v\n", fs.Name(), err)
+	// An error may hold a peer's bytes, a server's refusal or a certificate's
+	// name: escaped, a line at a time, none of them drives the terminal
+	for line := range strings.Lines(fmt.Sprintf("%s: %v\n", fs.Name(), err)) {
+		stderr.Write(logline.EscapeControls([]byte(line)))
+	}
 	if _, ok := errors.AsType[usageError](err); ok {
 		usage()
 		return 2

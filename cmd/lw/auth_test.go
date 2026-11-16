@@ -174,6 +174,16 @@ func TestAddUserRefusesADirectoryEveryUserCanWrite(t *testing.T) {
 	}
 }
 
+// A command's error is printed with what a terminal acts on escaped: it may
+// hold a peer's bytes, a server's refusal or a certificate's name
+func TestACommandsErrorIsEscaped(t *testing.T) {
+	creds := filepath.Join(t.TempDir(), "\x1b[2J")
+	code, _, stderr := runAuthTest(t, "remove-user", "-credentials", creds, "-user", "edge-01")
+	if code != 1 || strings.Contains(stderr, "\x1b") || !strings.Contains(stderr, "<1b>[2J") {
+		t.Fatalf("exit %d; stderr: %q", code, stderr)
+	}
+}
+
 // An empty file is how an operator picks the owner before the first user
 func TestAddUserFillsAnEmptyFile(t *testing.T) {
 	creds := filepath.Join(t.TempDir(), "users.toml")
