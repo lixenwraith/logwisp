@@ -86,6 +86,9 @@ func NewFileSinkPlugin(
 	if err := writerConfig.Validate(); err != nil {
 		return nil, fmt.Errorf("failed to initialize file writer: %w", err)
 	}
+	if err := config.CheckLogDir(writerConfig.Directory, writerConfig.Name+"."+writerConfig.Extension); err != nil {
+		return nil, fmt.Errorf("file sink: %w", err)
+	}
 
 	fs := &FileSink{
 		id:           id,

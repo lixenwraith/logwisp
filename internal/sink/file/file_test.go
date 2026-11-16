@@ -88,17 +88,24 @@ func TestRecordsTheWriterLosesAreCounted(t *testing.T) {
 	}
 }
 
-// The sink starts only where config.LogDir finds the directory safe, so a
-// planted link is never opened
-func TestUnsafeLogFileIsRefusedAtStart(t *testing.T) {
+// The sink is built, and starts, only where config.LogDir finds the directory
+// safe: a planted link is never opened, whether it was there when lw --check
+// or a reload built the sink or came before the start
+func TestUnsafeLogFileIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
+	fs := newSink(t, dir, map[string]any{})
 	if err := os.Symlink(target, filepath.Join(dir, "out.log")); err != nil {
 		t.Fatal(err)
 	}
-	fs := newSink(t, dir, map[string]any{})
 	if err := fs.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("started through a planted link: %v", err)
+	}
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	_, err := NewFileSinkPlugin("out", map[string]any{"directory": dir, "name": "out"}, log.NewLogger(), session.NewProxy(manager, "out"))
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("built over a planted link: %v", err)
 	}
 	if _, err := os.Lstat(target); err == nil {
 		t.Fatal("the link's target was created")

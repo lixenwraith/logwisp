@@ -223,7 +223,13 @@ func logConfig(cfg *config.Config) (*log.Config, error) {
 	default:
 		return nil, fmt.Errorf("invalid log output mode: %s", cfg.Logging.Output)
 	}
-	return logCfg, logCfg.Validate()
+	if err := logCfg.Validate(); err != nil || !logCfg.EnableFile {
+		return logCfg, err
+	}
+	if err := config.CheckLogDir(logCfg.Directory, logCfg.Name+"."+logCfg.Extension); err != nil {
+		return nil, fmt.Errorf("log file: %w", err)
+	}
+	return logCfg, nil
 }
 
 func configureFileLogging(logCfg *log.Config, cfg *config.Config) {

@@ -30,15 +30,24 @@ func WriteNew(path string, data io.WriterTo, mode os.FileMode) error {
 }
 
 // LogDir readies dir for a writer appending to file there, creating what is
-// missing as 0750. It refuses a directory every user can write, where another
-// could plant file as a link to what lw may write, and a file that is not a
-// regular one: the writer's first open follows a link and waits on a FIFO.
+// missing as 0750, then checks it as CheckLogDir does
 func LogDir(dir, file string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
+	return CheckLogDir(dir, file)
+}
+
+// CheckLogDir refuses, of what exists, a directory every user can write, where
+// another could plant file as a link to what lw may write, and a file that is
+// not a regular one: the writer's first open follows a link and waits on a
+// FIFO. It makes nothing, so a plugin's constructor runs it: lw --check and a
+// reload then refuse before the running service stops.
+func CheckLogDir(dir, file string) error {
 	info, err := os.Stat(dir)
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
 		return err
 	}
 	if info.Mode().Perm()&0o002 != 0 {
