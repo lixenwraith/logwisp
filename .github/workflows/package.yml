@@ -126,6 +126,9 @@ jobs:
           prepare: pkg install -y go127
           run: |
             set -e
+            printf '1;touch${IFS}/tmp/evaled;:\n' > /tmp/probe.pid
+            (set +eu; . /etc/rc.subr; check_pidfile /tmp/probe.pid /usr/sbin/daemon) || true
+            if [ -e /tmp/evaled ]; then echo "PROBE: rc.subr ran the pidfile's word"; rm /tmp/evaled; else echo "PROBE: rc.subr did not run it"; fi
             make release
             go127 test -run '^TestOnATerminal' ./cmd/lw
             go127 test ./internal/tui
@@ -140,9 +143,6 @@ jobs:
             sysrc logwisp_args="--logging.output=file --logging.file.directory=/var/db/logwisp/log"
             install -d -o logwisp /var/run/logwisp
             printf '1;touch${IFS}/tmp/evaled;:\n' > /var/run/logwisp/daemon.pid
-            cp /var/run/logwisp/daemon.pid /tmp/probe.pid
-            (. /etc/rc.subr; check_pidfile /tmp/probe.pid /usr/sbin/daemon) || true
-            if [ -e /tmp/evaled ]; then echo "PROBE: rc.subr ran the pidfile's word"; rm /tmp/evaled; else echo "PROBE: rc.subr did not run it"; fi
             service logwisp onestart
             sleep 3
             service logwisp onestatus
