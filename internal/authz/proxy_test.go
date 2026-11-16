@@ -59,6 +59,7 @@ func TestProxyModeTrustsOnlyItsProxies(t *testing.T) {
 		{"one plaintext hop", "127.0.0.1:5000", "203.0.113.7", "https, http", ""},
 		{"no client", "127.0.0.1:5000", "", "https", ""},
 		{"malformed client", "127.0.0.1:5000", "not-an-address", "https", ""},
+		{"client with a zone", "127.0.0.1:5000", "2001:db8::1%eth0", "https", ""},
 		{"spoofed hop", "127.0.0.1:5000", "198.51.100.1, 203.0.113.7", "https", "203.0.113.7"},
 		{"proxy chain", "127.0.0.1:5000", "203.0.113.7, 10.1.2.3", "https", "203.0.113.7"},
 		{"proxy hop with a port", "127.0.0.1:5000", "203.0.113.7, 10.1.2.3:443", "https", "203.0.113.7"},
