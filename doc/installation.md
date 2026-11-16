@@ -166,7 +166,11 @@ sudo systemctl reload logwisp
 
 `$PREFIX/etc/rc.d/logwisp` runs `lw` through `daemon(8)` as `logwisp_user`,
 with its output in syslog under the tag `logwisp`; `service logwisp reload`
-sends `SIGHUP`. `daemon(8)` restarts `lw` 5 s after it exits, as the systemd
+sends `SIGHUP`. `daemon(8)` itself stays root and keeps the pidfiles,
+`/var/run/logwisp.pid` and `/var/run/logwisp_daemon.pid`, where the account
+cannot write: `rc.subr` runs a word of a pidfile as a command, as root. An
+`lw` started by a script that kept them in `/var/run/logwisp` is stopped at
+the next `start`. `daemon(8)` restarts `lw` 5 s after it exits, as the systemd
 unit does after a failure, and after a clean exit too: a configuration whose
 input ends, such as a console source, restarts every 5 s. `service logwisp
 status` reports `lw`, which `daemon(8)` outlives. The port in `deploy/package/freebsd/` places the
