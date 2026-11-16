@@ -2,6 +2,7 @@ package httpchain
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -70,6 +71,73 @@ func TestBatchIsPublishedWholeOrNotAtAll(t *testing.T) {
 	}
 	if n := src.parseErrors.Load(); n != 1 {
 		t.Fatalf("%d parse errors, want 1", n)
+	}
+}
+
+// The bodies being read are bounded together, 64 of max_body_bytes: a batch
+// past the bound gets 503 while the others are held, and those arrive whole
+func TestBodiesInFlightAreBoundedTogether(t *testing.T) {
+	probe, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	probe.Close()
+	_, port, _ := net.SplitHostPort(addr)
+	p, _ := strconv.ParseInt(port, 10, 64)
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	created, err := NewHTTPChainSourcePlugin("in", map[string]any{"host": "127.0.0.1", "port": p, "max_body_bytes": int64(1000)},
+		log.NewLogger(), session.NewProxy(manager, "in"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := created.(*HTTPChainSource)
+	src.Subscribe()
+	if err := src.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(src.Stop)
+	line := append(bytes.Repeat([]byte("x"), 997), '\n') // not JSON: the count of bytes is what matters
+	post := func(body io.Reader) int {
+		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/ingest", body)
+		req.Header.Set(chain.HeaderProtocol, strconv.Itoa(chain.ProtocolVersion))
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil {
+			return 0
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	finish, held := make(chan struct{}), make(chan int, bodiesInFlight)
+	for range bodiesInFlight {
+		go func() {
+			body, w := io.Pipe()
+			go func() {
+				w.Write(line[:len(line)-1]) // held one byte short of its end
+				<-finish
+				w.Write(line[len(line)-1:])
+				w.Close()
+			}()
+			held <- post(body)
+		}()
+	}
+	for deadline := time.Now().Add(5 * time.Second); src.inFlight.Load() < bodiesInFlight*int64(len(line)-1); {
+		if time.Sleep(time.Millisecond); time.Now().After(deadline) {
+			t.Fatalf("%d bytes in flight, want the %d held", src.inFlight.Load(), bodiesInFlight*(len(line)-1))
+		}
+	}
+	if status := post(bytes.NewReader(line)); status != http.StatusServiceUnavailable {
+		t.Fatalf("a batch past the bound got %d, want 503", status)
+	}
+	close(finish)
+	for range bodiesInFlight {
+		if status := <-held; status != http.StatusNoContent {
+			t.Fatalf("a batch within the bound got %d, want 204", status)
+		}
+	}
+	if n := src.inFlight.Load(); n != 0 {
+		t.Fatalf("%d bytes still counted in flight", n)
 	}
 }
 

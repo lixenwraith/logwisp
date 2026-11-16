@@ -365,6 +365,8 @@ Options, each as type and default:
 - `buffer_size` (int, `1000`): subscriber channel depth.
 - `max_body_bytes` (int, `8388608`): per-request body cap (8 MiB), and about
   what a request holds in memory while its entries are published.
+  The bodies being read at once are bounded together at 64 times this, in
+  bytes received: a batch past the bound gets `503`, which the sink retries.
 - `read_timeout_ms` (int, `30000`): full request read deadline.
 - `acl` (table): as on `tcp_chain`, plus `requests_per_second_per_client`.
 

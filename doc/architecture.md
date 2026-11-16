@@ -348,7 +348,8 @@ answer `{"value": ...}` or `{"error", "path", "pipeline", "node", "key",
 - Chain listeners bound a single line at `core.MaxLogEntryBytes` (1 MiB); an
   oversized line terminates a `tcp_chain` link and fails an `http_chain`
   batch with `400`.
-- The `http_chain` source caps each request body at `max_body_bytes`.
+- The `http_chain` source caps each request body at `max_body_bytes`, and the
+  bodies it reads at once at 64 times that.
 - File sinks rotate on size, cap total rotated size, honour a retention
   window, and with `min_disk_free_mb` delete the oldest files to keep that
   much disk free.

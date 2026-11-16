@@ -131,7 +131,8 @@ are not counted); `0` means unlimited.
   `rejected_clients`, its connection kept.
 
 The `http_chain` source has no connection cap; it bounds work with
-`max_body_bytes` and `read_timeout_ms` instead.
+`max_body_bytes`, 64 times that for the bodies it reads at once, and
+`read_timeout_ms` instead.
 
 Per client, the `acl` block caps connections on every listener and requests
 on the HTTP ones ([Security](security.md#per-client-limits)), and SCRAM logins

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -41,7 +42,12 @@ const (
 	// maxSessions bounds the session cache as netacl bounds a table's clients:
 	// a session is some 600 bytes for 30 idle minutes, an address is free
 	maxSessions = 65536
+	// bodiesInFlight is how many bodies of max_body_bytes may be read at once,
+	// in bytes read whatever their number: each is held whole until published
+	bodiesInFlight = 64
 )
+
+var errBusy = errors.New("ingest bodies in flight are over their bound")
 
 // HTTPChainSource accepts NDJSON batches from upstream http_chain sinks
 type HTTPChainSource struct {
@@ -70,6 +76,9 @@ type HTTPChainSource struct {
 
 	mu      sync.RWMutex
 	stopped bool // under mu: set before the subscriber channels close
+
+	inFlight atomic.Int64 // bytes of the bodies being read and published
+	budget   int64        // what inFlight may reach
 
 	startTime        time.Time
 	totalEntries     atomic.Uint64
@@ -121,6 +130,10 @@ func NewHTTPChainSourcePlugin(
 		tlsConfig:   tlsCfg,
 		auth:        authPolicy,
 		acl:         aclPolicy,
+		budget:      math.MaxInt64,
+	}
+	if opts.MaxBodyBytes <= math.MaxInt64/bodiesInFlight {
+		s.budget = bodiesInFlight * opts.MaxBodyBytes
 	}
 
 	logger.Info("msg", "HTTP chain source initialized",
@@ -321,8 +334,20 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	// The batch is held as its body, which max_body_bytes bounds, and decoded
 	// as it is published: held decoded, a body of short lines took 100 times
-	// its size in entries
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.config.MaxBodyBytes))
+	// its size in entries. The bodies held at once are bounded together, by
+	// the bytes read, so that a sender declaring much and sending little holds
+	// none of the bound; past it the batch gets 503, which the sink retries.
+	held := &heldBody{r: http.MaxBytesReader(w, r.Body, s.config.MaxBodyBytes), s: s}
+	defer held.release()
+	body, err := io.ReadAll(held)
+	if errors.Is(err, errBusy) {
+		s.rejectedRequests.Add(1)
+		s.refusals.Refused("Batch refused: "+errBusy.Error(), func() []any {
+			return []any{"remote_addr", r.RemoteAddr, "bound_bytes", s.budget}
+		})
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+		return
+	}
 	if err == nil {
 		for line := range bytes.Lines(body) {
 			if len(bytes.TrimSuffix(line, []byte{'\n'})) >= core.MaxLogEntryBytes {
@@ -376,6 +401,25 @@ func (s *HTTPChainSource) handleIngest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(chain.HeaderAccepted, strconv.Itoa(accepted))
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// heldBody reads a batch's body, counting what it reads against the source's
+// bound on bodies in flight until release
+type heldBody struct {
+	r io.Reader
+	s *HTTPChainSource
+	n int64
+}
+
+func (b *heldBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	b.n += int64(n)
+	if b.s.inFlight.Add(int64(n)) > b.s.budget {
+		return n, errBusy
+	}
+	return n, err
+}
+
+func (b *heldBody) release() { b.s.inFlight.Add(-b.n) }
 
 // handleAuth runs one step of a SCRAM login and logs its outcome
 func (s *HTTPChainSource) handleAuth(w http.ResponseWriter, r *http.Request) {
