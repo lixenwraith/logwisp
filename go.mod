@@ -7,8 +7,8 @@ require (
 	github.com/lixenwraith/color v0.1.5
 	github.com/lixenwraith/config v0.2.2
 	github.com/lixenwraith/log v0.1.19
-	github.com/lixenwraith/terminal v0.6.7
-	github.com/lixenwraith/toml v0.9.1
+	github.com/lixenwraith/terminal v0.7.4
+	github.com/lixenwraith/toml v0.10.0
 	golang.org/x/term v0.48.0
 )
 
