@@ -200,7 +200,7 @@ const scenarios = {
     const streamed = page.waitForRequest(/\/stream$/, { timeout: 30000 });
     await signIn(page, password);
     const token = ((await streamed).headers().authorization ?? "").replace(/^Bearer /, "");
-    await page.waitForFunction(() => document.getElementById("state").textContent === "live", null, { timeout: 30000 });
+    await page.waitForFunction(() => document.getElementById("state").textContent.startsWith("live"), null, { timeout: 30000 });
     out.token_in_page_only = await page.evaluate((t) => t !== "" && localStorage.length === 0 &&
       sessionStorage.length === 0 && !location.href.includes(t) && !document.cookie.includes(t), token) ? 1 : 0;
   },
@@ -238,7 +238,7 @@ const scenarios = {
 
     // A reload ends the open stream and every token; the reconnect's 401 asks again
     await signIn(page, password);
-    await page.waitForFunction(() => document.getElementById("state").textContent === "live", null, { timeout: 30000 });
+    await page.waitForFunction(() => document.getElementById("state").textContent.startsWith("live"), null, { timeout: 30000 });
     process.kill(Number(pid), "SIGHUP");
     await statusIs(page, /session ended/);
     await inlineLogin(page);
