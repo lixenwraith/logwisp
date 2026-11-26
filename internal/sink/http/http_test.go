@@ -459,8 +459,8 @@ func TestStopWritesQueuedEventsToReadingStreams(t *testing.T) {
 	}
 }
 
-// A stream that connects late gets the last replay_lines entries after its
-// connected event, then the live ones, none twice
+// A stream that connects late is told how many earlier entries it lacks, gets
+// the last replay_lines of them, then the live ones, none twice
 func TestLateStreamGetsTheBacklog(t *testing.T) {
 	httpSink, _ := newTestHTTPSink(t, map[string]any{"replay_lines": int64(2)})
 	client, baseURL := serveTestHTTPSink(t, httpSink)
@@ -483,12 +483,11 @@ func TestLateStreamGetsTheBacklog(t *testing.T) {
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() && scanner.Text() != "event: connected" {
 	}
-	scanner.Scan() // its data
-	until(func() bool {
-		httpSink.clientsMu.Lock()
-		defer httpSink.clientsMu.Unlock()
-		return len(httpSink.clients) == 1
-	})
+	for scanner.Scan() && scanner.Text() != "event: backlog" {
+	}
+	if scanner.Scan(); scanner.Text() != `data: {"replayed":2,"missed":1}` {
+		t.Fatalf("backlog event %q", scanner.Text())
+	}
 	httpSink.Input() <- core.TransportEvent{Payload: []byte("line 3\n")}
 	var got []string
 	for len(got) < 3 && scanner.Scan() {

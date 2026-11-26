@@ -106,6 +106,7 @@ func NewPipeline(
 		return nil, err
 	}
 	pipeline.warnUnlabelled()
+	pipeline.warnUnkept()
 	pipeline.formats = slices.ContainsFunc(cfg.PluginSinks, func(c config.PluginSinkConfig) bool {
 		plugin, _ := config.LookupPlugin("sink", c.Type)
 		return plugin.Side != config.Dialer
@@ -133,6 +134,30 @@ func (p *Pipeline) warnUnlabelled() {
 		p.logger.Warn("msg", "Pipeline writes chain peers' entries in raw format, without the node each came from",
 			"pipeline", p.Config.Name,
 			"hint", "a txt or json format writes it, as node/source")
+	}
+}
+
+// warnUnkept reports, when built, an http sink keeping no replay in a pipeline
+// whose file source reads files from their start: that read is over as lw
+// starts, before a browser can open a stream
+func (p *Pipeline) warnUnkept() {
+	start := slices.ContainsFunc(p.Config.PluginSources, func(c config.PluginSourceConfig) bool {
+		if c.Type != "file" {
+			return false
+		}
+		o, err := config.Decode[config.FileSourceOptions]("source", c.Type, c.Config)
+		return err == nil && o.From == "start"
+	})
+	for _, c := range p.Config.PluginSinks {
+		if !start || c.Type != "http" {
+			continue
+		}
+		if o, err := config.Decode[config.HTTPSinkOptions]("sink", c.Type, c.Config); err == nil && o.ReplayLines == 0 {
+			p.logger.Warn("msg", "Files read from their start reach only the http streams already open",
+				"pipeline", p.Config.Name,
+				"sink", c.ID,
+				"hint", "replay_lines=N on the sink gives each new stream the last N entries")
+		}
 	}
 }
 

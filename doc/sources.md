@@ -5,10 +5,11 @@ as a `[[pipelines.plugin_sources]]` entry with an `id`, a `type`, and a
 type-specific `config` table. Registered types: `file`, `console`, `random`,
 `null`, `tcp_chain`, `http_chain`.
 
-Publication is non-blocking for every source but `console`: a full subscriber
-channel drops the entry and counts it in `dropped_entries`. That channel holds
-`buffer_size` entries, or 1000 on a source without that option. The `console`
-source waits instead (see [console](#console)).
+Publication is non-blocking for every source but `console` and `file`: a full
+subscriber channel drops the entry and counts it in `dropped_entries`. That
+channel holds `buffer_size` entries, or 1000 on a source without that option.
+The `console` and `file` sources wait instead, as what they read can be read
+later: a full pipeline slows the reading and loses no line.
 
 ---
 
@@ -73,6 +74,10 @@ Options, each as type and default:
   most, is not read either. `from = "start"` instead reads each file whole
   when its watcher is created, which a process writing beside LogWisp needs, at
   the cost of replaying files already on disk at every restart and reload.
+  That read ends as lw starts: an `http` sink's stream opened later gets it
+  only from the sink's `replay_lines`, and lw warns at start without one.
+  Each file has its own watcher, so the lines of several files interleave in
+  the order they are read, not by their time.
 - A file is followed by its content, not its inode or size. lw keeps the last
   8 lines read (1 KiB at most), matches them only whole (never a line still
   being written), and assumes lines are mostly distinct, as timestamped logs

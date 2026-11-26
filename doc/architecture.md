@@ -94,8 +94,8 @@ instance of a single type fails, naming both pipelines.
 1. **Source** produces a `core.LogEntry` and publishes it to every subscriber
    channel it has handed out; the pipeline subscribes before the source
    starts. Publication is non-blocking: a full subscriber channel increments
-   the source's `dropped_entries` counter. The console source alone waits,
-   since stdin can simply be read later.
+   the source's `dropped_entries` counter. The console and file sources wait
+   instead, since stdin and files can simply be read later.
 2. **Flow** applies, in order: rate limit → filter chain → formatter. A rate
    limit or filter drop ends the entry's life and increments
    `flow.total_dropped`, a filter's also `flow.total_filtered`. The verdict,
@@ -136,14 +136,15 @@ The drop policy is not configurable: **never block**, except where waiting
 loses nothing. Each stage drops and counts instead of waiting:
 
 - Source → subscriber: a full channel drops the entry; source
-  `dropped_entries`. The console source waits instead and reads stdin later.
+  `dropped_entries`. The console and file sources wait instead and read later.
 - Flow: the rate limiter or a filter rejection drops it; `flow.total_dropped`.
 - Pipeline → sink: a full sink input drops it for that sink only; the sink's
   `dropped_entries` in the pipeline's `sinks`, summed as the pipeline's
   `total_dropped_by_sink`, and shown on the sink's node by `lw --tui` while
-  it runs. A sink declaring `core.CapBackpressure`, the console and null
-  sinks, makes dispatch wait instead, so a filter loses no line to a slow
-  reader and its pipeline runs at the reader's pace; `Stop` ends the wait.
+  it runs. A sink declaring `core.CapBackpressure` makes dispatch wait
+  instead; `Stop` ends the wait. The console sink does, so a filter loses no
+  line to a slow reader and its pipeline runs at the reader's pace, and so do
+  the null, http and tcp sinks, whose own loops wait on nothing.
 - TCP/HTTP sink → client queue: a full queue drops it for that client only;
   sink `dropped_writes`.
 - Flow → tap: a full tap drops the record, copying nothing, which the live
