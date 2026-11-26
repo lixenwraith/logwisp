@@ -179,13 +179,14 @@ query it with a client certificate or a token from `lw auth token`.
 Each counter, where it is reported, and what a rise means:
 
 - `dropped_entries` (source): downstream cannot keep up with the source; the
-  console source never drops, it reads stdin slower
+  console and file sources never drop, they read slower
 - `total_dropped` (flow): the rate limit or filters are discarding entries,
   often by intent; `total_filtered` (flow and pipeline) is the filters' share.
   Both go on across a flow swapped in place, while each filter's own counters
   start over
-- `total_dropped_by_sink` (pipeline): a sink's input queue is full; a console
-  sink waits instead, so its entries count only when shutdown cuts the wait.
+- `total_dropped_by_sink` (pipeline): a sink's input queue is full; the
+  console, null, http and tcp sinks wait instead, so theirs count only when
+  shutdown cuts the wait.
   Each sink in the pipeline's `sinks` reports its share as `dropped_entries`,
   the status reporter logs it on the sink's line, and `lw --tui` shows it on
   the sink's node
@@ -298,11 +299,11 @@ sink backed up?), sink `total_processed`.
 
 A console sink never drops while its pipeline runs: when its output is slow
 (a paused terminal, a full pipe, a stalled log collector) its pipeline waits,
-and the pipeline's other sinks with it. Stdin is read slower; other sources
-queue, then drop and count `dropped_entries`. Where a service's stdout may
-stall, give it a `file` sink instead. A stop or reload waits on the output
-2 s, then drops the sink's queue with a WARN. A closed stdout pipe ends lw
-with `SIGPIPE`.
+and the pipeline's other sinks with it. Stdin and files are read slower;
+other sources queue, then drop and count `dropped_entries`. Where a service's
+stdout may stall, give it a `file` sink instead. A stop or reload waits on the
+output 2 s, then drops the sink's queue with a WARN. A closed stdout pipe ends
+lw with `SIGPIPE`.
 
 **File source reads nothing**
 

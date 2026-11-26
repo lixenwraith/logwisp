@@ -9,9 +9,11 @@ Registered types: `console`, `file`, `http`, `tcp`, `null`, `tcp_chain`,
 `http_chain`.
 
 Dispatch waits for a `console` sink, so a slow reader paces the whole pipeline,
-sibling sinks included (`null` waits too but discards at once). Any other sink
-whose input queue is full drops the event for itself only, counted as its
-`dropped_entries` in the pipeline's statistics and summed as the pipeline's
+sibling sinks included. It waits for the `null`, `http` and `tcp` sinks too,
+which wait on nothing: `null` discards at once, and `http` and `tcp` drop an
+entry only for a client whose queue is full. Any other sink whose input queue
+is full drops the event for itself only, counted as its `dropped_entries` in
+the pipeline's statistics and summed as the pipeline's
 `total_dropped_by_sink`.
 
 The `console`, `file`, `http`, `tcp` and `tcp_chain` sinks write what is
@@ -225,9 +227,9 @@ Options, each as type and default:
 - `max_connections` (int, `0`): concurrent stream cap; `0` = unlimited. A
   stream past it gets `503` and counts in `rejected_clients`.
 - `replay_lines` (int, `0`; `1000` from the `serve` preset): the last entries
-  a new stream gets after its `connected` event, before the live ones, so a
-  browser opened late sees a backlog; `0` = none, at most `1048576`. The sink
-  holds them, so their size counts toward lw's memory.
+  a new stream gets after its `connected` and `backlog` events, before the
+  live ones, so a browser opened late sees a backlog; `0` = none, at most
+  `1048576`. The sink holds them, so their size counts toward lw's memory.
 - `login_page` (bool, `false`): only for `scram` behind
   `auth.trusted_proxies`, where browsers log in (an error elsewhere): the
   login page at `/auth/login`.
@@ -272,12 +274,13 @@ Options, each as type and default:
   - never under `scram` on the sink's own TLS, which a browser cannot log in
     to: `/` is refused like any other path;
   - an endpoint at `/` keeps the root, and the viewer stays at `/auth/view`.
-  The viewer starts with the `replay_lines` backlog, holds one stream against
-  `max_connections`, and says so when all are taken (`server full`). Its
-  search keeps the lines containing a text, in any case unless its `Aa` toggle
-  matches case, and its level list the entries at or above a level, read as
-  the sources read it. It keeps the newest 5000 lines, and draws what arrived
-  once a frame, so a burst costs one layout.
+  The viewer starts with the `replay_lines` backlog, says how many earlier
+  entries it did not get, holds one stream against `max_connections`, and
+  says so when all are taken (`server full`). Its search keeps the lines
+  containing a text, in any case unless its `Aa` toggle matches case, and its
+  level list the entries at or above a level, read as the sources read it.
+  It keeps the newest 5000 lines, and draws what arrived once a frame, so a
+  burst costs one layout.
 - Refusals are logged ([WARN once a minute](security.md#refusals)) and counted
   in `auth_rejected`. The authorized
   identity is recorded in the client's session as `auth_method` /
@@ -286,7 +289,9 @@ Options, each as type and default:
   `Cache-Control: no-cache` and `X-Accel-Buffering: no`. On connect the client
   receives an `event: connected` frame carrying its client id, session id,
   sink instance id, endpoint paths, and `client_buffer_size` (as
-  `buffer_size`).
+  `buffer_size`). An `event: backlog` frame follows once the client is
+  registered: `replayed`, the `replay_lines` entries sent next, and `missed`,
+  the entries before them that the sink kept none of.
 - Payloads are framed per the SSE spec, one `data:` line per line break in the
   payload (CRLF, LF or a lone CR), so multi-line entries stream correctly and
   no entry can inject an `event:`, `id:` or `retry:` field.
@@ -316,13 +321,14 @@ Options, each as type and default:
 
 **Status endpoint** returns service and version identity, host, port, TLS flag,
 the compiled auth policy and acl, active client count, sink and per-client
-buffer sizes, connection limit, write timeout, uptime, endpoint paths, and the
-`total_processed` / `dropped_writes` / `rejected_clients` / `auth_rejected` /
-`acl_denied` / `acl_limited` counters.
+buffer sizes, connection limit, write timeout, `replay_lines`, uptime,
+endpoint paths, and the `total_processed` / `dropped_writes` /
+`rejected_clients` / `auth_rejected` / `acl_denied` / `acl_limited` counters.
 
 **Statistics**: `host`, `port`, `tls`, `buffer_size`, `client_buffer_size`,
-`max_connections`, `write_timeout_ms`, `endpoints`, `dropped_writes`,
-`rejected_clients`, and the [auth and acl keys](sources.md#source-statistics).
+`max_connections`, `write_timeout_ms`, `replay_lines`, `endpoints`,
+`dropped_writes`, `rejected_clients`, and the
+[auth and acl keys](sources.md#source-statistics).
 
 > Without an `auth` block both endpoints are unauthenticated. No response
 > carries a CORS header, so a page from another origin cannot read the stream:

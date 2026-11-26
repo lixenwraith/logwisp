@@ -152,7 +152,7 @@ func NewTCPSinkPlugin(
 		acl:          aclPolicy,
 	}
 
-	logger.Info("msg", " TCP sink initialized",
+	logger.Info("msg", "TCP sink initialized",
 		"component", "tcp_sink",
 		"instance_id", id,
 		"host", opts.Host,
@@ -169,7 +169,8 @@ func NewTCPSinkPlugin(
 
 // Capabilities returns supported capabilities
 func (t *TCPSink) Capabilities() []core.Capability {
-	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
+	// Its broadcast waits on no client, so dispatch waiting on it loses nothing
+	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession, core.CapBackpressure}
 	if t.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
 	}
@@ -235,7 +236,7 @@ func (t *TCPSink) Start(ctx context.Context) error {
 		}
 	}()
 
-	t.logger.Info("msg", " TCP server started",
+	t.logger.Info("msg", "TCP server started",
 		"component", "tcp_sink",
 		"instance_id", t.id,
 		"addr", t.addr)
@@ -252,7 +253,7 @@ func (t *TCPSink) Stop() {
 	t.wg.Wait()
 	t.auth.Close()
 
-	t.logger.Info("msg", " TCP sink stopped",
+	t.logger.Info("msg", "TCP sink stopped",
 		"component", "tcp_sink",
 		"instance_id", t.id,
 		"total_processed", t.totalProcessed.Load())

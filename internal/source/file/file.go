@@ -76,10 +76,9 @@ type FileSource struct {
 	wg     sync.WaitGroup
 
 	// Statistics
-	totalEntries   atomic.Uint64
-	droppedEntries atomic.Uint64
-	startTime      time.Time
-	lastEntryTime  core.AtomicTime
+	totalEntries  atomic.Uint64
+	startTime     time.Time
+	lastEntryTime core.AtomicTime
 }
 
 // NewFileSourcePlugin creates a file source through plugin factory
@@ -217,13 +216,12 @@ func (fs *FileSource) GetStats() source.SourceStats {
 	fs.mu.RUnlock()
 
 	return source.SourceStats{
-		ID:             fs.id,
-		Type:           "file",
-		TotalEntries:   fs.totalEntries.Load(),
-		DroppedEntries: fs.droppedEntries.Load(),
-		StartTime:      fs.startTime,
-		LastEntryTime:  lastEntry,
-		Details:        details,
+		ID:            fs.id,
+		Type:          "file",
+		TotalEntries:  fs.totalEntries.Load(),
+		StartTime:     fs.startTime,
+		LastEntryTime: lastEntry,
+		Details:       details,
 	}
 }
 
@@ -420,21 +418,26 @@ func (fs *FileSource) cleanupWatchers(files []string) {
 	}
 }
 
-// publish sends a log entry to all subscribers.
+// publish waits for every subscriber until Stop: a file can be read later, so
+// a full pipeline slows the reading instead of losing lines, as on stdin. The
+// wait holds no lock, so the scans go on meanwhile.
 func (fs *FileSource) publish(entry core.LogEntry) {
 	fs.mu.RLock()
-	defer fs.mu.RUnlock()
+	subscribers := fs.subscribers
+	fs.mu.RUnlock()
 
 	fs.totalEntries.Add(1)
 	fs.lastEntryTime.Store(entry.Time)
 
-	for _, ch := range fs.subscribers {
+	for _, ch := range subscribers {
+		select {
+		case ch <- entry: // first: a select with both ready picks at random
+			continue
+		default:
+		}
 		select {
 		case ch <- entry:
-		default:
-			fs.droppedEntries.Add(1)
-			fs.logger.Debug("msg", "Dropped log entry - subscriber buffer full",
-				"component", "file_source")
+		case <-fs.ctx.Done():
 		}
 	}
 }

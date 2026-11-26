@@ -166,7 +166,7 @@ func NewHTTPSinkPlugin(
 		web:          web,
 	}
 
-	logger.Info("msg", " HTTP sink initialized",
+	logger.Info("msg", "HTTP sink initialized",
 		"component", "http_sink",
 		"instance_id", id,
 		"host", opts.Host,
@@ -187,7 +187,8 @@ func NewHTTPSinkPlugin(
 
 // Capabilities returns supported capabilities
 func (h *HTTPSink) Capabilities() []core.Capability {
-	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession}
+	// Its broker waits on no client, so dispatch waiting on it loses nothing
+	caps := []core.Capability{core.CapSessionAware, core.CapMultiSession, core.CapBackpressure}
 	if h.tlsConfig != nil {
 		caps = append(caps, core.CapTLS)
 	}
@@ -287,7 +288,7 @@ func (h *HTTPSink) serve(ctx context.Context, ln net.Listener) error {
 		}
 	}()
 
-	h.logger.Info("msg", " HTTP server started",
+	h.logger.Info("msg", "HTTP server started",
 		"component", "http_sink",
 		"instance_id", h.id,
 		"addr", h.addr)
@@ -304,7 +305,7 @@ func (h *HTTPSink) Stop() {
 	h.wg.Wait()
 	h.auth.Close()
 
-	h.logger.Info("msg", " HTTP sink stopped",
+	h.logger.Info("msg", "HTTP sink stopped",
 		"component", "http_sink",
 		"instance_id", h.id,
 		"total_processed", h.totalProcessed.Load())
@@ -363,11 +364,11 @@ func (h *HTTPSink) brokerLoop() {
 			h.flushInput()
 			return
 		case event := <-h.input:
-			h.totalProcessed.Add(1)
 			h.lastProcessed.Store(time.Now())
 
 			var stale []uint64
 			h.clientsMu.Lock()
+			h.totalProcessed.Add(1) // under the lock, so a new stream knows what it missed
 			if n := int(h.config.ReplayLines); len(h.replay) < n {
 				h.replay = append(h.replay, event.Payload)
 			} else if n > 0 {
@@ -506,13 +507,21 @@ func (h *HTTPSink) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// Registered only now: a client the broker can queue into before its reader
 	// reaches the loop below loses a burst to a buffer nobody is draining. The
-	// backlog is taken under the same lock, so it ends where the queue begins.
+	// backlog is taken under the same lock, so it ends where the queue begins,
+	// and the backlog event says how many entries before it the stream lacks.
 	h.clientsMu.Lock()
 	h.clients[id] = c
 	h.clientsPeak = max(h.clientsPeak, len(h.clients))
 	backlog := sink.Queue(h.replay[h.replayNext:], h.replay[:h.replayNext])
+	missed := h.totalProcessed.Load() - uint64(len(h.replay))
 	h.clientsMu.Unlock()
-	if len(backlog) > 0 && !send(<-backlog, backlog, true) {
+	h.armWrite(rc)
+	fmt.Fprintf(w, "event: backlog\ndata: {\"replayed\":%d,\"missed\":%d}\n\n", len(backlog), missed)
+	if len(backlog) == 0 {
+		if rc.Flush() != nil {
+			return
+		}
+	} else if !send(<-backlog, backlog, true) {
 		return
 	}
 
@@ -589,6 +598,7 @@ func (h *HTTPSink) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"client_buffer_size": h.config.ClientBufferSize,
 			"max_connections":    h.config.MaxConnections,
 			"write_timeout_ms":   h.config.WriteTimeoutMS,
+			"replay_lines":       h.config.ReplayLines,
 			"uptime_seconds":     int(time.Since(h.startTime).Seconds()),
 		},
 		"endpoints": map[string]string{
@@ -619,6 +629,7 @@ func (h *HTTPSink) GetStats() sink.SinkStats {
 		"client_buffer_size": h.config.ClientBufferSize,
 		"max_connections":    h.config.MaxConnections,
 		"write_timeout_ms":   h.config.WriteTimeoutMS,
+		"replay_lines":       h.config.ReplayLines,
 		"tls":                h.tlsConfig != nil,
 		"dropped_writes":     h.droppedWrites.Load(),
 		"rejected_clients":   h.rejectedClients.Load(),

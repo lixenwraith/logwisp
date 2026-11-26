@@ -19,6 +19,7 @@ import (
 
 	"github.com/lixenwraith/logwisp/internal/config"
 	"github.com/lixenwraith/logwisp/internal/core"
+	"github.com/lixenwraith/logwisp/internal/session"
 	"github.com/lixenwraith/logwisp/internal/testutil"
 
 	"github.com/lixenwraith/log"
@@ -50,6 +51,44 @@ func TestFileSourceSkipsItsOwnOutput(t *testing.T) {
 	defer source.mu.RUnlock()
 	if _, followed := source.watchers[filepath.Join(dir, "app.log")]; !followed || len(source.watchers) != 1 || source.capped {
 		t.Fatalf("watchers %v, capped %v; want app.log alone", slices.Collect(maps.Keys(source.watchers)), source.capped)
+	}
+}
+
+// A full pipeline slows the reading instead of losing lines: a file read from
+// its start, past what the subscriber channel holds, arrives whole and in order
+func TestAFullPipelineSlowsTheReadingInsteadOfLosingLines(t *testing.T) {
+	const n = 3000
+	dir := t.TempDir()
+	var file strings.Builder
+	for i := range n {
+		fmt.Fprintf(&file, "line %d\n", i)
+	}
+	testutil.WriteFile(t, filepath.Join(dir, "app.log"), file.String())
+	manager := session.NewManager(time.Hour)
+	t.Cleanup(manager.Stop)
+	src, err := NewFileSourcePlugin("file", map[string]any{"directory": dir, "from": "start"}, log.NewLogger(), session.NewProxy(manager, "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := src.Subscribe()
+	if err := src.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(src.Stop)
+	for deadline := time.Now().Add(2 * time.Second); src.GetStats().TotalEntries <= uint64(cap(entries)); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the file was not read past a full channel")
+		}
+	}
+	for i := range n {
+		select {
+		case e := <-entries:
+			if want := fmt.Sprintf("line %d", i); e.Message != want {
+				t.Fatalf("entry %d is %q, want %q", i, e.Message, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("entry %d of %d never arrived", i, n)
+		}
 	}
 }
 

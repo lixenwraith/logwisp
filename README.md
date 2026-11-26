@@ -30,7 +30,7 @@ streams, or downstream LogWisp nodes.
 - **Fan-in and fan-out**: many sources and many sinks per pipeline
 - **Isolated sinks**: a stalled sink drops and counts its own events rather
   than stalling the pipeline or its sibling sinks; only the console sink
-  waits, so a filter loses no line to a slow reader
+  waits on its reader, so a filter loses no line to a slow one
 - **Hot reload** via `SIGHUP`/`SIGUSR1` or a config file watch, with the new
   configuration validated before the old service is torn down; a watched edit
   of flows alone swaps them in place, connections and file positions kept

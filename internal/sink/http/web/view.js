@@ -114,8 +114,19 @@ async function connect() {
   else streamWithCookie(url);
 }
 
+// The backlog event follows connected: the entries before this stream that
+// the sink replays, and those it kept none of
+function backlog(data) {
+  const { replayed = 0, missed = 0 } = JSON.parse(data);
+  const entries = (n) => `${n} ${n === 1 ? "entry" : "entries"}`;
+  if (!missed) return "live";
+  if (!replayed) return `live, ${entries(missed)} from before this page not kept (replay_lines is 0)`;
+  return `live, the last ${entries(replayed)} replayed, ${missed} before them not kept`;
+}
+
 function onEvent(type, data) {
   if (type === "connected") state.textContent = "live";
+  if (type === "backlog") state.textContent = backlog(data);
   if (type === "disconnect") {
     stopStream();
     retry("server shut down");
@@ -129,7 +140,7 @@ function onEvent(type, data) {
 function streamWithCookie(url) {
   const source = new EventSource(url);
   stopStream = () => source.close();
-  for (const type of ["connected", "disconnect", "message"]) {
+  for (const type of ["connected", "backlog", "disconnect", "message"]) {
     source.addEventListener(type, (event) => onEvent(type, event.data));
   }
   source.onerror = () => {
